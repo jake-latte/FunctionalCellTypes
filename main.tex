@@ -1,0 +1,58 @@
+% =============================================================================
+%  Functional Cell Types -- main document
+%
+%  Build:            latexmk -pdf main.tex                 (or: make)
+%  Single section:   latexmk -pdf sections/01_setup.tex    (or: make sec SEC=01_setup)
+%
+%  Structure
+%    preamble.tex    packages, theorem environments, layout
+%    macros.tex      mathematical notation (edit this to change notation globally)
+%    sections/       one file per section; each compiles standalone via `subfiles`
+%    references.bib  bibliography (biblatex + biber)
+%    figures/        graphics (\includegraphics{name} resolves here)
+%
+%  To add / rename / reorder a section: edit the list under "Sections" below
+%  and create the file in sections/ following the existing ones.
+% =============================================================================
+\documentclass[11pt,a4paper]{article}
+
+\input{preamble}
+\input{macros}
+
+\addbibresource{\subfix{references.bib}}
+\graphicspath{{\subfix{figures/}}}
+
+\title{Functional Cell Types}
+\author{Jake Laherty}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+% Uncomment for a table of contents:
+% \tableofcontents
+
+% Start section numbering at 0 so that Motivation is Section 0.
+% Delete this line for conventional numbering from 1.
+\setcounter{section}{-1}
+
+% ----------------------------------------------------------------------------
+%  Sections
+% ----------------------------------------------------------------------------
+\subfile{sections/00_motivation}
+\subfile{sections/01_setup}
+\subfile{sections/02_renormalisation_group}
+\subfile{sections/03_numerics}
+\subfile{sections/04_conclusions}
+
+% ----------------------------------------------------------------------------
+%  Back matter
+% ----------------------------------------------------------------------------
+\printbibliography
+
+% Appendices (uncomment and add files under sections/ as needed):
+% \appendix
+% \subfile{sections/A_derivations}
+
+\end{document}
