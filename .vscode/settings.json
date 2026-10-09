@@ -5,12 +5,20 @@
   "latex-workshop.latex.rootFile.doNotPrompt": true,
   "latex-workshop.latex.rootFile.useSubFile": true,
 
-  // Delete intermediate files after every build instead of only hiding them.
+  // --- Keep intermediate files out of the source tree -------------------------
+  // Everything a build produces (.aux, .bcf, .log, .pdf, ...) goes into build/
+  // at the repo root, for both main.tex and standalone section builds.
+  "latex-workshop.latex.outDir": "%WORKSPACE_FOLDER%/build",
+
+  // Optionally also delete the intermediates after every build.
   // Off by default because it forces a full rebuild (including biber) each time.
   // "latex-workshop.latex.autoClean.run": "onBuilt",
 
   // --- Hide build artefacts in the explorer and search -------------------------
+  // build/ is hidden outright; the per-extension patterns also cover anything
+  // produced by an in-place command-line build.
   "files.exclude": {
+    "**/build": true,
     "**/*.aux": true,
     "**/*.bbl": true,
     "**/*.bcf": true,
@@ -32,11 +40,15 @@
     "**/*.xdv": true
   },
   "search.exclude": {
+    "**/build": true,
     "**/*.pdf": true,
     "**/*.aux": true,
     "**/*.bbl": true,
     "**/*.bcf": true,
     "**/*.log": true,
     "**/*.run.xml": true
+  },
+  "files.watcherExclude": {
+    "**/build/**": true
   }
 }

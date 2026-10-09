@@ -1,4 +1,7 @@
-# LaTeX build artefacts (also applies inside sections/ for standalone builds)
+# Build output directory (latexmk, Makefile and VS Code all write here)
+build/
+
+# LaTeX build artefacts from any in-place build
 *.aux
 *.bbl
 *.bcf

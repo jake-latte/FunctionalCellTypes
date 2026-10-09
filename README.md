@@ -7,13 +7,16 @@ independently.
 ## Build
 
 ```sh
-make                      # full document -> main.pdf
-make sec SEC=02_renormalisation_group   # one section -> sections/02_renormalisation_group.pdf
-make clean
+make                                    # full document -> build/main.pdf
+make sec SEC=02_renormalisation_group   # one section   -> build/02_renormalisation_group.pdf
+make clean                              # removes build/
 ```
 
-Or directly: `latexmk -pdf main.tex`, and inside `sections/`
-`latexmk -pdf 01_setup.tex`.
+All intermediate files and PDFs go into `build/`, which is gitignored.
+
+In VS Code with LaTeX Workshop, `.vscode/settings.json` makes Ctrl+Alt+B
+compile whichever file is open (a section on its own, or everything from
+`main.tex`), writes output to `build/`, and hides that folder in the explorer.
 
 ## Layout
 
