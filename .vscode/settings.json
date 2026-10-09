@@ -1,0 +1,42 @@
+{
+  // --- LaTeX Workshop: build whichever file is open ---------------------------
+  // Open a file in sections/ and build (Ctrl+Alt+B) to compile just that section;
+  // open main.tex and build to compile the whole document. No prompt.
+  "latex-workshop.latex.rootFile.doNotPrompt": true,
+  "latex-workshop.latex.rootFile.useSubFile": true,
+
+  // Delete intermediate files after every build instead of only hiding them.
+  // Off by default because it forces a full rebuild (including biber) each time.
+  // "latex-workshop.latex.autoClean.run": "onBuilt",
+
+  // --- Hide build artefacts in the explorer and search -------------------------
+  "files.exclude": {
+    "**/*.aux": true,
+    "**/*.bbl": true,
+    "**/*.bcf": true,
+    "**/*.blg": true,
+    "**/*.fdb_latexmk": true,
+    "**/*.fls": true,
+    "**/*.lof": true,
+    "**/*.log": true,
+    "**/*.lot": true,
+    "**/*.nav": true,
+    "**/*.out": true,
+    "**/*.run.xml": true,
+    "**/*.snm": true,
+    "**/*.synctex.gz": true,
+    "**/*.synctex(busy)": true,
+    "**/*.synctex.gz(busy)": true,
+    "**/*.toc": true,
+    "**/*.vrb": true,
+    "**/*.xdv": true
+  },
+  "search.exclude": {
+    "**/*.pdf": true,
+    "**/*.aux": true,
+    "**/*.bbl": true,
+    "**/*.bcf": true,
+    "**/*.log": true,
+    "**/*.run.xml": true
+  }
+}
