@@ -1,7 +1,10 @@
 """Hyperparameter schema, written by `init` to CACHE_DIR/config.json.
 
-Every model forbids unknown keys, so a typo in a config file or a `--set` option fails
-at load time instead of silently falling back to a default.
+Every model forbids unknown keys and is strict about types, so a typo or a "5" where an int
+is expected fails at load time instead of silently becoming a default or a coerced value.
+
+Only this module (config, activations, cache) exists on this branch so far: the
+`python -m fct ...` CLI is not implemented yet.
 """
 
 import hashlib
@@ -14,7 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class DataConfig(_Strict):
@@ -111,12 +114,17 @@ class Config(_Strict):
     def section_hash(self, *sections: str) -> str:
         """Hash of the named sections, so an artefact can tell which config it came from.
 
-        Canonical JSON (sorted keys) makes the hash independent of field and argument order.
+        The top-level `dtype` is always folded in: it changes every artefact's numbers but
+        belongs to no section. Canonical JSON (sorted keys) makes the hash independent of
+        field and argument order.
         """
+        if not sections:
+            raise ValueError("section_hash needs at least one section name")
         unknown = set(sections) - set(type(self).model_fields)
         if unknown:
             raise ValueError(f"unknown config sections {sorted(unknown)}")
-        canonical = json.dumps(self.model_dump(include=set(sections)), sort_keys=True)
+        hashed = self.model_dump(include={*sections, "dtype"})
+        canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
@@ -124,20 +132,23 @@ def default_config() -> Config:
     return Config()
 
 
-def load_config(path: Path) -> Config:
+def load_config(path: str | Path) -> Config:
     """Read a config file; raises pydantic.ValidationError on unknown keys or bad types."""
     return Config.model_validate_json(Path(path).read_text())
 
 
-def save_config(cfg: Config, path: Path) -> None:
+def save_config(cfg: Config, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg.model_dump(), indent=2, sort_keys=True) + "\n")
 
 
 def resolve_device(cfg: Config) -> torch.device:
+    cuda = torch.cuda.is_available()
+    if cfg.device == "cuda" and not cuda:
+        raise RuntimeError('config requests device="cuda" but CUDA is not available on this host')
     if cfg.device == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return torch.device("cuda" if cuda else "cpu")
     return torch.device(cfg.device)
 
 

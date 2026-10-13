@@ -4,10 +4,12 @@ from collections.abc import Callable
 
 import torch
 
-PHI: dict[str, Callable] = {"relu": torch.relu, "tanh": torch.tanh, "sigmoid": torch.sigmoid}
+Activation = Callable[[torch.Tensor], torch.Tensor]
+
+PHI: dict[str, Activation] = {"relu": torch.relu, "tanh": torch.tanh, "sigmoid": torch.sigmoid}
 
 
-def get_phi(name: str) -> Callable:
+def get_phi(name: str) -> Activation:
     if name not in PHI:
         raise KeyError(f"unknown activation {name!r}; valid names: {sorted(PHI)}")
     return PHI[name]
@@ -26,7 +28,7 @@ def _sigmoid_prime(h: torch.Tensor) -> torch.Tensor:
     return s * (1 - s)
 
 
-def _autograd_prime(phi: Callable) -> Callable:
+def _autograd_prime(phi: Activation) -> Activation:
     def prime(h: torch.Tensor) -> torch.Tensor:
         with torch.enable_grad():
             h = h.detach().requires_grad_(True)
@@ -40,11 +42,13 @@ _ANALYTIC_PRIME = {
     torch.relu: _relu_prime,
     torch.nn.functional.relu: _relu_prime,
     torch.tanh: _tanh_prime,
+    torch.nn.functional.tanh: _tanh_prime,
     torch.sigmoid: _sigmoid_prime,
+    torch.nn.functional.sigmoid: _sigmoid_prime,
 }
 
 
-def phi_prime(phi: Callable) -> Callable:
+def phi_prime(phi: Activation) -> Activation:
     """Elementwise derivative of phi: analytic for the registered activations, else autograd.
 
     The autograd fallback assumes phi acts elementwise (it differentiates the sum).

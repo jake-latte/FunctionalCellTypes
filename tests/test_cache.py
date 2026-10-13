@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import numpy as np
 import pytest
 import torch
 
@@ -94,3 +97,84 @@ def test_latest_checkpoint_picks_highest_step(tmp_path):
     for step in (5, 100, 20):
         save_artefact(tmp_path / f"ckpt_{step:06d}.pt", {"s": step}, "h")
     assert latest_checkpoint(tmp_path).name == "ckpt_000100.pt"
+
+
+def test_non_loadable_payload_raises_naming_key_and_writes_nothing(tmp_path):
+    path = tmp_path / "x.pt"
+    with pytest.raises(TypeError, match=r"outer\.inner\[1\]"):
+        save_artefact(path, {"outer": {"inner": [1, np.zeros(2)]}}, "h")
+    assert not path.exists() and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("bad", [np.float64(1.0), Path("a"), {1: 2}, {"s": {1, 2}}])
+def test_other_non_loadable_payloads_raise(tmp_path, bad):
+    with pytest.raises(TypeError):
+        save_artefact(tmp_path / "x.pt", {"k": bad}, "h")
+
+
+def test_payload_with_config_hash_key_raises(tmp_path):
+    with pytest.raises(ValueError):
+        save_artefact(tmp_path / "x.pt", {"config_hash": "mine"}, "h")
+
+
+def test_empty_expected_hash_raises(tmp_path):
+    save_artefact(tmp_path / "x.pt", {"n": 1}, "h")
+    for bad in ("", None):
+        with pytest.raises(ValueError):
+            load_artefact(tmp_path / "x.pt", bad, CPU)
+
+
+def test_load_non_dict_raises(tmp_path):
+    path = tmp_path / "x.pt"
+    torch.save(torch.zeros(2), path)
+    with pytest.raises(TypeError):
+        load_artefact(path, "h", CPU)
+
+
+def test_load_or_compute_unloadable_compute_leaves_no_file(tmp_path):
+    path = tmp_path / "x.pt"
+    with pytest.raises(TypeError):
+        load_or_compute(path, "h", lambda: {"a": np.zeros(1)}, CPU)
+    assert not path.exists()
+
+
+def test_load_or_compute_unlinks_file_if_reload_fails(tmp_path, monkeypatch):
+    path = tmp_path / "x.pt"
+    real_load = torch.load
+    calls = []
+
+    def flaky_load(*args, **kwargs):
+        calls.append(1)
+        raise RuntimeError("cannot load")
+
+    monkeypatch.setattr(torch, "load", flaky_load)
+    with pytest.raises(RuntimeError, match="cannot load"):
+        load_or_compute(path, "h", lambda: {"v": 1}, CPU)
+    monkeypatch.setattr(torch, "load", real_load)
+    assert not path.exists()
+
+
+def test_write_checkpoint_keeps_higher_step(tmp_path):
+    write_checkpoint(tmp_path, "ckpt_", 20, {"s": 20}, "h")
+    write_checkpoint(tmp_path, "ckpt_", 10, {"s": 10}, "h")
+    assert sorted(p.name for p in tmp_path.glob("ckpt_*.pt")) == [
+        "ckpt_000010.pt",
+        "ckpt_000020.pt",
+    ]
+
+
+def test_write_checkpoint_width(tmp_path):
+    new = write_checkpoint(tmp_path, "ckpt_", 7, {"s": 7}, "h", width=5)
+    assert new.name == "ckpt_00007.pt"
+
+
+def test_write_checkpoint_writes_before_deleting(tmp_path, monkeypatch):
+    write_checkpoint(tmp_path, "ckpt_", 1, {"s": 1}, "h")
+
+    def boom(self, *args, **kwargs):
+        raise OSError("unlink failed")
+
+    monkeypatch.setattr(Path, "unlink", boom)
+    with pytest.raises(OSError):
+        write_checkpoint(tmp_path, "ckpt_", 2, {"s": 2}, "h")
+    assert (tmp_path / "ckpt_000002.pt").exists()

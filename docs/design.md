@@ -66,6 +66,8 @@ a fresh cache directory or delete the stale artefact (principle 9).
 | meanfield  | data, net, train, meanfield                |
 | analysis   | data, net, train, analysis                 |
 
+Every artefact additionally depends on `dtype`; `section_hash` always includes it.
+
 ## Saved files
 
 Every `.pt` file must be loadable with `torch.load(path, weights_only=True)`:
@@ -119,7 +121,7 @@ class Config(BaseModel):
     meanfield: MeanFieldConfig = MeanFieldConfig(); analysis: AnalysisConfig = AnalysisConfig()
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
-    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections, first 12 hex chars
+    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype, first 12 hex chars; >=1 section required
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -145,7 +147,9 @@ def save_artefact(path: Path, payload: dict, config_hash: str) -> None    # adds
 def load_artefact(path: Path, expected_hash: str, device) -> dict          # weights_only=True; raises StaleCacheError on mismatch
 def load_or_compute(path, expected_hash, compute: Callable[[], dict], device) -> dict
 def latest_checkpoint(dir: Path, prefix: str = "ckpt_") -> Path | None
-def write_checkpoint(dir: Path, prefix: str, step: int, payload: dict, config_hash: str) -> Path   # writes new file, then removes older ones with the same prefix
+def write_checkpoint(ckpt_dir: Path, prefix: str, step: int, payload: dict, config_hash: str, width: int = 6) -> Path
+    # writes ckpt_dir/<prefix><step:0{width}d>.pt, then removes ckpt files with the same prefix and a LOWER step
+    # (train uses the default width=6; meanfield passes width=5)
 ```
 
 ## data.py

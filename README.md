@@ -51,6 +51,12 @@ Numbering starts at 0 (Motivation is Section 0) because of
 The `fct` package trains deep networks and solves the matching mean-field
 theory. The environment is managed with `uv`; `uv.lock` pins every dependency.
 
+**Status:** the CLI (`python -m fct ...`) is not implemented yet on this branch; only
+config, activations and cache exist so far. The commands under "Intended workflow" are the
+plan, and the CLI work item will replace this sentence.
+
+`uv sync` downloads the CUDA-enabled torch wheel (several GB) on first run.
+
 ```sh
 uv sync          # create the environment (first run downloads torch)
 uv run pytest    # run the tests (CPU only, synthetic data)

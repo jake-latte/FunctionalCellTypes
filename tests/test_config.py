@@ -49,6 +49,43 @@ def test_wrong_type_raises(tmp_path):
         load_config(path)
 
 
+@pytest.mark.parametrize(
+    "raw", [{"net": {"N": "5"}}, {"meanfield": {"project_tilt": "yes"}}, {"data": {"var": "1.0"}}]
+)
+def test_lax_coercion_is_rejected(tmp_path, raw):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValidationError):
+        load_config(path)
+
+
+def test_int_accepted_for_float_field(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"data": {"var": 3}}))
+    assert load_config(path).data.var == 3.0
+
+
+def test_hash_changes_with_dtype():
+    a, b = default_config(), default_config()
+    b.dtype = "float32"
+    assert a.section_hash("data") != b.section_hash("data")
+
+
+def test_hash_requires_a_section():
+    with pytest.raises(ValueError):
+        default_config().section_hash()
+
+
+def test_hash_stable_across_json_key_order(tmp_path):
+    path, raw = _saved_json(tmp_path)
+    reversed_raw = {k: raw[k] for k in reversed(list(raw))}
+    reversed_raw["net"] = {k: raw["net"][k] for k in reversed(list(raw["net"]))}
+    path.write_text(json.dumps(reversed_raw))
+    assert load_config(path).section_hash("data", "net") == default_config().section_hash(
+        "data", "net"
+    )
+
+
 def test_hash_changes_with_own_section():
     a, b = default_config(), default_config()
     b.data.P = 7
@@ -82,9 +119,16 @@ def test_resolve_device_cpu():
     assert resolve_device(Config(device="cpu")) == torch.device("cpu")
 
 
-def test_resolve_device_auto_follows_cuda():
-    expected = "cuda" if torch.cuda.is_available() else "cpu"
-    assert resolve_device(Config(device="auto")).type == expected
+@pytest.mark.parametrize("available", [True, False])
+def test_resolve_device_auto_follows_cuda(monkeypatch, available):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: available)
+    assert resolve_device(Config(device="auto")).type == ("cuda" if available else "cpu")
+
+
+def test_resolve_device_cuda_without_cuda_raises(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="CUDA"):
+        resolve_device(Config(device="cuda"))
 
 
 def test_resolve_dtype():
