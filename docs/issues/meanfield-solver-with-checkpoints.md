@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -48,8 +48,8 @@ Why: a solve takes hours; it must survive interruption, and its result
    residuals `phihat_fp_resid_stein` below 0.1 and the inner residual below
    its tolerance. A second test checks resume: run `n_outer=4` with
    `save_int=2`, stop, resume, and compare `history` length and `Phi` with an
-   uninterrupted run (same seed; equality to float32 chain precision, i.e.
-   relative Frobenius < 1e-3).
+   uninterrupted run (same seed; relative Frobenius < 1e-10 for both chain
+   dtypes).
 6. **Print → log.** `print` calls become calls to the injected `log`.
 
 Risks: (a) `solve` currently hard-codes `torch.manual_seed` globally; the
@@ -57,8 +57,9 @@ port scopes randomness to the `torch.Generator` only (no global seeding).
 (b) The linear-φ validation uses `ident = lambda h: h`, which
 `activations.PHI` does not contain; the test passes the callable directly to
 `solve`, so `solve`'s `phi` argument stays a callable (the CLI resolves the
-name). (c) Exact resumption equality is only expected on CPU with float64
-chains; the test uses that.
+name). (c) Resumption is exact only up to the round trip of the chain state
+through float64 h-coordinates: float32 chains resume bitwise, float64 chains
+agree with an uninterrupted run to ~1e-14 relative; the test runs both.
 
 ## Inputs / outputs / interfaces
 
@@ -66,13 +67,18 @@ Exactly the *meanfield.py* section of `docs/design.md`: `empirical_kernels`,
 `SolveResult`, `solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg, net=None,
 log=print, checkpoint_dir=None, config_hash="")`, `run_meanfield(cfg,
 dataset, net, cache_dir, log=print)`, `load_meanfield(cache_dir, cfg,
-device)`. Depends on `fct.hmc`, `fct.model`, `fct.data`, `fct.cache`.
+device)`, `net_kernels(net, dataset, cfg)`. Depends on `fct.hmc`,
+`fct.model`, `fct.data`, `fct.cache`.
 
 ## Acceptance criteria
 
 - The analytic `L=1` linear test above passes.
-- The resume test above passes and leaves exactly one `ckpt_*.pt` plus
-  `final.pt`.
+- The resume test above passes and leaves only `final.pt` (it supersedes,
+  and replaces, the last `ckpt_*.pt`).
+- Resuming with a different net setting (net vs. none) from the one the
+  checkpoint was written with raises `ValueError` naming the checkpoint.
+- `net_kernels(net, dataset, cfg)` equals `empirical_kernels` on the
+  solver's inputs.
 - `run_meanfield` called twice returns the cached result without running
   any outer step the second time.
 - `load_meanfield` raises `StaleCacheError` when `cfg.meanfield.beta`

@@ -12,7 +12,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = [
+    "pytest",
+    "ruff>=0.17.0",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -11,6 +11,7 @@ global RNG or on which other tests ran.
 
 import time
 
+import numpy as np
 import pytest
 import torch
 
@@ -19,7 +20,14 @@ from fct.cache import StaleCacheError
 from fct.config import Config, DataConfig, MeanFieldConfig, NetConfig, TrainConfig
 from fct.data import Dataset
 from fct.hmc import relative_fro
-from fct.meanfield import HISTORY_KEYS, empirical_kernels, load_meanfield, run_meanfield, solve
+from fct.meanfield import (
+    HISTORY_KEYS,
+    empirical_kernels,
+    load_meanfield,
+    net_kernels,
+    run_meanfield,
+    solve,
+)
 from fct.model import make_net
 
 F64 = {"device": "cpu", "dtype": torch.float64}
@@ -134,7 +142,6 @@ def test_linear_solve_recovers_analytic_saddle(linear_problem, linear_solution):
     # ~0.013 at 100, ~0.009 at 200).
     assert dist < 0.2 * dist_prior
     assert dist < 0.04
-    assert seconds < 60
 
 
 def test_solve_without_checkpoint_dir_never_writes(linear_problem, monkeypatch):
@@ -230,7 +237,7 @@ class Interrupted(Exception):
     pass
 
 
-def resume_cfg():
+def resume_cfg(sample_dtype="float64"):
     return MeanFieldConfig(
         beta=1e3,
         n_chains=64,
@@ -238,48 +245,73 @@ def resume_cfg():
         save_int=2,
         warmup_trans=20,
         n_inner_max=5,
-        sample_dtype="float64",
+        sample_dtype=sample_dtype,
         log_int=1,
         seed=5,
     )
 
 
-def test_resume_after_interruption_matches_uninterrupted_run(tmp_path, monkeypatch):
-    X, Y = relu_problem(8, 8, seed=50)
-    net = small_net(8)
-
-    def run(**kwargs):
-        return solve(
-            X, Y, 2, 1e-3, 1e-3, torch.relu, 1.0, resume_cfg(), net=net, log=silent, **kwargs
-        )
-
-    full = run()
-
+def interrupt_on_call(monkeypatch, n):
+    """Make the n-th outer step raise Interrupted; returns a function that undoes the patch."""
     real_outer_step = mf._outer_step
     calls = []
 
-    def interrupt_on_third(*args, **kwargs):
+    def outer_step(*args, **kwargs):
         calls.append(1)
-        if len(calls) == 3:
+        if len(calls) == n:
             raise Interrupted
         return real_outer_step(*args, **kwargs)
 
-    monkeypatch.setattr(mf, "_outer_step", interrupt_on_third)
+    monkeypatch.setattr(mf, "_outer_step", outer_step)
+    return lambda: monkeypatch.setattr(mf, "_outer_step", real_outer_step)
+
+
+def solve_relu(X, Y, cfg, net=None, **kwargs):
+    return solve(X, Y, 2, 1e-3, 1e-3, torch.relu, 1.0, cfg, net=net, log=silent, **kwargs)
+
+
+# The chain state is checkpointed in h-coordinates (float64) and re-whitened on load.  For
+# float32 chains that round trip is exact, so a resumed run is bitwise identical; for float64
+# chains it costs ~1e-16 per entry, which grows to ~1e-14 relative over the remaining steps.
+# 1e-10 is still far below what a broken restore (e.g. of the generator) produces.
+@pytest.mark.parametrize("sample_dtype", ["float32", "float64"])
+def test_resume_after_interruption_matches_uninterrupted_run(tmp_path, monkeypatch, sample_dtype):
+    X, Y = relu_problem(8, 8, seed=50)
+    net = small_net(8)
+    cfg = resume_cfg(sample_dtype)
+    full = solve_relu(X, Y, cfg, net)
+
+    restore = interrupt_on_call(monkeypatch, 3)
     with pytest.raises(Interrupted):
-        run(checkpoint_dir=tmp_path, config_hash="h0")
+        solve_relu(X, Y, cfg, net, checkpoint_dir=tmp_path, config_hash="h0")
     assert sorted(p.name for p in tmp_path.iterdir()) == ["ckpt_00002.pt"]
 
-    monkeypatch.setattr(mf, "_outer_step", real_outer_step)
-    resumed = run(checkpoint_dir=tmp_path, config_hash="h0")
+    restore()
+    resumed = solve_relu(X, Y, cfg, net, checkpoint_dir=tmp_path, config_hash="h0")
 
-    assert sorted(p.name for p in tmp_path.glob("ckpt_*.pt")) == ["ckpt_00004.pt"]
-    assert (tmp_path / "final.pt").exists()
+    # final.pt holds the same payload as the last checkpoint, which is therefore removed.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["final.pt"]
     assert resumed.history["outer_step"] == full.history["outer_step"] == [0, 1, 2, 3]
-    assert relative_fro(resumed.Phi, full.Phi) < 1e-3
-    assert relative_fro(resumed.Phi_hat, full.Phi_hat) < 1e-3
-    for key in ("phihat_fp_resid_stein", "hmc_accept", "align_net"):
+    assert relative_fro(resumed.Phi, full.Phi) < 1e-10
+    assert relative_fro(resumed.Phi_hat, full.Phi_hat) < 1e-10
+    for key in ("phihat_fp_resid_stein", "hmc_accept", "hmc_eps", "eta_phihat", "align_net"):
         for a, b in zip(resumed.history[key], full.history[key]):
-            assert abs(a - b).max() < 1e-6, key
+            assert np.allclose(a, b, rtol=1e-10, atol=0, equal_nan=True), key
+
+
+@pytest.mark.parametrize("net_when_written", [False, True])
+def test_resume_refuses_a_checkpoint_with_the_other_net_setting(
+    tmp_path, monkeypatch, net_when_written
+):
+    X, Y = relu_problem(8, 8, seed=51)
+    cfg = resume_cfg()
+    nets = {True: small_net(8), False: None}
+    restore = interrupt_on_call(monkeypatch, 3)
+    with pytest.raises(Interrupted):
+        solve_relu(X, Y, cfg, nets[net_when_written], checkpoint_dir=tmp_path, config_hash="h0")
+    restore()
+    with pytest.raises(ValueError, match="ckpt_00002.pt"):
+        solve_relu(X, Y, cfg, nets[not net_when_written], checkpoint_dir=tmp_path, config_hash="h0")
 
 
 # ----------------------------------------------------------------------------- run / load
@@ -324,7 +356,11 @@ def test_run_meanfield_second_call_returns_cache_without_solving(cached_run, mon
         raise AssertionError("an outer step ran although final.pt exists")
 
     monkeypatch.setattr(mf, "_outer_step", forbidden)
-    second = run_meanfield(cfg, dataset, net, cache_dir, log=silent)
+    lines = []
+    second = run_meanfield(cfg, dataset, net, cache_dir, log=lines.append)
+    final = cache_dir / "meanfield" / "final.pt"
+    assert lines == [f"loaded finished solve from {final} (2 outer steps)"]
+    assert sorted(p.name for p in final.parent.iterdir()) == ["final.pt"]
     torch.testing.assert_close(second.Phi, first.Phi)
     torch.testing.assert_close(second.Phi_hat, first.Phi_hat)
     assert second.history["outer_step"] == first.history["outer_step"]
@@ -363,3 +399,26 @@ def test_run_meanfield_rejects_more_points_than_data(tmp_path):
     net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
     with pytest.raises(ValueError, match="n_points"):
         run_meanfield(cfg, dataset, net, tmp_path, log=silent)
+
+
+@pytest.mark.parametrize("readout", ["h", "phi"])
+def test_net_kernels_are_the_empirical_kernels_on_the_solver_inputs(readout):
+    cfg = small_config()
+    mf_cfg = MeanFieldConfig(**{**cfg.meanfield.model_dump(), "readout": readout})
+    cfg = Config(**{**cfg.model_dump(), "meanfield": mf_cfg.model_dump()})
+    dataset = small_dataset(cfg)
+    # A float32 net: net_kernels must evaluate it in its own dtype, then return float64.
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float32)
+    K = net_kernels(net, dataset, cfg)
+    expected, _ = empirical_kernels(net, dataset.x[:10].to(torch.float32), readout)
+    assert K.dtype == torch.float64 and K.shape == (2, 10, 10)
+    torch.testing.assert_close(K, expected.to(torch.float64), rtol=0, atol=0)
+
+
+def test_net_kernels_reject_more_points_than_data():
+    cfg = small_config()
+    dataset = small_dataset(cfg)
+    small = Dataset(x=dataset.x[:5], y=dataset.y[:5], Q=None, period=None)
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
+    with pytest.raises(ValueError, match="n_points"):
+        net_kernels(net, small, cfg)

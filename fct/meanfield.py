@@ -49,7 +49,10 @@ F64 = torch.float64
 CKPT_PREFIX, CKPT_WIDTH, FINAL_NAME = "ckpt_", 5, "final.pt"
 
 # One entry per outer step for every key; plots read these names.  NET_KEYS are present
-# only when `solve` is given a net (instead of lists of None).
+# only when `solve` is given a net: their entries are per-layer arrays, and a list of None
+# in their place would break code that stacks them.  `train_mse_net` is a scalar per step and
+# stays a per-step None without a net (None is weights_only-loadable, and
+# `draw.fig_solver_history` treats an all-None column as absent).
 HISTORY_KEYS = (
     "outer_step", "time", "inner_steps", "inner_residual", "inner_grad_rel", "inner_converged",
     "step_clipped", "eta_phi", "eta_phihat", "n_backtrack_inner", "n_backtrack_outer",
@@ -78,12 +81,25 @@ def empirical_kernels(net: MLP, X: torch.Tensor, readout: str) -> tuple[torch.Te
     raw pre-activations (P, L, N) (the N neurons are samples from the net's own
     single-site density, which is what the theory predicts)."""
     H, _ = net(X)  # (P, L, N)
-    L = H.shape[1]
-    Phi = []
-    for l in range(L):
-        psi = net.phi(H[:, l]) if (l < L - 1 or readout == "phi") else H[:, l]
-        Phi.append(psi @ psi.T / H.shape[2])
-    return torch.stack(Phi), H
+    L, N = H.shape[1], H.shape[2]
+    psis = [net.phi(H[:, l]) if (l < L - 1 or readout == "phi") else H[:, l] for l in range(L)]
+    return torch.stack([psi @ psi.T / N for psi in psis]), H
+
+
+def _solver_inputs(dataset: Dataset, cfg: Config) -> tuple[torch.Tensor, torch.Tensor]:
+    """(X, Y) = the first cfg.meanfield.n_points training points, the solver's inputs."""
+    n, P = cfg.meanfield.n_points, dataset.x.shape[0]
+    if n > P:
+        raise ValueError(f"meanfield.n_points={n} exceeds the dataset size P={P}")
+    return dataset.x[:n], dataset.y[:n]
+
+
+def net_kernels(net: MLP, dataset: Dataset, cfg: Config) -> torch.Tensor:
+    """The trained net's empirical kernels (L, P, P), float64, on exactly the solver's inputs
+    and readout, so they are directly comparable with the solver's Φ."""
+    X, _ = _solver_inputs(dataset, cfg)
+    Phi, _ = empirical_kernels(net, X.to(net.dtype), cfg.meanfield.readout)
+    return Phi.to(F64)
 
 
 @dataclass
@@ -123,11 +139,20 @@ class _Problem:
         return self.X.device
 
 
-def _make_problem(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig) -> _Problem:
+def _make_problem(
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    L: int,
+    lambda_w: float,
+    lambda_r: float,
+    phi: Activation,
+    g: float,
+    cfg: MeanFieldConfig,
+) -> _Problem:
     if X.ndim != 2 or Y.ndim != 2 or X.shape[0] != Y.shape[0]:
         raise ValueError(f"X (P, D_in) and Y (P, D_out) must share P; got {X.shape}, {Y.shape}")
-    if L < 1 or cfg.n_inner_max < 1 or cfg.n_chains < 1:
-        raise ValueError("L, n_inner_max and n_chains must all be >= 1")
+    if L < 1:
+        raise ValueError(f"L must be >= 1, got {L}")
     X, Y = X.to(F64), Y.to(F64)
     P, D_in = X.shape
     D_out = Y.shape[1]
@@ -154,21 +179,26 @@ def _prior_cov(prob: _Problem, l: int, Phi: torch.Tensor) -> torch.Tensor:
     return prob.prior_scale * (prob.Phi0 if l == 0 else (prob.g**2) * Phi[l - 1])
 
 
-def _new_sampler(prob, l, Sigma, M, generator, **overrides) -> SingleSiteHMC:
+def _new_sampler(
+    prob: _Problem, l: int, Sigma: torch.Tensor, M: torch.Tensor, generator: torch.Generator
+) -> SingleSiteHMC:
+    """Sampler for layer l with prior Σ, tilt M and the HMC settings of cfg."""
     c = prob.cfg
-    kwargs = {
-        "n_chains": c.n_chains,
-        "eps": c.eps0,
-        "n_leap": c.n_leap,
-        "target_accept": c.target_accept,
-        "adapt_rate": c.adapt_rate,
-        "jitter_rel": c.jitter_rel,
-        "sample_dtype": prob.sample_dtype,
-        "precondition": c.precondition,
-        "generator": generator,
-    }
     return SingleSiteHMC(
-        Sigma, M, prob.rate_tilt, prob.phi, prob.psi_is_phi[l], **{**kwargs, **overrides}
+        Sigma,
+        M,
+        prob.rate_tilt,
+        prob.phi,
+        prob.psi_is_phi[l],
+        n_chains=c.n_chains,
+        eps=c.eps0,
+        n_leap=c.n_leap,
+        target_accept=c.target_accept,
+        adapt_rate=c.adapt_rate,
+        jitter_rel=c.jitter_rel,
+        sample_dtype=prob.sample_dtype,
+        precondition=c.precondition,
+        generator=generator,
     )
 
 
@@ -222,12 +252,18 @@ def _init_from_net(prob: _Problem, Phi, Phi_hat, net_Phi, net_H) -> None:
     scratch = torch.Generator(device=prob.dev).manual_seed(0)
     for l in range(prob.L - 2, -1, -1):
         tmp = SingleSiteHMC(
-            _prior_cov(prob, l + 1, Phi), Phi_hat[l + 1], prob.rate_tilt, prob.phi,
-            prob.psi_is_phi[l + 1], n_chains=1, sample_dtype=F64,
-            jitter_rel=prob.cfg.jitter_rel, generator=scratch,
-        )  # fmt: skip
+            _prior_cov(prob, l + 1, Phi),
+            Phi_hat[l + 1],
+            prob.rate_tilt,
+            prob.phi,
+            prob.psi_is_phi[l + 1],
+            n_chains=1,
+            sample_dtype=F64,
+            jitter_rel=prob.cfg.jitter_rel,
+            generator=scratch,
+        )
         h = net_H[:, l + 1].T  # (N, P)
-        _, u = tmp._tilt_and_grad(h)
+        _, u = tmp.tilt_and_grad(h)
         h_u = h.T @ u / h.shape[0]
         Phi_hat[l] = sym(torch.linalg.solve(Phi[l], h_u))
 
@@ -478,7 +514,9 @@ class _OuterStep:
     n_backtrack: int
 
 
-def _trust_region_step(prob, st: _SolverState, grads, Phi_prev):
+def _trust_region_step(
+    prob: _Problem, st: _SolverState, grads: list[torch.Tensor], Phi_prev: torch.Tensor
+) -> tuple[list[int], list[float], list[bool]]:
     """Φ_l ← Π_PD(Φ_l^prev - η ∂S/∂Φ_l c_l²), the step clipped to max_rel_step ||Φ_l^prev||.
     c_l is read from the current Φ_l, i.e. the last attempted step when backtracking."""
     cfg = prob.cfg
@@ -534,8 +572,17 @@ def _outer_descent(prob, st: _SolverState, grads, Phi_prev, outer, log: Log) -> 
 
 
 # ----------------------------------------------------------------------------- diagnostics
-def _record(prob, st, outer, elapsed, inner: _InnerResult, og: _OuterGradients,
-            step: _OuterStep, Phi_prev, Phi_hat_prev) -> dict:  # fmt: skip
+def _record(
+    prob: _Problem,
+    st: _SolverState,
+    outer: int,
+    elapsed: float,
+    inner: _InnerResult,
+    og: _OuterGradients,
+    step: _OuterStep,
+    Phi_prev: torch.Tensor,
+    Phi_hat_prev: torch.Tensor,
+) -> dict:
     """The history entry of one outer step (per-layer quantities as numpy arrays)."""
     L, Phi, Phi_hat, diags = prob.L, st.Phi, st.Phi_hat, og.hmc_diag
 
@@ -667,13 +714,25 @@ def _to_payload(st: _SolverState) -> dict:
     }
 
 
-def _restore_state(prob: _Problem, payload: dict, gen: torch.Generator, path: Path) -> _SolverState:
+def _restore_state(
+    prob: _Problem, payload: dict, gen: torch.Generator, path: Path, with_net: bool
+) -> _SolverState:
     """Rebuild the samplers at the saved (Φ, Φ̂), load their chains and the generator state.
     No warm-up: the saved chains are already equilibrated."""
     Phi, Phi_hat = payload["Phi"].to(F64), payload["Phi_hat"].to(F64)
     expected = (prob.L, prob.P, prob.P)
     if tuple(Phi.shape) != expected or tuple(Phi_hat.shape) != expected:
         raise ValueError(f"{path} holds kernels of shape {tuple(Phi.shape)}, expected {expected}")
+    # The net diagnostics are fixed when a solve starts; continuing with a different net
+    # setting would silently drop them or leave history columns of different lengths.
+    if (payload["net_Phi"] is not None) != with_net:
+        written, given = (
+            ("with", "without") if payload["net_Phi"] is not None else ("without", "with")
+        )
+        raise ValueError(
+            f"{path} was written {written} a net but solve was called {given} one; "
+            "pass the same net (or none) as the original run, or delete the checkpoint"
+        )
     samplers = _make_samplers(prob, Phi, Phi_hat, gen)
     for s, state in zip(samplers, payload["samplers"], strict=True):
         s.load_state_dict(state)
@@ -740,7 +799,9 @@ def solve(
 
     With checkpoint_dir (requires config_hash): return its final.pt if present, else resume
     from its latest ckpt_*.pt if present; write ckpt_<outer:05d>.pt every cfg.save_int
-    outer steps and final.pt at the end.  Without it, nothing touches disk.
+    outer steps, and final.pt at the end (which then replaces the checkpoints).  A saved state
+    must have been written with a net iff `net` is given.  Without checkpoint_dir, nothing
+    touches disk.
     """
     if checkpoint_dir is not None and not config_hash:
         raise ValueError("checkpoint_dir needs a non-empty config_hash to guard against reuse")
@@ -752,9 +813,10 @@ def solve(
     if saved is None:
         st = _fresh_state(prob, net, gen, log)
     else:
-        st = _restore_state(prob, load_artefact(saved, config_hash, prob.dev), gen, saved)
+        payload = load_artefact(saved, config_hash, prob.dev)
+        st = _restore_state(prob, payload, gen, saved, with_net=net is not None)
         if saved.name == FINAL_NAME:
-            log(f"loaded finished solve from {saved}")
+            log(f"loaded finished solve from {saved} ({st.outer} outer steps)")
             return SolveResult(st.Phi, st.Phi_hat, st.history, st.samplers)
         log(f"resumed from {saved} at outer step {st.outer}")
 
@@ -767,8 +829,16 @@ def solve(
                 checkpoint_dir, CKPT_PREFIX, st.outer, _to_payload(st), config_hash, CKPT_WIDTH
             )
     if checkpoint_dir is not None:
-        save_artefact(Path(checkpoint_dir) / FINAL_NAME, _to_payload(st), config_hash)
+        _save_final(Path(checkpoint_dir), _to_payload(st), config_hash)
     return SolveResult(st.Phi, st.Phi_hat, st.history, st.samplers)
+
+
+def _save_final(checkpoint_dir: Path, payload: dict, config_hash: str) -> None:
+    """Write final.pt, then delete the checkpoints: final.pt supersedes them (the last one
+    holds the same payload, which is large at production size)."""
+    save_artefact(checkpoint_dir / FINAL_NAME, payload, config_hash)
+    for ckpt in checkpoint_dir.glob(f"{CKPT_PREFIX}*.pt"):
+        ckpt.unlink()
 
 
 def _meanfield_hash(cfg: Config) -> str:
@@ -780,19 +850,16 @@ def run_meanfield(
 ) -> SolveResult:
     """Solve on the first cfg.meanfield.n_points training points, caching under
     CACHE_DIR/meanfield (returns final.pt if present, resumes from a checkpoint otherwise)."""
-    mf = cfg.meanfield
-    P = dataset.x.shape[0]
-    if mf.n_points > P:
-        raise ValueError(f"meanfield.n_points={mf.n_points} exceeds the dataset size P={P}")
+    X, Y = _solver_inputs(dataset, cfg)
     return solve(
-        dataset.x[: mf.n_points],
-        dataset.y[: mf.n_points],
+        X,
+        Y,
         cfg.net.L,
         cfg.train.weight_lambda,
         cfg.train.rate_lambda,
         get_phi(cfg.net.phi),
         cfg.net.g,
-        mf,
+        cfg.meanfield,
         net=net,
         log=log,
         checkpoint_dir=cache_paths(cache_dir).meanfield,
