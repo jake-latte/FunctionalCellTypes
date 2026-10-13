@@ -10,10 +10,16 @@ Only this module (config, activations, cache) exists on this branch so far: the
 import hashlib
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import torch
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Constrained types: the config is the boundary, so impossible values fail at load time.
+PosInt = Annotated[int, Field(ge=1)]
+NonNegInt = Annotated[int, Field(ge=0)]
+PosFloat = Annotated[float, Field(gt=0)]
+NonNegFloat = Annotated[float, Field(ge=0)]
 
 
 class _Strict(BaseModel):
@@ -21,85 +27,94 @@ class _Strict(BaseModel):
 
 
 class DataConfig(_Strict):
-    P: int = 4096
-    D_in: int = 64
-    d: int = 2
-    var: float = 10.0
+    P: PosInt = 4096
+    D_in: PosInt = 64
+    d: PosInt = 2
+    var: PosFloat = 10.0
     cov: list[list[float]] | None = None  # None -> identity
     embedding: Literal["linear", "fourier"] = "fourier"
     seed: int = 0
 
+    @model_validator(mode="after")
+    def _fourier_needs_even_D_in(self):
+        # The fourier embedding stacks cos and sin features, so D_in must split into pairs.
+        if self.embedding == "fourier" and self.D_in % 2:
+            raise ValueError(
+                f"D_in must be even for the fourier embedding (cos/sin pairs); got {self.D_in}"
+            )
+        return self
+
 
 class NetConfig(_Strict):
-    N: int = 100
-    L: int = 3
-    g: float = 1.0
+    N: PosInt = 100
+    L: PosInt = 3
+    g: PosFloat = 1.0
     phi: Literal["relu", "tanh", "sigmoid"] = "relu"
     seed: int = 0
 
 
 class TrainConfig(_Strict):
-    n_epochs: int = 15_000
-    lr: float = 1e-3
-    weight_lambda: float = 1e-3
-    rate_lambda: float = 1e-3
-    log_int: int = 100
-    save_int: int = 100
+    n_epochs: NonNegInt = 15_000
+    lr: PosFloat = 1e-3
+    weight_lambda: NonNegFloat = 1e-3
+    rate_lambda: NonNegFloat = 1e-3
+    log_int: PosInt = 100
+    save_int: PosInt = 100
     seed: int = 0
 
 
 class MeanFieldConfig(_Strict):
-    n_points: int = 100  # solve on the first n_points training points
-    beta: float = 1e6
+    n_points: PosInt = 100  # solve on the first n_points training points
+    beta: PosFloat = 1e6
     readout: Literal["h", "phi"] = "h"
     # Algorithm 1
-    n_outer: int = 300
-    n_inner_max: int = 30
-    inner_tol: float = 1e-2
-    inner_tol_mc: float = 2.0
-    eta_phi: float = 0.05
-    eta_phihat: float = 0.05
-    eta_max: float = 1.0
-    eta_grow: float = 1.1
-    max_backtrack: int = 8
-    eta_min_rel: float = 1e-3
-    max_div_frac: float = 0.02
+    n_outer: PosInt = 300
+    n_inner_max: PosInt = 30
+    inner_tol: PosFloat = 1e-2
+    inner_tol_mc: PosFloat = 2.0
+    eta_phi: PosFloat = 0.05
+    eta_phihat: PosFloat = 0.05
+    eta_max: PosFloat = 1.0
+    eta_grow: PosFloat = 1.1
+    max_backtrack: PosInt = 8
+    eta_min_rel: NonNegFloat = 1e-3
+    max_div_frac: NonNegFloat = 0.02
     max_h2_growth: float = 10.0
     max_mc_err: float = 1.0
-    eps_collapse: float = 1e-2
+    eps_collapse: NonNegFloat = 1e-2
     project_tilt: bool = True
-    tilt_floor: float = 0.05
-    max_rel_step: float = 0.1
-    pd_floor_rel: float = 1e-8
-    inv_floor_rel: float = 1e-4
-    prior_scale: float | None = None
-    alpha: float | None = None
-    learning_prefactor: float = 0.5
-    rate_tilt: float | None = None
+    tilt_floor: Annotated[float, Field(ge=0, lt=1)] = 0.05
+    max_rel_step: PosFloat = 0.1
+    pd_floor_rel: PosFloat = 1e-8
+    inv_floor_rel: PosFloat = 1e-4
+    prior_scale: PosFloat | None = None
+    alpha: PosFloat | None = None
+    learning_prefactor: PosFloat = 0.5
+    rate_tilt: NonNegFloat | None = None
     # HMC
-    n_chains: int = 2048
-    n_trans: int = 2
-    n_trans_outer: int = 5
-    n_leap: int = 10
-    eps0: float = 0.05
-    target_accept: float = 0.75
-    adapt_rate: float = 0.05
-    warmup_trans: int = 200
+    n_chains: PosInt = 2048
+    n_trans: PosInt = 2
+    n_trans_outer: PosInt = 5
+    n_leap: PosInt = 10
+    eps0: PosFloat = 0.05
+    target_accept: Annotated[float, Field(gt=0, lt=1)] = 0.75
+    adapt_rate: PosFloat = 0.05
+    warmup_trans: PosInt = 200
     sample_dtype: Literal["float32", "float64"] = "float32"
-    jitter_rel: float = 1e-6
+    jitter_rel: PosFloat = 1e-6
     precondition: bool = True
     init: Literal["lazy", "gaussian", "net"] = "lazy"
-    n_init_samples: int = 20_000
-    log_int: int = 5
-    save_int: int = 10
+    n_init_samples: PosInt = 20_000
+    log_int: PosInt = 5
+    save_int: PosInt = 10
     seed: int = 0
 
 
 class AnalysisConfig(_Strict):
-    n_grid: int = 25  # test grid is n_grid x n_grid
-    n_components: int = 10  # PCA components per layer
-    plot_layer: int = 0  # layer whose neuron maps are drawn
-    n_cols: int = 8  # columns in the neuron-map grid
+    n_grid: PosInt = 25  # test grid is n_grid x n_grid
+    n_components: PosInt = 10  # PCA components per layer
+    plot_layer: NonNegInt = 0  # layer whose neuron maps are drawn
+    n_cols: PosInt = 8  # columns in the neuron-map grid
 
 
 class Config(_Strict):
