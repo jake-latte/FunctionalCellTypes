@@ -1,4 +1,6 @@
+import dataclasses
 import itertools
+import math
 
 import pytest
 import torch
@@ -16,6 +18,18 @@ def _cfg(**kw) -> DataConfig:
     return DataConfig(**{"P": 50, "D_in": 8, "d": 2, "var": 2.0, **kw})
 
 
+def _lowest_wavevectors(M: int, d: int = 2, box: int = 12) -> set[tuple[int, ...]]:
+    """Brute force: the M canonical lattice vectors of lowest |k|^2, ties broken
+    lexicographically. Independent of the implementation (plain Python, huge box)."""
+    vecs = [
+        k
+        for k in itertools.product(range(-box, box + 1), repeat=d)
+        if any(k) and next(c for c in k if c != 0) > 0
+    ]
+    vecs.sort(key=lambda k: (sum(c * c for c in k), k))
+    return set(vecs[:M])
+
+
 @pytest.mark.parametrize("embedding", ["linear", "fourier"])
 def test_make_dataset_is_deterministic_per_seed(embedding):
     a = make_dataset(_cfg(embedding=embedding, seed=1), CPU, F64)
@@ -23,6 +37,20 @@ def test_make_dataset_is_deterministic_per_seed(embedding):
     c = make_dataset(_cfg(embedding=embedding, seed=2), CPU, F64)
     assert torch.equal(a.x, b.x) and torch.equal(a.y, b.y)
     assert not torch.equal(a.y, c.y)
+
+
+def test_make_dataset_draws_from_cpu_generator():
+    # Seeding a CPU generator is what makes the data identical on every device.
+    cfg = _cfg(embedding="linear", seed=3, var=1.0)
+    gen = torch.Generator().manual_seed(3)
+    z = torch.randn((cfg.P, cfg.d), dtype=F64, generator=gen)
+    assert torch.equal(make_dataset(cfg, CPU, F64).y, z)
+
+
+def test_dataset_is_frozen():
+    ds = make_dataset(_cfg(), CPU, F64)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ds.x = ds.y
 
 
 def test_linear_dataset_shapes_and_orthonormal_Q():
@@ -40,6 +68,12 @@ def test_fourier_dataset_has_no_Q_and_float_period():
     assert ds.period == pytest.approx((ds.y.max() - ds.y.min()).item())
 
 
+def test_float32_dataset_and_grid_dtype():
+    ds = make_dataset(_cfg(embedding="fourier"), CPU, torch.float32)
+    assert ds.x.dtype == ds.y.dtype == torch.float32
+    assert grid_targets(1.0, 3, CPU, torch.float32).dtype == torch.float32
+
+
 def test_linear_seed_changes_Q():
     a = make_dataset(_cfg(embedding="linear", seed=1), CPU, F64)
     b = make_dataset(_cfg(embedding="linear", seed=2), CPU, F64)
@@ -51,30 +85,43 @@ def test_fourier_embedding_rejects_odd_D():
         fourier_embedding(torch.zeros(3, 2, dtype=F64), D=7, period=1.0)
 
 
-def _first_nonzero_positive(k: torch.Tensor) -> torch.Tensor:
-    first = k[torch.arange(len(k)), (k != 0).long().argmax(dim=1)]
-    return first > 0
+@pytest.mark.parametrize("period", [0.0, -1.0, float("inf"), float("nan")])
+def test_fourier_embedding_rejects_bad_period(period):
+    with pytest.raises(ValueError, match="period"):
+        fourier_embedding(torch.zeros(3, 2, dtype=F64), D=4, period=period)
 
 
-def test_fourier_embedding_pairs_unit_norm_and_wavevectors():
-    y = torch.randn(20, 2, dtype=F64)
-    D = 12
-    feats, k = fourier_embedding(y, D=D, period=5.0)
-    pairs = feats.reshape(20, D // 2, 2)
-    assert torch.allclose(pairs.norm(dim=-1), torch.ones(20, D // 2, dtype=F64))
+def test_fourier_embedding_pairs_unit_norm():
+    gen = torch.Generator().manual_seed(0)
+    y = torch.randn(20, 2, dtype=F64, generator=gen)
+    feats, _ = fourier_embedding(y, D=12, period=5.0)
+    assert torch.allclose(feats.reshape(20, 6, 2).norm(dim=-1), torch.ones(20, 6, dtype=F64))
+
+
+def test_fourier_embedding_known_wavevectors_D12():
+    _, k = fourier_embedding(torch.zeros(1, 2, dtype=F64), D=12, period=1.0)
+    assert {tuple(r) for r in k.tolist()} == {(1, 0), (0, 1), (1, 1), (1, -1), (2, 0), (0, 2)}
+
+
+@pytest.mark.parametrize("D", [12, 16, 48, 64])
+def test_fourier_embedding_keeps_lowest_wavevectors(D):
+    _, k = fourier_embedding(torch.zeros(1, 2, dtype=F64), D=D, period=1.0)
+    assert {tuple(r) for r in k.tolist()} == _lowest_wavevectors(D // 2)
     assert k.shape == (D // 2, 2)
-    assert (k != 0).any(dim=1).all()
-    assert _first_nonzero_positive(k).all()
 
-    # No omitted canonical lattice vector is shorter than the longest one kept.
-    lattice = torch.tensor(list(itertools.product(range(-4, 5), repeat=2)))
-    lattice = lattice[(lattice != 0).any(dim=1)]
-    lattice = lattice[_first_nonzero_positive(lattice)]
-    kept = {tuple(r) for r in k.tolist()}
-    max_kept = (k**2).sum(dim=1).max().item()
-    for row in lattice.tolist():
-        if tuple(row) not in kept:
-            assert sum(v * v for v in row) >= max_kept
+
+def test_fourier_embedding_hand_computed_phases():
+    D, period = 6, 4.0
+    at_origin, k = fourier_embedding(torch.zeros(1, 2, dtype=F64), D=D, period=period)
+    assert torch.allclose(at_origin, torch.tensor([[1, 0, 1, 0, 1, 0]], dtype=F64))
+    # A quarter period along axis 0 puts every mode with k = (1, 0) at phase pi/2.
+    y = torch.tensor([[period / 4, 0.0]], dtype=F64)
+    feats, k = fourier_embedding(y, D=D, period=period)
+    i = k.tolist().index([1, 0])
+    assert feats[0, 2 * i].abs() < 1e-12 and feats[0, 2 * i + 1] == pytest.approx(1.0)
+    phase = 2 * math.pi * (y @ k.to(F64).T)[0] / period
+    assert torch.allclose(feats[0, 0::2], torch.cos(phase))
+    assert torch.allclose(feats[0, 1::2], torch.sin(phase))
 
 
 @pytest.mark.parametrize("embedding", ["linear", "fourier"])
@@ -82,6 +129,17 @@ def test_embed_reproduces_dataset_x(embedding):
     cfg = _cfg(embedding=embedding)
     ds = make_dataset(cfg, CPU, F64)
     assert torch.allclose(embed(ds.y, ds, cfg), ds.x)
+
+
+def test_embed_rejects_mismatched_dataset():
+    lin = make_dataset(_cfg(embedding="linear"), CPU, F64)
+    fou = make_dataset(_cfg(embedding="fourier"), CPU, F64)
+    with pytest.raises(ValueError, match="Q"):
+        embed(lin.y, fou, _cfg(embedding="linear"))
+    with pytest.raises(ValueError, match="period"):
+        embed(fou.y, lin, _cfg(embedding="fourier"))
+    with pytest.raises(ValueError, match="D_in"):
+        embed(fou.y, fou, _cfg(embedding="fourier", D_in=10))
 
 
 def test_grid_targets_matches_meshgrid():
@@ -115,6 +173,11 @@ def test_wrong_shape_cov_raises():
         make_dataset(_cfg(cov=[[1.0, 0.0, 0.0]]), CPU, F64)
 
 
+def test_asymmetric_cov_raises():
+    with pytest.raises(ValueError, match="symmetric"):
+        make_dataset(_cfg(cov=[[1.0, 0.5], [0.0, 1.0]]), CPU, F64)
+
+
 def _full_cfg(**kw) -> Config:
     return Config(data=_cfg(**kw), device="cpu", dtype="float64")
 
@@ -131,8 +194,12 @@ def test_get_dataset_computes_then_loads(tmp_path, monkeypatch, embedding):
     monkeypatch.setattr(data_module, "make_dataset", boom)
     second = get_dataset(tmp_path, cfg)
     assert torch.equal(first.x, second.x) and torch.equal(first.y, second.y)
+    assert second.x.dtype == second.y.dtype == F64
     assert second.period == first.period
-    assert (second.Q is None) == (first.Q is None)
+    if embedding == "linear":
+        assert torch.equal(first.Q, second.Q) and second.Q.dtype == F64
+    else:
+        assert second.Q is None
 
 
 def test_get_dataset_stale_after_config_change(tmp_path):
