@@ -208,11 +208,16 @@ def empirical_kernels(net, X, readout) -> tuple[Tensor, Tensor]     # notebook
 class SolveResult: Phi: Tensor; Phi_hat: Tensor; history: dict[str, list]; samplers: list[SingleSiteHMC]
 def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, log=print,
           checkpoint_dir: Path | None = None, config_hash: str = "") -> SolveResult
-    # Algorithm 1 exactly as the notebook; if checkpoint_dir is given, resume from its latest ckpt_*.pt and
-    # write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end
+    # Algorithm 1 exactly as the notebook; if checkpoint_dir is given, return its final.pt if present, else
+    # resume from its latest ckpt_*.pt (ValueError if it was written with a net and `net` is None, or vice
+    # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then
+    # replaces the checkpoints
 def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> SolveResult
     # X = dataset.x[:n_points], Y = dataset.y[:n_points]; lambda_w/lambda_r from cfg.train; phi/g/L from cfg.net
     # hash = section_hash("data","net","train","meanfield"); returns final.pt if present
+def net_kernels(net: MLP, dataset: Dataset, cfg: Config) -> Tensor   # (L, P, P) float64
+    # the trained net's empirical_kernels on exactly the solver's inputs (same slicing code as run_meanfield)
+    # and cfg.meanfield.readout, the net evaluated in its own dtype; for the theory-vs-net kernels figure
 def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor, dict]   # Phi, Phi_hat, history
 ```
 
