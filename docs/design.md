@@ -215,7 +215,9 @@ def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor
 ```
 
 History values are stored per outer step; arrays become lists for saving. The
-history keys are exactly those of the notebook's `keys` list.
+history keys are exactly those of the notebook's `keys` list (`meanfield.HISTORY_KEYS`),
+except that `align_net` / `dist_net` are omitted when `solve` is given no net (instead of
+lists of `None`).
 
 ## analyse.py
 
