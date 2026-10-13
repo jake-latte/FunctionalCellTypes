@@ -213,6 +213,17 @@ def test_fig_neuron_maps_axes_and_surplus_off(n_neurons, n_cols, tmp_path):
     _assert_png(fig, tmp_path)
 
 
+def test_fig_neuron_maps_title_clear_of_panels():
+    # The default size (N=100, 8 columns): the overlap does not show at N=16, so the test uses
+    # the real size (about 4 s to draw).
+    fig = draw.fig_neuron_maps(_rand(100, P_GRID, P_GRID), 5.0, 8, "Activity in layer 1")
+    fig.canvas.draw()
+    (title,) = fig.texts
+    title_box = title.get_window_extent()
+    for ax in fig.axes:
+        assert not title_box.overlaps(ax.get_window_extent()), ax.get_label()
+
+
 def test_fig_example(dataset, tmp_path):
     cfg = DataConfig(D_in=8, P=P_TRAIN)
     fig = draw.fig_example(dataset, cfg)
@@ -240,6 +251,36 @@ def test_fig_kernels(tmp_path):
     for row in range(L):  # shared colour scale within a row
         assert images[2 * row].get_clim() == images[2 * row + 1].get_clim()
     _assert_png(fig, tmp_path)
+
+
+def _kernel_stacks():
+    g = torch.Generator().manual_seed(3)
+    theory = torch.rand(L, P_TRAIN, P_TRAIN, generator=g)
+    net = 1000 * torch.rand(L, P_TRAIN, P_TRAIN, generator=g)
+    return theory, net
+
+
+def test_fig_kernels_shared_scale_is_the_default_and_named_in_titles():
+    theory, net = _kernel_stacks()
+    fig = draw.fig_kernels(theory, net, shared_scale=True)
+    axes = [a for a in fig.axes if a.images]
+    for row in range(L):
+        assert axes[2 * row].images[0].get_clim() == axes[2 * row + 1].images[0].get_clim()
+    assert all("shared scale" in a.get_title() for a in axes)
+    assert len(fig.axes) == 2 * L * 2  # one colorbar per panel
+
+
+def test_fig_kernels_independent_scales_use_each_panels_own_range():
+    theory, net = _kernel_stacks()
+    fig = draw.fig_kernels(theory, net, shared_scale=False)
+    axes = [a for a in fig.axes if a.images]
+    assert len(axes) == 2 * L
+    assert len(fig.axes) == 2 * L * 2  # each panel keeps its own colorbar
+    for row in range(L):
+        for ax, stack in zip(axes[2 * row : 2 * row + 2], (theory, net)):
+            m = stack[row]
+            assert ax.images[0].get_clim() == (float(m.min()), float(m.max()))
+            assert "own scale" in ax.get_title()
 
 
 def test_fig_kernels_rejects_shape_mismatch():
