@@ -32,7 +32,7 @@ pyproject.toml, uv.lock, .gitignore, README.md
 Environment: `uv` + `pyproject.toml` + committed `uv.lock`. Tests run with
 `uv run pytest`. Pytest config: `[tool.pytest.ini_options] testpaths=["tests"]`,
 `pythonpath=["."]`. Dependencies: torch>=2.11, numpy, scikit-learn, matplotlib,
-pydantic>=2; dev: pytest. `ruff` config: line length 100.
+pydantic>=2; dev: pytest, ruff. `ruff` config: line length 100.
 
 ## Cache directory layout
 
@@ -130,6 +130,8 @@ def resolve_device(cfg: Config) -> torch.device   # "auto" -> cuda if available 
 def resolve_dtype(name: str) -> torch.dtype
 ```
 
+Fields are range-constrained (sizes and intervals >= 1, rates and scales > 0, `target_accept` in (0,1), `tilt_floor` in [0,1); `D_in` must be even for `embedding="fourier"`), and `load_config` raises `ValidationError` naming the field.
+
 ## activations.py
 
 ```python
@@ -179,9 +181,9 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # we
 ## train.py
 
 ```python
-def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[str, float]]
-    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2  (notebook cell 5); dict has mse, weight_l2, rate_l2, loss
-History = dict[str, list[float]]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs)
+def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[str, Tensor]]
+    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2  (notebook cell 5); dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
+History = dict[str, list[int | float]]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs)
 def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> tuple[MLP, History]
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
     # checkpoint every save_int epochs and at the end (final.pt); hash = section_hash("data","net","train")
