@@ -172,8 +172,8 @@ def get_dataset(cache_dir: Path, cfg: Config) -> Dataset          # cache-or-com
 ## model.py
 
 ```python
-class MLP(nn.Module)   # verbatim from the notebook: __init__(D_in, D_out, N, L, g, phi, device, dtype); forward(x) -> (H (P,L,N), Z (P,D_out)); weight_l2()
-def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # torch.manual_seed(cfg.seed) scoped via torch.random.fork_rng; phi = get_phi(cfg.phi)
+class MLP(nn.Module)   # verbatim from the notebook: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None); forward(x) -> (H (P,L,N), Z (P,D_out)); weight_l2()
+def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # weights drawn on CPU from a local torch.Generator seeded with cfg.seed, then moved to device (no global RNG touched); phi = get_phi(cfg.phi)
 ```
 
 ## train.py
