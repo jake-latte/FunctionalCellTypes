@@ -209,6 +209,19 @@ def test_fig_neuron_maps_axes_and_surplus_off(n_neurons, n_cols, tmp_path):
     _assert_png(fig, tmp_path)
 
 
+# The overlap depends on the number of rows, not N: the 24 pt title is fixed in points while
+# tight_layout's pad is a fraction of the figure height, so tall figures (13 rows, as for
+# N=100 in 8 columns) overlap and short ones (1 row) do not.
+@pytest.mark.parametrize("n_neurons, n_cols", [(13, 1), (8, 8)])
+def test_fig_neuron_maps_title_clear_of_panels(n_neurons, n_cols):
+    fig = draw.fig_neuron_maps(_rand(n_neurons, P_GRID, P_GRID), 5.0, n_cols, "Activity in layer 1")
+    fig.canvas.draw()
+    (title,) = fig.texts
+    title_box = title.get_window_extent()
+    for ax in fig.axes:
+        assert not title_box.overlaps(ax.get_window_extent()), ax.get_label()
+
+
 def test_fig_example(dataset, tmp_path):
     cfg = DataConfig(D_in=8, P=P_TRAIN)
     fig = draw.fig_example(dataset, cfg)
@@ -236,6 +249,38 @@ def test_fig_kernels(tmp_path):
     for row in range(L):  # shared colour scale within a row
         assert images[2 * row].get_clim() == images[2 * row + 1].get_clim()
     _assert_png(fig, tmp_path)
+
+
+def _kernel_stacks():
+    g = torch.Generator().manual_seed(3)
+    theory = torch.rand(L, P_TRAIN, P_TRAIN, generator=g)
+    net = 1000 * torch.rand(L, P_TRAIN, P_TRAIN, generator=g)
+    return theory, net
+
+
+@pytest.mark.parametrize("shared_scale", [True, False])
+def test_fig_kernels_scales_and_titles(shared_scale):
+    theory, net = _kernel_stacks()
+    # The default must be the shared scale, so only the False case passes the keyword.
+    fig = (
+        draw.fig_kernels(theory, net)
+        if shared_scale
+        else draw.fig_kernels(theory, net, shared_scale=False)
+    )
+    axes = [a for a in fig.axes if a.images]
+    assert len(axes) == 2 * L
+    assert len(fig.axes) == 2 * L * 2  # every panel keeps its own colorbar
+    note = "shared scale" if shared_scale else "own scale"
+    assert all(note in a.get_title() for a in axes)
+    for row in range(L):
+        pair = axes[2 * row : 2 * row + 2]
+        clims = [a.images[0].get_clim() for a in pair]
+        if shared_scale:
+            assert clims[0] == clims[1]
+        else:
+            for clim, stack in zip(clims, (theory, net)):
+                m = np.asarray(stack[row])
+                assert clim == pytest.approx((m.min(), m.max()), rel=1e-6)
 
 
 def test_fig_kernels_rejects_shape_mismatch():

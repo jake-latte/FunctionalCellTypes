@@ -240,7 +240,10 @@ def fig_neuron_maps(maps: ArrayLike, half_width: float, n_cols: int, title: str)
         else:
             ax.set_axis_off()
     fig.suptitle(title, fontsize=24)
-    fig.tight_layout()
+    # tight_layout ignores the suptitle; reserve the top strip for it explicitly. The strip is a
+    # fraction of the figure height, so it grows with the row count that causes the overlap
+    # (the title is fixed in points); on short figures tight_layout's own pad already clears it.
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig
 
 
@@ -300,19 +303,30 @@ def plot_kernel(
     return ax
 
 
-def fig_kernels(Phi_theory: ArrayLike, Phi_net: ArrayLike) -> Figure:
-    """L rows x 2 columns: theory kernel and network kernel, sharing a colour scale per row."""
+def fig_kernels(Phi_theory: ArrayLike, Phi_net: ArrayLike, shared_scale: bool = True) -> Figure:
+    """L rows x 2 columns: theory kernel and network kernel.
+
+    With `shared_scale` both panels of a row use one colour scale; without it each panel has
+    its own, so a kernel orders of magnitude smaller than its partner is not rendered flat.
+    Every panel title names the scale in force.
+    """
     theory, net = _np(Phi_theory), _np(Phi_net)
     if theory.shape != net.shape or theory.ndim != 3:
         raise ValueError(f"need two (L, P, P) stacks, got {theory.shape} and {net.shape}")
     n_layers = len(theory)
+    scale_note = "shared scale" if shared_scale else "own scale"
     fig, axes = plt.subplots(n_layers, 2, figsize=(9, 4.5 * n_layers), squeeze=False)
     for layer in range(n_layers):
-        vmin = min(theory[layer].min(), net[layer].min())
-        vmax = max(theory[layer].max(), net[layer].max())
+        # vmin/vmax None lets imshow use the panel's own range.
+        vmin = min(theory[layer].min(), net[layer].min()) if shared_scale else None
+        vmax = max(theory[layer].max(), net[layer].max()) if shared_scale else None
         for ax, kernel, name in zip(axes[layer], (theory, net), ("theory", "net")):
             plot_kernel(
-                kernel[layer], ax=ax, title=f"{name} layer {layer + 1}", vmin=vmin, vmax=vmax
+                kernel[layer],
+                ax=ax,
+                title=f"{name} layer {layer + 1} ({scale_note})",
+                vmin=vmin,
+                vmax=vmax,
             )
     fig.tight_layout()
     return fig
