@@ -89,12 +89,12 @@ def layer_pca(h_grid: Tensor, phi: Callable[[Tensor], Tensor], n_components: int
     return LayerPCA(explained_variance, components, similarity)
 
 
-def neuron_maps(
-    h_grid: Tensor, phi: Callable[[Tensor], Tensor], layer: int, n_grid: int
-) -> Tensor:
+def neuron_maps(h_grid: Tensor, phi: Callable[[Tensor], Tensor], layer: int, n_grid: int) -> Tensor:
     """(N, p, p) activity maps of every neuron in `layer`."""
     if h_grid.shape[0] != n_grid**2:
-        raise ValueError(f"h_grid has {h_grid.shape[0]} points but n_grid={n_grid} needs {n_grid**2}")
+        raise ValueError(
+            f"h_grid has {h_grid.shape[0]} points but n_grid={n_grid} needs {n_grid**2}"
+        )
     return phi(h_grid[:, layer]).T.reshape(-1, n_grid, n_grid)
 
 
@@ -103,7 +103,9 @@ def kernel_scales(Phi: Tensor) -> Tensor:
     return Phi.diagonal(dim1=-2, dim2=-1).mean(dim=-1)
 
 
-def get_grid_predictions(cache_dir: Path, cfg: Config, net: MLP, dataset: Dataset) -> GridPredictions:
+def get_grid_predictions(
+    cache_dir: Path, cfg: Config, net: MLP, dataset: Dataset
+) -> GridPredictions:
     """Load CACHE_DIR/analysis/grid.pt, computing it on first use.
 
     Raises StaleCacheError if it was written under a different data/net/train/analysis config.
