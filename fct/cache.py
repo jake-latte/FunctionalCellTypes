@@ -60,7 +60,7 @@ def _check_loadable(obj, where: str) -> None:
         for i, value in enumerate(obj):
             _check_loadable(value, f"{where}[{i}]")
     else:
-        raise TypeError(f"{where}: {type(obj).__name__} cannot be saved; only weights_only-loadable")
+        raise TypeError(f"{where}: {type(obj).__name__} is not weights_only-loadable")
 
 
 def save_artefact(path: str | Path, payload: dict, config_hash: str) -> None:
