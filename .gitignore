@@ -20,3 +20,14 @@ build/
 *.vrb
 *.xdv
 *.pdf
+
+# Python / fct library
+cache/
+.cache/
+.venv/
+.uv-cache/
+__pycache__/
+*.pt
+.claude/worktrees/
+.pytest_cache/
+.pm/

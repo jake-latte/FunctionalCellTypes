@@ -45,3 +45,34 @@ compile whichever file is open (a section on its own, or everything from
 Renaming or reordering is just editing the `\subfile` list in `main.tex`.
 Numbering starts at 0 (Motivation is Section 0) because of
 `\setcounter{section}{-1}` in `main.tex`; delete that line for 1-based numbering.
+
+## Python library
+
+The `fct` package trains deep networks and solves the matching mean-field
+theory. The environment is managed with `uv`; `uv.lock` pins every dependency.
+
+**Status:** the CLI (`python -m fct ...`) is not implemented yet on this branch; only
+config, activations and cache exist so far. The commands under "Intended workflow" are the
+plan, and the CLI work item will replace this sentence.
+
+`uv sync` downloads the CUDA-enabled torch wheel (several GB) on first run.
+
+```sh
+uv sync          # create the environment (first run downloads torch)
+uv run pytest    # run the tests (CPU only, synthetic data)
+```
+
+Intended workflow. Everything lives under one `CACHE_DIR`, and every step
+resumes from, or reuses, what is already there:
+
+```sh
+uv run python -m fct init CACHE_DIR --set data.P=512 --set net.L=2   # writes CACHE_DIR/config.json
+uv run python -m fct train CACHE_DIR          # train the network
+uv run python -m fct solve CACHE_DIR          # mean-field saddle-point solver
+uv run python -m fct plot CACHE_DIR           # figures that need results
+uv run python -m fct plot-example CACHE_DIR   # figure that needs no results
+```
+
+`docs/design.md` is the interface contract between modules. Changing a config
+section that an artefact depends on makes loading it raise `StaleCacheError`;
+use a fresh `CACHE_DIR` or delete the stale file.
