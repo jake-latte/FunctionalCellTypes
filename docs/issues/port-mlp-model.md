@@ -22,8 +22,9 @@ function (which `torch.load(weights_only=True)` cannot read).
 Implement exactly the *model.py* section of `docs/design.md`:
 `MLP(D_in, D_out, N, L, g, phi, device, dtype)` with `forward(x) -> (H, Z)`
 and `weight_l2()`, and `make_net(cfg: NetConfig, D_in, D_out, device, dtype)`.
-Seed via `torch.random.fork_rng` + `torch.manual_seed(cfg.seed)` so the global
-RNG is untouched. Uses `fct.activations.get_phi`.
+Draw all weights on CPU from a local `torch.Generator().manual_seed(cfg.seed)`,
+then move to the device, so no global RNG is touched and the weights do not
+depend on the device. Uses `fct.activations.get_phi`.
 
 ## Acceptance criteria
 
@@ -40,5 +41,5 @@ RNG is untouched. Uses `fct.activations.get_phi`.
   outputs.
 
 ## Implementation notes
-- `fork_rng(devices=...)`: pass the CUDA device index list only when the device is CUDA, otherwise `devices=[]`, so the CPU-only test path does not touch CUDA.
+- `MLP.__init__` takes an optional `generator` for the initial weights.
 - Tests: CPU, float64, tiny sizes (P=5, D_in=3, N=4, L=1 and L=3), `tmp_path` for the save/load round trip.
