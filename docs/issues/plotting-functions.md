@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: simple
-status: in review
+status: done
 ---
 
 # Port all figures to `fct/draw.py` as axis-accepting plot functions
