@@ -259,7 +259,7 @@ plot_neuron_map(map2d, half_width, ax=None); fig_neuron_maps(maps, half_width, n
 plot_training_history(history, ax=None)               # mse / loss vs epoch, log y
 fig_solver_history(history) -> Figure                 # the notebook's plot_history dashboard
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
-plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net) -> Figure   # theory vs net kernels per layer
+plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_scale=True) -> Figure   # theory vs net kernels per layer; shared_scale=False gives each panel its own colour scale
 ```
 
 ## cli.py
