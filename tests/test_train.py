@@ -27,6 +27,7 @@ def _cfg(n_epochs=20, L=2, **train_kw) -> Config:
         net=NetConfig(N=8, L=L, g=1.0, phi="tanh", seed=2),
         train=TrainConfig(n_epochs=n_epochs, lr=1e-2, **train_kw),
         dtype="float64",
+        device="cpu",
     )
 
 
@@ -102,6 +103,7 @@ def test_linear_task_is_learned(tmp_path):
             n_epochs=300, lr=1e-2, rate_lambda=0.0, weight_lambda=1e-3, log_int=50, save_int=100
         ),
         dtype="float64",
+        device="cpu",
     )
     ds, net = _setup(cfg)
     _, hist = train(cfg, ds, net, tmp_path, log=lambda s: None)
@@ -112,9 +114,7 @@ def test_linear_task_is_learned(tmp_path):
     "n_epochs, L, save_int, log_int, interrupt_at",
     [(20, 2, 5, 5, 10), (12, 3, 3, 1, 7)],
 )
-def test_resume_matches_uninterrupted_run(
-    tmp_path, n_epochs, L, save_int, log_int, interrupt_at
-):
+def test_resume_matches_uninterrupted_run(tmp_path, n_epochs, L, save_int, log_int, interrupt_at):
     cfg = _cfg(n_epochs, L=L, save_int=save_int, log_int=log_int)
     ds, net_ref = _setup(cfg)
     _, hist_ref = train(cfg, ds, net_ref, tmp_path / "ref", log=lambda s: None)
@@ -144,7 +144,10 @@ def test_resume_matches_uninterrupted_run(
     assert hist_b == hist_ref
     _assert_same_params(net_ref, net_b)
     last_save = (n_epochs - 1) // save_int * save_int
-    assert sorted(p.name for p in train_dir.glob("*.pt")) == [f"ckpt_{last_save:06d}.pt", "final.pt"]
+    assert sorted(p.name for p in train_dir.glob("*.pt")) == [
+        f"ckpt_{last_save:06d}.pt",
+        "final.pt",
+    ]
 
 
 def test_train_with_final_does_no_work(tmp_path):

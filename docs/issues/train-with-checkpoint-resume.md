@@ -47,8 +47,12 @@ loaded. If `final.pt` exists, load it and return without training.
 
 ## Implementation notes
 - A checkpoint with `epoch=s` is written before the step of epoch s; the step,
-  history entry and log line follow. An interrupt inside `log` at epoch s
-  therefore resumes at s.
+  history entry and log line follow. An interruption at epoch t therefore
+  resumes at the last multiple of `save_int` at or before t.
+- `compute_loss` returns detached 0-d tensors; `.item()` is called only on log
+  epochs to avoid a host-device sync every epoch.
+- Inconsistent artefacts (missing keys, epoch beyond `n_epochs`, wrong dtype or
+  device) raise `ValueError` naming the file.
 - Optimiser state is keyed by int, so it is converted to str keys on save and
   back on load; `state_dict()` is copied to a plain dict (the cache rejects
   `OrderedDict`).
