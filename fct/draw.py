@@ -240,7 +240,9 @@ def fig_neuron_maps(maps: ArrayLike, half_width: float, n_cols: int, title: str)
         else:
             ax.set_axis_off()
     fig.suptitle(title, fontsize=24)
-    # tight_layout ignores the suptitle; reserve the top strip for it explicitly.
+    # tight_layout ignores the suptitle; reserve the top strip for it explicitly. The strip is a
+    # fraction of the figure height, so it grows with the row count that causes the overlap
+    # (the title is fixed in points); on short figures tight_layout's own pad already clears it.
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig
 
@@ -306,7 +308,7 @@ def fig_kernels(Phi_theory: ArrayLike, Phi_net: ArrayLike, shared_scale: bool = 
 
     With `shared_scale` both panels of a row use one colour scale; without it each panel has
     its own, so a kernel orders of magnitude smaller than its partner is not rendered flat.
-    The panel titles say which is in force.
+    Every panel title names the scale in force.
     """
     theory, net = _np(Phi_theory), _np(Phi_net)
     if theory.shape != net.shape or theory.ndim != 3:

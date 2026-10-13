@@ -36,10 +36,13 @@ its own colour scale and colorbar. The CLI keeps the default. Every
 - `fig_kernels(Phi_theory, Phi_net, shared_scale=True)` keeps today's
   behaviour (tested: both panels of a row have the same `clim`);
   `shared_scale=False` gives each panel `clim == (min, max)` of its own
-  matrix and its own colorbar; the row title states which scale is used.
+  matrix and its own colorbar; every panel title names the scale used (the
+  default figure's panel titles gain the "(shared scale)" suffix).
 - Existing `tests/test_draw.py` pass unchanged; new tests for the two
   criteria above.
 
 ## Notes
-- The overlap does not reproduce at N=16, so the test draws N=100 (about 4 s).
+- The overlap depends on the number of rows (figure height), not N: the 24 pt
+  title is fixed in points while tight_layout's pad is a fraction of the
+  figure. The test uses 13 rows (reproduces the overlap) and 1 row (short path).
 - `docs/design.md` draw.py line for `fig_kernels` mentions `shared_scale`.
