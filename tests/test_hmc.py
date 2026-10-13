@@ -251,3 +251,20 @@ def test_kernel_alignment_is_cosine_similarity_with_zero_floor():
     B = torch.eye(3, dtype=torch.float64)
     assert kernel_alignment(3 * B, B) == pytest.approx(1.0)
     assert kernel_alignment(B, torch.zeros_like(B)) == 0.0
+
+
+@pytest.mark.parametrize("psi_is_phi, lambda_r", [(False, 0.0), (True, 0.0), (True, 0.3)])
+def test_tilt_and_grad_is_the_tilt_exponent_and_its_gradient(Sigma, M, psi_is_phi, lambda_r):
+    """U(h) = 1/2 psi^T M psi + 1/2 lambda_r phi^T phi, u = dU/dh by autograd, for samples the
+    caller brings (in float64 for a float64 sampler)."""
+    s = SingleSiteHMC(
+        Sigma, M, lambda_r, torch.tanh, psi_is_phi, n_chains=1, sample_dtype=torch.float64,
+        generator=seeded(7),
+    )  # fmt: skip
+    h = torch.randn(5, P, generator=seeded(8), **F64).requires_grad_(True)
+    psi = torch.tanh(h) if psi_is_phi else h
+    U_ref = 0.5 * ((psi @ M) * psi).sum(-1) + 0.5 * lambda_r * (torch.tanh(h) ** 2).sum(-1)
+    (u_ref,) = torch.autograd.grad(U_ref.sum(), h)
+    U, u = s.tilt_and_grad(h.detach())
+    torch.testing.assert_close(U, U_ref.detach())
+    torch.testing.assert_close(u, u_ref)

@@ -265,6 +265,10 @@ class SingleSiteHMC:
             u = u + self.lambda_r * self.phi_prime(h) * ph
         return U, u
 
+    def tilt_and_grad(self, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """U(h) per chain and u = ∇U, for callers that bring their own samples h (n, P)."""
+        return self._tilt_and_grad(h)
+
     def _potential_and_grad(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         h = z @ self.L.T
         U, u = self._tilt_and_grad(h)
