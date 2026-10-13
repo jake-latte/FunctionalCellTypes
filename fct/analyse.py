@@ -4,7 +4,7 @@ Everything except the `get_*` wrappers is pure (no file access, no plotting). Th
 cache the expensive results under CACHE_DIR/analysis/ so figures can be redrawn in seconds.
 """
 
-from collections.abc import Callable
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,7 +13,8 @@ import torch
 from sklearn.decomposition import PCA
 from torch import Tensor
 
-from fct.cache import cache_paths, load_or_compute
+from fct.activations import Activation, get_phi
+from fct.cache import StaleCacheError, cache_paths, load_or_compute
 from fct.config import Config, DataConfig, resolve_device
 from fct.data import Dataset, embed, grid_targets
 from fct.model import MLP
@@ -28,6 +29,7 @@ class GridPredictions:
     z_grid: Tensor  # (p^2, d) network outputs on the grid
     test_error: Tensor  # (p, p) per-point MSE over output dimensions
     train_error: Tensor  # (P,) per-training-point MSE over output dimensions
+    net_weight_l2: float  # identifies the network the predictions came from
 
 
 @dataclass
@@ -47,6 +49,10 @@ def grid_predictions(
     """
     if data_cfg.d != 2:
         raise ValueError(f"the test grid is 2-D, so the config needs d == 2, got d={data_cfg.d}")
+    if net.D_out != data_cfg.d:
+        raise ValueError(
+            f"net.D_out ({net.D_out}) must equal the latent dimension d ({data_cfg.d})"
+        )
     half_width = data_cfg.var / 2
     y_grid = grid_targets(half_width, n_grid, net.device, net.dtype)
     x_grid = embed(y_grid, dataset, data_cfg)
@@ -61,10 +67,11 @@ def grid_predictions(
         z_grid=z_grid,
         test_error=(y_grid - z_grid).square().mean(dim=1).reshape(n_grid, n_grid),
         train_error=(dataset.y - z_train).square().mean(dim=1),
+        net_weight_l2=float(net.weight_l2().detach()),
     )
 
 
-def layer_pca(h_grid: Tensor, phi: Callable[[Tensor], Tensor], n_components: int) -> LayerPCA:
+def layer_pca(h_grid: Tensor, phi: Activation, n_components: int) -> LayerPCA:
     """PCA per layer of the N neuron maps phi(h) (each a vector over the p^2 grid points).
 
     Neurons are the samples and grid points the features, so components are spatial
@@ -79,18 +86,22 @@ def layer_pca(h_grid: Tensor, phi: Callable[[Tensor], Tensor], n_components: int
     ratios, comps = [], []
     for layer in range(n_layers):
         activity = phi(h_grid[:, layer].T).detach().cpu().numpy()  # (N, p^2)
-        pca = PCA(n_components=n_components).fit(activity)
+        # Exact solver: the default may pick a randomized one, and a cached result must be
+        # determined by the config alone.
+        pca = PCA(n_components=n_components, svd_solver="full").fit(activity)
         ratios.append(pca.explained_variance_ratio_)
         comps.append(pca.components_)
-    kwargs = {"device": h_grid.device, "dtype": torch.float64}
+    kwargs = {"device": h_grid.device, "dtype": h_grid.dtype}
     explained_variance = torch.as_tensor(np.stack(ratios), **kwargs)
     components = torch.as_tensor(np.stack(comps), **kwargs)
     similarity = torch.einsum("lnp,LNp->lnLN", components, components) / n_points
     return LayerPCA(explained_variance, components, similarity)
 
 
-def neuron_maps(h_grid: Tensor, phi: Callable[[Tensor], Tensor], layer: int, n_grid: int) -> Tensor:
+def neuron_maps(h_grid: Tensor, phi: Activation, layer: int, n_grid: int) -> Tensor:
     """(N, p, p) activity maps of every neuron in `layer`."""
+    if not 0 <= layer < h_grid.shape[1]:
+        raise ValueError(f"layer must be in [0, {h_grid.shape[1]}), got {layer}")
     if h_grid.shape[0] != n_grid**2:
         raise ValueError(
             f"h_grid has {h_grid.shape[0]} points but n_grid={n_grid} needs {n_grid**2}"
@@ -108,30 +119,47 @@ def get_grid_predictions(
 ) -> GridPredictions:
     """Load CACHE_DIR/analysis/grid.pt, computing it on first use.
 
-    Raises StaleCacheError if it was written under a different data/net/train/analysis config.
+    Expects the trained net (from `load_trained`). The file is keyed on the config, so a
+    hit is checked against the net's weight norm: StaleCacheError if the config sections
+    data/net/train/analysis differ from the writer's, or if `net` is not the net that
+    produced the file.
     """
-    n_grid = cfg.analysis.n_grid
 
     def compute() -> dict:
-        g = grid_predictions(net, dataset, cfg.data, n_grid)
-        return {**vars(g)}
+        return vars(grid_predictions(net, dataset, cfg.data, cfg.analysis.n_grid))
 
     path = cache_paths(cache_dir).analysis / "grid.pt"
     payload = load_or_compute(path, _analysis_hash(cfg), compute, resolve_device(cfg))
-    return GridPredictions(**{k: v for k, v in payload.items() if k != "config_hash"})
+    if not math.isclose(payload["net_weight_l2"], float(net.weight_l2().detach()), rel_tol=1e-9):
+        raise StaleCacheError(
+            f"{path} was computed from a different network (weight norm "
+            f"{payload['net_weight_l2']!r} vs {float(net.weight_l2().detach())!r}). Delete the file "
+            "to recompute it from this net."
+        )
+    return GridPredictions(**_fields(payload))
 
 
-def get_layer_pca(
-    cache_dir: Path, cfg: Config, grid: GridPredictions, phi: Callable[[Tensor], Tensor]
-) -> LayerPCA:
-    """Load CACHE_DIR/analysis/pca.pt, fitting it on first use (same staleness rule as above)."""
+def get_layer_pca(cache_dir: Path, cfg: Config, grid: GridPredictions, phi: Activation) -> LayerPCA:
+    """Load CACHE_DIR/analysis/pca.pt, fitting it on first use.
+
+    Expects `grid` from `get_grid_predictions` and `phi` equal to the configured activation
+    (ValueError otherwise). StaleCacheError if the config sections data/net/train/analysis
+    differ from those the file was written with.
+    """
+    if phi is not get_phi(cfg.net.phi):
+        raise ValueError(f"phi must be the configured activation {cfg.net.phi!r}")
 
     def compute() -> dict:
-        return {**vars(layer_pca(grid.h_grid, phi, cfg.analysis.n_components))}
+        return vars(layer_pca(grid.h_grid, phi, cfg.analysis.n_components))
 
     path = cache_paths(cache_dir).analysis / "pca.pt"
     payload = load_or_compute(path, _analysis_hash(cfg), compute, resolve_device(cfg))
-    return LayerPCA(**{k: v for k, v in payload.items() if k != "config_hash"})
+    return LayerPCA(**_fields(payload))
+
+
+def _fields(payload: dict) -> dict:
+    """The artefact payload without the cache's own bookkeeping key."""
+    return {k: v for k, v in payload.items() if k != "config_hash"}
 
 
 def _analysis_hash(cfg: Config) -> str:
