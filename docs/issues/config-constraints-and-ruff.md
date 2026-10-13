@@ -36,7 +36,8 @@ listed below. No signature or default changes. `pyproject.toml`: `ruff` in
   n_trans_outer, n_leap, warmup_trans, n_init_samples, log_int, save_int,
   max_backtrack >= 1`; `beta, eps0, target_accept, adapt_rate, eta_phi,
   eta_phihat, eta_max, eta_grow, inner_tol, inner_tol_mc, max_rel_step,
-  pd_floor_rel, inv_floor_rel, jitter_rel, learning_prefactor > 0`;
+  pd_floor_rel, inv_floor_rel, jitter_rel, learning_prefactor,
+  max_h2_growth, max_mc_err > 0`;
   `0 < target_accept < 1`; `0 <= tilt_floor < 1`; `max_div_frac,
   eps_collapse, eta_min_rel >= 0`. `prior_scale`, `alpha` are `> 0` when set;
   `rate_tilt` is `>= 0` when set.

@@ -12,8 +12,7 @@ from fct.config import (
     default_config,
 )
 
-# Hashes of default_config() computed before constraints were added: constraints must not
-# change the dumped JSON, or every cached artefact would be invalidated.
+# Section hashes key cached artefacts, so the dumped JSON of the defaults must not change.
 DEFAULT_HASHES = {
     ("data",): "9b4dc993c839",
     ("data", "net", "train"): "57bd5055a2d2",
@@ -39,6 +38,7 @@ _POSITIVE_FLOAT = {
         "beta", "eps0", "target_accept", "adapt_rate", "eta_phi", "eta_phihat", "eta_max",
         "eta_grow", "inner_tol", "inner_tol_mc", "max_rel_step", "pd_floor_rel",
         "inv_floor_rel", "jitter_rel", "learning_prefactor", "prior_scale", "alpha",
+        "max_h2_growth", "max_mc_err",
     ],
 }  # fmt: skip
 _NONNEGATIVE_INT = {TrainConfig: ["n_epochs"], AnalysisConfig: ["plot_layer"]}
@@ -67,8 +67,11 @@ BAD = (
 
 @pytest.mark.parametrize(("cls", "field", "value"), BAD)
 def test_offending_value_raises_naming_the_field(cls, field, value):
-    with pytest.raises(ValidationError, match=field):
+    with pytest.raises(ValidationError) as exc:
         cls(**{field: value})
+    err = exc.value.errors()[0]
+    assert err["loc"] == (field,)
+    assert err["type"] in {"greater_than", "greater_than_equal", "less_than"}
 
 
 @pytest.mark.parametrize(
@@ -89,8 +92,9 @@ def test_boundary_values_are_accepted(cls, field, value):
 
 
 def test_fourier_embedding_needs_even_D_in():
-    with pytest.raises(ValidationError, match="D_in.*even"):
+    with pytest.raises(ValidationError, match="D_in must be even") as exc:
         DataConfig(D_in=63, embedding="fourier")
+    assert exc.value.errors()[0]["type"] == "value_error"
 
 
 def test_linear_embedding_allows_odd_D_in():

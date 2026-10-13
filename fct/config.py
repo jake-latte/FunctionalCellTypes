@@ -1,16 +1,15 @@
-"""Hyperparameter schema, written by `init` to CACHE_DIR/config.json.
+"""Hyperparameter schema, JSON I/O and section hashes; the CLI's `init` writes it to
+CACHE_DIR/config.json.
 
 Every model forbids unknown keys and is strict about types, so a typo or a "5" where an int
 is expected fails at load time instead of silently becoming a default or a coerced value.
-
-Only this module (config, activations, cache) exists on this branch so far: the
-`python -m fct ...` CLI is not implemented yet.
+Fields are range-constrained too, so impossible values fail at load time naming the field.
 """
 
 import hashlib
 import json
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -36,7 +35,7 @@ class DataConfig(_Strict):
     seed: int = 0
 
     @model_validator(mode="after")
-    def _fourier_needs_even_D_in(self):
+    def _fourier_needs_even_D_in(self) -> Self:
         # The fourier embedding stacks cos and sin features, so D_in must split into pairs.
         if self.embedding == "fourier" and self.D_in % 2:
             raise ValueError(
@@ -79,8 +78,8 @@ class MeanFieldConfig(_Strict):
     max_backtrack: PosInt = 8
     eta_min_rel: NonNegFloat = 1e-3
     max_div_frac: NonNegFloat = 0.02
-    max_h2_growth: float = 10.0
-    max_mc_err: float = 1.0
+    max_h2_growth: PosFloat = 10.0
+    max_mc_err: PosFloat = 1.0
     eps_collapse: NonNegFloat = 1e-2
     project_tilt: bool = True
     tilt_floor: Annotated[float, Field(ge=0, lt=1)] = 0.05

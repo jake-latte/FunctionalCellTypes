@@ -32,7 +32,7 @@ pyproject.toml, uv.lock, .gitignore, README.md
 Environment: `uv` + `pyproject.toml` + committed `uv.lock`. Tests run with
 `uv run pytest`. Pytest config: `[tool.pytest.ini_options] testpaths=["tests"]`,
 `pythonpath=["."]`. Dependencies: torch>=2.11, numpy, scikit-learn, matplotlib,
-pydantic>=2; dev: pytest. `ruff` config: line length 100.
+pydantic>=2; dev: pytest, ruff. `ruff` config: line length 100.
 
 ## Cache directory layout
 
@@ -129,6 +129,8 @@ def save_config(cfg: Config, path: Path) -> None   # indent=2, sorted keys
 def resolve_device(cfg: Config) -> torch.device   # "auto" -> cuda if available else cpu
 def resolve_dtype(name: str) -> torch.dtype
 ```
+
+Fields are range-constrained (sizes and intervals >= 1, rates and scales > 0, `target_accept` in (0,1), `tilt_floor` in [0,1); `D_in` must be even for `embedding="fourier"`), and `load_config` raises `ValidationError` naming the field.
 
 ## activations.py
 
