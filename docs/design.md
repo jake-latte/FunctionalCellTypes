@@ -272,5 +272,7 @@ python -m fct plot CACHE_DIR [--which all|learning|representation|neurons|traini
 python -m fct plot-example CACHE_DIR                                 # result-independent figure
 ```
 
+`--which all` (default) draws each figure whose inputs exist and lists the skipped ones — learning|representation|neurons|training need train/final.pt, solver needs meanfield/final.pt, kernels needs both; a single `--which` with missing inputs exits 1.
+
 `--set` takes dotted keys and JSON-ish values (`--set net.phi=tanh`,
 `--set data.cov=[[1,0],[0,1]]`); unknown keys fail loudly via pydantic.

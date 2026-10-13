@@ -1,9 +1,8 @@
 """End-to-end tests of `python -m fct` on a tiny CPU config, calling `main` directly."""
 
+import io
 import json
-import os
-
-os.environ.setdefault("MPLBACKEND", "Agg")
+import sys
 
 import pytest
 
@@ -142,3 +141,49 @@ def test_help_lists_subcommands(capsys):
     out = capsys.readouterr().out
     for cmd in ("init", "train", "solve", "plot", "plot-example"):
         assert cmd in out
+
+
+def test_main_line_buffers_stdout(monkeypatch):
+    # Block-buffered stdout hides progress from `> log` and SLURM logs until the process ends.
+    stream = io.TextIOWrapper(io.BytesIO())
+    monkeypatch.setattr(sys, "stdout", stream)
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    assert stream.line_buffering
+
+
+@pytest.mark.parametrize(
+    "text, fragment",
+    [("{not json", "config.json"), ('{"net": {"bogus": 1}}', "bogus")],
+)
+def test_bad_config_file_is_a_cli_error(tmp_path, capsys, text, fragment):
+    (tmp_path / "config.json").write_text(text)
+    assert main(["train", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error:") and fragment in err
+    assert "Traceback" not in err
+
+
+def test_solve_with_too_many_points_is_a_cli_error(tmp_path, capsys):
+    _init(tmp_path, "meanfield.n_points=100")
+    assert main(["train", str(tmp_path)]) == 0
+    capsys.readouterr()
+    assert main(["solve", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "n_points" in err and err.count("\n") == 1
+
+
+def test_train_on_finished_cache_says_it_reused_the_model(tmp_path, capsys):
+    _init(tmp_path)
+    assert main(["train", str(tmp_path)]) == 0
+    capsys.readouterr()
+    assert main(["train", str(tmp_path)]) == 0
+    assert "train/final.pt" in capsys.readouterr().out
+
+
+def test_force_init_warns_about_stale_artefacts(tmp_path, capsys):
+    _init(tmp_path)
+    assert main(["train", str(tmp_path)]) == 0
+    capsys.readouterr()
+    assert main(["init", str(tmp_path), "--force"]) == 0
+    assert "stale" in capsys.readouterr().out

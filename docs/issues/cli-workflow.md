@@ -9,7 +9,7 @@ status: in review
 
 # Add the `python -m fct` CLI: init / train / solve / plot / plot-example
 
-Wire the library into the workflow of `todo.md`: initialise a hyperparameter
+Wire the library into the init -> train / solve -> plot workflow: initialise a hyperparameter
 JSON in a cache directory, then train, solve the mean field, draw the
 result-dependent figures, or draw the result-independent example figure,
 every step defaulting to whatever already exists in the cache.

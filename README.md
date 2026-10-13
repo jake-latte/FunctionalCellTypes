@@ -88,5 +88,6 @@ interface contract between modules.
 
 ```sh
 uv run pytest         # tests (CPU only, synthetic data)
-uv run ruff check     # lint
+uv run ruff check fct tests            # lint
+uv run ruff format --check fct tests   # formatting
 ```

@@ -9,14 +9,17 @@ import argparse
 import json
 import sys
 from collections.abc import Callable, Sequence
+from functools import cached_property
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from pydantic import ValidationError
+from torch import Tensor
 
-from fct.activations import get_phi
-from fct.analyse import get_grid_predictions, get_layer_pca, neuron_maps
+from fct.activations import Activation, get_phi
+from fct.analyse import GridPredictions, get_grid_predictions, get_layer_pca, neuron_maps
 from fct.cache import StaleCacheError, cache_paths
 from fct.config import (
     Config,
@@ -36,9 +39,9 @@ from fct.draw import (
     fig_solver_history,
     plot_training_history,
 )
-from fct.meanfield import empirical_kernels, load_meanfield, run_meanfield
+from fct.meanfield import load_meanfield, net_kernels, run_meanfield
 from fct.model import MLP, make_net
-from fct.train import load_trained, train
+from fct.train import History, load_trained, train
 
 FIGURE_DPI = 150
 
@@ -48,7 +51,7 @@ class CliError(Exception):
 
 
 # ---------------------------------------------------------------------------- config handling
-def _parse_value(text: str):
+def _parse_value(text: str) -> Any:
     """JSON if it parses (`2`, `[[1,0],[0,1]]`, `null`), else the raw string (`tanh`)."""
     try:
         return json.loads(text)
@@ -56,7 +59,7 @@ def _parse_value(text: str):
         return text
 
 
-def _set_path(tree: dict, dotted_key: str, value) -> None:
+def _set_path(tree: dict, dotted_key: str, value: Any) -> None:
     """Assign `value` at a dotted path of an existing nested dict.
 
     Intermediate sections must already exist; only the last key may be new, and then
@@ -88,7 +91,12 @@ def _load_cfg(cache_dir: Path) -> Config:
     path = cache_paths(cache_dir).config
     if not path.exists():
         raise CliError(f"{path} not found; run `python -m fct init {cache_dir}` first")
-    return load_config(path)
+    try:
+        return load_config(path)
+    except json.JSONDecodeError as err:
+        raise CliError(f"{path} is not valid JSON: {err}") from err
+    except ValidationError as err:
+        raise CliError(f"{path} is not a valid config: {err}") from err
 
 
 # ---------------------------------------------------------------------------- subcommands
@@ -100,14 +108,25 @@ def cmd_init(args: argparse.Namespace) -> int:
         cfg = apply_overrides(default_config(), args.set)
     except ValidationError as err:
         raise CliError(str(err)) from err
+    paths = cache_paths(args.cache_dir)
+    stale = [d.name for d in (paths.data, paths.train, paths.meanfield) if d.exists()]
     save_config(cfg, path)
     print(f"wrote {path}")
+    if stale:
+        print(f"warning: {', '.join(stale)}/ hold artefacts from the old config and are now stale")
     return 0
 
 
 def _load_inputs(cache_dir: Path) -> tuple[Config, Dataset]:
     cfg = _load_cfg(cache_dir)
     return cfg, get_dataset(cache_dir, cfg)
+
+
+def _load_net(cache_dir: Path, cfg: Config) -> tuple[MLP, History]:
+    try:
+        return load_trained(cache_dir, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype))
+    except FileNotFoundError as err:
+        raise CliError(f"{err}; run `python -m fct train {cache_dir}` first") from err
 
 
 def cmd_train(args: argparse.Namespace) -> int:
@@ -119,13 +138,19 @@ def cmd_train(args: argparse.Namespace) -> int:
         resolve_device(cfg),
         resolve_dtype(cfg.dtype),
     )
+    final = cache_paths(args.cache_dir).train / "final.pt"
+    if final.exists():
+        print(f"loaded trained model from {final}")
     train(cfg, dataset, net, args.cache_dir, log=print)
     return 0
 
 
 def cmd_solve(args: argparse.Namespace) -> int:
     cfg, dataset = _load_inputs(args.cache_dir)
-    net, _ = load_trained(args.cache_dir, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype))
+    n_points, P = cfg.meanfield.n_points, dataset.x.shape[0]
+    if n_points > P:
+        raise CliError(f"meanfield.n_points={n_points} exceeds the dataset size data.P={P}")
+    net, _ = _load_net(args.cache_dir, cfg)
     run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
     return 0
 
@@ -138,32 +163,35 @@ def cmd_plot_example(args: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------------------- plot
 class _Inputs:
-    """Everything a figure may need, loaded from the cache."""
+    """Everything a figure may need, loaded from the cache; only what `needs` names is read."""
 
-    def __init__(self, cache_dir: Path, needs: set[str]):
+    def __init__(self, cache_dir: Path, cfg: Config, needs: set[str]):
         self.cache_dir = cache_dir
-        self.cfg = _load_cfg(cache_dir)
-        self.dataset = get_dataset(cache_dir, self.cfg)
-        self.device = resolve_device(self.cfg)
-        self.dtype = resolve_dtype(self.cfg.dtype)
+        self.cfg = cfg
+        self.dataset: Dataset = get_dataset(cache_dir, cfg)
         self.net: MLP | None = None
-        self.train_history = None
-        self.Phi = None
-        self.solver_history = None
+        self.train_history: History | None = None
+        self.Phi: Tensor | None = None
+        self.solver_history: History | None = None
         if "train" in needs:
-            self.net, self.train_history = load_trained(
-                cache_dir, self.cfg, self.device, self.dtype
-            )
+            self.net, self.train_history = _load_net(cache_dir, cfg)
         if "meanfield" in needs:
-            self.Phi, _, self.solver_history = load_meanfield(cache_dir, self.cfg, self.device)
+            self.Phi, _, self.solver_history = _load_meanfield(cache_dir, cfg)
 
     @property
-    def phi(self):
+    def phi(self) -> Activation:
         return get_phi(self.cfg.net.phi)
 
-    @property
-    def grid(self):
+    @cached_property
+    def grid(self) -> GridPredictions:
         return get_grid_predictions(self.cache_dir, self.cfg, self.net, self.dataset)
+
+
+def _load_meanfield(cache_dir: Path, cfg: Config) -> tuple[Tensor, Tensor, History]:
+    try:
+        return load_meanfield(cache_dir, cfg, resolve_device(cfg))
+    except FileNotFoundError as err:
+        raise CliError(f"{err}; run `python -m fct solve {cache_dir}` first") from err
 
 
 def _draw_learning(i: _Inputs) -> Figure:
@@ -190,21 +218,21 @@ def _draw_solver(i: _Inputs) -> Figure:
 
 
 def _draw_kernels(i: _Inputs) -> Figure:
-    # The theory works in float64 on the first n_points inputs; the net is evaluated on the
-    # same inputs in its own dtype.
-    X = i.dataset.x[: i.cfg.meanfield.n_points]
-    net_Phi, _ = empirical_kernels(i.net, X.to(i.net.dtype), i.cfg.meanfield.readout)
-    return fig_kernels(i.Phi, net_Phi.to(i.Phi.dtype))
+    return fig_kernels(i.Phi, net_kernels(i.net, i.dataset, i.cfg))
 
 
-# figure name -> (artefacts it needs, drawing function)
-FIGURES: dict[str, tuple[frozenset[str], Callable[[_Inputs], Figure]]] = {
-    "learning": (frozenset({"train"}), _draw_learning),
-    "representation": (frozenset({"train"}), _draw_representation),
-    "neurons": (frozenset({"train"}), _draw_neurons),
-    "training": (frozenset({"train"}), _draw_training),
-    "solver": (frozenset({"meanfield"}), _draw_solver),
-    "kernels": (frozenset({"train", "meanfield"}), _draw_kernels),
+class _Figure(NamedTuple):
+    needs: frozenset[str]  # artefacts whose final.pt must exist
+    draw: Callable[[_Inputs], Figure]
+
+
+FIGURES: dict[str, _Figure] = {
+    "learning": _Figure(frozenset({"train"}), _draw_learning),
+    "representation": _Figure(frozenset({"train"}), _draw_representation),
+    "neurons": _Figure(frozenset({"train"}), _draw_neurons),
+    "training": _Figure(frozenset({"train"}), _draw_training),
+    "solver": _Figure(frozenset({"meanfield"}), _draw_solver),
+    "kernels": _Figure(frozenset({"train", "meanfield"}), _draw_kernels),
 }
 
 
@@ -228,18 +256,18 @@ def _save_figure(fig: Figure, cache_dir: Path, name: str) -> None:
 
 
 def cmd_plot(args: argparse.Namespace) -> int:
-    _load_cfg(args.cache_dir)  # fail on a missing config before looking at artefacts
+    cfg = _load_cfg(args.cache_dir)
     wanted = list(FIGURES) if args.which == "all" else [args.which]
-    missing = {name: _missing_files(args.cache_dir, FIGURES[name][0]) for name in wanted}
+    missing = {name: _missing_files(args.cache_dir, FIGURES[name].needs) for name in wanted}
     drawable = [name for name in wanted if not missing[name]]
     skipped = [name for name in wanted if missing[name]]
     if not drawable:
         reasons = "; ".join(f"{n} needs {', '.join(missing[n])}" for n in skipped)
         raise CliError(f"nothing to draw: {reasons}")
-    needs = set().union(*(FIGURES[name][0] for name in drawable))
-    inputs = _Inputs(args.cache_dir, needs)
+    needs = set().union(*(FIGURES[name].needs for name in drawable))
+    inputs = _Inputs(args.cache_dir, cfg, needs)
     for name in drawable:
-        _save_figure(FIGURES[name][1](inputs), args.cache_dir, name)
+        _save_figure(FIGURES[name].draw(inputs), args.cache_dir, name)
     for name in skipped:
         print(f"skipped {name}: missing {', '.join(missing[name])}")
     return 0
@@ -250,7 +278,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m fct", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def add(name: str, func: Callable[[argparse.Namespace], int], help_: str):
+    def add(
+        name: str, func: Callable[[argparse.Namespace], int], help_: str
+    ) -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_, description=help_)
         p.add_argument("cache_dir", metavar="CACHE_DIR", type=Path)
         p.set_defaults(func=func)
@@ -271,10 +301,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Line-buffer so progress reaches `> log` files and SLURM logs while a run is going,
+    # not only when the process exits (matters for killed or long jobs).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (CliError, FileNotFoundError, StaleCacheError) as err:
+    except (CliError, StaleCacheError) as err:
         print(f"error: {err}", file=sys.stderr)
         return 1
 
