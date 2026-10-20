@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 from matplotlib.figure import Figure
+from matplotlib.patches import Circle, Rectangle
 
 from fct import draw
 from fct.analyse import example_outputs
@@ -68,7 +69,26 @@ def test_plot_loss_curves_draws_four_distinguishable_log_lines():
     assert ax.get_yscale() == "log" and ax.get_xlabel() == "epoch" and ax.get_ylabel()
     assert len(ax.lines) == 4
     assert len({line.get_linestyle() for line in ax.lines}) == 4
-    assert {t.get_text() for t in ax.get_legend().get_texts()} >= {"loss", "mse"}
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == [
+        "loss (total)",
+        "mse (raw)",
+        "weight L2 (raw)",
+        "rate L2 (raw)",
+    ]
+    assert "not additive" in ax.get_ylabel()
+
+
+def test_plot_loss_curves_marks_all_zero_series_in_the_legend():
+    h = _loss_history()
+    h["rate_l2"] = [0.0] * len(h["epoch"])
+    texts = [t.get_text() for t in draw.plot_loss_curves(h).get_legend().get_texts()]
+    assert texts[-1] == "rate L2 (raw) (zero)"
+    assert "(zero)" not in " ".join(texts[:-1])
+
+
+def test_plot_training_history_is_the_loss_curves_plot():
+    ax = draw.plot_training_history(_loss_history())
+    assert ax.get_legend().get_texts()[0].get_text() == "loss (total)"
 
 
 def test_plot_loss_curves_uses_the_given_axis_and_creates_no_figure():
@@ -165,7 +185,33 @@ def test_fig_mir_history_has_three_panels_with_shared_x(n_layers):
     assert len(axes) == 3
     assert axes[0].get_shared_x_axes().joined(axes[0], axes[1])
     assert axes[0].get_shared_x_axes().joined(axes[0], axes[2])
-    assert fig._suptitle.get_text() == "setting A"
+    assert fig.get_suptitle() == "setting A"
+
+
+def test_plot_mir_history_corrected_extends_below_the_fixed_range_for_negative_values():
+    h = _monitor_history(2)
+    h["monitor_mir_corrected"][1][0] = -0.3
+    low, high = draw.plot_mir_history(h, which="corrected").get_ylim()
+    assert low < -0.3 and high == pytest.approx(1.05)
+    # raw keeps the fixed range whatever the data
+    h["monitor_mir"][1][0] = -0.3
+    assert draw.plot_mir_history(h, which="raw").get_ylim() == pytest.approx((-0.05, 1.05))
+
+
+def test_plot_mir_history_corrected_keeps_the_fixed_range_for_ordinary_values():
+    h = _monitor_history(2)
+    h["monitor_mir_corrected"] = [[0.1, 0.2]] * 4
+    assert draw.plot_mir_history(h, which="corrected").get_ylim() == pytest.approx((-0.05, 1.05))
+
+
+def test_single_monitor_call_axes_have_integer_ticks_and_a_visible_window():
+    h = _monitor_history(2, n_calls=1)
+    h["monitor_epoch"] = [7]
+    for ax in (draw.plot_mir_history(h), draw.plot_dead_neurons(h)):
+        low, high = ax.get_xlim()
+        assert low < 7 < high
+        assert all(float(t).is_integer() for t in ax.get_xticks())
+    assert all(float(t).is_integer() for t in draw.plot_dead_neurons(h).get_yticks())
 
 
 # ----------------------------------------------------------------- example outputs
@@ -189,13 +235,13 @@ def test_fig_example_outputs_renders_every_task(task):
 
 @pytest.mark.parametrize("task", list(CONFIGS))
 def test_plot_example_outputs_draws_into_the_given_axis(task):
-    outputs, cfg = _outputs(task)
+    outputs, _ = _outputs(task)
     _fig, ax = plt.subplots()
     n_before = len(plt.get_fignums())
-    assert draw.plot_example_outputs(task, outputs, cfg, ax=ax) is ax
+    assert draw.plot_example_outputs(task, outputs, ax=ax) is ax
     assert len(plt.get_fignums()) == n_before
     assert ax.has_data()
-    draw.plot_example_outputs(task, outputs, cfg)  # creates its own figure
+    draw.plot_example_outputs(task, outputs)  # creates its own figure
     assert len(plt.get_fignums()) == n_before + 1
 
 
@@ -204,7 +250,34 @@ def test_example_outputs_reject_an_unknown_task():
     with pytest.raises(ValueError, match="unknown task"):
         draw.fig_example_outputs("nope", outputs, cfg)
     with pytest.raises(ValueError, match="unknown task"):
-        draw.plot_example_outputs("nope", outputs, cfg)
+        draw.plot_example_outputs("nope", outputs)
+
+
+def test_fig_example_outputs_rejects_a_config_for_another_task():
+    outputs, cfg = _outputs("what_where")
+    with pytest.raises(ValueError, match="not 'object_action'"):
+        draw.fig_example_outputs("object_action", outputs, cfg)
+
+
+def test_fig_example_outputs_rejects_inconsistent_motif_count():
+    outputs, cfg = _outputs("what_where")
+    wrong = cfg.model_copy(update={"n_motifs": cfg.n_motifs + 1})
+    with pytest.raises(ValueError, match="columns"):
+        draw.fig_example_outputs("what_where", outputs, wrong)
+
+
+@pytest.mark.parametrize("n_show", [0, -1])
+def test_fig_example_outputs_rejects_nonpositive_n_show(n_show):
+    outputs, cfg = _outputs("object_action")
+    with pytest.raises(ValueError, match="n_show"):
+        draw.fig_example_outputs("object_action", outputs, cfg, n_show=n_show)
+
+
+@pytest.mark.parametrize("task", list(CONFIGS))
+def test_fig_example_outputs_rejects_empty_outputs(task):
+    outputs, cfg = _outputs(task, n=0)
+    with pytest.raises(ValueError, match="empty"):
+        draw.fig_example_outputs(task, outputs, cfg)
 
 
 def test_fig_example_outputs_shows_at_most_the_requested_number_of_examples():
@@ -213,27 +286,96 @@ def test_fig_example_outputs_shows_at_most_the_requested_number_of_examples():
     assert len(fig.axes) == 2 * 2
 
 
-def test_plot_prediction_scatter_has_identity_line_and_r2_in_the_legend():
+def test_example_figures_use_one_figure_legend_not_per_panel_legends():
+    outputs, cfg = _outputs("what_where")
+    fig = draw.fig_example_outputs("what_where", outputs, cfg)
+    assert len(fig.legends) == 1
+    assert {t.get_text() for t in fig.legends[0].get_texts()} == {"true", "predicted"}
+    assert all(ax.get_legend() is None for ax in fig.axes)
+
+
+def test_constant_targets_do_not_prevent_the_figure():
+    outputs, cfg = _outputs("position", n=3)
+    flat = type(outputs)(
+        outputs.indices, outputs.x, torch.ones_like(outputs.y_true), outputs.y_pred
+    )
+    fig = draw.fig_example_outputs("position", flat, cfg)
+    assert [t.get_text() for t in fig.axes[0].get_legend().get_texts()] == ["identity"]
+
+
+def test_plot_prediction_scatter_shows_the_given_r2_in_the_legend():
     y = torch.tensor([[0.0, 1.0], [2.0, 3.0]])
-    ax = draw.plot_prediction_scatter(y, y)
-    assert any("R" in t.get_text() and "1.00" in t.get_text() for t in ax.get_legend().get_texts())
+    ax = draw.plot_prediction_scatter(y, y, r2=0.9)
+    texts = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert texts == ["identity (R² on these examples = 0.90)"]
     assert ax.get_xlabel() and ax.get_ylabel()
+    assert [t.get_text() for t in draw.plot_prediction_scatter(y, y).get_legend().get_texts()] == [
+        "identity"
+    ]
+
+
+def _grid(agent, *cells, n=G):
+    objects = torch.zeros(n, n, dtype=torch.bool)
+    for row, col in cells:
+        objects[row, col] = True
+    return torch.tensor(agent), objects
 
 
 def test_plot_object_grid_puts_row_zero_at_the_top_and_marks_agent_and_objects():
-    objects = torch.zeros(G, G, dtype=torch.bool)
-    objects[0, 2] = True
-    ax = draw.plot_object_grid(torch.tensor([2, 0]), objects)
+    agent, objects = _grid([2, 0], (0, 2))
+    ax = draw.plot_object_grid(agent, objects)
     assert ax.yaxis_inverted() and not ax.xaxis_inverted()
     assert ax.get_xlim() == pytest.approx((-0.5, G - 0.5))
-    offsets = np.concatenate([c.get_offsets() for c in ax.collections])
-    assert {(0.0, 2.0), (2.0, 0.0)} <= {tuple(map(float, o)) for o in offsets}  # (col, row)
+    squares = [p for p in ax.patches if isinstance(p, Rectangle)]
+    rings = [p for p in ax.patches if isinstance(p, Circle)]
+    # data coordinates are (column, row)
+    assert [(s.get_x() + s.get_width() / 2, s.get_y() + s.get_height() / 2) for s in squares] == [
+        (2.0, 0.0)
+    ]
+    assert {c.center for c in rings} == {(0.0, 2.0)}
+
+
+def test_agent_on_an_object_is_ringed_by_the_object_square_fit_inside():
+    agent, objects = _grid([1, 1], (1, 1))
+    ax = draw.plot_object_grid(agent, objects)
+    square = next(p for p in ax.patches if isinstance(p, Rectangle))
+    ring = max((p for p in ax.patches if isinstance(p, Circle)), key=lambda c: c.get_radius())
+    assert not ring.get_fill()
+    assert ring.get_radius() > np.hypot(square.get_width(), square.get_height()) / 2 * 0.9
+    assert ring.get_radius() < 0.5  # inside the cell
+
+
+def test_plot_object_grid_rejects_bad_shapes_and_agent_outside_the_grid():
+    with pytest.raises(ValueError, match="grid"):
+        draw.plot_object_grid(torch.tensor([0, 0]), torch.zeros(3, 4, dtype=torch.bool))
+    with pytest.raises(ValueError, match="agent_rc"):
+        draw.plot_object_grid(torch.tensor([3, 0]), torch.zeros(3, 3, dtype=torch.bool))
+
+
+def _boundaries(ax):
+    xs = sorted(ln.get_xdata()[0] for ln in ax.lines if ln.get_xdata()[0] == ln.get_xdata()[-1])
+    ys = sorted(ln.get_ydata()[0] for ln in ax.lines if ln.get_ydata()[0] == ln.get_ydata()[-1])
+    return xs, ys
 
 
 def test_plot_motif_image_draws_the_macro_grid_on_three_pixel_boundaries():
-    image = torch.zeros(9, 9)
-    ax = draw.plot_motif_image(image)
-    xs = sorted(ln.get_xdata()[0] for ln in ax.lines if ln.get_xdata()[0] == ln.get_xdata()[-1])
-    ys = sorted(ln.get_ydata()[0] for ln in ax.lines if ln.get_ydata()[0] == ln.get_ydata()[-1])
-    assert xs == [2.5, 5.5] and ys == [2.5, 5.5]
+    ax = draw.plot_motif_image(torch.zeros(9, 9))
+    assert _boundaries(ax) == ([2.5, 5.5], [2.5, 5.5])
     assert ax.yaxis_inverted()
+
+
+@pytest.mark.parametrize(
+    ("n_macro", "motif_size", "expected"),
+    [(2, 4, [3.5]), (4, 2, [1.5, 3.5, 5.5]), (3, 2, [1.5, 3.5])],
+)
+def test_motif_image_grid_follows_macro_count_and_motif_size(n_macro, motif_size, expected):
+    # Swapping the two constants would move the lines, so a mixed-up constant fails here.
+    side = n_macro * motif_size
+    ax = draw.plot_motif_image(torch.zeros(side, side), n_macro=n_macro, motif_size=motif_size)
+    assert _boundaries(ax) == (expected, expected)
+    assert len(ax.get_xticks()) == n_macro
+
+
+def test_plot_motif_image_rejects_a_wrong_image_shape():
+    with pytest.raises(ValueError, match="shape"):
+        draw.plot_motif_image(torch.zeros(8, 9))

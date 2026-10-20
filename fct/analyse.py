@@ -191,6 +191,8 @@ def pick_examples(P: int, n: int, seed: int) -> Tensor:
 def example_outputs(net: MLP, dataset: Dataset, indices: Tensor | list[int]) -> ExampleOutputs:
     """The net's outputs and the dataset's targets on the rows `indices` (integers)."""
     idx = torch.as_tensor(indices).cpu()
+    if idx.numel() == 0:  # an empty list has no dtype of its own
+        idx = idx.long()
     if idx.is_floating_point() or idx.is_complex() or idx.dtype == torch.bool:
         raise ValueError(f"indices must be integers, got dtype {idx.dtype}")
     idx = idx.long()
