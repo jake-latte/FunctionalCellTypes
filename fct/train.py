@@ -18,6 +18,8 @@ from fct.model import MLP, make_net
 
 History = dict[str, list]  # monitor entries are lists over layers, the rest numbers
 Monitor = Callable[[MLP], dict[str, list]]
+MONITOR_PREFIX = "monitor_"  # history keys of monitor results: monitor_epoch, monitor_<key>
+MONITOR_EPOCH = f"{MONITOR_PREFIX}epoch"
 _HISTORY_KEYS = ("epoch", "mse", "weight_l2", "rate_l2", "loss")
 _REQUIRED_KEYS = ("epoch", "net_state_dict", "optim_state_dict", "history", "rng_state")
 
@@ -139,17 +141,29 @@ def _check_monitor_matches_config(cfg: Config, monitor: Monitor | None) -> None:
         raise ValueError("a monitor was passed but train.monitor_int=0 disables monitoring")
 
 
+def _new_history(monitored: bool) -> History:
+    history: History = {key: [] for key in _HISTORY_KEYS}
+    if monitored:
+        history[MONITOR_EPOCH] = []
+    return history
+
+
+def _monitor_due(epoch: int, tc: TrainConfig) -> bool:
+    """Whether the monitor runs at the start of `epoch` (the final call is separate)."""
+    return tc.monitor_int > 0 and epoch % tc.monitor_int == 0
+
+
 def _record_monitor(history: History, epoch: int, result: dict[str, list]) -> None:
     """Append one monitor call to `history` as `monitor_epoch` and `monitor_<key>` entries."""
-    if "epoch" in result:
-        raise ValueError("a monitor must not return the key 'epoch' (it clashes with history)")
-    keys = {f"monitor_{k}" for k in result}
-    seen = {k for k in history if k.startswith("monitor_") and k != "monitor_epoch"}
-    if history["monitor_epoch"] and keys != seen:
+    keys = {f"{MONITOR_PREFIX}{k}" for k in result}
+    if MONITOR_EPOCH in keys:
+        raise ValueError(f"monitor key 'epoch' is reserved: it would overwrite {MONITOR_EPOCH!r}")
+    seen = {k for k in history if k.startswith(MONITOR_PREFIX) and k != MONITOR_EPOCH}
+    if history[MONITOR_EPOCH] and keys != seen:
         raise ValueError(f"monitor returned keys {sorted(keys)}, earlier calls {sorted(seen)}")
-    history["monitor_epoch"].append(epoch)
+    history[MONITOR_EPOCH].append(epoch)
     for key, value in result.items():
-        history.setdefault(f"monitor_{key}", []).append(value)
+        history.setdefault(f"{MONITOR_PREFIX}{key}", []).append(value)
 
 
 def _call_monitor(monitor: Monitor, net: MLP) -> dict[str, list]:
@@ -206,9 +220,7 @@ def train(
         # Nothing in the full-batch loop draws from the global RNG today; the state is kept
         # for future stochastic steps and for downstream code.
         torch.manual_seed(tc.seed)
-        start, history = 0, {key: [] for key in _HISTORY_KEYS}
-        if monitor is not None:
-            history["monitor_epoch"] = []
+        start, history = 0, _new_history(monitor is not None)
     else:
         start, history, note = _restore(ckpt, cfg, net, optim)
         log(f"resumed from {ckpt} at epoch {start}" + (f" ({note})" if note else ""))
@@ -219,7 +231,7 @@ def train(
             write_checkpoint(
                 train_dir, "ckpt_", epoch, _payload(net, optim, history, epoch), config_hash
             )
-        if monitor is not None and epoch % tc.monitor_int == 0:
+        if monitor is not None and _monitor_due(epoch, tc):
             _record_monitor(history, epoch, _call_monitor(monitor, net))
         parts = _step(net, optim, dataset, tc)
         if epoch % tc.log_int == 0:

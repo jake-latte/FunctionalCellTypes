@@ -130,6 +130,19 @@ def _load_net(cache_dir: Path, cfg: Config) -> tuple[MLP, History]:
         raise CliError(f"{err}; run `python -m fct train {cache_dir}` first") from err
 
 
+def _lazy_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]:
+    """A MIR monitor built on its first call, so a finished run (which `train` returns without
+    monitoring) loads even when the dataset has no factors; a fresh run still fails at once."""
+    built: list[Callable[[MLP], dict[str, list]]] = []
+
+    def monitor(net: MLP) -> dict[str, list]:
+        if not built:
+            built.append(make_mir_monitor(dataset, cfg))
+        return built[0](net)
+
+    return monitor
+
+
 def cmd_train(args: argparse.Namespace) -> int:
     cfg, dataset = _load_inputs(args.cache_dir)
     net = make_net(
@@ -142,7 +155,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     final = cache_paths(args.cache_dir).train / "final.pt"
     if final.exists():
         print(f"loaded trained model from {final}")
-    monitor = make_mir_monitor(dataset, cfg) if cfg.train.monitor_int > 0 else None
+    monitor = _lazy_mir_monitor(dataset, cfg) if cfg.train.monitor_int > 0 else None
     train(cfg, dataset, net, args.cache_dir, log=print, monitor=monitor)
     return 0
 

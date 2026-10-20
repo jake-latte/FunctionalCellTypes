@@ -7,7 +7,7 @@ from fct.cache import cache_paths, latest_checkpoint, load_artefact
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset
 from fct.model import make_net
-from fct.train import load_trained, train
+from fct.train import MONITOR_EPOCH, MONITOR_PREFIX, load_trained, train
 
 CPU, F64 = torch.device("cpu"), torch.float64
 QUIET = {"log": lambda s: None}
@@ -55,9 +55,9 @@ def test_monitor_is_called_at_multiples_and_after_the_last_step(tmp_path, n_epoc
     ds, net = _setup(cfg)
     _, hist = train(cfg, ds, net, tmp_path, monitor=_usum_monitor, **QUIET)
     expected = [*range(0, n_epochs, monitor_int), n_epochs]  # final call; no duplicate
-    assert hist["monitor_epoch"] == expected
-    assert hist["monitor_count"] == [[1, 2]] * len(expected)
-    assert len(hist["monitor_usum"]) == len(expected)
+    assert hist[MONITOR_EPOCH] == expected
+    assert hist[f"{MONITOR_PREFIX}count"] == [[1, 2]] * len(expected)
+    assert len(hist[f"{MONITOR_PREFIX}usum"]) == len(expected)
     assert {"epoch", "mse", "weight_l2", "rate_l2", "loss"} <= set(hist)
 
 
@@ -66,9 +66,9 @@ def test_monitor_sees_the_initial_and_the_trained_net(tmp_path):
     ds, net = _setup(cfg)
     initial = _usum_monitor(net)["usum"]
     net, hist = train(cfg, ds, net, tmp_path, monitor=_usum_monitor, **QUIET)
-    assert hist["monitor_usum"][0] == initial
-    assert hist["monitor_usum"][-1] == _usum_monitor(net)["usum"]
-    assert hist["monitor_usum"][0] != hist["monitor_usum"][-1]
+    assert hist[f"{MONITOR_PREFIX}usum"][0] == initial
+    assert hist[f"{MONITOR_PREFIX}usum"][-1] == _usum_monitor(net)["usum"]
+    assert hist[f"{MONITOR_PREFIX}usum"][0] != hist[f"{MONITOR_PREFIX}usum"][-1]
 
 
 def test_monitor_does_not_perturb_training(tmp_path):
@@ -87,7 +87,7 @@ def test_monitor_does_not_perturb_training(tmp_path):
     net_on, hist_on, rng_on = run(5, rng_hungry_monitor, tmp_path / "on")
     _assert_same_params(net_off, net_on)
     assert torch.equal(rng_off, rng_on)
-    assert {k: v for k, v in hist_on.items() if not k.startswith("monitor_")} == hist_off
+    assert {k: v for k, v in hist_on.items() if not k.startswith(MONITOR_PREFIX)} == hist_off
 
 
 def test_monitor_off_leaves_the_history_keys_unchanged(tmp_path):
@@ -112,7 +112,7 @@ def test_monitor_and_monitor_int_must_agree(tmp_path):
 def test_monitor_with_a_reserved_or_changing_key_raises(tmp_path):
     cfg = _cfg(monitor_int=5)
     ds, net = _setup(cfg)
-    with pytest.raises(ValueError, match="epoch"):
+    with pytest.raises(ValueError, match="monitor_epoch"):
         train(cfg, ds, net, tmp_path / "a", monitor=lambda n: {"epoch": [1.0]}, **QUIET)
     calls = iter([{"a": [1.0]}, {"b": [1.0]}])
     with pytest.raises(ValueError, match="keys"):
@@ -144,12 +144,32 @@ def test_resume_reproduces_the_monitor_history(
     resume_at = interrupt_at // save_int * save_int
     assert saved["epoch"] == resume_at
     # the checkpoint written at epoch e predates e's monitor entry; the resumed run adds it
-    assert saved["history"]["monitor_epoch"] == [
-        e for e in range(resume_at) if e % monitor_int == 0
-    ]
+    assert saved["history"][MONITOR_EPOCH] == [e for e in range(resume_at) if e % monitor_int == 0]
 
     _, net_b = _setup(cfg)
     net_b, hist_b = train(cfg, ds, net_b, tmp_path / "run", monitor=_usum_monitor, **QUIET)
     assert hist_b == hist_ref
     _assert_same_params(net_ref, net_b)
     assert load_trained(tmp_path / "run", cfg, CPU, F64)[1] == hist_ref
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_monitor_does_not_perturb_training_on_cuda(tmp_path):
+    cuda = torch.device("cuda")
+
+    def rng_hungry_monitor(net):
+        torch.rand(5, device=cuda)  # draws from the CUDA RNG, which train must restore
+        return _usum_monitor(net)
+
+    def run(monitor_int, monitor, root):
+        cfg = _cfg(monitor_int=monitor_int).model_copy(update={"device": "cuda"})
+        ds = make_dataset(cfg.data, cuda, F64)
+        net = make_net(cfg.net, ds.x.shape[1], ds.y.shape[1], cuda, F64)
+        torch.manual_seed(123)
+        net, _ = train(cfg, ds, net, root, monitor=monitor, **QUIET)
+        return net, torch.cuda.get_rng_state(), torch.get_rng_state()
+
+    net_off, cuda_off, cpu_off = run(0, None, tmp_path / "off")
+    net_on, cuda_on, cpu_on = run(5, rng_hungry_monitor, tmp_path / "on")
+    _assert_same_params(net_off, net_on)
+    assert torch.equal(cuda_off, cuda_on) and torch.equal(cpu_off, cpu_on)
