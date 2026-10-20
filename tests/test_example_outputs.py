@@ -10,6 +10,8 @@ from fct.analyse import (
     example_outputs,
     pick_examples,
     prediction_report,
+    r_squared_per_output,
+    split_what_where,
 )
 from fct.config import DataConfig, NetConfig
 from fct.data import make_dataset, task_dims
@@ -109,19 +111,27 @@ def test_decode_what_where_rejects_wrong_width():
 def test_report_regression_tasks_give_r2_one_for_perfect_prediction():
     y = torch.tensor([[1.0, -1.0], [2.0, 0.0], [0.0, 3.0]], dtype=F64)
     for cfg in (LT, POS):
-        assert prediction_report(cfg.task, y, y.clone(), cfg) == {"r2": 1.0}
+        report = prediction_report(cfg.task, y, y.clone(), cfg)
+        assert report == {"r2_pooled": 1.0, "r2_per_output": 1.0}
 
 
-def test_report_r2_is_computed_against_the_grand_mean():
-    y = torch.tensor([[0.0, 2.0], [4.0, 6.0]], dtype=F64)  # mean 3, SS_tot = 9+1+1+9 = 20
+def test_report_r2_conventions_differ_on_hand_computed_values():
+    y = torch.tensor([[0.0, 2.0], [4.0, 6.0]], dtype=F64)
     pred = y + torch.tensor([[1.0, 0.0], [0.0, -1.0]], dtype=F64)  # SS_res = 2
-    assert prediction_report("linear_teacher", y, pred, LT)["r2"] == pytest.approx(0.9)
+    report = prediction_report("linear_teacher", y, pred, LT)
+    # pooled: grand mean 3, SS_tot = 9+1+1+9 = 20 -> 1 - 2/20
+    assert report["r2_pooled"] == pytest.approx(0.9)
+    # per output: each column has SS_tot = 8 and SS_res = 1 -> 1 - 1/8
+    assert report["r2_per_output"] == pytest.approx(0.875)
 
 
 def test_report_r2_of_a_constant_target_raises():
     y = torch.ones(3, 2, dtype=F64)
     with pytest.raises(ValueError, match="variance"):
         prediction_report("position", y, y, POS)
+    flat_column = torch.tensor([[0.0, 1.0], [2.0, 1.0]], dtype=F64)
+    with pytest.raises(ValueError, match="variance"):
+        r_squared_per_output(flat_column, flat_column)
 
 
 def _actions(rows):
@@ -141,7 +151,7 @@ def test_report_object_action_exact_match_and_argmax_optimal():
         ]
     )
     report = prediction_report("object_action", y, pred, OA)
-    assert report == {"exact_match": 0.5, "argmax_optimal": 0.75}
+    assert report == {"exact_match": 0.5, "argmax_optimal": 0.75, "stay_rate": 0.25}
 
 
 def test_report_object_action_argmax_only_credit():
@@ -150,7 +160,16 @@ def test_report_object_action_argmax_only_credit():
     assert prediction_report("object_action", y, pred, OA) == {
         "exact_match": 0.0,
         "argmax_optimal": 1.0,
+        "stay_rate": 0.0,
     }
+
+
+def test_report_object_action_tied_maximum_is_not_an_optimal_decision():
+    y = _actions([[1, 0, 0, 0, 0]])  # 'stay' is optimal and is the first column
+    constant = _actions([[0.3, 0.3, 0.3, 0.3, 0.3]])
+    assert prediction_report("object_action", y, constant, OA)["argmax_optimal"] == 0.0
+    tied_top = _actions([[0.8, 0.8, 0.0, 0.0, 0.0]])
+    assert prediction_report("object_action", y, tied_top, OA)["argmax_optimal"] == 0.0
 
 
 def test_report_what_where_scores_where_and_what_separately():
@@ -169,6 +188,14 @@ def test_report_what_where_scores_where_and_what_separately():
     }
 
 
+def test_split_what_where_separates_the_where_and_what_columns():
+    y = torch.arange(26.0).reshape(2, 13)
+    where, what = split_what_where(y, 4)
+    assert torch.equal(where, y[:, :9]) and torch.equal(what, y[:, 9:])
+    with pytest.raises(ValueError, match="columns"):
+        split_what_where(y, 5)
+
+
 def test_report_rejects_unknown_task_and_shape_mismatch():
     y = torch.zeros(2, 5, dtype=F64)
     with pytest.raises(ValueError, match="unknown task"):
@@ -177,3 +204,10 @@ def test_report_rejects_unknown_task_and_shape_mismatch():
         prediction_report("object_action", y, y[:, :4], OA)
     with pytest.raises(ValueError, match="outputs"):
         prediction_report("what_where", y, y, WW)  # 5 outputs, WW needs 13
+
+
+def test_example_outputs_rejects_non_integer_indices():
+    net, ds = _net_and_data(LT)
+    for bad in ([0.0, 1.0], torch.tensor([0.5]), [True, False]):
+        with pytest.raises(ValueError, match="integer"):
+            example_outputs(net, ds, bad)

@@ -16,7 +16,7 @@ from torch import Tensor
 from fct.activations import Activation, get_phi
 from fct.cache import StaleCacheError, cache_paths, load_or_compute
 from fct.config import Config, DataConfig, resolve_device
-from fct.data import Dataset, embed, grid_targets
+from fct.data import TASKS, Dataset, embed, grid_targets
 from fct.model import MLP
 from fct.tasks import ACTION_NAMES, N_MACRO, N_MICRO
 
@@ -189,8 +189,11 @@ def pick_examples(P: int, n: int, seed: int) -> Tensor:
 
 
 def example_outputs(net: MLP, dataset: Dataset, indices: Tensor | list[int]) -> ExampleOutputs:
-    """The net's outputs and the dataset's targets on the rows `indices`."""
-    idx = torch.as_tensor(indices, dtype=torch.long).cpu()
+    """The net's outputs and the dataset's targets on the rows `indices` (integers)."""
+    idx = torch.as_tensor(indices).cpu()
+    if idx.is_floating_point() or idx.is_complex() or idx.dtype == torch.bool:
+        raise ValueError(f"indices must be integers, got dtype {idx.dtype}")
+    idx = idx.long()
     n_rows = len(dataset.x)
     if idx.ndim != 1 or (idx.numel() > 0 and (idx.min() < 0 or idx.max() >= n_rows)):
         raise ValueError(f"indices must be a 1-D list of rows in [0, {n_rows}), got {idx}")
@@ -222,22 +225,67 @@ def decode_what_where(x: Tensor) -> Tensor:
     return x.reshape(-1, N_MICRO, N_MICRO)
 
 
+def split_what_where(y: Tensor, n_motifs: int) -> tuple[Tensor, Tensor]:
+    """The `where` (first 9) and `what` (last n_motifs) columns of what_where outputs."""
+    n_where = N_MACRO**2
+    if y.ndim != 2 or y.shape[1] != n_where + n_motifs:
+        raise ValueError(
+            f"what_where outputs need {n_where} + n_motifs = {n_where + n_motifs} columns, "
+            f"got shape {tuple(y.shape)}"
+        )
+    return y[:, :n_where], y[:, n_where:]
+
+
+def _check_pair(y_true: Tensor, y_pred: Tensor) -> None:
+    if y_true.shape != y_pred.shape or y_true.ndim != 2:
+        raise ValueError(
+            f"y_true and y_pred need one 2-D shape, got {y_true.shape}, {y_pred.shape}"
+        )
+
+
 def r_squared(y_true: Tensor, y_pred: Tensor) -> float:
-    """1 - SS_res / SS_tot pooled over all entries, with SS_tot about the grand mean."""
+    """Pooled R^2: 1 - SS_res / SS_tot over all entries, SS_tot about the grand mean.
+
+    Outputs with different means or scales are not weighted equally; see `r_squared_per_output`.
+    """
+    _check_pair(y_true, y_pred)
     ss_tot = (y_true - y_true.mean()).square().sum()
     if ss_tot == 0:
         raise ValueError("R^2 is undefined: the targets have zero variance")
     return float(1 - (y_true - y_pred).square().sum() / ss_tot)
 
 
-def _object_action_report(y_true: Tensor, y_pred: Tensor) -> dict[str, float]:
+def r_squared_per_output(y_true: Tensor, y_pred: Tensor) -> float:
+    """R^2 of every output column about its own mean, averaged uniformly (sklearn's default)."""
+    _check_pair(y_true, y_pred)
+    ss_tot = (y_true - y_true.mean(dim=0)).square().sum(dim=0)
+    if (ss_tot == 0).any():
+        raise ValueError("R^2 is undefined: an output has zero variance across the samples")
+    ss_res = (y_true - y_pred).square().sum(dim=0)
+    return float((1 - ss_res / ss_tot).mean())
+
+
+def _regression_report(y_true: Tensor, y_pred: Tensor, cfg: DataConfig) -> dict[str, float]:
+    return {
+        "r2_pooled": r_squared(y_true, y_pred),
+        "r2_per_output": r_squared_per_output(y_true, y_pred),
+    }
+
+
+def _object_action_report(y_true: Tensor, y_pred: Tensor, cfg: DataConfig) -> dict[str, float]:
+    _check_outputs(y_true, len(ACTION_NAMES))
     target = y_true > 0.5
     exact = ((y_pred > 0.5) == target).all(dim=1)
-    # Ties in the argmax resolve to the first maximum.
-    best = target.gather(1, y_pred.argmax(dim=1, keepdim=True)).squeeze(1)
+    # A tied maximum is not a decision (an all-equal prediction would otherwise always pick
+    # 'stay', the first column), so only a unique maximum can be optimal.
+    top = y_pred.argmax(dim=1, keepdim=True)
+    unique_max = (y_pred == y_pred.gather(1, top)).sum(dim=1) == 1
+    optimal = target.gather(1, top).squeeze(1) & unique_max
+    only_stay = target[:, 0] & ~target[:, 1:].any(dim=1)
     return {
         "exact_match": float(exact.float().mean()),
-        "argmax_optimal": float(best.float().mean()),
+        "argmax_optimal": float(optimal.float().mean()),
+        "stay_rate": float(only_stay.float().mean()),
     }
 
 
@@ -245,11 +293,12 @@ def _top1_accuracy(y_true: Tensor, y_pred: Tensor) -> float:
     return float((y_pred.argmax(dim=1) == y_true.argmax(dim=1)).float().mean())
 
 
-def _what_where_report(y_true: Tensor, y_pred: Tensor) -> dict[str, float]:
-    where, what = slice(0, N_MACRO**2), slice(N_MACRO**2, None)
+def _what_where_report(y_true: Tensor, y_pred: Tensor, cfg: DataConfig) -> dict[str, float]:
+    where_t, what_t = split_what_where(y_true, cfg.n_motifs)
+    where_p, what_p = split_what_where(y_pred, cfg.n_motifs)
     return {
-        "where_accuracy": _top1_accuracy(y_true[:, where], y_pred[:, where]),
-        "what_accuracy": _top1_accuracy(y_true[:, what], y_pred[:, what]),
+        "where_accuracy": _top1_accuracy(where_t, where_p),
+        "what_accuracy": _top1_accuracy(what_t, what_p),
     }
 
 
@@ -258,25 +307,29 @@ def _check_outputs(y: Tensor, expected: int) -> None:
         raise ValueError(f"expected {expected} outputs for this task, got {y.shape[1]}")
 
 
+_REPORTS = {
+    "linear_teacher": _regression_report,
+    "position": _regression_report,
+    "object_action": _object_action_report,
+    "what_where": _what_where_report,
+}
+
+
 def prediction_report(
     task: str, y_true: Tensor, y_pred: Tensor, cfg: DataConfig
 ) -> dict[str, float]:
     """Task-appropriate accuracy summary of predictions `y_pred` against targets `y_true`.
 
-    linear_teacher and position: {"r2"}. object_action: {"exact_match" (thresholded at 0.5
-    equals the target set), "argmax_optimal" (the largest prediction is an optimal action)}.
-    what_where: {"where_accuracy", "what_accuracy"} (top-1 over the first 9 / last m outputs).
+    linear_teacher and position: {"r2_pooled", "r2_per_output"}.
+    object_action: {"exact_match" (pred > 0.5 equals the target set), "argmax_optimal" (the
+    largest prediction, if unique, is an optimal action), "stay_rate" (fraction of samples
+    whose only optimal action is 'stay', the share a constant 'stay' output would get right)}.
+    what_where: {"where_accuracy", "what_accuracy"} (top-1 over the first 9 / last n_motifs
+    outputs).
     """
-    if task not in {"linear_teacher", "position", "object_action", "what_where"}:
-        raise ValueError(f"unknown task {task!r}")
-    if y_true.shape != y_pred.shape or y_true.ndim != 2:
-        raise ValueError(
-            f"y_true and y_pred need one 2-D shape, got {y_true.shape}, {y_pred.shape}"
-        )
-    if task == "object_action":
-        _check_outputs(y_true, len(ACTION_NAMES))
-        return _object_action_report(y_true, y_pred)
-    if task == "what_where":
-        _check_outputs(y_true, N_MACRO**2 + cfg.n_motifs)
-        return _what_where_report(y_true, y_pred)
-    return {"r2": r_squared(y_true, y_pred)}
+    if task not in TASKS:
+        raise ValueError(f"unknown task {task!r}; expected one of {sorted(TASKS)}")
+    if task not in _REPORTS:
+        raise ValueError(f"no prediction report for task {task!r}")
+    _check_pair(y_true, y_pred)
+    return _REPORTS[task](y_true, y_pred, cfg)
