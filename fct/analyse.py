@@ -18,6 +18,7 @@ from fct.cache import StaleCacheError, cache_paths, load_or_compute
 from fct.config import Config, DataConfig, resolve_device
 from fct.data import Dataset, embed, grid_targets
 from fct.model import MLP
+from fct.tasks import ACTION_NAMES, N_MACRO, N_MICRO
 
 
 @dataclass
@@ -164,3 +165,118 @@ def _fields(payload: dict) -> dict:
 
 def _analysis_hash(cfg: Config) -> str:
     return cfg.section_hash("data", "net", "train", "analysis")
+
+
+# --------------------------------------------------------------------------- example outputs
+
+
+@dataclass
+class ExampleOutputs:
+    """A few dataset rows with the net's predictions for them, all on the CPU."""
+
+    indices: Tensor  # (n,) rows of the dataset
+    x: Tensor  # (n, D_in)
+    y_true: Tensor  # (n, D_out)
+    y_pred: Tensor  # (n, D_out)
+
+
+def pick_examples(P: int, n: int, seed: int) -> Tensor:
+    """(n,) distinct dataset rows chosen uniformly; a CPU generator makes the choice
+    independent of the device."""
+    if n > P:
+        raise ValueError(f"cannot pick {n} examples from only {P} samples")
+    return torch.randperm(P, generator=torch.Generator().manual_seed(seed))[:n]
+
+
+def example_outputs(net: MLP, dataset: Dataset, indices: Tensor | list[int]) -> ExampleOutputs:
+    """The net's outputs and the dataset's targets on the rows `indices`."""
+    idx = torch.as_tensor(indices, dtype=torch.long).cpu()
+    n_rows = len(dataset.x)
+    if idx.ndim != 1 or (idx.numel() > 0 and (idx.min() < 0 or idx.max() >= n_rows)):
+        raise ValueError(f"indices must be a 1-D list of rows in [0, {n_rows}), got {idx}")
+    rows = idx.to(dataset.x.device)
+    with torch.no_grad():
+        _, z = net(dataset.x[rows])
+    return ExampleOutputs(
+        indices=idx,
+        x=dataset.x[rows].cpu(),
+        y_true=dataset.y[rows].cpu(),
+        y_pred=z.cpu(),
+    )
+
+
+def decode_object_action(x: Tensor, grid_size: int) -> tuple[Tensor, Tensor]:
+    """Invert the object_action input: (agent_rc (n, 2) int, objects (n, G, G) bool)."""
+    cells = grid_size**2
+    if x.ndim != 2 or x.shape[1] != 2 * cells:
+        raise ValueError(f"x must have shape (n, 2*G*G = {2 * cells}), got {tuple(x.shape)}")
+    agent = x[:, :cells].argmax(dim=1)
+    agent_rc = torch.stack([agent // grid_size, agent % grid_size], dim=1)
+    return agent_rc, (x[:, cells:] > 0.5).reshape(-1, grid_size, grid_size)
+
+
+def decode_what_where(x: Tensor) -> Tensor:
+    """Invert the what_where input: the (n, 9, 9) micro-grid images (row-major pixels)."""
+    if x.ndim != 2 or x.shape[1] != N_MICRO**2:
+        raise ValueError(f"x must have shape (n, {N_MICRO**2} = 81), got {tuple(x.shape)}")
+    return x.reshape(-1, N_MICRO, N_MICRO)
+
+
+def _r2(y_true: Tensor, y_pred: Tensor) -> float:
+    """1 - SS_res / SS_tot pooled over all entries, with SS_tot about the grand mean."""
+    ss_tot = (y_true - y_true.mean()).square().sum()
+    if ss_tot == 0:
+        raise ValueError("R^2 is undefined: the targets have zero variance")
+    return float(1 - (y_true - y_pred).square().sum() / ss_tot)
+
+
+def _object_action_report(y_true: Tensor, y_pred: Tensor) -> dict[str, float]:
+    target = y_true > 0.5
+    exact = ((y_pred > 0.5) == target).all(dim=1)
+    # Ties in the argmax resolve to the first maximum.
+    best = target.gather(1, y_pred.argmax(dim=1, keepdim=True)).squeeze(1)
+    return {
+        "exact_match": float(exact.float().mean()),
+        "argmax_optimal": float(best.float().mean()),
+    }
+
+
+def _top1_accuracy(y_true: Tensor, y_pred: Tensor) -> float:
+    return float((y_pred.argmax(dim=1) == y_true.argmax(dim=1)).float().mean())
+
+
+def _what_where_report(y_true: Tensor, y_pred: Tensor) -> dict[str, float]:
+    where, what = slice(0, N_MACRO**2), slice(N_MACRO**2, None)
+    return {
+        "where_accuracy": _top1_accuracy(y_true[:, where], y_pred[:, where]),
+        "what_accuracy": _top1_accuracy(y_true[:, what], y_pred[:, what]),
+    }
+
+
+def _check_outputs(y: Tensor, expected: int) -> None:
+    if y.shape[1] != expected:
+        raise ValueError(f"expected {expected} outputs for this task, got {y.shape[1]}")
+
+
+def prediction_report(
+    task: str, y_true: Tensor, y_pred: Tensor, cfg: DataConfig
+) -> dict[str, float]:
+    """Task-appropriate accuracy summary of predictions `y_pred` against targets `y_true`.
+
+    linear_teacher and position: {"r2"}. object_action: {"exact_match" (thresholded at 0.5
+    equals the target set), "argmax_optimal" (the largest prediction is an optimal action)}.
+    what_where: {"where_accuracy", "what_accuracy"} (top-1 over the first 9 / last m outputs).
+    """
+    if task not in {"linear_teacher", "position", "object_action", "what_where"}:
+        raise ValueError(f"unknown task {task!r}")
+    if y_true.shape != y_pred.shape or y_true.ndim != 2:
+        raise ValueError(
+            f"y_true and y_pred need one 2-D shape, got {y_true.shape}, {y_pred.shape}"
+        )
+    if task == "object_action":
+        _check_outputs(y_true, len(ACTION_NAMES))
+        return _object_action_report(y_true, y_pred)
+    if task == "what_where":
+        _check_outputs(y_true, N_MACRO**2 + cfg.n_motifs)
+        return _what_where_report(y_true, y_pred)
+    return {"r2": _r2(y_true, y_pred)}
