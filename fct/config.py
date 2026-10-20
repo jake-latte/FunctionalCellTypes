@@ -91,6 +91,11 @@ class TrainConfig(_Strict):
     log_int: PosInt = 100
     save_int: PosInt = 100
     seed: int = 0
+    # Modularity monitor: 0 disables it. The settings are hashed with the run so a cached
+    # run always matches the monitor settings that produced its history.
+    monitor_int: NonNegInt = 0
+    monitor_bins: Annotated[int, Field(ge=2)] = 10
+    monitor_shuffles: PosInt = 5
 
 
 class MeanFieldConfig(_Strict):
