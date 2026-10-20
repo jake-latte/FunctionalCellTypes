@@ -5,6 +5,7 @@ the only function that touches disk. The generated numbers depend on the data co
 dtype only, not on the device.
 """
 
+import dataclasses
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,13 @@ class Dataset:
     y: Tensor  # (P, d)
     Q: Tensor | None  # (D_in, d) orthonormal map for embedding="linear", else None
     period: float | None  # y.max() - y.min() at generation for "fourier", else None
+    # Ground-truth task variables, for scoring what the hidden units encode. int64 = categorical
+    # labels 0..C-1, floating = continuous. `groups` maps a group name to the factor names it
+    # contains (a factor that is its own group is a singleton group); `extras` holds tensors
+    # needed to draw further examples of the task.
+    factors: dict[str, Tensor] | None = None
+    groups: dict[str, list[str]] | None = None
+    extras: dict[str, Tensor] | None = None
 
 
 def _canonical_lattice(d: int, K: int, device: torch.device) -> Tensor:
@@ -86,6 +94,15 @@ def _covariance(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Te
     return cov
 
 
+def _position_factors(y: Tensor) -> tuple[dict[str, Tensor], dict[str, list[str]]]:
+    """Each coordinate of y is a continuous factor in its own singleton group.
+
+    Columns are copied so that saving one factor does not write the whole of y again.
+    """
+    names = [f"y{i}" for i in range(y.shape[1])]
+    return {n: y[:, i].contiguous() for i, n in enumerate(names)}, {n: [n] for n in names}
+
+
 def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
     """Gaussian latents y ~ N(0, var * cov) embedded linearly (random orthonormal Q) or by
     Fourier features.
@@ -99,15 +116,16 @@ def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> D
     chol = torch.linalg.cholesky(cfg.var * cov)
     z = torch.randn((cfg.P, cfg.d), dtype=dtype, generator=gen).to(device)
     y = z @ chol.T
+    factors, groups = _position_factors(y)
 
     if cfg.embedding == "linear":
         U = torch.randn((cfg.D_in, cfg.d), dtype=dtype, generator=gen).to(device)
         Q = torch.linalg.qr(U, mode="reduced")[0]
-        return Dataset(x=y @ Q.T, y=y, Q=Q, period=None)
+        return Dataset(x=y @ Q.T, y=y, Q=Q, period=None, factors=factors, groups=groups)
     # The period spans the generated values so the lowest mode covers the whole range of y.
     period = (y.max() - y.min()).item()
     x, _ = fourier_embedding(y, D=cfg.D_in, period=period)
-    return Dataset(x=x, y=y, Q=None, period=period)
+    return Dataset(x=x, y=y, Q=None, period=period, factors=factors, groups=groups)
 
 
 def embed(y_new: Tensor, dataset: Dataset, cfg: DataConfig) -> Tensor:
@@ -143,8 +161,8 @@ def get_dataset(cache_dir: Path, cfg: Config) -> Dataset:
 
     def compute() -> dict:
         ds = make_dataset(cfg.data, device, dtype)
-        return {"x": ds.x, "y": ds.y, "Q": ds.Q, "period": ds.period}
+        return {f.name: getattr(ds, f.name) for f in dataclasses.fields(ds)}
 
     path = cache_paths(cache_dir).data / "dataset.pt"
     payload = load_or_compute(path, cfg.section_hash("data"), compute, device)
-    return Dataset(x=payload["x"], y=payload["y"], Q=payload["Q"], period=payload["period"])
+    return Dataset(**{f.name: payload[f.name] for f in dataclasses.fields(Dataset)})
