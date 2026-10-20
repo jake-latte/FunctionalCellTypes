@@ -243,6 +243,32 @@ def get_grid_predictions(cache_dir, cfg, net, dataset) -> GridPredictions # cach
 def get_layer_pca(cache_dir, cfg, grid: GridPredictions, phi) -> LayerPCA # cached: analysis/pca.pt
 ```
 
+## modularity.py
+
+Pure (no I/O, no plotting), vectorised over neurons. Scores how modular a layer is for the
+task factors: `I[n, k]` is the plug-in mutual information (nats) between neuron n's rate and
+factor group k, `r[n] = max_k I / sum_k I`, and `MIR = (mean_n r - 1/K) / (1 - 1/K)`
+(1: every neuron informative about one group; ~0: information spread evenly).
+
+```python
+rank_bins(values (P,N), n_bins) -> (P,N) int64        # equal-frequency per column from mid-ranks; ties share a bin
+factor_labels(factor (P,), n_bins) -> (labels, C)     # int factors relabelled 0..C-1; float factors rank-binned
+mutual_information(bins, n_bins, labels, n_labels) -> (N,)   # one flat bincount for all neurons
+neuron_factor_information(rates (P,N), factors, groups=None, n_bins=10) -> FactorInformation(member_mi (N,M), group_mi (N,K), group_names)
+preference(group_mi, tol=1e-12) -> (r, dead)
+mir(r, K) -> float;  layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
+network_mir(rates (P,L,N), ...) -> list[LayerMIR]     # rates are phi(H); the caller applies phi
+shuffle_factors(factors, generator); shuffled_mir(rates, factors, groups=None, n_bins=10, seed=0, n_shuffles=1) -> float
+```
+
+Conventions: integer factors are categorical, floating ones continuous. A group's information
+is the sum of its members' (the total the neuron carries about them; the information about
+their joint configuration cannot be estimated by a plug-in estimator). `groups=None` makes
+each factor its own group. Dead neurons (total information <= tol, e.g. constant firing) get
+r = 1/K, so they add zero to the MIR numerator; `n_dead` reports them. The plug-in
+estimator is biased upward and max/sum has a positive floor for unrelated neurons, so plot
+`shuffled_mir` (factors jointly permuted across samples) next to every MIR curve.
+
 ## draw.py
 
 Every `plot_*` takes `ax: Axes | None = None`, creates its own figure only if
