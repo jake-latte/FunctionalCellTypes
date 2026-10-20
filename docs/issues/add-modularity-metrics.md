@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: simple
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
