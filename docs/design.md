@@ -20,6 +20,7 @@ fct/
   hmc.py           # SingleSiteHMC sampler + linear-algebra helpers
   meanfield.py     # saddle-point solver (Algorithm 1) with checkpoint / resume
   analyse.py       # pure analysis functions + cached wrappers
+  modularity.py    # neuron-factor mutual information, preference, MIR (pure)
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   cli.py           # argparse CLI: init / train / solve / plot / plot-example
   __main__.py      # `python -m fct ...` -> cli.main()
@@ -242,6 +243,46 @@ def kernel_scales(Phi) -> Tensor (L,)                                     # tr(P
 def get_grid_predictions(cache_dir, cfg, net, dataset) -> GridPredictions # cached: analysis/grid.pt
 def get_layer_pca(cache_dir, cfg, grid: GridPredictions, phi) -> LayerPCA # cached: analysis/pca.pt
 ```
+
+## modularity.py
+
+Pure (no I/O, no plotting), vectorised over neurons. Scores how modular a layer is for the
+task factors: `I[n, k]` is the plug-in mutual information (nats) between neuron n's rate and
+factor group k, `r[n] = max_k I / sum_k I`, and `MIR = (mean_n r - 1/K) / (1 - 1/K)`
+(1: every neuron informative about one group; ~0: information spread evenly).
+
+```python
+rank_bins(values (P,N), n_bins) -> (P,N) int64        # equal-frequency per column from mid-ranks; ties share a bin
+factor_labels(factor (P,), n_bins) -> (labels, C)     # int factors relabelled 0..C-1; float factors rank-binned
+mutual_information(bins, n_bins, labels, n_labels) -> (N,)   # one flat bincount for all neurons
+neuron_factor_information(rates (P,N), factors, groups=None, n_bins=10) -> FactorInformation(member_mi (N,M), group_mi (N,K), group_names)
+preference(group_mi, tol=1e-12) -> (r, dead)
+mir(r, K) -> float;  layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
+network_mir(rates (P,L,N), ...) -> list[LayerMIR]     # rates are phi(H); the caller applies phi
+shuffle_factors(factors, generator); shuffled_mir(rates, factors, groups=None, n_bins=10, seed=0, n_shuffles=1) -> float
+```
+
+Conventions: integer factors are categorical, floating ones continuous. A group's information
+is the sum of its members' (the total the neuron carries about them; the information about
+their joint configuration cannot be estimated by a plug-in estimator). `groups=None` makes
+each factor its own group. Dead neurons (total information <= tol, e.g. constant firing) get
+r = 1/K, so they add zero to the MIR numerator; `n_dead` reports them. The plug-in
+estimator is biased upward and max/sum has a positive floor for unrelated neurons, so plot
+`shuffled_mir` (factors jointly permuted across samples) next to every MIR curve.
+
+Bias correction: `neuron_factor_information` / `layer_mir` / `network_mir` take
+`bias_correction="none"|"shuffle"`, `n_shuffles=5`, `seed=0`. With "shuffle", each member
+information (before the group sum) has its mean over `n_shuffles` joint label shuffles
+subtracted and is clamped at 0; neurons whose raw total is not above twice their null total
+are zeroed, so they are dead (r = 1/K). The raw MIR has a cardinality-dependent floor: at
+P = 8192, 10 rate bins, noise neurons score ~0.89 with one 25-way plus two binary factors
+and ~0.10 with three five-way factors; corrected, both are ~0. The notebook plots the raw
+MIR, the corrected MIR and the `shuffled_mir` baseline.
+
+Group edge cases: a factor in no group is ignored; a factor in two groups counts in both; a
+constant factor is accepted (zero information, but it still counts towards K, so datasets with
+a constant action bit work). Inputs are validated loudly (NaN rates or factors, mismatched
+lengths, bad dtypes, K < 2).
 
 ## draw.py
 
