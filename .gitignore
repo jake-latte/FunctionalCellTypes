@@ -31,3 +31,6 @@ __pycache__/
 .claude/worktrees/
 .pytest_cache/
 .pm/
+
+# Local scratch directory
+tmp/

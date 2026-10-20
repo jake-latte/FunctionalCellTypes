@@ -14,6 +14,8 @@ from typing import Annotated, Literal, Self
 import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from fct.tasks import TASK_SPECS
+
 # Constrained types: the config is the boundary, so impossible values fail at load time.
 PosInt = Annotated[int, Field(ge=1)]
 NonNegInt = Annotated[int, Field(ge=0)]
@@ -26,21 +28,50 @@ class _Strict(BaseModel):
 
 
 class DataConfig(_Strict):
+    """Data settings. `task` selects the generator and only that task's fields are read: the
+    fields of other tasks are ignored, but they still enter the cache hash, so changing one
+    makes an existing data cache stale. Sizes and counts are PosInt (>= 1) except
+    `max_objects` (>= 0); `latent_range` is PosFloat. Constraints between fields (the task's
+    fixed D_in, max_objects <= grid_size**2, n_motifs <= 511, D_in > n_latents) are checked
+    here so a bad config fails at load time.
+    """
+
+    # `task` selects the generator; the fields below it are grouped by the task that reads them.
+    task: Literal["position", "linear_teacher", "object_action", "what_where"] = "position"
     P: PosInt = 4096
+    # position: input dimension of the embedding. linear_teacher: the number of features m of
+    # both x and y. object_action / what_where: fixed by the task (2*grid_size**2 / 81) and
+    # checked by make_dataset.
     D_in: PosInt = 64
+    # position
     d: PosInt = 2
     var: PosFloat = 10.0
     cov: list[list[float]] | None = None  # None -> identity
     embedding: Literal["linear", "fourier"] = "fourier"
+    # linear_teacher
+    n_latents: PosInt = 3
+    latent_range: PosFloat = 1.0
+    # object_action
+    grid_size: PosInt = 5
+    max_objects: NonNegInt = 3
+    # what_where
+    n_motifs: PosInt = 8
     seed: int = 0
 
     @model_validator(mode="after")
     def _fourier_needs_even_D_in(self) -> Self:
         # The fourier embedding stacks cos and sin features, so D_in must split into pairs.
-        if self.embedding == "fourier" and self.D_in % 2:
+        if self.task == "position" and self.embedding == "fourier" and self.D_in % 2:
             raise ValueError(
                 f"D_in must be even for the fourier embedding (cos/sin pairs); got {self.D_in}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _task_accepts_the_fields(self) -> Self:
+        # Each non-position task checks its own constraints (sizes that must agree, limits).
+        if self.task in TASK_SPECS:
+            TASK_SPECS[self.task].validate(self)
         return self
 
 

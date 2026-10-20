@@ -1,12 +1,13 @@
 """Task data: latent positions `y` and their high-dimensional embedding `x`.
 
 `make_dataset` and the helpers are pure given a config, device and dtype; `get_dataset` is
-the only function that touches disk. The generated numbers depend on the data config and
+the only function that touches disk. `TASKS` is the one registry of tasks (the position task
+here, the others from `fct.tasks`); `Dataset` is defined in `fct.tasks` and re-exported here. The generated numbers depend on the data config and
 dtype only, not on the device.
 """
 
+import dataclasses
 import math
-from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -14,14 +15,7 @@ from torch import Tensor
 
 from fct.cache import cache_paths, load_or_compute
 from fct.config import Config, DataConfig, resolve_device, resolve_dtype
-
-
-@dataclass(frozen=True)
-class Dataset:
-    x: Tensor  # (P, D_in)
-    y: Tensor  # (P, d)
-    Q: Tensor | None  # (D_in, d) orthonormal map for embedding="linear", else None
-    period: float | None  # y.max() - y.min() at generation for "fourier", else None
+from fct.tasks import TASK_SPECS, Dataset, TaskSpec
 
 
 def _canonical_lattice(d: int, K: int, device: torch.device) -> Tensor:
@@ -86,7 +80,16 @@ def _covariance(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Te
     return cov
 
 
-def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
+def _position_factors(y: Tensor) -> tuple[dict[str, Tensor], dict[str, list[str]]]:
+    """Each coordinate of y is a continuous factor in its own singleton group.
+
+    Columns are copied so that saving one factor does not write the whole of y again.
+    """
+    names = [f"y{i}" for i in range(y.shape[1])]
+    return {n: y[:, i].contiguous() for i, n in enumerate(names)}, {n: [n] for n in names}
+
+
+def _position_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
     """Gaussian latents y ~ N(0, var * cov) embedded linearly (random orthonormal Q) or by
     Fourier features.
 
@@ -99,19 +102,44 @@ def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> D
     chol = torch.linalg.cholesky(cfg.var * cov)
     z = torch.randn((cfg.P, cfg.d), dtype=dtype, generator=gen).to(device)
     y = z @ chol.T
+    factors, groups = _position_factors(y)
 
     if cfg.embedding == "linear":
         U = torch.randn((cfg.D_in, cfg.d), dtype=dtype, generator=gen).to(device)
         Q = torch.linalg.qr(U, mode="reduced")[0]
-        return Dataset(x=y @ Q.T, y=y, Q=Q, period=None)
+        return Dataset(x=y @ Q.T, y=y, Q=Q, period=None, factors=factors, groups=groups)
     # The period spans the generated values so the lowest mode covers the whole range of y.
     period = (y.max() - y.min()).item()
     x, _ = fourier_embedding(y, D=cfg.D_in, period=period)
-    return Dataset(x=x, y=y, Q=None, period=period)
+    return Dataset(x=x, y=y, Q=None, period=period, factors=factors, groups=groups)
+
+
+TASKS: dict[str, TaskSpec] = {
+    "position": TaskSpec(
+        input_dim=lambda cfg: cfg.D_in,
+        output_dim=lambda cfg: cfg.d,
+        validate=lambda cfg: None,  # DataConfig checks the fourier pairing of D_in
+        generate=_position_dataset,
+    ),
+    **TASK_SPECS,
+}
+
+
+def task_dims(cfg: DataConfig) -> tuple[int, int]:
+    """(D_in, D_out) of the network that learns the configured task."""
+    spec = TASKS[cfg.task]
+    return spec.input_dim(cfg), spec.output_dim(cfg)
+
+
+def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
+    """Generate the configured task (see `TASKS`); the output does not depend on the device."""
+    return TASKS[cfg.task].generate(cfg, device, dtype)
 
 
 def embed(y_new: Tensor, dataset: Dataset, cfg: DataConfig) -> Tensor:
-    """Embed new latent points exactly as `dataset` was embedded."""
+    """Embed new latent points exactly as `dataset` was embedded (position task only)."""
+    if cfg.task != "position":
+        raise ValueError(f"embed is defined for the position task only, not {cfg.task!r}")
     if dataset.x.shape[1] != cfg.D_in:
         raise ValueError(f"dataset has D_in={dataset.x.shape[1]} but config has D_in={cfg.D_in}")
     if cfg.embedding == "linear":
@@ -143,8 +171,8 @@ def get_dataset(cache_dir: Path, cfg: Config) -> Dataset:
 
     def compute() -> dict:
         ds = make_dataset(cfg.data, device, dtype)
-        return {"x": ds.x, "y": ds.y, "Q": ds.Q, "period": ds.period}
+        return {f.name: getattr(ds, f.name) for f in dataclasses.fields(ds)}
 
     path = cache_paths(cache_dir).data / "dataset.pt"
     payload = load_or_compute(path, cfg.section_hash("data"), compute, device)
-    return Dataset(x=payload["x"], y=payload["y"], Q=payload["Q"], period=payload["period"])
+    return Dataset(**{f.name: payload[f.name] for f in dataclasses.fields(Dataset)})
