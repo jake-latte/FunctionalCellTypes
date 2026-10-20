@@ -9,8 +9,12 @@ from fct.data import Dataset, get_dataset, make_dataset
 CPU = torch.device("cpu")
 F64 = torch.float64
 
-# Values produced by the position task before factors existed; x and y of a fixed config must
-# stay bit-identical so that existing experiments reproduce.
+# Reference values of the position task, produced with fct/data.py as of commit 08ca367 (before
+# factors existed) for DataConfig(P=3, D_in=4, d=2, var=2.0, embedding=<key>, seed=7) on CPU in
+# float64; `_cfg(P=3, D_in=4, embedding=e, seed=7)` below builds exactly that config.
+# Regenerate: check out fct/data.py from 08ca367 into a scratch module, call its make_dataset on
+# that config and print x.tolist() / y.tolist(). Exact equality with main was verified once in
+# review; the test keeps a tight tolerance so last-bit platform differences do not break it.
 POSITION_Y = [
     [-0.20759961775316083, 1.1117716865964231],
     [1.339007960601311, -1.5759204280167223],
@@ -37,8 +41,9 @@ def _cfg(**kw) -> DataConfig:
 @pytest.mark.parametrize("embedding", ["linear", "fourier"])
 def test_position_task_values_are_unchanged(embedding):
     ds = make_dataset(_cfg(P=3, D_in=4, embedding=embedding, seed=7), CPU, F64)
-    assert ds.x.tolist() == POSITION_X[embedding]
-    assert ds.y.tolist() == POSITION_Y
+    reference_x = torch.tensor(POSITION_X[embedding], dtype=F64)
+    assert torch.allclose(ds.x, reference_x, rtol=0, atol=1e-12)
+    assert torch.allclose(ds.y, torch.tensor(POSITION_Y, dtype=F64), rtol=0, atol=1e-12)
 
 
 def test_position_factors_are_the_columns_of_y():

@@ -7,8 +7,8 @@ import torch
 from pydantic import ValidationError
 
 import fct.data as data_module
-from fct.config import Config, DataConfig
-from fct.data import Dataset, get_dataset, make_dataset, task_dims
+from fct.config import Config, DataConfig, load_config, save_config
+from fct.data import embed, get_dataset, make_dataset, task_dims
 from fct.tasks import optimal_actions
 
 CPU = torch.device("cpu")
@@ -57,6 +57,24 @@ def test_task_dims_matches_the_dataset(task):
     assert ds.x.dtype == ds.y.dtype == F64
 
 
+VARIED = [
+    ("position", {"d": 3, "D_in": 10}),
+    ("linear_teacher", {"D_in": 4, "n_latents": 1}),
+    ("linear_teacher", {"D_in": 9, "n_latents": 5}),
+    ("object_action", {"grid_size": 2, "max_objects": 4, "D_in": 8}),
+    ("object_action", {"grid_size": 4, "max_objects": 0, "D_in": 32}),
+    ("what_where", {"n_motifs": 1}),
+    ("what_where", {"n_motifs": 40}),
+]
+
+
+@pytest.mark.parametrize(("task", "kw"), VARIED)
+def test_task_dims_equals_generated_shapes_across_configs(task, kw):
+    cfg = _cfg(task, **kw)
+    ds = make_dataset(cfg, CPU, F64)
+    assert task_dims(cfg) == (ds.x.shape[1], ds.y.shape[1])
+
+
 @pytest.mark.parametrize("task", SMALL)
 def test_factors_and_groups_are_consistent(task):
     ds = make_dataset(_cfg(task), CPU, F64)
@@ -97,6 +115,41 @@ def test_wrong_D_in_names_the_value_to_set(task):
 def test_non_fourier_tasks_may_have_odd_D_in():
     # The even-D_in rule is about the position task's cos/sin pairs only.
     assert make_dataset(_cfg("what_where"), CPU, F64).x.shape[1] == 81
+
+
+@pytest.mark.parametrize(
+    ("task", "kw", "match"),
+    [
+        ("object_action", {"grid_size": 5, "D_in": 64}, r"data\.D_in=50"),
+        ("object_action", {"max_objects": 10}, "max_objects"),
+        ("what_where", {"D_in": 64}, r"data\.D_in=81"),
+        ("what_where", {"n_motifs": 512}, "511"),
+    ],
+)
+def test_data_config_rejects_impossible_task_settings(task, kw, match):
+    with pytest.raises(ValidationError, match=match):
+        _cfg(task, **kw)
+
+
+def test_data_config_rejects_bad_task_from_json(tmp_path):
+    cfg = Config(data=_cfg("what_where"))
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    path.write_text(path.read_text().replace('"n_motifs": 5', '"n_motifs": 600'))
+    with pytest.raises(ValidationError, match="511"):
+        load_config(path)
+
+
+def test_other_tasks_fields_are_ignored():
+    a = make_dataset(_cfg("what_where", grid_size=2, n_latents=7), CPU, F64)
+    b = make_dataset(_cfg("what_where"), CPU, F64)
+    assert torch.equal(a.x, b.x)
+
+
+def test_embed_is_position_only():
+    ds = make_dataset(_cfg("what_where"), CPU, F64)
+    with pytest.raises(ValueError, match="position"):
+        embed(ds.y, ds, _cfg("what_where"))
 
 
 # --- linear teacher -----------------------------------------------------------------------
@@ -318,7 +371,3 @@ def test_what_where_where_and_what_are_uniform_and_independent():
 def test_what_where_rejects_more_motifs_than_the_library():
     with pytest.raises(ValueError, match="511"):
         make_dataset(_cfg("what_where", n_motifs=512), CPU, F64)
-
-
-def test_dataset_type_is_returned():
-    assert isinstance(make_dataset(_cfg("what_where"), CPU, F64), Dataset)

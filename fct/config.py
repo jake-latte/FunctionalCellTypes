@@ -14,6 +14,8 @@ from typing import Annotated, Literal, Self
 import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from fct.tasks import TASK_SPECS
+
 # Constrained types: the config is the boundary, so impossible values fail at load time.
 PosInt = Annotated[int, Field(ge=1)]
 NonNegInt = Annotated[int, Field(ge=0)]
@@ -26,6 +28,14 @@ class _Strict(BaseModel):
 
 
 class DataConfig(_Strict):
+    """Data settings. `task` selects the generator and only that task's fields are read: the
+    fields of other tasks are ignored, but they still enter the cache hash, so changing one
+    makes an existing data cache stale. Sizes and counts are PosInt (>= 1) except
+    `max_objects` (>= 0); `latent_range` is PosFloat. Constraints between fields (the task's
+    fixed D_in, max_objects <= grid_size**2, n_motifs <= 511, D_in > n_latents) are checked
+    here so a bad config fails at load time.
+    """
+
     # `task` selects the generator; the fields below it are grouped by the task that reads them.
     task: Literal["position", "linear_teacher", "object_action", "what_where"] = "position"
     P: PosInt = 4096
@@ -58,12 +68,10 @@ class DataConfig(_Strict):
         return self
 
     @model_validator(mode="after")
-    def _teacher_has_more_features_than_latents(self) -> Self:
-        if self.task == "linear_teacher" and self.D_in <= self.n_latents:
-            raise ValueError(
-                f"D_in (the number of features m) must exceed n_latents; "
-                f"got D_in={self.D_in}, n_latents={self.n_latents}"
-            )
+    def _task_accepts_the_fields(self) -> Self:
+        # Each non-position task checks its own constraints (sizes that must agree, limits).
+        if self.task in TASK_SPECS:
+            TASK_SPECS[self.task].validate(self)
         return self
 
 

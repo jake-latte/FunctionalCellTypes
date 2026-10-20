@@ -1,13 +1,13 @@
 """Task data: latent positions `y` and their high-dimensional embedding `x`.
 
 `make_dataset` and the helpers are pure given a config, device and dtype; `get_dataset` is
-the only function that touches disk. The generated numbers depend on the data config and
+the only function that touches disk. `TASKS` is the one registry of tasks (the position task
+here, the others from `fct.tasks`); `Dataset` is defined in `fct.tasks` and re-exported here. The generated numbers depend on the data config and
 dtype only, not on the device.
 """
 
 import dataclasses
 import math
-from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -15,22 +15,7 @@ from torch import Tensor
 
 from fct.cache import cache_paths, load_or_compute
 from fct.config import Config, DataConfig, resolve_device, resolve_dtype
-from fct.tasks import GENERATORS, task_input_dim, task_output_dim
-
-
-@dataclass(frozen=True)
-class Dataset:
-    x: Tensor  # (P, D_in)
-    y: Tensor  # (P, d)
-    Q: Tensor | None  # (D_in, d) orthonormal map for embedding="linear", else None
-    period: float | None  # y.max() - y.min() at generation for "fourier", else None
-    # Ground-truth task variables, for scoring what the hidden units encode. int64 = categorical
-    # labels 0..C-1, floating = continuous. `groups` maps a group name to the factor names it
-    # contains (a factor that is its own group is a singleton group); `extras` holds tensors
-    # needed to draw further examples of the task.
-    factors: dict[str, Tensor] | None = None
-    groups: dict[str, list[str]] | None = None
-    extras: dict[str, Tensor] | None = None
+from fct.tasks import TASK_SPECS, Dataset, TaskSpec
 
 
 def _canonical_lattice(d: int, K: int, device: torch.device) -> Tensor:
@@ -104,38 +89,14 @@ def _position_factors(y: Tensor) -> tuple[dict[str, Tensor], dict[str, list[str]
     return {n: y[:, i].contiguous() for i, n in enumerate(names)}, {n: [n] for n in names}
 
 
-def task_dims(cfg: DataConfig) -> tuple[int, int]:
-    """(D_in, D_out) of the network that learns the configured task."""
-    if cfg.task == "position":
-        return cfg.D_in, cfg.d
-    return task_input_dim(cfg) or cfg.D_in, task_output_dim(cfg)
-
-
-def _make_task_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
-    fixed = task_input_dim(cfg)
-    if fixed is not None and cfg.D_in != fixed:
-        raise ValueError(
-            f"task {cfg.task!r} fixes the input dimension at {fixed}; set data.D_in={fixed} "
-            f"(got D_in={cfg.D_in})"
-        )
-    t = GENERATORS[cfg.task](cfg, device, dtype)
-    return Dataset(
-        x=t.x, y=t.y, Q=None, period=None, factors=t.factors, groups=t.groups, extras=t.extras
-    )
-
-
-def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
-    """Generate the configured task; the non-position tasks live in `fct.tasks`.
-
-    Position task: Gaussian latents y ~ N(0, var * cov) embedded linearly (random orthonormal
-    Q) or by Fourier features.
+def _position_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
+    """Gaussian latents y ~ N(0, var * cov) embedded linearly (random orthonormal Q) or by
+    Fourier features.
 
     The random draws come from a CPU generator seeded with `cfg.seed` and are moved to
     `device` afterwards: CUDA and CPU generators give different streams, and the cache key
     does not include the device, so the data must not depend on it.
     """
-    if cfg.task != "position":
-        return _make_task_dataset(cfg, device, dtype)
     cov = _covariance(cfg, device, dtype)
     gen = torch.Generator().manual_seed(cfg.seed)
     chol = torch.linalg.cholesky(cfg.var * cov)
@@ -153,8 +114,32 @@ def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> D
     return Dataset(x=x, y=y, Q=None, period=period, factors=factors, groups=groups)
 
 
+TASKS: dict[str, TaskSpec] = {
+    "position": TaskSpec(
+        input_dim=lambda cfg: cfg.D_in,
+        output_dim=lambda cfg: cfg.d,
+        validate=lambda cfg: None,  # DataConfig checks the fourier pairing of D_in
+        generate=_position_dataset,
+    ),
+    **TASK_SPECS,
+}
+
+
+def task_dims(cfg: DataConfig) -> tuple[int, int]:
+    """(D_in, D_out) of the network that learns the configured task."""
+    spec = TASKS[cfg.task]
+    return spec.input_dim(cfg), spec.output_dim(cfg)
+
+
+def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
+    """Generate the configured task (see `TASKS`); the output does not depend on the device."""
+    return TASKS[cfg.task].generate(cfg, device, dtype)
+
+
 def embed(y_new: Tensor, dataset: Dataset, cfg: DataConfig) -> Tensor:
-    """Embed new latent points exactly as `dataset` was embedded."""
+    """Embed new latent points exactly as `dataset` was embedded (position task only)."""
+    if cfg.task != "position":
+        raise ValueError(f"embed is defined for the position task only, not {cfg.task!r}")
     if dataset.x.shape[1] != cfg.D_in:
         raise ValueError(f"dataset has D_in={dataset.x.shape[1]} but config has D_in={cfg.D_in}")
     if cfg.embedding == "linear":

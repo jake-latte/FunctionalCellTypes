@@ -140,7 +140,7 @@ def resolve_device(cfg: Config) -> torch.device   # "auto" -> cuda if available 
 def resolve_dtype(name: str) -> torch.dtype
 ```
 
-Fields are range-constrained (sizes and intervals >= 1, rates and scales > 0, `target_accept` in (0,1), `tilt_floor` in [0,1); `D_in` must be even for the position task with `embedding="fourier"`; for `linear_teacher`, `D_in` (the number of features m of both x and y) must exceed `n_latents`), and `load_config` raises `ValidationError` naming the field.
+`task` selects the generator and only that task's fields are read; the fields of other tasks are ignored but still enter the cache hash (changing one makes an existing data cache stale). Fields are range-constrained (sizes and intervals >= 1, rates and scales > 0, `target_accept` in (0,1), `tilt_floor` in [0,1); `D_in` must be even for the position task with `embedding="fourier"`; for `linear_teacher`, `D_in` (the number of features m of both x and y) must exceed `n_latents`; `max_objects` >= 0 while `n_latents`, `grid_size`, `n_motifs` are >= 1 and `latent_range` > 0; `max_objects <= grid_size**2`, `n_motifs <= 511`, and for `object_action` / `what_where` `D_in` must equal the fixed 2*G*G / 81), and `load_config` raises `ValidationError` naming the field.
 
 ## activations.py
 
@@ -168,7 +168,7 @@ def write_checkpoint(ckpt_dir: Path, prefix: str, step: int, payload: dict, conf
 
 ```python
 @dataclass(frozen=True)
-class Dataset:
+class Dataset:      # defined in tasks.py, re-exported by data.py
     x: Tensor   # (P, D_in)
     y: Tensor   # (P, D_out)  (position task: (P, d))
     Q: Tensor | None        # (D_in, d) orthonormal map for embedding="linear", else None
@@ -178,29 +178,34 @@ class Dataset:
     extras: dict[str, Tensor] | None = None        # tensors needed to draw further examples of the task
 
 def fourier_embedding(y, D, period) -> tuple[Tensor, Tensor]      # verbatim from the notebook
-def task_dims(cfg: DataConfig) -> tuple[int, int]                 # (D_in, D_out) of the configured task; position: (cfg.D_in, cfg.d)
-def make_dataset(cfg: DataConfig, device, dtype) -> Dataset       # dispatches on cfg.task; position = notebook position_task, seeded by torch.Generator(cfg.seed)
-def embed(y_new: Tensor, dataset: Dataset, cfg: DataConfig) -> Tensor   # same embedding as the dataset (linear: y@Q.T; fourier: dataset.period); position task only
+TASKS: dict[str, TaskSpec]     # the one registry: "position" (defined in data.py) plus tasks.TASK_SPECS
+def task_dims(cfg: DataConfig) -> tuple[int, int]                 # (TASKS[cfg.task].input_dim(cfg), .output_dim(cfg)); position: (cfg.D_in, cfg.d)
+def make_dataset(cfg: DataConfig, device, dtype) -> Dataset       # TASKS[cfg.task].generate; position = notebook position_task, seeded by torch.Generator(cfg.seed)
+def embed(y_new: Tensor, dataset: Dataset, cfg: DataConfig) -> Tensor   # same embedding as the dataset (linear: y@Q.T; fourier: dataset.period); position task only (ValueError for other tasks)
 def grid_targets(half_width: float, n_grid: int, device, dtype) -> Tensor  # (n_grid**2, 2) meshgrid 'ij' flattened as in notebook cell 13
 def get_dataset(cache_dir: Path, cfg: Config) -> Dataset          # cache-or-compute at CACHE_DIR/data/dataset.pt, hash = section_hash("data"); persists x, y, Q, period, factors, groups, extras
 ```
 
 Every task draws from a CPU `torch.Generator` seeded with `cfg.seed` and moves the result to the device, so
 the data never depends on the device. `D_in` of `object_action` and `what_where` is fixed by the task
-(2*G*G and 81): `make_dataset` raises a `ValueError` naming the `data.D_in` to set when it differs;
-`task_dims` returns the task's own value. The position task's factors are `y0`, `y1`, ... (the columns of
+(2*G*G and 81): `DataConfig` rejects a different `D_in`, with a message naming the `data.D_in` to set. The position task's factors are `y0`, `y1`, ... (the columns of
 `y`, floating), each a singleton group.
 
 ## tasks.py
 
-Pure generators `fn(cfg: DataConfig, device, dtype) -> TaskData` (`TaskData`: x, y, factors, groups, extras),
-registered in `GENERATORS`; `make_dataset` wraps the result in a `Dataset` with `Q = period = None`.
+`TaskSpec` (frozen dataclass) bundles `input_dim(cfg)`, `output_dim(cfg)`, `validate(cfg)` (raises
+`ValueError` for a config the task cannot generate) and `generate(cfg, device, dtype) -> Dataset`; the sizes
+that the config validates, `task_dims` reports and the generator produces all come from it. `TASK_SPECS`
+holds the three tasks below; `data.TASKS` adds the position task. `DataConfig` calls `validate` of its task
+(`D_in > n_latents`; `max_objects <= grid_size**2` and `D_in = 2*G*G`; `n_motifs <= 511` and `D_in = 81`) and
+the generators call it again to protect direct calls. tasks.py imports `fct.config` only for type checking,
+because the config imports `TASK_SPECS`.
 
 ```python
-def linear_teacher(cfg, device, dtype) -> TaskData
+def linear_teacher(cfg, device, dtype) -> Dataset   # Q = period = None
     # Z (P,k) iid U[-a,a]; W_X, W_Y (m,k) iid N(0,1/k), m = cfg.D_in; x = Z W_X^T, y = Z W_Y^T, both (P,m)
     # factors z0..z{k-1} (float); one singleton group per latent; extras W_X, W_Y
-def object_action(cfg, device, dtype) -> TaskData
+def object_action(cfg, device, dtype) -> Dataset   # Q = period = None
     # G x G grid, cell = row*G + col; agent cell uniform; #objects uniform on 0..A; distinct object cells drawn
     # uniformly from ALL cells (an object may sit under the agent); ValueError if A > G*G
     # x = [one-hot agent cell (G*G), binary object map (G*G)] (P, 2*G*G); y = optimal action (P, 5)
@@ -210,14 +215,13 @@ def optimal_actions(agent_rc: Tensor (P,2) int, objects: Tensor (P,G,G) bool) ->
     # columns [stay, up, down, left, right], up = row-1, down = row+1, left = col-1, right = col+1; Manhattan
     # distance. stay = 1 iff no objects or the agent is on one; otherwise stay = 0 and a move is 1 iff it stays on
     # the grid and lowers the minimum distance to the object set by exactly 1 (ties and diagonals give several 1s)
-def what_where(cfg, device, dtype) -> TaskData
+def what_where(cfg, device, dtype) -> Dataset   # Q = period = None
     # 9x9 micro-grid = 3x3 macro-grid of 3x3 cells; library = the 511 non-empty binary 3x3 patterns; the m
     # motifs are chosen uniformly without replacement (ValueError if m > 511); `where` uniform on 9 macro-cells
     # (row-major) and `what` uniform on m, independent; x (P,81) row-major micro-grid, pixel (3R+r, 3C+c) =
     # motif[r*3+c] inside macro-cell (R,C), zero elsewhere; y (P, 9+m) = [one-hot where, one-hot what]
     # factors where, what (int64), each a singleton group; extras motifs (m,9) in the dataset dtype
-def task_input_dim(cfg) -> int | None      # the D_in a task fixes (object_action, what_where), else None
-def task_output_dim(cfg) -> int            # D_out of the three non-position tasks
+TASK_SPECS: dict[str, TaskSpec]   # linear_teacher, object_action, what_where
 ```
 
 ## model.py

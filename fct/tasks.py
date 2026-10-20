@@ -1,18 +1,27 @@
-"""Pure generators for the linear-teacher, object-action and what-where tasks.
+"""Task specs and pure generators for the linear-teacher, object-action and what-where tasks.
 
-Each generator returns a `TaskData`: the inputs `x`, the targets `y`, the ground-truth
-`factors` (int64 = categorical labels, floating = continuous), how those factors are `groups`
-for modularity scoring, and `extras` needed to draw further examples. All randomness comes
-from a CPU generator seeded with `cfg.seed` and is moved to `device` afterwards, because CPU
-and CUDA generators give different streams and the cache key does not include the device.
+Each task is a `TaskSpec` (input size, output size, config validation, generator) so that the
+sizes the config validates, `task_dims` reports and the generator produces come from one place.
+Generators return a `Dataset` carrying the ground-truth `factors`, their `groups` for
+modularity scoring and the `extras` needed to draw further examples. All randomness comes from
+a CPU generator seeded with `cfg.seed` and is moved to `device` afterwards, because CPU and
+CUDA generators give different streams and the cache key does not include the device.
+
+This module must not import `fct.config` at run time: the config imports `TASK_SPECS` to
+validate itself.
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor
 
-from fct.config import DataConfig
+if TYPE_CHECKING:
+    from fct.config import DataConfig
 
 ACTION_NAMES = ("stay", "up", "down", "left", "right")
 # (d_row, d_col) of the four moves, in the column order of ACTION_NAMES[1:].
@@ -25,24 +34,57 @@ MOTIF_LIBRARY_SIZE = 2 ** (MOTIF_SIZE**2) - 1  # 511 non-empty patterns
 
 
 @dataclass(frozen=True)
-class TaskData:
-    x: Tensor
-    y: Tensor
-    factors: dict[str, Tensor]
-    groups: dict[str, list[str]]
-    extras: dict[str, Tensor]
+class Dataset:
+    x: Tensor  # (P, D_in)
+    y: Tensor  # (P, D_out); position task: (P, d)
+    Q: Tensor | None  # (D_in, d) orthonormal map for embedding="linear", else None
+    period: float | None  # y.max() - y.min() at generation for "fourier", else None
+    # Ground-truth task variables, for scoring what the hidden units encode. Each factor is a
+    # (P,) tensor: int64 = categorical labels 0..C-1, floating = continuous. `groups` maps a
+    # group name to the factor names it contains (a factor that is its own group is a singleton
+    # group); `extras` holds tensors needed to draw further examples of the task.
+    factors: dict[str, Tensor] | None = None
+    groups: dict[str, list[str]] | None = None
+    extras: dict[str, Tensor] | None = None
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    input_dim: Callable[[DataConfig], int]
+    output_dim: Callable[[DataConfig], int]
+    # Raises ValueError for a config the task cannot generate (called by DataConfig and by
+    # the generator, which also protects direct calls).
+    validate: Callable[[DataConfig], None]
+    generate: Callable[[DataConfig, torch.device, torch.dtype], Dataset]
 
 
 def _singleton_groups(names: list[str]) -> dict[str, list[str]]:
     return {n: [n] for n in names}
 
 
-def linear_teacher(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> TaskData:
+def _validate_linear_teacher(cfg: DataConfig) -> None:
+    if cfg.D_in <= cfg.n_latents:
+        raise ValueError(
+            f"D_in (the number of features m) must exceed n_latents; "
+            f"got D_in={cfg.D_in}, n_latents={cfg.n_latents}"
+        )
+
+
+def _check_input_dim(cfg: DataConfig, expected: int) -> None:
+    if cfg.D_in != expected:
+        raise ValueError(
+            f"task {cfg.task!r} fixes the input dimension at {expected}; set data.D_in={expected} "
+            f"(got D_in={cfg.D_in})"
+        )
+
+
+def linear_teacher(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
     """x = Z W_X^T and y = Z W_Y^T for latents Z (P, k) iid uniform on [-a, a].
 
     W_X and W_Y are (m, k) with iid N(0, 1/k) entries, fixed by the seed; m = cfg.D_in is the
     number of features of both x and y. Every latent is its own factor and its own group.
     """
+    _validate_linear_teacher(cfg)
     k, m, a = cfg.n_latents, cfg.D_in, cfg.latent_range
     gen = torch.Generator().manual_seed(cfg.seed)
     z = a * (2 * torch.rand((cfg.P, k), dtype=dtype, generator=gen) - 1)
@@ -50,9 +92,11 @@ def linear_teacher(cfg: DataConfig, device: torch.device, dtype: torch.dtype) ->
     w_y = torch.randn((m, k), dtype=dtype, generator=gen) / k**0.5
     z, w_x, w_y = z.to(device), w_x.to(device), w_y.to(device)
     names = [f"z{i}" for i in range(k)]
-    return TaskData(
+    return Dataset(
         x=z @ w_x.T,
         y=z @ w_y.T,
+        Q=None,
+        period=None,
         factors={n: z[:, i].contiguous() for i, n in enumerate(names)},
         groups=_singleton_groups(names),
         extras={"W_X": w_x, "W_Y": w_y},
@@ -98,6 +142,20 @@ def optimal_actions(agent_rc: Tensor, objects: Tensor) -> Tensor:
     return torch.stack([stay, *moves], dim=1).to(torch.float32)
 
 
+def _object_action_input_dim(cfg: DataConfig) -> int:
+    return 2 * cfg.grid_size**2
+
+
+def _validate_object_action(cfg: DataConfig) -> None:
+    cells = cfg.grid_size**2
+    if cfg.max_objects > cells:
+        raise ValueError(
+            f"max_objects={cfg.max_objects} exceeds the {cells} cells of a "
+            f"{cfg.grid_size}x{cfg.grid_size} grid"
+        )
+    _check_input_dim(cfg, _object_action_input_dim(cfg))
+
+
 def _random_object_maps(cfg: DataConfig, gen: torch.Generator) -> Tensor:
     """(P, G*G) bool: a uniform number in 0..A of distinct cells per sample, chosen uniformly.
 
@@ -110,16 +168,15 @@ def _random_object_maps(cfg: DataConfig, gen: torch.Generator) -> Tensor:
     return ranks < n_objects[:, None]
 
 
-def object_action(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> TaskData:
+def object_action(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
     """An agent on a G x G grid (cells row-major) with up to A objects; y is the optimal action.
 
     The agent's cell is uniform, the object count is uniform on 0..A, and object cells are
     distinct and drawn from all G*G cells, so an object can sit under the agent. x is the
     one-hot agent cell concatenated with the binary object map, shape (P, 2*G*G).
     """
-    G, A = cfg.grid_size, cfg.max_objects
-    if A > G * G:
-        raise ValueError(f"max_objects={A} exceeds the {G * G} cells of a {G}x{G} grid")
+    _validate_object_action(cfg)
+    G = cfg.grid_size
     gen = torch.Generator().manual_seed(cfg.seed)
     agent = torch.randint(0, G * G, (cfg.P,), generator=gen)
     objects = _random_object_maps(cfg, gen)
@@ -131,9 +188,11 @@ def object_action(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> 
     factors = {"position": agent}
     factors |= {f"object_{i}": objects[:, i].long() for i in range(G * G)}
     factors |= {f"action_{n}": actions[:, j].long() for j, n in enumerate(ACTION_NAMES)}
-    return TaskData(
+    return Dataset(
         x=torch.cat([onehot, objects], dim=1).to(dtype),
         y=actions.to(dtype),
+        Q=None,
+        period=None,
         factors=factors,
         groups={
             "position": ["position"],
@@ -145,9 +204,10 @@ def object_action(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> 
 
 
 def _motif_library(device: torch.device) -> Tensor:
-    """(511, 9) every non-empty binary 3x3 pattern (row-major bits of 1..511)."""
+    """(511, 9) every non-empty binary 3x3 pattern: bit i of the code (least significant
+    first) is cell i of the row-major pattern, for codes 1..511."""
     codes = torch.arange(1, MOTIF_LIBRARY_SIZE + 1, device=device)
-    return (codes[:, None] >> torch.arange(MOTIF_SIZE**2, device=device) & 1).to(torch.int64)
+    return ((codes[:, None] >> torch.arange(MOTIF_SIZE**2, device=device)) & 1).to(torch.int64)
 
 
 def _place_motifs(where: Tensor, motifs: Tensor) -> Tensor:
@@ -160,7 +220,16 @@ def _place_motifs(where: Tensor, motifs: Tensor) -> Tensor:
     return grid.reshape(-1, N_MICRO**2)
 
 
-def what_where(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> TaskData:
+def _validate_what_where(cfg: DataConfig) -> None:
+    if cfg.n_motifs > MOTIF_LIBRARY_SIZE:
+        raise ValueError(
+            f"n_motifs={cfg.n_motifs} exceeds the {MOTIF_LIBRARY_SIZE} non-empty 3x3 binary "
+            "patterns"
+        )
+    _check_input_dim(cfg, N_MICRO**2)
+
+
+def what_where(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
     """A 3x3 motif placed in one of the 3x3 macro-cells of a 9x9 micro-grid.
 
     The motif library is all 2^9 - 1 = 511 non-empty binary 3x3 patterns (the all-on pattern
@@ -168,11 +237,8 @@ def what_where(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Tas
     (macro-cell, 9 values, row-major) and `what` (motif index) are drawn independently and
     uniformly. y is the one-hot `where` followed by the one-hot `what`, shape (P, 9 + m).
     """
+    _validate_what_where(cfg)
     m = cfg.n_motifs
-    if m > MOTIF_LIBRARY_SIZE:
-        raise ValueError(
-            f"n_motifs={m} exceeds the {MOTIF_LIBRARY_SIZE} non-empty 3x3 binary patterns"
-        )
     gen = torch.Generator().manual_seed(cfg.seed)
     chosen = torch.randperm(MOTIF_LIBRARY_SIZE, generator=gen)[:m]
     where = torch.randint(0, N_MACRO**2, (cfg.P,), generator=gen)
@@ -181,37 +247,34 @@ def what_where(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Tas
 
     motifs = _motif_library(device)[chosen]
     onehot = torch.nn.functional.one_hot
-    return TaskData(
+    return Dataset(
         x=_place_motifs(where, motifs[what]).to(dtype),
         y=torch.cat([onehot(where, N_MACRO**2), onehot(what, m)], dim=1).to(dtype),
+        Q=None,
+        period=None,
         factors={"where": where, "what": what},
         groups=_singleton_groups(["where", "what"]),
         extras={"motifs": motifs.to(dtype)},
     )
 
 
-def task_input_dim(cfg: DataConfig) -> int | None:
-    """The input dimension a task fixes by itself, or None where D_in is a free choice."""
-    if cfg.task == "object_action":
-        return 2 * cfg.grid_size**2
-    if cfg.task == "what_where":
-        return N_MICRO**2
-    return None
-
-
-def task_output_dim(cfg: DataConfig) -> int:
-    """The output dimension of every non-position task."""
-    if cfg.task == "linear_teacher":
-        return cfg.D_in
-    if cfg.task == "object_action":
-        return len(ACTION_NAMES)
-    if cfg.task == "what_where":
-        return N_MACRO**2 + cfg.n_motifs
-    raise ValueError(f"task {cfg.task!r} has no generator in fct.tasks")
-
-
-GENERATORS = {
-    "linear_teacher": linear_teacher,
-    "object_action": object_action,
-    "what_where": what_where,
+TASK_SPECS: dict[str, TaskSpec] = {
+    "linear_teacher": TaskSpec(
+        input_dim=lambda cfg: cfg.D_in,
+        output_dim=lambda cfg: cfg.D_in,
+        validate=_validate_linear_teacher,
+        generate=linear_teacher,
+    ),
+    "object_action": TaskSpec(
+        input_dim=_object_action_input_dim,
+        output_dim=lambda cfg: len(ACTION_NAMES),
+        validate=_validate_object_action,
+        generate=object_action,
+    ),
+    "what_where": TaskSpec(
+        input_dim=lambda cfg: N_MICRO**2,
+        output_dim=lambda cfg: N_MACRO**2 + cfg.n_motifs,
+        validate=_validate_what_where,
+        generate=what_where,
+    ),
 }
