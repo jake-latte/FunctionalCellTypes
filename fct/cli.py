@@ -41,6 +41,7 @@ from fct.draw import (
 )
 from fct.meanfield import load_meanfield, net_kernels, run_meanfield
 from fct.model import MLP, make_net
+from fct.monitor import make_mir_monitor
 from fct.train import History, load_trained, train
 
 FIGURE_DPI = 150
@@ -141,7 +142,8 @@ def cmd_train(args: argparse.Namespace) -> int:
     final = cache_paths(args.cache_dir).train / "final.pt"
     if final.exists():
         print(f"loaded trained model from {final}")
-    train(cfg, dataset, net, args.cache_dir, log=print)
+    monitor = make_mir_monitor(dataset, cfg) if cfg.train.monitor_int > 0 else None
+    train(cfg, dataset, net, args.cache_dir, log=print, monitor=monitor)
     return 0
 
 

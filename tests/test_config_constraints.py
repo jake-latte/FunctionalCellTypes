@@ -13,7 +13,8 @@ from fct.config import (
 )
 
 # Section hashes key cached artefacts, so the dumped JSON of the defaults must not change
-# unintentionally (adding a config field changes every hash that includes its section: old caches become stale).
+# unintentionally (adding a config field changes every hash that includes its section, so old
+# caches become stale).
 DEFAULT_HASHES = {
     ("data",): "37d33c6aae26",
     ("data", "net", "train"): "b0dc69885e46",

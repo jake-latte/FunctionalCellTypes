@@ -5,6 +5,7 @@ import json
 import sys
 
 import pytest
+import torch
 
 from fct.cli import main
 
@@ -187,3 +188,21 @@ def test_force_init_warns_about_stale_artefacts(tmp_path, capsys):
     capsys.readouterr()
     assert main(["init", str(tmp_path), "--force"]) == 0
     assert "stale" in capsys.readouterr().out
+
+
+def _trained_history(cache):
+    return torch.load(cache / "train" / "final.pt", weights_only=True)["history"]
+
+
+def test_train_records_the_monitor_only_when_asked(tmp_path):
+    with_monitor, without = tmp_path / "with", tmp_path / "without"
+    assert _init(with_monitor, "train.monitor_int=3", "train.monitor_bins=4") == 0
+    assert _init(without) == 0
+    for cache in (with_monitor, without):
+        assert main(["train", str(cache)]) == 0
+    hist = _trained_history(with_monitor)
+    assert hist["monitor_epoch"] == [0, 3, 6]  # n_epochs = 6: the last call is after the final step
+    for key in ("mir", "mir_corrected", "mir_chance", "n_dead", "n_dead_corrected"):
+        assert len(hist[f"monitor_{key}"]) == 3
+        assert all(len(layers) == 2 for layers in hist[f"monitor_{key}"])  # net.L = 2
+    assert not [k for k in _trained_history(without) if k.startswith("monitor")]
