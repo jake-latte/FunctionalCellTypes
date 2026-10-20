@@ -1,9 +1,21 @@
 import math
+import time
 
 import pytest
 import torch
 
-from fct.modularity import factor_labels, mutual_information, rank_bins
+from fct.modularity import (
+    factor_labels,
+    layer_mir,
+    mir,
+    mutual_information,
+    network_mir,
+    neuron_factor_information,
+    preference,
+    rank_bins,
+    shuffle_factors,
+    shuffled_mir,
+)
 
 P_BIG = 20000
 
@@ -140,3 +152,218 @@ def test_mi_rejects_mismatched_lengths_and_out_of_range_codes():
         mutual_information(torch.zeros(5, 1, dtype=torch.int64), 2, torch.zeros(4).long(), 2)
     with pytest.raises(ValueError, match="range"):
         mutual_information(torch.full((5, 1), 3), 2, torch.zeros(5).long(), 2)
+
+
+# ------------------------------------------------- synthetic ground truth
+
+K3, C3 = 3, 3  # three factors with three levels each
+
+
+def _factors3(P: int = P_BIG, seed: int = 10) -> dict[str, torch.Tensor]:
+    g = _gen(seed)
+    return {f"f{k}": torch.randint(0, C3, (P,), generator=g) for k in range(K3)}
+
+
+def _coded(factors: dict[str, torch.Tensor], names: list[str], scale: float) -> torch.Tensor:
+    """Rate that is a monotone code of the joint configuration of `names`."""
+    code = torch.zeros_like(next(iter(factors.values())))
+    for name in names:
+        code = code * C3 + factors[name]
+    return scale * code.double()
+
+
+def _modular_layer(factors) -> torch.Tensor:
+    """Neuron n carries factor n % 3 only, with its own monotone gain."""
+    cols = [_coded(factors, [f"f{n % K3}"], 1.0 + n) for n in range(2 * K3)]
+    return torch.stack(cols, dim=1)
+
+
+def _expected_mir(r: float, K: int) -> float:
+    return (r - 1 / K) / (1 - 1 / K)
+
+
+def test_preference_is_max_over_sum_and_dead_neurons_sit_at_chance():
+    group_mi = torch.tensor([[1.0, 0.0, 0.0], [1.0, 1.0, 2.0], [0.0, 0.0, 0.0]]).double()
+    r, dead = preference(group_mi)
+    assert r.tolist() == pytest.approx([1.0, 0.5, 1 / 3])
+    assert dead.tolist() == [False, False, True]
+
+
+def test_mir_formula_endpoints_and_validation():
+    assert mir(torch.ones(5), 3) == pytest.approx(1.0)
+    assert mir(torch.full((5,), 1 / 3, dtype=torch.float64), 3) == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="K"):
+        mir(torch.ones(5), 1)
+
+
+def test_single_factor_neurons_give_mir_near_one():
+    factors = _factors3()
+    out = layer_mir(_modular_layer(factors), factors, n_bins=10)
+    assert out.r.min() > 0.97
+    assert out.mir > 0.97
+    assert out.n_dead == 0
+    assert out.group_names == ["f0", "f1", "f2"]
+    assert out.group_mi.shape == (2 * K3, K3)
+
+
+def test_two_factor_mixtures_give_the_analytic_mir():
+    factors = _factors3()
+    pairs = [["f0", "f1"], ["f1", "f2"], ["f0", "f2"]]
+    rates = torch.stack([_coded(factors, pair, 1.0) for pair in pairs * 2], dim=1)
+    out = layer_mir(rates, factors, n_bins=10)
+    assert out.r.tolist() == pytest.approx([0.5] * 6, abs=0.01)
+    assert out.mir == pytest.approx(_expected_mir(0.5, K3), abs=0.02)
+
+
+def test_fully_mixed_neurons_give_mir_near_zero():
+    factors = _factors3()
+    rates = torch.stack([_coded(factors, ["f0", "f1", "f2"], 1.0 + n) for n in range(4)], dim=1)
+    out = layer_mir(rates, factors, n_bins=C3**K3)  # enough bins to resolve all 27 configurations
+    assert abs(out.mir) < 0.03
+
+
+def test_noise_layer_mir_is_low_and_matches_the_shuffled_baseline():
+    factors = _factors3()
+    modular = _modular_layer(factors)
+    noise = torch.randn(P_BIG, 200, generator=_gen(11), dtype=torch.float64)
+    noise_mir = layer_mir(noise, factors).mir
+    baseline = shuffled_mir(noise, factors, n_shuffles=3)
+    assert noise_mir < 0.5 * layer_mir(modular, factors).mir
+    assert noise_mir == pytest.approx(baseline, abs=0.05)
+
+
+def test_shuffled_mir_of_a_modular_layer_is_far_below_its_true_mir():
+    factors = _factors3()
+    layer = _modular_layer(factors)
+    assert shuffled_mir(layer, factors, n_shuffles=2) < 0.5 * layer_mir(layer, factors).mir
+
+
+def test_shuffled_mir_is_seeded_and_shuffle_factors_keeps_dependencies():
+    factors = _factors3(P=500)
+    layer = torch.randn(500, 5, generator=_gen(12))
+    assert shuffled_mir(layer, factors, seed=3) == shuffled_mir(layer, factors, seed=3)
+    assert shuffled_mir(layer, factors, seed=3) != shuffled_mir(layer, factors, seed=4)
+    dependent = {"a": factors["f0"], "b": factors["f0"].clone(), "c": torch.rand(500)}
+    shuffled = shuffle_factors(dependent, torch.Generator().manual_seed(0))
+    assert torch.equal(shuffled["a"], shuffled["b"])  # one permutation for every factor
+    assert not torch.equal(shuffled["a"], dependent["a"])
+    assert torch.equal(shuffled["c"].sort().values, dependent["c"].sort().values)
+
+
+def test_continuous_latents_with_monotone_neurons_give_mir_near_one():
+    g = _gen(13)
+    u, v = torch.rand(P_BIG, generator=g), torch.rand(P_BIG, generator=g)
+    rates = torch.stack([torch.exp(3 * u), v**3, -u, torch.relu(v - 0.3)], dim=1)
+    assert layer_mir(rates, {"u": u, "v": v}, n_bins=10).mir > 0.97
+
+
+# ------------------------------------------------------------------ groups
+
+
+def _binary_factors(P: int = P_BIG, seed: int = 14):
+    g = _gen(seed)
+    return {name: torch.randint(0, 2, (P,), generator=g) for name in "abcd"}
+
+
+def test_group_mi_is_the_sum_of_member_mi():
+    factors = _binary_factors()
+    rates = factors["a"][:, None].double()  # copies member a of the group
+    info = neuron_factor_information(rates, factors, {"g": ["a", "b", "c"], "h": ["d"]})
+    assert info.group_names == ["g", "h"]
+    assert info.member_mi.shape == (1, 4)
+    assert float(info.member_mi[0, 0]) == pytest.approx(_entropy(factors["a"]), abs=1e-9)
+    assert info.member_mi[0, 1:].abs().max() < 0.01
+    assert float(info.group_mi[0, 0]) == pytest.approx(_entropy(factors["a"]), abs=0.02)
+    assert float(info.group_mi[0, 1]) == pytest.approx(float(info.member_mi[0, 3]))
+
+
+def test_mir_over_groups_differs_from_mir_over_members_as_constructed():
+    f = _binary_factors()
+    # neuron 2 mixes a and b, which share a group
+    rates = torch.stack([f["a"].double(), f["c"].double(), (2 * f["a"] + f["b"]).double()], dim=1)
+    by_group = layer_mir(rates, f, {"ab": ["a", "b"], "cd": ["c", "d"]})
+    by_member = layer_mir(rates, f)
+    assert by_group.mir == pytest.approx(1.0, abs=0.02)
+    # members: r = [1, 1, 0.5], K = 4
+    assert by_member.mir == pytest.approx(_expected_mir((1 + 1 + 0.5) / 3, 4), abs=0.02)
+
+
+def test_no_groups_equals_singleton_groups():
+    f = _binary_factors(P=2000)
+    rates = torch.randn(2000, 5, generator=_gen(15))
+    default = neuron_factor_information(rates, f)
+    explicit = neuron_factor_information(rates, f, {k: [k] for k in f})
+    assert default.group_names == explicit.group_names == list(f)
+    assert torch.equal(default.group_mi, explicit.group_mi)
+    assert torch.equal(default.group_mi, default.member_mi)
+
+
+# ------------------------------------------------------------ dead neurons
+
+
+def test_constant_neurons_are_dead_sit_at_chance_and_add_nothing():
+    factors = _factors3()
+    live = _modular_layer(factors)[:, :2]
+    rates = torch.cat([live, torch.full((P_BIG, 2), 0.7, dtype=torch.float64)], dim=1)
+    out = layer_mir(rates, factors)
+    assert out.n_dead == 2
+    assert out.r[2:].tolist() == [1 / K3, 1 / K3]  # exactly chance
+    live_mean = float(out.r[:2].mean())
+    # Two of four neurons contribute 0 to the numerator: MIR = half the live neurons' MIR.
+    assert out.mir == pytest.approx(0.5 * _expected_mir(live_mean, K3), abs=1e-12)
+
+
+# --------------------------------------------------------- network, dtype
+
+
+def test_network_mir_returns_one_entry_per_layer():
+    factors = _factors3()
+    modular = _modular_layer(factors)
+    noise = torch.randn(P_BIG, modular.shape[1], generator=_gen(16), dtype=torch.float64)
+    out = network_mir(torch.stack([modular, noise], dim=1), factors)
+    assert len(out) == 2
+    assert out[0].mir > 0.97
+    assert out[1].mir < 0.5
+    assert out[0].mir == layer_mir(modular, factors).mir
+
+
+def test_float32_and_float64_rates_agree():
+    factors = _factors3(P=3000)
+    rates32 = torch.randn(3000, 8, generator=_gen(17)).relu()
+    a = layer_mir(rates32, factors)
+    b = layer_mir(rates32.double(), factors)
+    assert a.mir == pytest.approx(b.mir, abs=1e-9)
+    assert torch.allclose(a.group_mi, b.group_mi, atol=1e-9)
+
+
+def test_many_neurons_are_scored_quickly():
+    factors = {k: v[:5000] for k, v in _factors3().items()}
+    rates = torch.randn(5000, 2000, generator=_gen(18))
+    start = time.perf_counter()
+    out = layer_mir(rates, factors)
+    assert time.perf_counter() - start < 5.0
+    assert out.r.shape == (2000,)
+
+
+# --------------------------------------------------------- failing loudly
+
+
+def test_invalid_inputs_fail_loudly():
+    factors = _factors3(P=100)
+    rates = torch.randn(100, 3)
+    with pytest.raises(ValueError, match="2-D"):
+        layer_mir(rates[:, 0], factors)
+    with pytest.raises(ValueError, match="3-D"):
+        network_mir(rates, factors)
+    with pytest.raises(ValueError, match="samples"):
+        layer_mir(rates[:50], factors)
+    with pytest.raises(ValueError, match="n_bins"):
+        layer_mir(rates, factors, n_bins=1)
+    with pytest.raises(ValueError, match="K"):
+        layer_mir(rates, {"f0": factors["f0"]})
+    with pytest.raises(ValueError, match="unknown"):
+        layer_mir(rates, factors, {"g": ["f0", "nope"], "h": ["f1"]})
+    with pytest.raises(ValueError, match="at least one factor"):
+        layer_mir(rates, {})
+    with pytest.raises(ValueError, match="n_shuffles"):
+        shuffled_mir(rates, factors, n_shuffles=0)
