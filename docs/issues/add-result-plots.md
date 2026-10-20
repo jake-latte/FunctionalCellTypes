@@ -1,0 +1,28 @@
+---
+type: infrastructure
+complexity: simple
+status: done
+---
+
+<!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
+
+# Plots for the modularity study: loss curves, example outputs, MIR over training
+
+The results notebook shows, for each task and hyperparameter setting: (1) the loss curves, (2) example outputs of the final network, (3) the MIR of each hidden layer throughout training. This item adds the analysis helpers and `plot_*` / `fig_*` functions (following draw.py's conventions: `plot_*` take an optional `ax` and create a figure only when none is given, `fig_*` assemble figures, nothing calls plt.show()).
+
+## Interfaces
+- `analyse.ExampleOutputs` dataclass: `indices (n,)`, `x (n, D_in)`, `y_true (n, D_out)`, `y_pred (n, D_out)` (CPU tensors), and `analyse.example_outputs(net, dataset, indices) -> ExampleOutputs` (pure; net evaluated without grad; `indices` an int tensor/list into the dataset; `analyse.pick_examples(P, n, seed) -> Tensor` a seeded CPU choice without replacement).
+- `analyse.decode_object_action(x, grid_size) -> (agent_rc (n,2), objects (n,G,G) bool)` and `analyse.decode_what_where(x) -> image (n, 9, 9)`; `analyse.prediction_report(task: str, y_true, y_pred, cfg: DataConfig) -> dict[str, float]`, a task-appropriate accuracy summary for the notebook table: linear_teacher: R^2 of the prediction over all outputs; object_action: fraction of samples whose thresholded (> 0.5) predicted action vector equals the target exactly, and the per-sample argmax-of-prediction-is-an-optimal-action rate; what_where: top-1 accuracy of `where` (first 9 outputs) and of `what` (remaining m outputs) separately; the position task: R^2.
+- draw.py (all pure plotting; inputs are results, no computation beyond layout):
+  - `plot_loss_curves(history, ax=None)`: train loss, mse and the weight/rate penalties versus epoch on a log y axis (reuse/extend plot_training_history without breaking its tests; history keys: epoch, mse, weight_l2, rate_l2, loss).
+  - `plot_mir_history(history, ax=None, which="raw")`: one line per hidden layer of `monitor_mir` (which="raw") or `monitor_mir_corrected` (which="corrected") versus `monitor_epoch`, layer colours from one fixed palette (first layer = first colour), and, for which="raw", the chance baseline `monitor_mir_chance` drawn dotted in the same colour per layer; y axis the MIR range [-0.05, 1.05]; axis labels and a legend with "layer 1", "layer 2", ... and the baseline entry. history format (fixed by the monitor item): `monitor_epoch` list[int]; `monitor_mir`, `monitor_mir_corrected`, `monitor_mir_chance`, `monitor_n_dead`, `monitor_n_dead_corrected` are lists over monitor calls of lists over layers. A history without monitor keys raises a clear ValueError.
+  - `fig_mir_history(history, title="") -> Figure`: two panels (raw with baseline; corrected), shared x, plus a third small panel of the dead-neuron counts per layer (`monitor_n_dead_corrected`) over epochs.
+  - `plot_example_outputs(task, outputs, data_cfg, extras=None, ax=None...)`/`fig_example_outputs(task, outputs, data_cfg, extras) -> Figure` rendering by task: linear_teacher: for each of ~4 examples true vs predicted output vector as two bar/stem rows, plus a scatter of all predicted vs true entries with the identity line and R^2; object_action: for each of ~6 examples a GxG grid showing the agent (marker), the objects (squares), and next to it the true and predicted action vectors as paired bars over [stay, up, down, left, right] (predictions as raw values, a 0.5 threshold line); what_where: for each of ~4 examples the 9x9 input image with the 3x3 macro grid drawn, and paired bars of true vs predicted `where` (9) and `what` (m) outputs, titled with the argmax decisions and whether they are right; position task: true vs predicted y scatter. Unknown task raises.
+  - `fig_setting_summary(histories: dict[str, History], keys, ...)`: not needed; do NOT add notebook layout code here.
+- docs/design.md: document every new function signature and the history-key contract.
+
+## Acceptance criteria
+- Analysis functions: `example_outputs` returns exactly the net's output on the chosen rows (compare with a direct forward pass) and the dataset's targets; `decode_object_action` and `decode_what_where` invert the task generators on a generated dataset (use `fct.data.make_dataset` with tiny configs for object_action and what_where; check agent position, object map and image against the dataset's factors); `prediction_report` returns hand-computable values on constructed predictions (perfect prediction gives R^2 = 1 / accuracy 1; a wrong action vector lowers exact-match as computed by hand; a prediction that argmaxes to an optimal action but is thresholded to a different set counts in the second metric only), and handles each task name, raising on an unknown one.
+- Plot functions: each draws into a given Axes without creating a figure and creates one when none is given; `fig_*` return Figures; synthetic histories (hand-built, with and without the monitor keys, with 1, 3 and 5 layers, one monitor call only) and nets from `make_net` on tiny datasets from all three new tasks and the position task render without error; empty / mismatched histories raise ValueError.
+- Render at least one PNG per plot function into tmp/ and LOOK at them (Read tool): axis labels present, legends do not cover data, the three-line-styles are distinguishable, object-action grid orientation matches the convention (row 0 at the top, 'up' = toward row 0), the what-where macro grid lines fall on 3-pixel boundaries. State in your final message what you checked and fixed from looking.
+- All existing tests pass; ruff check and format clean.
