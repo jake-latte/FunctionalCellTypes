@@ -12,16 +12,17 @@ from fct.config import (
     default_config,
 )
 
-# Section hashes key cached artefacts, so the dumped JSON of the defaults must not change.
+# Section hashes key cached artefacts, so the dumped JSON of the defaults must not change
+# unintentionally (adding a DataConfig field changes every hash: old caches become stale).
 DEFAULT_HASHES = {
-    ("data",): "9b4dc993c839",
-    ("data", "net", "train"): "57bd5055a2d2",
-    ("data", "net", "train", "meanfield"): "466eab81d8e4",
-    ("data", "net", "train", "analysis"): "f6d07e782c0c",
+    ("data",): "37d33c6aae26",
+    ("data", "net", "train"): "02048bfb0e68",
+    ("data", "net", "train", "meanfield"): "7e4cb37a1fe3",
+    ("data", "net", "train", "analysis"): "951f6caaa023",
 }
 
 _POSITIVE_INT = {
-    DataConfig: ["P", "D_in", "d"],
+    DataConfig: ["P", "D_in", "d", "n_latents", "grid_size", "n_motifs"],
     NetConfig: ["N", "L"],
     TrainConfig: ["log_int", "save_int"],
     MeanFieldConfig: [
@@ -31,7 +32,7 @@ _POSITIVE_INT = {
     AnalysisConfig: ["n_grid", "n_components", "n_cols"],
 }  # fmt: skip
 _POSITIVE_FLOAT = {
-    DataConfig: ["var"],
+    DataConfig: ["var", "latent_range"],
     NetConfig: ["g"],
     TrainConfig: ["lr"],
     MeanFieldConfig: [
@@ -41,7 +42,11 @@ _POSITIVE_FLOAT = {
         "max_h2_growth", "max_mc_err",
     ],
 }  # fmt: skip
-_NONNEGATIVE_INT = {TrainConfig: ["n_epochs"], AnalysisConfig: ["plot_layer"]}
+_NONNEGATIVE_INT = {
+    DataConfig: ["max_objects"],
+    TrainConfig: ["n_epochs"],
+    AnalysisConfig: ["plot_layer"],
+}
 _NONNEGATIVE_FLOAT = {
     TrainConfig: ["weight_lambda", "rate_lambda"],
     MeanFieldConfig: ["max_div_frac", "eps_collapse", "eta_min_rel", "tilt_floor", "rate_tilt"],

@@ -15,6 +15,7 @@ from torch import Tensor
 
 from fct.cache import cache_paths, load_or_compute
 from fct.config import Config, DataConfig, resolve_device, resolve_dtype
+from fct.tasks import GENERATORS, task_input_dim, task_output_dim
 
 
 @dataclass(frozen=True)
@@ -103,14 +104,38 @@ def _position_factors(y: Tensor) -> tuple[dict[str, Tensor], dict[str, list[str]
     return {n: y[:, i].contiguous() for i, n in enumerate(names)}, {n: [n] for n in names}
 
 
+def task_dims(cfg: DataConfig) -> tuple[int, int]:
+    """(D_in, D_out) of the network that learns the configured task."""
+    if cfg.task == "position":
+        return cfg.D_in, cfg.d
+    return task_input_dim(cfg) or cfg.D_in, task_output_dim(cfg)
+
+
+def _make_task_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
+    fixed = task_input_dim(cfg)
+    if fixed is not None and cfg.D_in != fixed:
+        raise ValueError(
+            f"task {cfg.task!r} fixes the input dimension at {fixed}; set data.D_in={fixed} "
+            f"(got D_in={cfg.D_in})"
+        )
+    t = GENERATORS[cfg.task](cfg, device, dtype)
+    return Dataset(
+        x=t.x, y=t.y, Q=None, period=None, factors=t.factors, groups=t.groups, extras=t.extras
+    )
+
+
 def make_dataset(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
-    """Gaussian latents y ~ N(0, var * cov) embedded linearly (random orthonormal Q) or by
-    Fourier features.
+    """Generate the configured task; the non-position tasks live in `fct.tasks`.
+
+    Position task: Gaussian latents y ~ N(0, var * cov) embedded linearly (random orthonormal
+    Q) or by Fourier features.
 
     The random draws come from a CPU generator seeded with `cfg.seed` and are moved to
     `device` afterwards: CUDA and CPU generators give different streams, and the cache key
     does not include the device, so the data must not depend on it.
     """
+    if cfg.task != "position":
+        return _make_task_dataset(cfg, device, dtype)
     cov = _covariance(cfg, device, dtype)
     gen = torch.Generator().manual_seed(cfg.seed)
     chol = torch.linalg.cholesky(cfg.var * cov)
