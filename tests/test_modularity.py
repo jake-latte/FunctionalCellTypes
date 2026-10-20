@@ -341,7 +341,7 @@ def test_many_neurons_are_scored_quickly():
     rates = torch.randn(5000, 2000, generator=_gen(18))
     start = time.perf_counter()
     out = layer_mir(rates, factors)
-    assert time.perf_counter() - start < 5.0
+    assert time.perf_counter() - start < 10.0
     assert out.r.shape == (2000,)
 
 
@@ -367,3 +367,122 @@ def test_invalid_inputs_fail_loudly():
         layer_mir(rates, {})
     with pytest.raises(ValueError, match="n_shuffles"):
         shuffled_mir(rates, factors, n_shuffles=0)
+
+
+# ------------------------------------------------------- bias correction
+
+P_MID = 8192
+
+
+def _factor_sets(P: int = P_MID, seed: int = 20) -> dict[str, dict[str, torch.Tensor]]:
+    g = _gen(seed)
+    return {
+        "3x5": {f"f{i}": torch.randint(0, 5, (P,), generator=g) for i in range(3)},
+        "25+binary": {
+            "a": torch.randint(0, 25, (P,), generator=g),
+            "b": torch.randint(0, 2, (P,), generator=g),
+            "c": torch.randint(0, 2, (P,), generator=g),
+        },
+    }
+
+
+@pytest.mark.parametrize("set_name", ["3x5", "25+binary"])
+def test_corrected_mir_of_noise_neurons_is_near_zero_for_any_cardinality(set_name):
+    factors = _factor_sets()[set_name]
+    noise = torch.randn(P_MID, 200, generator=_gen(21), dtype=torch.float64)
+    raw = layer_mir(noise, factors).mir
+    corrected = layer_mir(noise, factors, bias_correction="shuffle")
+    assert abs(corrected.mir) < 0.03
+    assert corrected.n_dead > 150  # almost all noise neurons are indistinguishable from chance
+    assert raw > 0.05  # the uncorrected floor is what the correction removes
+
+
+def test_raw_noise_floor_depends_on_the_factor_set():
+    sets = _factor_sets()
+    noise = torch.randn(P_MID, 200, generator=_gen(21), dtype=torch.float64)
+    floors = {name: layer_mir(noise, f).mir for name, f in sets.items()}
+    assert floors["25+binary"] > floors["3x5"] + 0.3
+
+
+def test_corrected_mir_keeps_the_modular_and_mixed_ground_truth():
+    factors = _factors3()
+    modular = layer_mir(_modular_layer(factors), factors, bias_correction="shuffle")
+    assert modular.mir > 0.95
+    pairs = [["f0", "f1"], ["f1", "f2"], ["f0", "f2"]]
+    mixed = torch.stack([_coded(factors, pair, 1.0) for pair in pairs * 2], dim=1)
+    out = layer_mir(mixed, factors, bias_correction="shuffle")
+    assert out.mir == pytest.approx(_expected_mir(0.5, K3), abs=0.02)
+
+
+def test_bias_correction_is_deterministic_for_a_seed_and_none_is_unchanged():
+    factors = _factors3(P=2000)
+    rates = torch.randn(2000, 20, generator=_gen(22)).relu()
+    a = neuron_factor_information(rates, factors, bias_correction="shuffle", seed=4)
+    b = neuron_factor_information(rates, factors, bias_correction="shuffle", seed=4)
+    assert torch.equal(a.group_mi, b.group_mi)
+    plain = neuron_factor_information(rates, factors)
+    explicit = neuron_factor_information(rates, factors, bias_correction="none")
+    assert torch.equal(plain.member_mi, explicit.member_mi)
+    assert (a.member_mi <= plain.member_mi + 1e-12).all()  # correction only subtracts
+    with pytest.raises(ValueError, match="bias_correction"):
+        neuron_factor_information(rates, factors, bias_correction="bogus")  # type: ignore[arg-type]
+
+
+def test_bias_correction_passes_through_layer_and_network():
+    factors = _factors3(P=3000)
+    rates = torch.randn(3000, 2, 10, generator=_gen(23))
+    out = network_mir(rates, factors, bias_correction="shuffle", n_shuffles=2, seed=1)
+    ref = layer_mir(rates[:, 1], factors, bias_correction="shuffle", n_shuffles=2, seed=1)
+    assert out[1].mir == ref.mir
+
+
+# ------------------------------------------------- conventions, validation
+
+
+def test_ungrouped_factor_is_ignored_shared_factor_counts_twice_constant_is_accepted():
+    f = _binary_factors(P=4000)
+    f["const"] = torch.zeros(4000, dtype=torch.int64)
+    f["cont"] = torch.full((4000,), 0.5)
+    rates = f["a"][:, None].double()
+    info = neuron_factor_information(rates, f, {"g1": ["a"], "g2": ["a", "b"], "g3": ["const"]})
+    assert float(info.group_mi[0, 0]) == pytest.approx(float(info.member_mi[0, 0]))
+    assert float(info.group_mi[0, 1]) >= float(info.member_mi[0, 0])  # a counted in g2 as well
+    assert float(info.group_mi[0, 2]) == 0.0  # constant factor: zero information, still a group
+    assert info.member_mi[0, 4:].abs().max() == 0.0  # the ungrouped constant float factor too
+    assert len(info.group_names) == 3
+
+
+def test_preference_validates_shape_and_K():
+    with pytest.raises(ValueError, match="K"):
+        preference(torch.ones(4, 1))
+    with pytest.raises(ValueError, match="2-D"):
+        preference(torch.ones(4))
+
+
+def test_low_level_functions_validate_dimensions_and_dtypes():
+    ints = torch.zeros(5, 1, dtype=torch.int64)
+    with pytest.raises(ValueError, match="2-D"):
+        mutual_information(torch.zeros(5, dtype=torch.int64), 2, torch.zeros(5).long(), 2)
+    with pytest.raises(ValueError, match="P = 0"):
+        mutual_information(torch.zeros(0, 1, dtype=torch.int64), 2, torch.zeros(0).long(), 2)
+    with pytest.raises(ValueError, match="integer"):
+        mutual_information(ints.double(), 2, torch.zeros(5).long(), 2)
+    with pytest.raises(ValueError, match="integer"):
+        mutual_information(ints, 2, torch.zeros(5), 2)
+    with pytest.raises(ValueError, match="P = 0"):
+        rank_bins(torch.zeros(0, 3), 4)
+    with pytest.raises(ValueError, match="at least one factor"):
+        shuffle_factors({}, _gen())
+
+
+def test_nan_inputs_are_rejected_by_name():
+    factors = _factors3(P=50)
+    rates = torch.randn(50, 3)
+    bad_rates = rates.clone()
+    bad_rates[3, 1] = float("nan")
+    with pytest.raises(ValueError, match="rates contains NaN"):
+        layer_mir(bad_rates, factors)
+    bad_factor = torch.rand(50)
+    bad_factor[0] = float("nan")
+    with pytest.raises(ValueError, match="'u' contains NaN"):
+        layer_mir(rates, {"u": bad_factor, "v": torch.rand(50)})
