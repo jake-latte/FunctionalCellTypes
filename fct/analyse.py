@@ -16,8 +16,9 @@ from torch import Tensor
 from fct.activations import Activation, get_phi
 from fct.cache import StaleCacheError, cache_paths, load_or_compute
 from fct.config import Config, DataConfig, resolve_device
-from fct.data import Dataset, embed, grid_targets
+from fct.data import TASKS, Dataset, embed, grid_targets
 from fct.model import MLP
+from fct.tasks import ACTION_NAMES, N_MACRO, N_MICRO
 
 
 @dataclass
@@ -164,3 +165,173 @@ def _fields(payload: dict) -> dict:
 
 def _analysis_hash(cfg: Config) -> str:
     return cfg.section_hash("data", "net", "train", "analysis")
+
+
+# --------------------------------------------------------------------------- example outputs
+
+
+@dataclass
+class ExampleOutputs:
+    """A few dataset rows with the net's predictions for them, all on the CPU."""
+
+    indices: Tensor  # (n,) rows of the dataset
+    x: Tensor  # (n, D_in)
+    y_true: Tensor  # (n, D_out)
+    y_pred: Tensor  # (n, D_out)
+
+
+def pick_examples(P: int, n: int, seed: int) -> Tensor:
+    """(n,) distinct dataset rows chosen uniformly; a CPU generator makes the choice
+    independent of the device."""
+    if n > P:
+        raise ValueError(f"cannot pick {n} examples from only {P} samples")
+    return torch.randperm(P, generator=torch.Generator().manual_seed(seed))[:n]
+
+
+def example_outputs(net: MLP, dataset: Dataset, indices: Tensor | list[int]) -> ExampleOutputs:
+    """The net's outputs and the dataset's targets on the rows `indices` (integers)."""
+    idx = torch.as_tensor(indices).cpu()
+    if idx.numel() == 0:  # an empty list has no dtype of its own
+        idx = idx.long()
+    if idx.is_floating_point() or idx.is_complex() or idx.dtype == torch.bool:
+        raise ValueError(f"indices must be integers, got dtype {idx.dtype}")
+    idx = idx.long()
+    n_rows = len(dataset.x)
+    if idx.ndim != 1 or (idx.numel() > 0 and (idx.min() < 0 or idx.max() >= n_rows)):
+        raise ValueError(f"indices must be a 1-D list of rows in [0, {n_rows}), got {idx}")
+    rows = idx.to(dataset.x.device)
+    with torch.no_grad():
+        _, z = net(dataset.x[rows])
+    return ExampleOutputs(
+        indices=idx,
+        x=dataset.x[rows].cpu(),
+        y_true=dataset.y[rows].cpu(),
+        y_pred=z.cpu(),
+    )
+
+
+def decode_object_action(x: Tensor, grid_size: int) -> tuple[Tensor, Tensor]:
+    """Invert the object_action input: (agent_rc (n, 2) int, objects (n, G, G) bool)."""
+    cells = grid_size**2
+    if x.ndim != 2 or x.shape[1] != 2 * cells:
+        raise ValueError(f"x must have shape (n, 2*G*G = {2 * cells}), got {tuple(x.shape)}")
+    agent = x[:, :cells].argmax(dim=1)
+    agent_rc = torch.stack([agent // grid_size, agent % grid_size], dim=1)
+    return agent_rc, (x[:, cells:] > 0.5).reshape(-1, grid_size, grid_size)
+
+
+def decode_what_where(x: Tensor) -> Tensor:
+    """Invert the what_where input: the (n, 9, 9) micro-grid images (row-major pixels)."""
+    if x.ndim != 2 or x.shape[1] != N_MICRO**2:
+        raise ValueError(f"x must have shape (n, {N_MICRO**2} = 81), got {tuple(x.shape)}")
+    return x.reshape(-1, N_MICRO, N_MICRO)
+
+
+def split_what_where(y: Tensor, n_motifs: int) -> tuple[Tensor, Tensor]:
+    """The `where` (first 9) and `what` (last n_motifs) columns of what_where outputs."""
+    n_where = N_MACRO**2
+    if y.ndim != 2 or y.shape[1] != n_where + n_motifs:
+        raise ValueError(
+            f"what_where outputs need {n_where} + n_motifs = {n_where + n_motifs} columns, "
+            f"got shape {tuple(y.shape)}"
+        )
+    return y[:, :n_where], y[:, n_where:]
+
+
+def _check_pair(y_true: Tensor, y_pred: Tensor) -> None:
+    if y_true.shape != y_pred.shape or y_true.ndim != 2:
+        raise ValueError(
+            f"y_true and y_pred need one 2-D shape, got {y_true.shape}, {y_pred.shape}"
+        )
+
+
+def r_squared(y_true: Tensor, y_pred: Tensor) -> float:
+    """Pooled R^2: 1 - SS_res / SS_tot over all entries, SS_tot about the grand mean.
+
+    Outputs with different means or scales are not weighted equally; see `r_squared_per_output`.
+    """
+    _check_pair(y_true, y_pred)
+    ss_tot = (y_true - y_true.mean()).square().sum()
+    if ss_tot == 0:
+        raise ValueError("R^2 is undefined: the targets have zero variance")
+    return float(1 - (y_true - y_pred).square().sum() / ss_tot)
+
+
+def r_squared_per_output(y_true: Tensor, y_pred: Tensor) -> float:
+    """R^2 of every output column about its own mean, averaged uniformly (sklearn's default)."""
+    _check_pair(y_true, y_pred)
+    ss_tot = (y_true - y_true.mean(dim=0)).square().sum(dim=0)
+    if (ss_tot == 0).any():
+        raise ValueError("R^2 is undefined: an output has zero variance across the samples")
+    ss_res = (y_true - y_pred).square().sum(dim=0)
+    return float((1 - ss_res / ss_tot).mean())
+
+
+def _regression_report(y_true: Tensor, y_pred: Tensor, cfg: DataConfig) -> dict[str, float]:
+    return {
+        "r2_pooled": r_squared(y_true, y_pred),
+        "r2_per_output": r_squared_per_output(y_true, y_pred),
+    }
+
+
+def _object_action_report(y_true: Tensor, y_pred: Tensor, cfg: DataConfig) -> dict[str, float]:
+    _check_outputs(y_true, len(ACTION_NAMES))
+    target = y_true > 0.5
+    exact = ((y_pred > 0.5) == target).all(dim=1)
+    # A tied maximum is not a decision (an all-equal prediction would otherwise always pick
+    # 'stay', the first column), so only a unique maximum can be optimal.
+    top = y_pred.argmax(dim=1, keepdim=True)
+    unique_max = (y_pred == y_pred.gather(1, top)).sum(dim=1) == 1
+    optimal = target.gather(1, top).squeeze(1) & unique_max
+    only_stay = target[:, 0] & ~target[:, 1:].any(dim=1)
+    return {
+        "exact_match": float(exact.float().mean()),
+        "argmax_optimal": float(optimal.float().mean()),
+        "stay_rate": float(only_stay.float().mean()),
+    }
+
+
+def _top1_accuracy(y_true: Tensor, y_pred: Tensor) -> float:
+    return float((y_pred.argmax(dim=1) == y_true.argmax(dim=1)).float().mean())
+
+
+def _what_where_report(y_true: Tensor, y_pred: Tensor, cfg: DataConfig) -> dict[str, float]:
+    where_t, what_t = split_what_where(y_true, cfg.n_motifs)
+    where_p, what_p = split_what_where(y_pred, cfg.n_motifs)
+    return {
+        "where_accuracy": _top1_accuracy(where_t, where_p),
+        "what_accuracy": _top1_accuracy(what_t, what_p),
+    }
+
+
+def _check_outputs(y: Tensor, expected: int) -> None:
+    if y.shape[1] != expected:
+        raise ValueError(f"expected {expected} outputs for this task, got {y.shape[1]}")
+
+
+_REPORTS = {
+    "linear_teacher": _regression_report,
+    "position": _regression_report,
+    "object_action": _object_action_report,
+    "what_where": _what_where_report,
+}
+
+
+def prediction_report(
+    task: str, y_true: Tensor, y_pred: Tensor, cfg: DataConfig
+) -> dict[str, float]:
+    """Task-appropriate accuracy summary of predictions `y_pred` against targets `y_true`.
+
+    linear_teacher and position: {"r2_pooled", "r2_per_output"}.
+    object_action: {"exact_match" (pred > 0.5 equals the target set), "argmax_optimal" (the
+    largest prediction, if unique, is an optimal action), "stay_rate" (fraction of samples
+    whose only optimal action is 'stay', the share a constant 'stay' output would get right)}.
+    what_where: {"where_accuracy", "what_accuracy"} (top-1 over the first 9 / last n_motifs
+    outputs).
+    """
+    if task not in TASKS:
+        raise ValueError(f"unknown task {task!r}; expected one of {sorted(TASKS)}")
+    if task not in _REPORTS:
+        raise ValueError(f"no prediction report for task {task!r}")
+    _check_pair(y_true, y_pred)
+    return _REPORTS[task](y_true, y_pred, cfg)

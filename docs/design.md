@@ -324,6 +324,24 @@ def neuron_maps(h_grid, phi, layer, n_grid) -> Tensor (N, p, p)           # note
 def kernel_scales(Phi) -> Tensor (L,)                                     # tr(Phi_l)/P
 def get_grid_predictions(cache_dir, cfg, net, dataset) -> GridPredictions # cached: analysis/grid.pt
 def get_layer_pca(cache_dir, cfg, grid: GridPredictions, phi) -> LayerPCA # cached: analysis/pca.pt
+
+@dataclass
+class ExampleOutputs: indices (n,); x (n,D_in); y_true (n,D_out); y_pred (n,D_out)      # all CPU
+def pick_examples(P, n, seed) -> Tensor (n,)                  # seeded CPU randperm prefix; ValueError if n > P
+def example_outputs(net, dataset, indices) -> ExampleOutputs  # net under no_grad on dataset.x[indices]; ValueError for out-of-range or non-integer indices
+def decode_object_action(x, grid_size) -> (agent_rc (n,2) int, objects (n,G,G) bool)   # inverts object_action's x
+def decode_what_where(x) -> image (n,9,9)                     # row-major micro-grid, pixel (3R+r, 3C+c)
+def r_squared(y_true, y_pred) -> float                        # pooled: 1 - SS_res/SS_tot over all entries, SS_tot about the grand mean; ValueError if the targets are constant
+def r_squared_per_output(y_true, y_pred) -> float             # each output column about its own mean, averaged uniformly (sklearn's default); ValueError if a column is constant
+def split_what_where(y, n_motifs) -> (where (n,9), what (n,n_motifs))   # the one definition of the column split; ValueError on a wrong width
+def prediction_report(task, y_true, y_pred, cfg: DataConfig) -> dict[str, float]
+    # linear_teacher, position: {"r2_pooled", "r2_per_output"} (the notebook shows both);
+    # object_action: {"exact_match" (pred > 0.5 equals the target row),
+    #   "argmax_optimal" (the argmax of pred is a 1 of the target row; a tied maximum counts as NOT optimal, so a constant
+    #   prediction does not score through argmax picking 'stay' first),
+    #   "stay_rate" (fraction of samples whose only optimal action is stay, from y_true: what a constant 'stay' would get)};
+    # what_where: {"where_accuracy", "what_accuracy"} (top-1 over the first 9 / last cfg.n_motifs outputs)
+    # ValueError for a task not in data.TASKS, mismatched shapes or a wrong output count
 ```
 
 ## modularity.py
@@ -383,7 +401,34 @@ plot_training_history(history, ax=None)               # mse / loss vs epoch, log
 fig_solver_history(history) -> Figure                 # the notebook's plot_history dashboard
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
 plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_scale=True) -> Figure   # theory vs net kernels per layer; shared_scale=False gives each panel its own colour scale
+
+# Result figures. `history` is the train.py history extended by the monitor with the keys below.
+plot_loss_curves(history, ax=None)                    # total loss (solid) and the RAW logged mse (dashed), weight_l2 (dotted), rate_l2 (dash-dot) vs epoch, log y;
+                                                      # the raw terms are not the weighted terms of the loss, so they do not add up to it; an all-zero series is labelled "(zero)"
+plot_training_history(history, ax=None)               # = plot_loss_curves
+plot_mir_history(history, ax=None, which="raw", legend=True)   # one solid line per layer (LAYER_COLORS[layer]) vs monitor_epoch;
+                                                      # which="raw": monitor_mir plus monitor_mir_chance dotted in the layer colour, y fixed to [-0.05, 1.05];
+                                                      # "corrected": monitor_mir_corrected, lower y limit extended to min(-0.05, data min - 0.05)
+plot_dead_neurons(history, ax=None, legend=True)      # monitor_n_dead_corrected per layer vs monitor_epoch
+fig_mir_history(history, title="") -> Figure          # three panels sharing epoch: raw (+ baseline, legend), corrected, dead neurons
+plot_prediction_scatter(y_true, y_pred, ax=None, r2=None)   # all entries, identity line; r2 (computed by the caller) shown in the legend as "R² on these examples"
+plot_paired_bars(y_true, y_pred, labels, ax=None, threshold=None)   # true / predicted value per output; artists labelled, the caller makes the (figure-level) legend
+plot_object_grid(agent_rc, objects, ax=None)          # one scene: squares = objects, ring+dot = agent (visible on an object); row 0 at the top (up = toward row 0); ValueError unless objects is (G,G) and the agent is inside
+plot_motif_image(image, ax=None, n_macro=3, motif_size=3)   # (n_macro*motif_size)² image with the macro grid at motif_size*k - 0.5
+plot_example_outputs(task, outputs: ExampleOutputs, ax=None, r2=None) -> Axes   # NOT task specific: predicted vs true scatter of all entries (task only validated)
+fig_example_outputs(task, outputs, data_cfg, n_show=None) -> Figure
+    # linear_teacher (4 examples: true/pred stems + scatter), object_action (6: scene + paired action bars with a 0.5 line),
+    # what_where (4: image + where / what bars, titled with the argmax decisions), position (scatter), each with one figure-level legend;
+    # R² on the shown outputs is computed here via analyse.r_squared (omitted if the targets are constant).
+    # ValueError: task not in data.TASKS, data_cfg.task != task, empty outputs, n_show < 1, or outputs inconsistent with data_cfg
+    # (grid size, n_motifs)
 ```
+
+History keys. `train.py` records `epoch`, `mse`, `weight_l2`, `rate_l2`, `loss` (lists of floats). The monitor adds
+`monitor_epoch` (list[int]) and `monitor_mir`, `monitor_mir_corrected`, `monitor_mir_chance`, `monitor_n_dead`,
+`monitor_n_dead_corrected`: lists over monitor calls of lists over layers. The result plot functions raise
+`ValueError` for a missing key (the message names it), an empty history, columns of different length, or a
+different number of layers in different monitor calls.
 
 ## cli.py
 
