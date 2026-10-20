@@ -222,7 +222,7 @@ def decode_what_where(x: Tensor) -> Tensor:
     return x.reshape(-1, N_MICRO, N_MICRO)
 
 
-def _r2(y_true: Tensor, y_pred: Tensor) -> float:
+def r_squared(y_true: Tensor, y_pred: Tensor) -> float:
     """1 - SS_res / SS_tot pooled over all entries, with SS_tot about the grand mean."""
     ss_tot = (y_true - y_true.mean()).square().sum()
     if ss_tot == 0:
@@ -279,4 +279,4 @@ def prediction_report(
     if task == "what_where":
         _check_outputs(y_true, N_MACRO**2 + cfg.n_motifs)
         return _what_where_report(y_true, y_pred)
-    return {"r2": _r2(y_true, y_pred)}
+    return {"r2": r_squared(y_true, y_pred)}

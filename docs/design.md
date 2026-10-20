@@ -295,6 +295,19 @@ def neuron_maps(h_grid, phi, layer, n_grid) -> Tensor (N, p, p)           # note
 def kernel_scales(Phi) -> Tensor (L,)                                     # tr(Phi_l)/P
 def get_grid_predictions(cache_dir, cfg, net, dataset) -> GridPredictions # cached: analysis/grid.pt
 def get_layer_pca(cache_dir, cfg, grid: GridPredictions, phi) -> LayerPCA # cached: analysis/pca.pt
+
+@dataclass
+class ExampleOutputs: indices (n,); x (n,D_in); y_true (n,D_out); y_pred (n,D_out)      # all CPU
+def pick_examples(P, n, seed) -> Tensor (n,)                  # seeded CPU randperm prefix; ValueError if n > P
+def example_outputs(net, dataset, indices) -> ExampleOutputs  # net under no_grad on dataset.x[indices]; ValueError for out-of-range indices
+def decode_object_action(x, grid_size) -> (agent_rc (n,2) int, objects (n,G,G) bool)   # inverts object_action's x
+def decode_what_where(x) -> image (n,9,9)                     # row-major micro-grid, pixel (3R+r, 3C+c)
+def r_squared(y_true, y_pred) -> float                        # 1 - SS_res/SS_tot pooled over all entries, SS_tot about the grand mean; ValueError if the targets are constant
+def prediction_report(task, y_true, y_pred, cfg: DataConfig) -> dict[str, float]
+    # linear_teacher, position: {"r2"}; object_action: {"exact_match" (pred > 0.5 equals the target row),
+    # "argmax_optimal" (argmax of pred, first on ties, is a 1 of the target row)};
+    # what_where: {"where_accuracy", "what_accuracy"} (top-1 over the first 9 / last cfg.n_motifs outputs)
+    # ValueError for an unknown task, mismatched shapes or a wrong output count
 ```
 
 ## modularity.py
@@ -354,7 +367,29 @@ plot_training_history(history, ax=None)               # mse / loss vs epoch, log
 fig_solver_history(history) -> Figure                 # the notebook's plot_history dashboard
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
 plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_scale=True) -> Figure   # theory vs net kernels per layer; shared_scale=False gives each panel its own colour scale
+
+# Result figures. `history` is the train.py history extended by the monitor with the keys below.
+plot_loss_curves(history, ax=None)                    # loss (solid), mse (dashed), weight_l2 (dotted), rate_l2 (dash-dot) vs epoch, log y; needs epoch, mse, weight_l2, rate_l2, loss
+plot_mir_history(history, ax=None, which="raw", legend=True)   # one solid line per layer (LAYER_COLORS[layer]) vs monitor_epoch, y in [-0.05, 1.05];
+                                                      # which="raw": monitor_mir plus monitor_mir_chance dotted in the layer colour; "corrected": monitor_mir_corrected
+plot_dead_neurons(history, ax=None, legend=True)      # monitor_n_dead_corrected per layer vs monitor_epoch
+fig_mir_history(history, title="") -> Figure          # three panels sharing epoch: raw (+ baseline, legend), corrected, dead neurons
+plot_prediction_scatter(y_true, y_pred, ax=None)      # all entries, identity line, pooled R^2 in the legend
+plot_paired_bars(y_true, y_pred, labels, ax=None, threshold=None, legend=True)   # true / predicted value per output
+plot_object_grid(agent_rc, objects, ax=None)          # one scene: squares = objects, circle = agent; row 0 at the top (up = toward row 0)
+plot_motif_image(image, ax=None)                      # 9x9 input with the macro grid drawn at the pixel boundaries 2.5 and 5.5
+plot_example_outputs(task, outputs: ExampleOutputs, data_cfg, extras=None, ax=None) -> Axes   # one-axis summary (prediction scatter) for any task
+fig_example_outputs(task, outputs, data_cfg, extras=None, n_show=None) -> Figure
+    # linear_teacher (4 examples: true/pred stems + scatter), object_action (6: scene + paired action bars with a 0.5 line),
+    # what_where (4: image + where / what bars, titled with the argmax decisions), position (scatter); ValueError otherwise.
+    # `extras` is reserved for the dataset's extras; no task needs it to draw today
 ```
+
+History keys. `train.py` records `epoch`, `mse`, `weight_l2`, `rate_l2`, `loss` (lists of floats). The monitor adds
+`monitor_epoch` (list[int]) and `monitor_mir`, `monitor_mir_corrected`, `monitor_mir_chance`, `monitor_n_dead`,
+`monitor_n_dead_corrected`: lists over monitor calls of lists over layers. The result plot functions raise
+`ValueError` for a missing key (the message names it), an empty history, columns of different length, or a
+different number of layers in different monitor calls.
 
 ## cli.py
 
