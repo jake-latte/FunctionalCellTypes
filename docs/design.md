@@ -264,14 +264,16 @@ With `monitor_int == 0` the history keys and values are those of an unmonitored 
 def make_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]   # ValueError if dataset.factors is None
 ```
 
-One call runs the net on `dataset.x`, takes the rates phi(H) of every hidden layer (phi from `cfg.net`) and returns,
-per layer l = 0..L-1 (each value a list of length L): `mir` (`network_mir`, bias_correction="none"), `mir_corrected`
-(bias_correction="shuffle"), `mir_chance` (`shuffled_mir` of the layer), `n_dead`, `n_dead_corrected` (ints). It uses
-`dataset.groups`, `cfg.train.monitor_bins`, `cfg.train.monitor_shuffles` and seed `cfg.train.seed`, so a call is a
-deterministic function of the net. The history keys are therefore `monitor_epoch`, `monitor_mir`,
-`monitor_mir_corrected`, `monitor_mir_chance`, `monitor_n_dead`, `monitor_n_dead_corrected`: the last five are lists
-over calls of lists over layers. Cost: about 4 s per call at N=256, L=5, P=4096 on `object_action` and 1 s on
-`what_where` (CPU, 16 threads), growing with L, P and the number of factors.
+The docstring of `make_mir_monitor` owns the contract (the keys `MIR_MONITOR_KEYS`, their meaning and the settings
+used); `MIR_MONITOR_KEYS` is exported from `monitor.py`. One call runs the net on `dataset.x`, takes the rates phi(H)
+of every hidden layer and gets each layer's numbers from one `layer_mir_report` call. The history keys are
+`monitor_epoch` plus `monitor_<key>` for each of those keys, each a list over calls of lists over layers.
+
+Cost: per layer a call bins the rates once and makes 1 + `monitor_shuffles` mutual-information passes (the raw
+estimate plus one per shuffle, shared by the bias correction and the chance level), so it grows linearly with L,
+`monitor_shuffles`, P, N and the number of factors. Measured (CPU, float64, 16 torch threads, N=256, L=5, P=4096, relu,
+`monitor_bins=10`, `monitor_shuffles=5`): about 1.5 s per call on `object_action` (G=5; 3 factor groups) and 0.22 s on
+`what_where` (m=8).
 
 ## hmc.py
 
@@ -359,6 +361,8 @@ neuron_factor_information(rates (P,N), factors, groups=None, n_bins=10) -> Facto
 preference(group_mi, tol=1e-12) -> (r, dead)
 mir(r, K) -> float;  layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
 network_mir(rates (P,L,N), ...) -> list[LayerMIR]     # rates are phi(H); the caller applies phi
+layer_mir_report(rates (P,N), factors, groups=None, n_bins=10, n_shuffles=5, seed=0) -> LayerMIRReport(mir, mir_corrected, mir_chance, n_dead, n_dead_corrected)
+                                                      # exactly the numbers of layer_mir (none / shuffle) and shuffled_mir, in one pass: one binning, one shuffle loop
 shuffle_factors(factors, generator); shuffled_mir(rates, factors, groups=None, n_bins=10, seed=0, n_shuffles=1) -> float
 ```
 

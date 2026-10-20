@@ -8,11 +8,10 @@ from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset
 from fct.model import make_net
 from fct.modularity import network_mir, shuffled_mir
-from fct.monitor import make_mir_monitor
+from fct.monitor import MIR_MONITOR_KEYS, make_mir_monitor
 from fct.tasks import Dataset
 
 CPU, F64 = torch.device("cpu"), torch.float64
-KEYS = {"mir", "mir_corrected", "mir_chance", "n_dead", "n_dead_corrected"}
 
 
 def _cfg(data: DataConfig, L=2, N=8, **train_kw) -> Config:
@@ -52,7 +51,7 @@ def test_monitor_equals_direct_modularity_calls(make_cfg):
         for layer in range(cfg.net.L)
     ]
 
-    assert set(out) == KEYS
+    assert set(out) == set(MIR_MONITOR_KEYS)
     assert out["mir"] == [m.mir for m in raw]
     assert out["mir_corrected"] == [m.mir for m in corrected]
     assert out["mir_chance"] == chance
@@ -102,7 +101,8 @@ def _two_factor_dataset(P: int, shuffle_factors: bool) -> Dataset:
 
 
 def _two_factor_cfg(N: int) -> Config:
-    data = DataConfig(task="position", P=1, D_in=2, embedding="linear")  # unused by the monitor
+    # Config requires a DataConfig, but the monitor reads the Dataset it is given, not this.
+    data = DataConfig(task="position", P=1, D_in=2, embedding="linear")
     return _cfg(data, L=1, N=N, monitor_bins=5, monitor_shuffles=5)
 
 
@@ -118,6 +118,12 @@ def test_neurons_hand_set_to_read_one_factor_each_give_high_mir():
         net.U[: N // 2, 0] = 1.0
         net.U[N // 2 :, 1] = 1.0
     out = make_mir_monitor(ds, cfg)(net)
+    # Thresholds, with P = 2000 and 5 bins. A neuron that is a monotone function of its factor
+    # has information log 5 about it and only the plug-in bias (B-1)(C-1)/(2P) = 0.004 nats
+    # about the other, so r = 0.998 and the raw MIR = 0.996 (> 0.95 leaves room for the
+    # tanh/ties binning); correcting subtracts that bias, so the corrected MIR is ~1 (> 0.9).
+    # The chance level is the raw MIR of unrelated neurons, max/sum of two near-equal noise
+    # informations: about 0.2-0.3, so the corrected MIR clears it by ~0.7 (> 0.3 is loose).
     assert out["mir"][0] > 0.95
     assert out["mir_corrected"][0] > 0.9
     assert out["mir_corrected"][0] > out["mir_chance"][0] + 0.3
@@ -129,5 +135,7 @@ def test_fresh_net_on_shuffled_factors_sits_at_chance():
     ds = _two_factor_dataset(P, shuffle_factors=True)
     net = make_net(cfg.net, 2, 1, CPU, F64)
     out = make_mir_monitor(ds, cfg)(net)
+    # Raw MIR and its chance level are both the mean preference of 64 noise neurons (sd of
+    # the mean ~0.02 each), so |difference| < 0.1 is ~2 sd; the corrected MIR is ~0 by design.
     assert abs(out["mir"][0] - out["mir_chance"][0]) < 0.1
     assert abs(out["mir_corrected"][0]) < 0.1
