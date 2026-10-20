@@ -22,6 +22,7 @@ fct/
   meanfield.py     # saddle-point solver (Algorithm 1) with checkpoint / resume
   analyse.py       # pure analysis functions + cached wrappers
   modularity.py    # neuron-factor mutual information, preference, MIR (pure)
+  monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   cli.py           # argparse CLI: init / train / solve / plot / plot-example
   __main__.py      # `python -m fct ...` -> cli.main()
@@ -102,6 +103,9 @@ class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
     weight_lambda: float = 1e-3; rate_lambda: float = 1e-3
     log_int: int = 100; save_int: int = 100; seed: int = 0
+    monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
+    monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
+    monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1)
 class MeanFieldConfig(BaseModel):
     n_points: int = 100                 # solve on the first n_points training points (X=x[:n_points])
     beta: float = 1e6
@@ -237,12 +241,37 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # we
 ```python
 def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[str, Tensor]]
     # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2  (notebook cell 5); dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
-History = dict[str, list[int | float]]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs)
-def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> tuple[MLP, History]
+History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus the monitor_* keys below when monitored
+def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
+          monitor: Callable[[MLP], dict[str, list]] | None = None) -> tuple[MLP, History]
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
     # checkpoint every save_int epochs and at the end (final.pt); hash = section_hash("data","net","train")
-def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[MLP, History]   # rebuilds net with make_net and loads final.pt; raises FileNotFoundError if absent
+    # monitor: required exactly when cfg.train.monitor_int > 0 (ValueError otherwise, before anything runs)
+def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[MLP, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
 ```
+
+Monitor hook: `monitor(net)` is called under `torch.no_grad()` with the global RNG state restored afterwards,
+at the START of every epoch e with `e % monitor_int == 0` (after e's periodic checkpoint, before its step; so e = 0
+records the initial net) and once more after the last step with e = `n_epochs` (the trained net; never a duplicate).
+Each call appends e to `history["monitor_epoch"]` (list[int]) and, for every key `k` of its result, the value to
+`history["monitor_<k>"]` (one entry per call). Every call must return the same keys. A checkpoint written at epoch e
+does not yet hold e's entry; the resumed run records it, so resuming reproduces the uninterrupted history exactly.
+With `monitor_int == 0` the history keys and values are those of an unmonitored run.
+
+## monitor.py
+
+```python
+def make_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]   # ValueError if dataset.factors is None
+```
+
+One call runs the net on `dataset.x`, takes the rates phi(H) of every hidden layer (phi from `cfg.net`) and returns,
+per layer l = 0..L-1 (each value a list of length L): `mir` (`network_mir`, bias_correction="none"), `mir_corrected`
+(bias_correction="shuffle"), `mir_chance` (`shuffled_mir` of the layer), `n_dead`, `n_dead_corrected` (ints). It uses
+`dataset.groups`, `cfg.train.monitor_bins`, `cfg.train.monitor_shuffles` and seed `cfg.train.seed`, so a call is a
+deterministic function of the net. The history keys are therefore `monitor_epoch`, `monitor_mir`,
+`monitor_mir_corrected`, `monitor_mir_chance`, `monitor_n_dead`, `monitor_n_dead_corrected`: the last five are lists
+over calls of lists over layers. Cost: about 4 s per call at N=256, L=5, P=4096 on `object_action` and 1 s on
+`what_where` (CPU, 16 threads), growing with L, P and the number of factors.
 
 ## hmc.py
 
@@ -360,7 +389,7 @@ plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_s
 
 ```
 python -m fct init CACHE_DIR [--set data.P=512 --set net.L=2 ...]   # writes config.json from defaults; refuses to overwrite unless --force
-python -m fct train CACHE_DIR
+python -m fct train CACHE_DIR                                        # builds the MIR monitor when train.monitor_int > 0
 python -m fct solve CACHE_DIR
 python -m fct plot CACHE_DIR [--which all|learning|representation|neurons|training|solver|kernels]   # result-dependent figures -> CACHE_DIR/figures/
 python -m fct plot-example CACHE_DIR                                 # result-independent figure
