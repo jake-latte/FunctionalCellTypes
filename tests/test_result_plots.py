@@ -384,41 +384,53 @@ def test_plot_motif_image_rejects_a_wrong_image_shape():
 # ----------------------------------------------------------------- size and style
 
 
-def test_style_has_readable_sizes_and_wide_figures():
-    rc = draw.STYLE_RC
-    assert 13 <= rc["font.size"] <= 14
-    assert rc["xtick.labelsize"] >= 11 and rc["ytick.labelsize"] >= 11
-    assert rc["axes.titlesize"] > rc["font.size"] and rc["axes.labelsize"] >= rc["font.size"]
-    assert 12 <= draw.FIG_WIDTH <= 14
+def _tick_sizes(fig) -> list[float]:
+    fig.canvas.draw()  # tick labels exist only after a draw
+    return [
+        t.get_fontsize() for ax in fig.axes for t in ax.get_xticklabels() + ax.get_yticklabels()
+    ]
 
 
-@pytest.mark.parametrize("task", list(CONFIGS))
-def test_example_figures_are_full_width_with_readable_ticks(task):
-    outputs, cfg = _outputs(task)
-    fig = draw.fig_example_outputs(task, outputs, cfg)
-    assert fig.get_figwidth() >= 12 or task == "position"
-    ticks = [t.get_fontsize() for ax in fig.axes for t in ax.get_xticklabels()]
-    assert min(ticks) >= 11
+def _full_width_figures():
+    values = np.array([[0.1, 0.2], [0.3, np.nan]])
+    figs = {
+        "loss": draw.fig_loss_curves(_loss_history()),
+        "mir": draw.fig_mir_history(_monitor_history(2)),
+        "heatmap": draw.fig_mir_heatmaps({"raw": values}, ["a", "b"], ["done", "done"]),
+    }
+    for task in ("linear_teacher", "object_action", "what_where"):
+        outputs, cfg = _outputs(task)
+        figs[task] = draw.fig_example_outputs(task, outputs, cfg)
+    return figs
 
 
-def test_fig_loss_curves_is_wide_titled_and_keeps_the_legend_off_the_curves():
+def test_results_figures_are_full_width_with_readable_ticks_without_caller_rcparams():
+    for name, fig in _full_width_figures().items():
+        assert fig.get_figwidth() >= 12, name
+        assert min(_tick_sizes(fig)) >= 11, name
+
+
+def test_position_figure_is_a_large_square_scatter():
+    outputs, cfg = _outputs("position")
+    fig = draw.fig_example_outputs("position", outputs, cfg)
+    assert fig.get_figwidth() >= 6 and fig.get_figheight() >= 6
+    assert min(_tick_sizes(fig)) >= 11
+
+
+def test_fig_loss_curves_is_titled_and_keeps_the_legend_right_of_the_axis():
     fig = draw.fig_loss_curves(_loss_history(), title="setting A")
-    assert fig.get_figwidth() >= 12
     (ax,) = fig.axes
     assert ax.get_title() == "setting A"
-    assert ax.get_legend()._loc == 6  # "center left" of the anchor outside the axis
+    fig.canvas.draw()
+    assert ax.get_legend().get_window_extent().x0 >= ax.get_window_extent().x1
 
 
-def test_fig_mir_history_and_heatmaps_are_full_width():
-    assert draw.fig_mir_history(_monitor_history(2)).get_figwidth() >= 12
-    values = np.array([[0.1, 0.2], [0.3, np.nan]])
-    fig = draw.fig_mir_heatmaps({"raw": values}, ["a", "b"], ["done", "done"])
-    assert fig.get_figwidth() >= 12
-
-
-def test_the_style_applies_without_the_caller_setting_rcparams():
-    fig = draw.fig_mir_history(_monitor_history(2))
-    assert fig.axes[0].xaxis.label.get_fontsize() >= 13
+def test_prediction_scatter_legend_is_below_the_axis_in_a_styled_figure():
+    outputs, cfg = _outputs("position")
+    fig = draw.fig_example_outputs("position", outputs, cfg)
+    ax = fig.axes[0]
+    fig.canvas.draw()
+    assert ax.get_legend().get_window_extent().y1 <= ax.get_window_extent().y0
 
 
 def test_linear_teacher_overlays_true_and_predicted_on_one_axis_per_example():

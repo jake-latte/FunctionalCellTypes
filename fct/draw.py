@@ -52,12 +52,13 @@ LAYER_COLORS = [
 ]
 _GREY = "#52514e"  # reference lines and the trained-network overlay
 
-# Sizes of the results figures, in one place. A notebook is read at full width, so the figures
-# are wide and their text is large enough to read without zooming; heights are per row of
-# panels. `STYLE_RC` is applied while a results figure is built (see `_styled`), so every title,
-# label, tick and legend in it takes its size from here and nothing below hard-codes a font size.
-FIG_WIDTH = 13.0  # inches; the width of every full-width results figure
-ROW_HEIGHT = 2.6  # inches per row of example panels
+# Fonts and line widths of the results figures, in one place. A notebook is read at full width,
+# so the figures are wide and their text is large enough to read without zooming. `STYLE_RC` is
+# applied while a results figure is built (see `_styled`), so every title, label, tick and legend
+# in it takes its size from here and nothing below hard-codes a font size. Each `fig_*` keeps its
+# own geometry (heights grow with the number of rows of panels).
+FIG_WIDTH = 13.0  # inches; the width of the full-width results figures
+HEATMAP_WIDTH = FIG_WIDTH + 1  # the shared colourbar sits outside the panels
 ANNOTATION_SIZE = 12  # numbers written inside heatmap cells
 STYLE_RC = {
     "font.size": 14,
@@ -72,6 +73,7 @@ STYLE_RC = {
     "axes.linewidth": 1.2,
 }
 LINE_WIDTH = STYLE_RC["lines.linewidth"]
+MARKER_SIZE = STYLE_RC["lines.markersize"]
 
 
 class Overlay(NamedTuple):
@@ -123,12 +125,12 @@ SOLVER_N_COLS = 4
 # --------------------------------------------------------------------------- helpers
 
 
-def _styled(build: Callable[..., Figure]) -> Callable[..., Figure]:
+def _styled[**P](build: Callable[P, Figure]) -> Callable[P, Figure]:
     """Build a figure under `STYLE_RC`; the text sizes are fixed when each artist is created,
     so the figure keeps them after the context is left."""
 
     @functools.wraps(build)
-    def wrapper(*args, **kwargs) -> Figure:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Figure:
         with plt.rc_context(STYLE_RC):
             return build(*args, **kwargs)
 
@@ -471,7 +473,7 @@ LOSS_STYLES = (
 )
 MIR_KEYS = {"raw": "monitor_mir", "corrected": "monitor_mir_corrected"}
 MIR_YLIM = (-0.05, 1.05)
-MIR_YMARGIN = 0.05  # headroom below the lowest corrected MIR, which can go negative
+MIR_YMARGIN = 0.05  # headroom below the lowest corrected MIR, which is >= 0 up to round-off
 # Colours of the example figures: grid and agent marks, and true vs predicted values. They are
 # not in LAYER_COLORS so a legend never has to say which meaning a colour has.
 AGENT_COLOR = "#c2185b"
@@ -501,6 +503,9 @@ def plot_loss_curves(history: Mapping[str, ArrayLike], ax: Axes | None = None) -
     The total loss is 0.5*N*mse + lambda_w*weight_l2 + lambda_r*rate_l2, so the three raw
     terms are drawn as logged and do not add up to the loss curve. A series that is zero at
     every epoch cannot be seen on a log axis and is marked "(zero)" in the legend instead.
+
+    The legend sits outside the axis, to its right: that assumes a constrained-layout figure
+    such as `fig_loss_curves` makes; with a caller-supplied `ax` it may be clipped.
     """
     keys = ["epoch", *(key for key, *_ in LOSS_STYLES)]
     cols = _history_columns(history, keys, "training")
@@ -564,8 +569,8 @@ def _format_epoch_axis(ax: Axes, epoch: np.ndarray) -> None:
 
 
 def _mir_ylim(mir: np.ndarray, which: str) -> tuple[float, float]:
-    """Fixed MIR range for raw values; the corrected MIR can be negative, so extend the
-    lower limit to show every point."""
+    """Fixed MIR range for raw values. The corrected MIR is >= 0 up to round-off, so its range
+    is the same; the lower limit is still extended defensively to show every point."""
     if which == "raw" or not np.isfinite(mir).any():
         return MIR_YLIM
     return min(MIR_YLIM[0], float(np.nanmin(mir)) - MIR_YMARGIN), MIR_YLIM[1]
@@ -578,7 +583,8 @@ def plot_mir_history(
 
     `which="raw"` plots `monitor_mir` with the chance baseline `monitor_mir_chance` dotted in
     each layer's colour, on the fixed range [-0.05, 1.05]. `which="corrected"` plots
-    `monitor_mir_corrected`, whose lower limit extends below -0.05 if the data do.
+    `monitor_mir_corrected` on the same range (the corrected MIR is >= 0 up to round-off; the
+    lower limit extends below -0.05 only if the data do).
     """
     if which not in MIR_KEYS:
         raise ValueError(f"which must be one of {sorted(MIR_KEYS)}, got {which!r}")
@@ -659,6 +665,8 @@ def plot_prediction_scatter(
     """Every predicted entry against its target, with the identity line.
 
     `r2`, computed by the caller (see `analyse.r_squared`), is shown in the legend when given.
+    The legend sits below the axis, which assumes a constrained-layout figure (the styled
+    `fig_*` functions); with a caller-supplied `ax` it may be clipped.
     """
     t, p = _np(y_true).ravel(), _np(y_pred).ravel()
     ax = _get_ax(ax)
@@ -802,8 +810,10 @@ def _plot_output_vector(true: ArrayLike, pred: ArrayLike, ax: Axes) -> Axes:
     x = np.arange(len(t))
     ax.vlines(x, 0, t, color=TRUE_COLOR, lw=LINE_WIDTH)
     ax.axhline(0, color=_GREY, lw=1)
-    ax.plot(x, t, "o", ms=14, mfc="none", mec=TRUE_COLOR, mew=LINE_WIDTH, label="true")
-    ax.plot(x, p, "D", ms=8, color=PRED_COLOR, label="predicted")
+    ax.plot(
+        x, t, "o", ms=1.75 * MARKER_SIZE, mfc="none", mec=TRUE_COLOR, mew=LINE_WIDTH, label="true"
+    )
+    ax.plot(x, p, "D", color=PRED_COLOR, label="predicted")
     ax.set_xticks(x)
     ax.margins(y=0.25)  # keep end markers off the frame
     return ax
@@ -1048,7 +1058,7 @@ def fig_mir_heatmaps(
     title: str = "",
 ) -> Figure:
     """One heatmap per named panel side by side on a shared colour scale and colourbar. The
-    scale is [min(0, data), max(1, data)], so a corrected MIR below zero is shown, not clipped."""
+    scale is [min(0, data), max(1, data)], so a value outside [0, 1] (round-off) is shown, not clipped."""
     arrays = {name: _np(a) for name, a in panels.items()}
     finite = np.concatenate([a[np.isfinite(a)] for a in arrays.values()])
     vmin = min(0.0, float(finite.min())) if finite.size else 0.0
@@ -1056,7 +1066,7 @@ def fig_mir_heatmaps(
     fig, axes = plt.subplots(
         1,
         len(arrays),
-        figsize=(FIG_WIDTH + 1, 0.55 * len(row_labels) + 2.6),
+        figsize=(HEATMAP_WIDTH, 0.55 * len(row_labels) + 2.6),
         sharey=True,
         layout="constrained",
     )

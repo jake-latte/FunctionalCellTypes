@@ -25,6 +25,7 @@ fct/
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   sweep.py         # the 36-setting grid: SweepConfig, expand, run_setting, status
+  explanations.py  # MIR_EXPLANATION: the notebook's markdown/LaTeX definition of raw, corrected and chance-baseline MIR
   report.py        # what the results notebook shows: read-only load of a sweep ROOT, final-MIR table, prose from numbers
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
   __main__.py      # `python -m fct ...` -> cli.main()
@@ -419,7 +420,7 @@ fig_loss_curves(history, title="") -> Figure          # plot_loss_curves as a fu
 plot_training_history(history, ax=None)               # = plot_loss_curves
 plot_mir_history(history, ax=None, which="raw", legend=True)   # one solid line per layer (LAYER_COLORS[layer]) vs monitor_epoch;
                                                       # which="raw": monitor_mir plus monitor_mir_chance dotted in the layer colour, y fixed to [-0.05, 1.05];
-                                                      # "corrected": monitor_mir_corrected, lower y limit extended to min(-0.05, data min - 0.05)
+                                                      # "corrected": monitor_mir_corrected, same range (the corrected MIR is >= 0 up to round-off; the lower limit extends only if a value goes below -0.05)
 plot_dead_neurons(history, ax=None, legend=True)      # monitor_n_dead_corrected per layer vs monitor_epoch
 fig_mir_history(history, title="") -> Figure          # three panels sharing epoch: raw (+ baseline, legend), corrected, dead neurons
 plot_prediction_scatter(y_true, y_pred, ax=None, r2=None)   # all entries, identity line; r2 (computed by the caller) shown in a legend below the axis as "R² on these examples"
@@ -477,21 +478,24 @@ All settings share the seeds, so they differ only in the swept axes. The history
 monitor.py. The monitor runs at epochs 0, k*monitor_int for every k with k*monitor_int < n_epochs, and n_epochs, so
 when n_epochs is not a multiple of monitor_int the last two entries are closer than monitor_int (n_epochs=7, monitor_int=2: 0, 2, 4, 6, 7).
 
-Size and style: the figures read in the results notebook (`fig_loss_curves`, `fig_mir_history`, `fig_example_outputs`,
-`fig_mir_heatmaps`) are built under `plt.rc_context(STYLE_RC)` (the `_styled` decorator), so they look the same in the CLI, the
-notebook and a script. All sizes live in `draw.py`: `FIG_WIDTH = 13` inches, `STYLE_RC` (font 14, axes title 16, labels 14, ticks
-12, legend 13, figure title 18, line width 2.5, marker size 8), `LINE_WIDTH`, `ANNOTATION_SIZE` (heatmap cell numbers, 12).
-Function bodies take text sizes from the rc parameters rather than hard-coding them; heights are per row of panels. The
-notebook sets `figure.dpi = 100` (about 1300 px wide, executed size ~14 MB for the 36-setting sweep; executed notebooks are not
-committed). The solver dashboard, neuron maps and other training-time figures keep their own sizes.
+Size and style: the four figures read in the results notebook (`fig_loss_curves`, `fig_mir_history`, `fig_example_outputs`,
+`fig_mir_heatmaps`) are built under `plt.rc_context(STYLE_RC)` (the `_styled` decorator), so they look the same wherever they
+are called from (the CLI's `plot` figures are other functions and keep their own sizes). Fonts and line widths are centralised in
+`draw.py`: `STYLE_RC` (font 14, axes title 16, labels 14, ticks 12, legend 13, figure title 18, line width 2.5, marker size 8,
+axes line width 1.2), `LINE_WIDTH`, `MARKER_SIZE`, `ANNOTATION_SIZE` (heatmap cell numbers, 12) and the widths `FIG_WIDTH = 13` and
+`HEATMAP_WIDTH = FIG_WIDTH + 1` inches. Function bodies take text sizes from the rc parameters rather than hard-coding them.
+Heights stay in each `fig_*` and grow with the number of rows of panels. The legends of `plot_loss_curves` (right of the axis) and
+`plot_prediction_scatter` (below it) assume such a constrained-layout figure and may clip in a caller-supplied `ax`. The notebook
+sets `figure.dpi = 100` (about 1300 px wide; the executed notebook of the 36-setting sweep is ~14 MB and is not committed).
 
 ## report.py and notebooks/
 
 The results notebook `notebooks/modularity.ipynb` is generated: `notebooks/build_modularity.py` holds its source
-(`build_notebook()`: the intro, parameter and setup cells, the markdown cell `report.MIR_EXPLANATION` (equations defining
+(`build_notebook()`: the intro, parameter and setup cells, the markdown cell `explanations.MIR_EXPLANATION` (equations defining
 the rates, rank bins, plug-in MI, preference, MIR, dead neurons, the raw MIR and its cardinality floor, the shuffled chance
 baseline and the corrected MIR, and how to read the plots and tables; it restates `fct/modularity.py`, and a test checks its
-key terms and that its `$`/`$$` equations are balanced), a summary cell per task, then a cell per setting, each selecting its setting by name with
+numbers that have a source in the code (dead threshold `modularity.DEAD_TOL`, noise factor `modularity.NOISE_FACTOR`, the
+`TrainConfig` monitor defaults) are filled in from it, and tests recompute the quoted floor examples and check the `$`/`$$` equations are balanced), a summary cell per task, then a cell per setting, each selecting its setting by name with
 `find_result(RESULTS, task, L, phi, rate)`, so a reordered grid fails loudly instead of mislabelling), and
 `execute_notebook(nb, root)` runs a deep copy in a fresh kernel (no timing metadata, so equal runs give equal notebooks) after
 `with_root` has put `ROOT = '<root>'` into the tagged parameter cell; the source `nb` stays output-free. In the source the cell
@@ -520,7 +524,7 @@ def show(items)                                 # the only IPython use
 
 `draw.py` has the heatmaps: `plot_mir_heatmap(values, row_labels, row_status, title, ax, vmin, vmax, colorbar)` (NaN cells grey, unfinished
 rows labelled with their status, ValueError instead of clipping a value outside [vmin, vmax]) and `fig_mir_heatmaps(panels, row_labels,
-row_status, title)` (one shared scale [min(0, data), max(1, data)] and one colourbar).
+row_status, title)` (one shared scale [min(0, data), max(1, data)] and one colourbar; values outside [0, 1] are shown, not clipped).
 
 A missing or interrupted setting renders as one bold line naming it and its directory (relative to ROOT); its row in the table and
 heatmap is labelled with the status. Prediction metrics are on the whole training set (the sweep has no held-out data).
