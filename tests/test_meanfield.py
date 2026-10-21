@@ -22,6 +22,7 @@ from fct.data import Dataset
 from fct.hmc import relative_fro
 from fct.meanfield import (
     HISTORY_KEYS,
+    RateTiltError,
     empirical_kernels,
     load_meanfield,
     net_kernels,
@@ -442,3 +443,12 @@ def test_run_meanfield_needs_an_explicit_tilt_only_for_a_nonzero_rate_penalty(
             run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
     else:
         run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+
+
+def test_load_meanfield_applies_the_same_explicit_tilt_check(cached_run):
+    cfg, _, _, cache_dir, _ = cached_run
+    unset = cfg.model_copy(
+        update={"meanfield": cfg.meanfield.model_copy(update={"rate_tilt": None})}
+    )
+    with pytest.raises(RateTiltError, match="rate_tilt"):
+        load_meanfield(cache_dir, unset, "cpu")

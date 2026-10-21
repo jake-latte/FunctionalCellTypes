@@ -324,13 +324,14 @@ def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=
     # rate_tilt = rate_lambda would therefore describe an objective P_train times too strong, so there is NO default: ValueError
     # if train.rate_lambda != 0 and meanfield.rate_tilt is None. rate_tilt = rate_lambda / P_train is the same objective when
     # n_points == P_train; with fewer points the solved subset is a different problem, and rate_lambda / n_points treats it as
-    # the whole training set (as the mapping alpha = lambda_w n_points D_out / beta already does). Which to use is the PI's decision.
+    # the whole training set (as the mapping alpha = lambda_w n_points D_out / beta already does). The code forces an explicit choice until the PI decides the default mapping.
     # X = dataset.x[:n_points], Y = dataset.y[:n_points]; lambda_w/lambda_r from cfg.train; phi/g/L from cfg.net
     # hash = section_hash("data","net","train","meanfield"); returns final.pt if present
 def net_kernels(net: MLP, dataset: Dataset, cfg: Config) -> Tensor   # (L, P, P) float64
     # the trained net's empirical_kernels on exactly the solver's inputs (same slicing code as run_meanfield)
     # and cfg.meanfield.readout, the net evaluated in its own dtype; for the theory-vs-net kernels figure
 def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor, dict]   # Phi, Phi_hat, history
+    # raises RateTiltError (a ValueError) like run_meanfield when train.rate_lambda != 0 and meanfield.rate_tilt is None (P taken from cfg.data.P), so a result made before the check cannot load under an unstated objective; `fct solve` and `fct plot` turn it into one `error:` line (--set meanfield.rate_tilt=...)
 ```
 
 History values are stored per outer step; arrays become lists for saving. The

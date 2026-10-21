@@ -243,13 +243,17 @@ def _train_hash(cfg: Config) -> str:
 
 def setting_status(root: Path, sweep: SweepConfig, setting: Setting) -> Status:
     """done = train/final.pt exists and was written under this setting's current config (data,
-    net, train sections and the loss version); stale = a final.pt written under another;
+    net, train sections and the loss version); stale = a final.pt written under another, or one
+    that cannot be read;
     partial = a checkpoint but no final.pt; else missing. Only the hash of final.pt is read."""
     train_dir = cache_paths(setting_dir(root, setting)).train
     final = train_dir / "final.pt"
     if final.exists():
         current = _train_hash(setting_config(sweep, setting))
-        return "done" if read_config_hash(final) == current else "stale"
+        try:
+            return "done" if read_config_hash(final) == current else "stale"
+        except ValueError:  # an unreadable final.pt cannot be reused, whatever config it had
+            return "stale"
     return "partial" if latest_checkpoint(train_dir) is not None else "missing"
 
 
@@ -281,7 +285,7 @@ def run_setting(
     if status == "stale":
         raise StaleCacheError(
             f"setting {index}: {directory}/train/final.pt was written under a different config "
-            "or loss definition than the current one, so its results are not those of this "
+            "or loss definition than the current one, or is unreadable, so its results are not those of this "
             "sweep. To rerun it, delete the sweep ROOT or use a fresh one."
         )
     if status == "done":

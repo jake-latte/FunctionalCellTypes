@@ -107,6 +107,11 @@ uv run python -m fct plot CACHE_DIR           # figures that need results (--whi
 uv run python -m fct plot-example CACHE_DIR   # figure that needs no results
 ```
 
+`solve` needs `meanfield.rate_tilt` set explicitly (`--set meanfield.rate_tilt=...`) whenever
+`train.rate_lambda != 0`, because the trained loss averages the rate penalty over its P samples.
+`rate_lambda / P_train` is the same objective when `meanfield.n_points == P_train`;
+`rate_lambda / n_points` treats the solved points as the whole training set.
+
 `init --set` takes dotted keys with JSON values (`--set net.phi=tanh`,
 `--set data.cov=[[1,0],[0,1]]`); unknown keys are rejected, and an existing `config.json` is
 only replaced with `--force`. `plot` draws every figure whose inputs exist and lists the

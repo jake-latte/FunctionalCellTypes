@@ -42,7 +42,7 @@ from fct.draw import (
     fig_solver_history,
     plot_training_history,
 )
-from fct.meanfield import load_meanfield, net_kernels, run_meanfield
+from fct.meanfield import RateTiltError, load_meanfield, net_kernels, run_meanfield
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
@@ -179,7 +179,10 @@ def cmd_solve(args: argparse.Namespace) -> int:
     if n_points > P:
         raise CliError(f"meanfield.n_points={n_points} exceeds the dataset size data.P={P}")
     net, _ = _load_net(args.cache_dir, cfg)
-    run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
+    try:
+        run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
+    except RateTiltError as err:
+        raise CliError(str(err)) from err
     return 0
 
 
@@ -220,6 +223,8 @@ def _load_meanfield(cache_dir: Path, cfg: Config) -> tuple[Tensor, Tensor, Histo
         return load_meanfield(cache_dir, cfg, resolve_device(cfg))
     except FileNotFoundError as err:
         raise CliError(f"{err}; run `python -m fct solve {cache_dir}` first") from err
+    except RateTiltError as err:
+        raise CliError(str(err)) from err
 
 
 def _draw_learning(i: _Inputs) -> Figure:

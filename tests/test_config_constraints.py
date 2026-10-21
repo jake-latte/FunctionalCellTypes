@@ -6,6 +6,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+import fct.config
 from fct.config import (
     LOSS_VERSION,
     AnalysisConfig,
@@ -125,3 +126,11 @@ def test_train_section_hashes_hold_the_loss_version(sections):
     payload = {**cfg.model_dump(include={*sections, "dtype"}), "loss_version": LOSS_VERSION}
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
     assert cfg.section_hash(*sections) == expected
+
+
+@pytest.mark.parametrize("sections", TRAIN_SECTIONS)
+def test_train_section_hashes_change_with_the_loss_version(sections, monkeypatch):
+    cfg = default_config()
+    before = cfg.section_hash(*sections)
+    monkeypatch.setattr(fct.config, "LOSS_VERSION", LOSS_VERSION + 1)
+    assert cfg.section_hash(*sections) != before

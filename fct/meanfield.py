@@ -849,6 +849,10 @@ def _meanfield_hash(cfg: Config) -> str:
     return cfg.section_hash("data", "net", "train", "meanfield")
 
 
+class RateTiltError(ValueError):
+    """The mean-field rate tilt is unset although the trained loss has a rate penalty."""
+
+
 def _require_explicit_rate_tilt(cfg: Config, n_train: int) -> None:
     """The rate tilt has no default that matches the trained loss, so it must be set.
 
@@ -859,14 +863,14 @@ def _require_explicit_rate_tilt(cfg: Config, n_train: int) -> None:
     as if it were the whole training set (as the mapping of alpha does)."""
     if cfg.meanfield.rate_tilt is not None or cfg.train.rate_lambda == 0 or n_train == 1:
         return
-    raise ValueError(
+    raise RateTiltError(
         f"train.rate_lambda={cfg.train.rate_lambda:g} but meanfield.rate_tilt is not set. The "
         f"trained loss averages the rate penalty over its P={n_train} samples, so a default of "
         f"rate_tilt=rate_lambda would describe an objective {n_train} times too strong. Set "
         f"meanfield.rate_tilt explicitly: rate_lambda / P = {cfg.train.rate_lambda / n_train:g} "
         f"matches the trained loss when n_points == P (n_points={cfg.meanfield.n_points}); "
         f"rate_lambda / n_points = {cfg.train.rate_lambda / cfg.meanfield.n_points:g} treats "
-        "the solved points as the whole training set."
+        "the solved points as the whole training set (e.g. `--set meanfield.rate_tilt=<value>`)."
     )
 
 
@@ -898,7 +902,11 @@ def load_meanfield(
     cache_dir: Path, cfg: Config, device: torch.device | str
 ) -> tuple[torch.Tensor, torch.Tensor, History]:
     """(Φ, Φ̂, history) of a finished solve; history entries are numpy arrays again.
-    Raises FileNotFoundError if there is no result, StaleCacheError if the config changed."""
+    Raises FileNotFoundError if there is no result, StaleCacheError if the config changed,
+    RateTiltError if the config leaves the rate tilt unset (as `run_meanfield` does): a result
+    made before that check would otherwise load silently under an objective that is not the
+    trained loss."""
+    _require_explicit_rate_tilt(cfg, cfg.data.P)
     path = cache_paths(cache_dir).meanfield / FINAL_NAME
     if not path.exists():
         raise FileNotFoundError(f"{path} does not exist; run `python -m fct solve` first")

@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import torch
 
+import fct.config
 from fct import lrtune
 from fct.cache import cache_paths, latest_checkpoint
 from fct.lrplot import fig_metric_vs_lr, plot_metric_vs_lr
@@ -576,3 +577,10 @@ def test_all_zero_values_get_a_non_degenerate_y_range():
         r["heldout_mse"] = 0.0
     low, high = plot_metric_vs_lr(rows, "linear_teacher", 1).get_ylim()
     assert high > low
+
+
+def test_evaluate_setting_says_stale_for_a_final_from_another_loss_version(tmp_path, monkeypatch):
+    sweep, setting = _finished_tiny(tmp_path)
+    monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION + 1)
+    with pytest.raises(FileNotFoundError, match="stale"):
+        evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)

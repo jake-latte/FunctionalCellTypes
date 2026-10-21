@@ -366,3 +366,13 @@ def test_cli_status_counts_stale_settings_separately(tiny, tmp_path, capsys, mon
     assert lines[0].split()[:2] == ["0", "stale"]
     assert lines[1].split()[:2] == ["1", "done"]
     assert "1 done, 0 partial, 34 missing, 1 stale" in lines[-1]
+
+
+def test_an_unreadable_final_is_stale_not_a_crash(tiny, tmp_path):
+    settings = expand(tiny)
+    train = cache_paths(setting_dir(tmp_path, settings[0])).train
+    train.mkdir(parents=True)
+    (train / "final.pt").write_bytes(b"truncated")
+    assert setting_status(tmp_path, tiny, settings[0]) == "stale"
+    with pytest.raises(StaleCacheError, match="unreadable"):
+        run_setting(tiny, 0, tmp_path, **QUIET)

@@ -11,7 +11,7 @@
 #    bash jobs/fct_sweep.sh ROOT --submit --index N    # submit ONLY setting N
 #    bash jobs/fct_sweep.sh ROOT --dry-run [--index N] # print the sbatch command, run nothing
 #    bash jobs/fct_sweep.sh ROOT --list                # index -> setting directory
-#    bash jobs/fct_sweep.sh ROOT --status              # done / partial / missing per setting
+#    bash jobs/fct_sweep.sh ROOT --status              # done / partial / missing / stale per setting
 #
 #  Environment overrides:
 #    FCT_MAX_CONCURRENT  cap on simultaneously-running array tasks (default 4)
