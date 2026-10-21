@@ -22,6 +22,7 @@ fct/
   meanfield.py     # saddle-point solver (Algorithm 1) with checkpoint / resume
   analyse.py       # pure analysis functions + cached wrappers
   modularity.py    # neuron-factor mutual information, preference, MIR (pure)
+  monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   cli.py           # argparse CLI: init / train / solve / plot / plot-example
   __main__.py      # `python -m fct ...` -> cli.main()
@@ -102,6 +103,9 @@ class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
     weight_lambda: float = 1e-3; rate_lambda: float = 1e-3
     log_int: int = 100; save_int: int = 100; seed: int = 0
+    monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
+    monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
+    monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1)
 class MeanFieldConfig(BaseModel):
     n_points: int = 100                 # solve on the first n_points training points (X=x[:n_points])
     beta: float = 1e6
@@ -237,12 +241,39 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # we
 ```python
 def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[str, Tensor]]
     # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2  (notebook cell 5); dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
-History = dict[str, list[int | float]]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs)
-def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> tuple[MLP, History]
+History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus the monitor_* keys below when monitored
+def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
+          monitor: Callable[[MLP], dict[str, list]] | None = None) -> tuple[MLP, History]
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
     # checkpoint every save_int epochs and at the end (final.pt); hash = section_hash("data","net","train")
-def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[MLP, History]   # rebuilds net with make_net and loads final.pt; raises FileNotFoundError if absent
+    # monitor: required exactly when cfg.train.monitor_int > 0 (ValueError otherwise, before anything runs)
+def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[MLP, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
 ```
+
+Monitor hook: `monitor(net)` is called under `torch.no_grad()` with the global RNG state restored afterwards,
+at the START of every epoch e with `e % monitor_int == 0` (after e's periodic checkpoint, before its step; so e = 0
+records the initial net) and once more after the last step with e = `n_epochs` (the trained net; never a duplicate).
+Each call appends e to `history["monitor_epoch"]` (list[int]) and, for every key `k` of its result, the value to
+`history["monitor_<k>"]` (one entry per call). Every call must return the same keys. A checkpoint written at epoch e
+does not yet hold e's entry; the resumed run records it, so resuming reproduces the uninterrupted history exactly.
+With `monitor_int == 0` the history keys and values are those of an unmonitored run.
+
+## monitor.py
+
+```python
+def make_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]   # ValueError if dataset.factors is None
+```
+
+The docstring of `make_mir_monitor` owns the contract (the keys `MIR_MONITOR_KEYS`, their meaning and the settings
+used); `MIR_MONITOR_KEYS` is exported from `monitor.py`. One call runs the net on `dataset.x`, takes the rates phi(H)
+of every hidden layer and gets each layer's numbers from one `layer_mir_report` call. The history keys are
+`monitor_epoch` plus `monitor_<key>` for each of those keys, each a list over calls of lists over layers.
+
+Cost: per layer a call bins the rates once and makes 1 + `monitor_shuffles` mutual-information passes (the raw
+estimate plus one per shuffle, shared by the bias correction and the chance level), so it grows linearly with L,
+`monitor_shuffles`, P, N and the number of factors. Measured (CPU, float64, 16 torch threads, N=256, L=5, P=4096, relu,
+`monitor_bins=10`, `monitor_shuffles=5`): about 1.5 s per call on `object_action` (G=5; 3 factor groups) and 0.22 s on
+`what_where` (m=8).
 
 ## hmc.py
 
@@ -330,6 +361,8 @@ neuron_factor_information(rates (P,N), factors, groups=None, n_bins=10) -> Facto
 preference(group_mi, tol=1e-12) -> (r, dead)
 mir(r, K) -> float;  layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
 network_mir(rates (P,L,N), ...) -> list[LayerMIR]     # rates are phi(H); the caller applies phi
+layer_mir_report(rates (P,N), factors, groups=None, n_bins=10, n_shuffles=5, seed=0) -> LayerMIRReport(mir, mir_corrected, mir_chance, n_dead, n_dead_corrected)
+                                                      # exactly the numbers of layer_mir (none / shuffle) and shuffled_mir, in one pass: one binning, one shuffle loop
 shuffle_factors(factors, generator); shuffled_mir(rates, factors, groups=None, n_bins=10, seed=0, n_shuffles=1) -> float
 ```
 
@@ -405,7 +438,7 @@ different number of layers in different monitor calls.
 
 ```
 python -m fct init CACHE_DIR [--set data.P=512 --set net.L=2 ...]   # writes config.json from defaults; refuses to overwrite unless --force
-python -m fct train CACHE_DIR
+python -m fct train CACHE_DIR                                        # builds the MIR monitor (lazily, at its first call) when train.monitor_int > 0
 python -m fct solve CACHE_DIR
 python -m fct plot CACHE_DIR [--which all|learning|representation|neurons|training|solver|kernels]   # result-dependent figures -> CACHE_DIR/figures/
 python -m fct plot-example CACHE_DIR                                 # result-independent figure

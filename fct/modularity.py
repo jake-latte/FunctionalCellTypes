@@ -149,6 +149,41 @@ def _member_information(bins: Tensor, n_bins: int, encoded: list[tuple[Tensor, i
     return torch.stack([mutual_information(bins, n_bins, lab, C) for lab, C in encoded], dim=1)
 
 
+def _encode_factors(
+    factors: dict[str, Tensor], n_bins: int, device: torch.device
+) -> list[tuple[Tensor, int]]:
+    """(labels, n_labels) of every factor, in the order of `factors`, on `device`."""
+    encoded = []
+    for name, factor in factors.items():
+        labels, n_labels = factor_labels(factor, n_bins, name)
+        encoded.append((labels.to(device), n_labels))
+    return encoded
+
+
+def _shuffled_member_information(
+    bins: Tensor, n_bins: int, encoded: list[tuple[Tensor, int]], generator: torch.Generator
+) -> Tensor:
+    """(N, n_members) information of the rates with every factor under ONE joint permutation
+    drawn from `generator` (one randperm per call)."""
+    perm = torch.randperm(bins.shape[0], generator=generator).to(bins.device)
+    return _member_information(bins, n_bins, [(labels[perm], C) for labels, C in encoded])
+
+
+def _subtract_null(member_mi: Tensor, null: Tensor) -> Tensor:
+    """Bias-corrected member information: subtract the shuffled mean, clamp at 0, and zero
+    the rows whose raw total is not above twice their null total (indistinguishable from noise)."""
+    noise_like = member_mi.sum(dim=1) <= 2 * null.sum(dim=1)
+    corrected = (member_mi - null).clamp(min=0.0)
+    corrected[noise_like] = 0.0
+    return corrected
+
+
+def _mir_and_dead(member_mi: Tensor, membership: Tensor) -> tuple[float, int]:
+    """MIR and dead-neuron count of (N, n_members) member informations."""
+    r, dead = preference(member_mi @ membership.to(member_mi.device))
+    return mir(r, membership.shape[1]), int(dead.sum())
+
+
 def neuron_factor_information(
     rates: Tensor,
     factors: dict[str, Tensor],
@@ -178,22 +213,14 @@ def neuron_factor_information(
     _check_samples(rates, factors, n_bins)
     membership = _membership(factors, groups)
     bins = rank_bins(rates, n_bins)
-    encoded = []
-    for name, factor in factors.items():
-        labels, n_labels = factor_labels(factor, n_bins, name)
-        encoded.append((labels.to(bins.device), n_labels))
+    encoded = _encode_factors(factors, n_bins, bins.device)
     member_mi = _member_information(bins, n_bins, encoded)
     if bias_correction == "shuffle":
         generator = torch.Generator().manual_seed(seed)
-        P = bins.shape[0]
         null = torch.zeros_like(member_mi)
         for _ in range(n_shuffles):
-            perm = torch.randperm(P, generator=generator).to(bins.device)
-            shuffled = [(labels[perm], C) for labels, C in encoded]
-            null += _member_information(bins, n_bins, shuffled) / n_shuffles
-        noise_like = member_mi.sum(dim=1) <= 2 * null.sum(dim=1)
-        member_mi = (member_mi - null).clamp(min=0.0)
-        member_mi[noise_like] = 0.0
+            null += _shuffled_member_information(bins, n_bins, encoded, generator) / n_shuffles
+        member_mi = _subtract_null(member_mi, null)
     group_names = list(factors) if groups is None else list(groups)
     return FactorInformation(member_mi, member_mi @ membership.to(member_mi.device), group_names)
 
@@ -272,6 +299,50 @@ def network_mir(
         layer_mir(rates[:, layer], factors, groups, n_bins, bias_correction, n_shuffles, seed)
         for layer in range(rates.shape[1])
     ]
+
+
+class LayerMIRReport(NamedTuple):
+    mir: float  # raw plug-in MIR (`layer_mir`, bias_correction="none")
+    mir_corrected: float  # `layer_mir` with bias_correction="shuffle"
+    mir_chance: float  # `shuffled_mir` of the layer
+    n_dead: int  # dead neurons of the raw estimate
+    n_dead_corrected: int  # dead neurons of the corrected estimate
+
+
+def layer_mir_report(
+    rates: Tensor,
+    factors: dict[str, Tensor],
+    groups: dict[str, list[str]] | None = None,
+    n_bins: int = 10,
+    n_shuffles: int = 5,
+    seed: int = 0,
+) -> LayerMIRReport:
+    """Raw MIR, corrected MIR and chance MIR of one layer's rates `rates` (P, N) in one pass.
+
+    Returns exactly the numbers of `layer_mir` (both bias corrections) and `shuffled_mir`
+    with the same arguments, but bins the rates once and computes the raw information once.
+    The bias correction and the chance level draw the same `n_shuffles` permutations (one
+    seeded generator, one randperm per shuffle), so each shuffled information is computed
+    once and serves both: its mean is the null, its own MIR is a chance sample. Cost:
+    1 + `n_shuffles` mutual-information passes over the layer.
+    """
+    if n_shuffles < 1:
+        raise ValueError(f"n_shuffles must be >= 1, got {n_shuffles}")
+    _check_samples(rates, factors, n_bins)
+    membership = _membership(factors, groups)
+    bins = rank_bins(rates, n_bins)
+    encoded = _encode_factors(factors, n_bins, bins.device)
+    member_mi = _member_information(bins, n_bins, encoded)
+    generator = torch.Generator().manual_seed(seed)
+    null = torch.zeros_like(member_mi)
+    chance = 0.0
+    for _ in range(n_shuffles):
+        shuffled = _shuffled_member_information(bins, n_bins, encoded, generator)
+        null += shuffled / n_shuffles
+        chance += _mir_and_dead(shuffled, membership)[0]
+    raw_mir, raw_dead = _mir_and_dead(member_mi, membership)
+    corrected_mir, corrected_dead = _mir_and_dead(_subtract_null(member_mi, null), membership)
+    return LayerMIRReport(raw_mir, corrected_mir, chance / n_shuffles, raw_dead, corrected_dead)
 
 
 def shuffle_factors(factors: dict[str, Tensor], generator: torch.Generator) -> dict[str, Tensor]:

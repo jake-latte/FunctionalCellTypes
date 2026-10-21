@@ -16,7 +16,10 @@ from fct.config import Config, TrainConfig, resolve_device, resolve_dtype
 from fct.data import Dataset
 from fct.model import MLP, make_net
 
-History = dict[str, list[int | float]]
+History = dict[str, list]  # monitor entries are lists over layers, the rest numbers
+Monitor = Callable[[MLP], dict[str, list]]
+MONITOR_PREFIX = "monitor_"  # history keys of monitor results: monitor_epoch, monitor_<key>
+MONITOR_EPOCH = f"{MONITOR_PREFIX}epoch"
 _HISTORY_KEYS = ("epoch", "mse", "weight_l2", "rate_l2", "loss")
 _REQUIRED_KEYS = ("epoch", "net_state_dict", "optim_state_dict", "history", "rng_state")
 
@@ -131,6 +134,46 @@ def _step(
     return parts
 
 
+def _check_monitor_matches_config(cfg: Config, monitor: Monitor | None) -> None:
+    if cfg.train.monitor_int > 0 and monitor is None:
+        raise ValueError(f"train.monitor_int={cfg.train.monitor_int} needs a monitor, got None")
+    if cfg.train.monitor_int == 0 and monitor is not None:
+        raise ValueError("a monitor was passed but train.monitor_int=0 disables monitoring")
+
+
+def _new_history(monitored: bool) -> History:
+    history: History = {key: [] for key in _HISTORY_KEYS}
+    if monitored:
+        history[MONITOR_EPOCH] = []
+    return history
+
+
+def _monitor_due(epoch: int, tc: TrainConfig) -> bool:
+    """Whether the monitor runs at the start of `epoch` (the final call is separate)."""
+    return tc.monitor_int > 0 and epoch % tc.monitor_int == 0
+
+
+def _record_monitor(history: History, epoch: int, result: dict[str, list]) -> None:
+    """Append one monitor call to `history` as `monitor_epoch` and `monitor_<key>` entries."""
+    keys = {f"{MONITOR_PREFIX}{k}" for k in result}
+    if MONITOR_EPOCH in keys:
+        raise ValueError(f"monitor key 'epoch' is reserved: it would overwrite {MONITOR_EPOCH!r}")
+    seen = {k for k in history if k.startswith(MONITOR_PREFIX) and k != MONITOR_EPOCH}
+    if history[MONITOR_EPOCH] and keys != seen:
+        raise ValueError(f"monitor returned keys {sorted(keys)}, earlier calls {sorted(seen)}")
+    history[MONITOR_EPOCH].append(epoch)
+    for key, value in result.items():
+        history.setdefault(f"{MONITOR_PREFIX}{key}", []).append(value)
+
+
+def _call_monitor(monitor: Monitor, net: MLP) -> dict[str, list]:
+    """Run `monitor` without gradients and without advancing the global RNG: the training
+    stream must not depend on whether, or how often, the net is being monitored."""
+    cuda = [net.device] if net.device.type == "cuda" else []
+    with torch.no_grad(), torch.random.fork_rng(devices=cuda):
+        return monitor(net)
+
+
 def _check_net_matches_config(net: MLP, cfg: Config) -> None:
     if net.dtype != resolve_dtype(cfg.dtype):
         raise ValueError(f"net dtype {net.dtype} does not match config dtype {cfg.dtype!r}")
@@ -144,6 +187,7 @@ def train(
     net: MLP,
     cache_dir: Path,
     log: Callable[[str], None] = print,
+    monitor: Monitor | None = None,
 ) -> tuple[MLP, History]:
     """Train `net` in place on the full dataset; resume from the latest checkpoint if any.
 
@@ -151,8 +195,15 @@ def train(
     no RNG change). A checkpoint with `epoch=s` is written before the step of epoch s; the
     step, history entry and log line follow. An interruption at epoch t therefore resumes at
     the last multiple of `save_int` at or before t, repeating the deterministic steps since.
+
+    `monitor` (required exactly when `train.monitor_int > 0`) is called on the net at the
+    start of every epoch e with e % monitor_int == 0, after e's checkpoint and before its
+    step, and once more after the last step (e = n_epochs). Its results enter the history as
+    `monitor_epoch` and `monitor_<key>`. A checkpoint therefore never holds the entry of the
+    epoch it is written at; the resumed run records it, so resuming reproduces the history.
     """
     _check_net_matches_config(net, cfg)
+    _check_monitor_matches_config(cfg, monitor)
     tc = cfg.train
     train_dir = cache_paths(cache_dir).train
     config_hash = cfg.section_hash("data", "net", "train")
@@ -169,7 +220,7 @@ def train(
         # Nothing in the full-batch loop draws from the global RNG today; the state is kept
         # for future stochastic steps and for downstream code.
         torch.manual_seed(tc.seed)
-        start, history = 0, {key: [] for key in _HISTORY_KEYS}
+        start, history = 0, _new_history(monitor is not None)
     else:
         start, history, note = _restore(ckpt, cfg, net, optim)
         log(f"resumed from {ckpt} at epoch {start}" + (f" ({note})" if note else ""))
@@ -180,12 +231,16 @@ def train(
             write_checkpoint(
                 train_dir, "ckpt_", epoch, _payload(net, optim, history, epoch), config_hash
             )
+        if monitor is not None and _monitor_due(epoch, tc):
+            _record_monitor(history, epoch, _call_monitor(monitor, net))
         parts = _step(net, optim, dataset, tc)
         if epoch % tc.log_int == 0:
             values = {k: v.item() for k, v in parts.items()}
             _record(history, epoch, values)
             log(_log_line(epoch, tc.n_epochs, values))
 
+    if monitor is not None:
+        _record_monitor(history, tc.n_epochs, _call_monitor(monitor, net))
     save_artefact(final, _payload(net, optim, history, tc.n_epochs), config_hash)
     return net, history
 

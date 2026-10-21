@@ -5,8 +5,11 @@ import json
 import sys
 
 import pytest
+import torch
 
 from fct.cli import main
+from fct.monitor import MIR_MONITOR_KEYS
+from fct.train import MONITOR_EPOCH, MONITOR_PREFIX
 
 TINY = [
     "data.P=64", "data.D_in=8", "net.N=8", "net.L=2",
@@ -187,3 +190,39 @@ def test_force_init_warns_about_stale_artefacts(tmp_path, capsys):
     capsys.readouterr()
     assert main(["init", str(tmp_path), "--force"]) == 0
     assert "stale" in capsys.readouterr().out
+
+
+def _trained_history(cache):
+    return torch.load(cache / "train" / "final.pt", weights_only=True)["history"]
+
+
+def test_train_records_the_monitor_only_when_asked(tmp_path):
+    with_monitor, without = tmp_path / "with", tmp_path / "without"
+    assert _init(with_monitor, "train.monitor_int=3", "train.monitor_bins=4") == 0
+    assert _init(without) == 0
+    for cache in (with_monitor, without):
+        assert main(["train", str(cache)]) == 0
+    hist = _trained_history(with_monitor)
+    assert hist[MONITOR_EPOCH] == [0, 3, 6]  # n_epochs = 6: the last call is after the final step
+    for key in MIR_MONITOR_KEYS:
+        assert len(hist[f"{MONITOR_PREFIX}{key}"]) == 3
+        assert all(len(layers) == 2 for layers in hist[f"{MONITOR_PREFIX}{key}"])  # net.L = 2
+    assert not [k for k in _trained_history(without) if k.startswith(MONITOR_PREFIX)]
+
+
+def _no_factors(*args):
+    raise ValueError("the MIR monitor needs dataset.factors")
+
+
+def test_finished_run_loads_without_building_the_monitor(tmp_path, monkeypatch):
+    assert _init(tmp_path, "train.monitor_int=3") == 0
+    assert main(["train", str(tmp_path)]) == 0
+    monkeypatch.setattr("fct.cli.make_mir_monitor", _no_factors)
+    assert main(["train", str(tmp_path)]) == 0
+
+
+def test_fresh_run_without_factors_fails_loudly(tmp_path, monkeypatch):
+    assert _init(tmp_path, "train.monitor_int=3") == 0
+    monkeypatch.setattr("fct.cli.make_mir_monitor", _no_factors)
+    with pytest.raises(ValueError, match="factors"):
+        main(["train", str(tmp_path)])

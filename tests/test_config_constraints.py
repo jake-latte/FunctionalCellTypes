@@ -13,18 +13,19 @@ from fct.config import (
 )
 
 # Section hashes key cached artefacts, so the dumped JSON of the defaults must not change
-# unintentionally (adding a DataConfig field changes every hash: old caches become stale).
+# unintentionally (adding a config field changes every hash that includes its section, so old
+# caches become stale).
 DEFAULT_HASHES = {
     ("data",): "37d33c6aae26",
-    ("data", "net", "train"): "02048bfb0e68",
-    ("data", "net", "train", "meanfield"): "7e4cb37a1fe3",
-    ("data", "net", "train", "analysis"): "951f6caaa023",
+    ("data", "net", "train"): "b0dc69885e46",
+    ("data", "net", "train", "meanfield"): "dbf1020c63da",
+    ("data", "net", "train", "analysis"): "9d009ed093eb",
 }
 
 _POSITIVE_INT = {
     DataConfig: ["P", "D_in", "d", "n_latents", "grid_size", "n_motifs"],
     NetConfig: ["N", "L"],
-    TrainConfig: ["log_int", "save_int"],
+    TrainConfig: ["log_int", "save_int", "monitor_shuffles"],
     MeanFieldConfig: [
         "n_points", "n_outer", "n_inner_max", "n_chains", "n_trans", "n_trans_outer",
         "n_leap", "warmup_trans", "n_init_samples", "log_int", "save_int", "max_backtrack",
@@ -44,7 +45,7 @@ _POSITIVE_FLOAT = {
 }  # fmt: skip
 _NONNEGATIVE_INT = {
     DataConfig: ["max_objects"],
-    TrainConfig: ["n_epochs"],
+    TrainConfig: ["n_epochs", "monitor_int"],
     AnalysisConfig: ["plot_layer"],
 }
 _NONNEGATIVE_FLOAT = {
@@ -63,6 +64,8 @@ BAD = (
     + _cases(_NONNEGATIVE_INT, [-1])
     + _cases(_NONNEGATIVE_FLOAT, [-0.1])
     + [
+        (TrainConfig, "monitor_bins", 1),
+        (TrainConfig, "monitor_bins", 0),
         (MeanFieldConfig, "target_accept", 1.0),
         (MeanFieldConfig, "target_accept", 1.5),
         (MeanFieldConfig, "tilt_floor", 1.0),
@@ -84,6 +87,7 @@ def test_offending_value_raises_naming_the_field(cls, field, value):
     [
         (TrainConfig, "n_epochs", 0),
         (TrainConfig, "weight_lambda", 0.0),
+        (TrainConfig, "monitor_bins", 2),
         (AnalysisConfig, "plot_layer", 0),
         (MeanFieldConfig, "tilt_floor", 0.0),
         (MeanFieldConfig, "rate_tilt", 0.0),
