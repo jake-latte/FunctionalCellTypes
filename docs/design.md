@@ -438,7 +438,7 @@ different number of layers in different monitor calls.
 
 ```
 python -m fct init CACHE_DIR [--set data.P=512 --set net.L=2 ...]   # writes config.json from defaults; refuses to overwrite unless --force
-python -m fct train CACHE_DIR                                        # builds the MIR monitor when train.monitor_int > 0
+python -m fct train CACHE_DIR                                        # builds the MIR monitor (lazily, at its first call) when train.monitor_int > 0
 python -m fct solve CACHE_DIR
 python -m fct plot CACHE_DIR [--which all|learning|representation|neurons|training|solver|kernels]   # result-dependent figures -> CACHE_DIR/figures/
 python -m fct plot-example CACHE_DIR                                 # result-independent figure

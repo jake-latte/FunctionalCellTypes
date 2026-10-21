@@ -12,10 +12,10 @@ import torch
 from fct.activations import get_phi
 from fct.config import Config
 from fct.model import MLP
-from fct.modularity import layer_mir_report
+from fct.modularity import LayerMIRReport, layer_mir_report
 from fct.tasks import Dataset
 
-MIR_MONITOR_KEYS = ("mir", "mir_corrected", "mir_chance", "n_dead", "n_dead_corrected")
+MIR_MONITOR_KEYS = LayerMIRReport._fields  # one source of truth for the history keys
 
 
 def make_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]:

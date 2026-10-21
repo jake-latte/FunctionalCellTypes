@@ -6,6 +6,7 @@ and exit code 1; anything else propagates with its traceback.
 """
 
 import argparse
+import functools
 import json
 import sys
 from collections.abc import Callable, Sequence
@@ -133,12 +134,13 @@ def _load_net(cache_dir: Path, cfg: Config) -> tuple[MLP, History]:
 def _lazy_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]:
     """A MIR monitor built on its first call, so a finished run (which `train` returns without
     monitoring) loads even when the dataset has no factors; a fresh run still fails at once."""
-    built: list[Callable[[MLP], dict[str, list]]] = []
+
+    @functools.cache
+    def build() -> Callable[[MLP], dict[str, list]]:
+        return make_mir_monitor(dataset, cfg)
 
     def monitor(net: MLP) -> dict[str, list]:
-        if not built:
-            built.append(make_mir_monitor(dataset, cfg))
-        return built[0](net)
+        return build()(net)
 
     return monitor
 
