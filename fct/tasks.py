@@ -278,3 +278,58 @@ TASK_SPECS: dict[str, TaskSpec] = {
         generate=what_where,
     ),
 }
+
+
+def _redefine_linear_teacher(cfg: DataConfig, new: Dataset, reference: Dataset) -> Dataset:
+    z = torch.stack([new.factors[f"z{i}"] for i in range(cfg.n_latents)], dim=1)
+    w_x, w_y = reference.extras["W_X"], reference.extras["W_Y"]
+    return Dataset(
+        x=z @ w_x.T,
+        y=z @ w_y.T,
+        Q=None,
+        period=None,
+        factors=new.factors,
+        groups=new.groups,
+        extras=reference.extras,
+    )
+
+
+def _redefine_what_where(cfg: DataConfig, new: Dataset, reference: Dataset) -> Dataset:
+    motifs = reference.extras["motifs"]
+    x = _place_motifs(new.factors["where"], motifs[new.factors["what"]]).to(new.x.dtype)
+    return Dataset(
+        x=x,
+        y=new.y,
+        Q=None,
+        period=None,
+        factors=new.factors,
+        groups=new.groups,
+        extras=reference.extras,
+    )
+
+
+# object_action has no task definition beyond the config: a new seed alone gives new samples.
+_REDEFINE: dict[str, Callable[[DataConfig, Dataset, Dataset], Dataset]] = {
+    "linear_teacher": _redefine_linear_teacher,
+    "object_action": lambda cfg, new, reference: new,
+    "what_where": _redefine_what_where,
+}
+
+
+def resample(
+    cfg: DataConfig, reference: Dataset, seed: int, device: torch.device, dtype: torch.dtype
+) -> Dataset:
+    """Fresh samples of the task `reference` was generated from, drawn with data seed `seed`.
+
+    A generator draws the task definition (the linear teacher's W_X and W_Y, the what-where
+    motif set) from the same seeded stream as the samples, so generating with a new seed alone
+    would be a different task. The new samples are re-expressed with the definition held in
+    `reference.extras`, so they are held-out data of the same task. Pure: generator outputs
+    are unchanged and nothing is read or written on disk.
+    """
+    if cfg.task not in _REDEFINE:
+        raise ValueError(f"resample is defined for tasks {sorted(_REDEFINE)}, not {cfg.task!r}")
+    if seed == cfg.seed:
+        raise ValueError(f"seed must differ from the reference data seed {cfg.seed}")
+    new = TASK_SPECS[cfg.task].generate(cfg.model_copy(update={"seed": seed}), device, dtype)
+    return _REDEFINE[cfg.task](cfg, new, reference)

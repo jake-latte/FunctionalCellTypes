@@ -231,6 +231,11 @@ def what_where(cfg, device, dtype) -> Dataset   # Q = period = None
     # motif[r*3+c] inside macro-cell (R,C), zero elsewhere; y (P, 9+m) = [one-hot where, one-hot what]
     # factors where, what (int64), each a singleton group; extras motifs (m,9) in the dataset dtype
 TASK_SPECS: dict[str, TaskSpec]   # linear_teacher, object_action, what_where
+def resample(cfg, reference: Dataset, seed, device, dtype) -> Dataset
+    # fresh samples of the task `reference` came from, data seed `seed` != cfg.seed (ValueError otherwise, and for
+    # a task that is not one of the three). The generators draw the task definition (linear teacher W_X, W_Y;
+    # what-where motif set) from the same stream as the samples, so the new samples are re-expressed with the
+    # definition in reference.extras (object_action has none: the new seed is enough). Generators are unchanged.
 ```
 
 ## model.py
@@ -556,6 +561,40 @@ repeated once after an OSError, e.g. a vanished file or a stale NFS handle durin
 A missing setting, or a partial one without usable data, renders as one bold line naming it, the reason and its directory (relative to ROOT); its row in
 the table and heatmap is labelled with the status. A running setting is drawn like a finished one but labelled "partial, epoch X of N" everywhere, its
 table and heatmap rows are marked provisional, and it never enters a summary statistic, so a provisional number cannot be read as a final one. Prediction metrics are on the whole training set (the sweep has no held-out data).
+
+## lrtune.py and lrplot.py (learning-rate tuning)
+
+A separate tool with its own entry point, `python -m fct.lrtune` (not a subcommand of `python -m fct`; folding it
+into `cli.py` is not planned for now). Every trial is a normal sweep: one ROOT per (lr, seed), `trial_root(base,
+lr, seed)` = `BASE/lr_<lr:g>_seed<seed>`, written with `sweep.run_setting`, so tuning uses the production path.
+
+```python
+# result rows: dict with the keys of COLUMNS (also the CSV schema, docs/lr_tuning_results.csv)
+COLUMNS = task, L, phi, rate_lambda, lr, seed, n_epochs, diverged, train_mse, heldout_mse, null_mse (held-out
+          MSE of the zero net), loss (final regularised loss on the training data), max_spike, tail_drop,
+          mir_corrected (final corrected MIR per layer, ';'-joined)
+evaluate_setting(root, sweep, setting, held_out_seed) -> Row   # read-only; FileNotFoundError if not done or no
+    # dataset cache; ValueError if the history lacks loss / monitor entries; held-out data from tasks.resample,
+    # seed = training data seed + HELD_OUT_SEED_OFFSET
+loss_curve_stats(history) -> {diverged, max_spike, tail_drop}   # >= 2 logged points, loss > 0 else ValueError
+write_rows_csv / read_rows_csv(path)                            # typed round trip, ValueError on a wrong header
+# pure table logic (no disk):
+collapse_seeds(rows, keys)        # median over seeds per (setting, lr); collapsed rows have n_seeds, no seed
+filter_rows(rows, seeds, n_epochs, lrs); learned_settings(rows, margin)   # learned = longest run beats 0.9 x null_mse
+average_ranks(values, rtol)       # ties within rtol (TIE_RTOL = 1e-3) share the mean rank, non-finite last
+rank_learning_rates(rows, tie_rtol, key) -> [Score]     # rank / gap to the setting's best, per (setting, lr)
+select(scores) / select_by(scores, keys) -> Selection   # lowest mean rank among the fewest-failure lrs; ties listed
+global_verdict(scores, max_median_gap=0.10, max_ratio=2.0) -> Verdict
+report_markdown(rows, key="loss", learned_only, ...)    # a verdict only for key loss or learned_only
+run_trials(template, base, lrs, seeds, indices) / collect_rows(...)     # I/O edge, resumable, BASE/timings.csv
+# command line: init BASE --N --P --epochs [--device]; run / collect BASE --lrs [--seeds --tasks --layers];
+#               report CSV... [--key loss|heldout_mse|train_mse --learned-only --seeds --n-epochs --lrs
+#                              --max-median-gap --max-ratio --fig-dir]
+```
+
+lrplot.py draws one result column against lr per task and depth (`plot_metric_vs_lr(rows, task, L, key, best_lr,
+logy, ax=None)`, `fig_metric_vs_lr(rows, key, ylabel, logy, best_by_group)`), in the shared `draw.STYLE_RC`
+style; a diverged run is a red cross at the top of its panel.
 
 ## cli.py
 
