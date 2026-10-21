@@ -1,4 +1,5 @@
-"""Command-line entry point: `python -m fct init|train|solve|plot|plot-example CACHE_DIR`.
+"""Command-line entry point: `python -m fct init|train|solve|plot|plot-example CACHE_DIR` and
+`python -m fct sweep init|list|count|status|run ROOT`.
 
 Each subcommand is a thin wiring of library functions; all computation lives elsewhere.
 Expected user errors (missing config or prerequisites, stale cache) become one stderr line
@@ -43,6 +44,18 @@ from fct.draw import (
 from fct.meanfield import load_meanfield, net_kernels, run_meanfield
 from fct.model import MLP, make_net
 from fct.monitor import make_mir_monitor
+from fct.sweep import (
+    SweepConfig,
+    expand,
+    get_setting,
+    load_sweep,
+    preset,
+    run_setting,
+    save_sweep,
+    setting_dir,
+    setting_status,
+    sweep_path,
+)
 from fct.train import History, load_trained, train
 
 FIGURE_DPI = 150
@@ -78,15 +91,19 @@ def _set_path(tree: dict, dotted_key: str, value: Any) -> None:
     node[last] = value
 
 
-def apply_overrides(cfg: Config, overrides: Sequence[str]) -> Config:
-    """A validated copy of `cfg` with each `key=value` override applied."""
-    tree = cfg.model_dump()
+def _override_tree(tree: dict, overrides: Sequence[str]) -> dict:
+    """`tree` with each `key=value` override applied (in place)."""
     for item in overrides:
         key, sep, text = item.partition("=")
         if not sep or not key:
             raise CliError(f"--set expects key=value, got {item!r}")
         _set_path(tree, key, _parse_value(text))
-    return Config.model_validate(tree)
+    return tree
+
+
+def apply_overrides(cfg: Config, overrides: Sequence[str]) -> Config:
+    """A validated copy of `cfg` with each `key=value` override applied."""
+    return Config.model_validate(_override_tree(cfg.model_dump(), overrides))
 
 
 def _load_cfg(cache_dir: Path) -> Config:
@@ -290,6 +307,100 @@ def cmd_plot(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------- sweep
+def _load_sweep(root: Path) -> SweepConfig:
+    path = sweep_path(root)
+    try:
+        return load_sweep(root)
+    except FileNotFoundError as err:
+        raise CliError(f"{err}; run `python -m fct sweep init {root}` first") from err
+    except ValidationError as err:  # also covers invalid JSON
+        raise CliError(f"{path} is not a valid sweep config: {err}") from err
+
+
+def cmd_sweep_init(args: argparse.Namespace) -> int:
+    path = sweep_path(args.root)
+    if path.exists() and not args.force:
+        raise CliError(f"{path} already exists; pass --force to overwrite it")
+    try:
+        tree = _override_tree(preset(args.preset).model_dump(), args.set)
+        sweep = SweepConfig.model_validate(tree)
+    except ValidationError as err:
+        raise CliError(str(err)) from err
+    save_sweep(sweep, args.root)
+    print(f"wrote {path}")
+    return 0
+
+
+def _setting_name(root: Path, setting) -> str:
+    return str(setting_dir(root, setting).relative_to(root))
+
+
+def cmd_sweep_count(args: argparse.Namespace) -> int:
+    print(len(expand(_load_sweep(args.root))))
+    return 0
+
+
+def cmd_sweep_list(args: argparse.Namespace) -> int:
+    for i, setting in enumerate(expand(_load_sweep(args.root))):
+        print(f"{i} {_setting_name(args.root, setting)}")
+    return 0
+
+
+def cmd_sweep_status(args: argparse.Namespace) -> int:
+    states = [
+        (i, setting_status(args.root, s), _setting_name(args.root, s))
+        for i, s in enumerate(expand(_load_sweep(args.root)))
+    ]
+    for i, state, name in states:
+        print(f"{i} {state} {name}")
+    counts = [
+        sum(state == kind for _, state, _ in states) for kind in ("done", "partial", "missing")
+    ]
+    print("{} done, {} partial, {} missing".format(*counts))
+    return 0
+
+
+def cmd_sweep_run(args: argparse.Namespace) -> int:
+    """One setting with --index (a SLURM array task), else every setting in order."""
+    sweep = _load_sweep(args.root)
+    try:
+        if args.index is None:
+            indices = range(len(expand(sweep)))
+        else:
+            get_setting(sweep, args.index)  # fail before any work on a bad index
+            indices = [args.index]
+        for i in indices:
+            run_setting(sweep, i, args.root, log=print)
+    except ValueError as err:
+        raise CliError(str(err)) from err
+    return 0
+
+
+def _add_sweep_parser(sub) -> None:
+    p_sweep = sub.add_parser("sweep", help="the 36-setting grid", description="the 36-setting grid")
+    actions = p_sweep.add_subparsers(dest="action", required=True)
+
+    def add(name: str, func, help_: str) -> argparse.ArgumentParser:
+        p = actions.add_parser(name, help=help_, description=help_)
+        p.add_argument("root", metavar="ROOT", type=Path)
+        p.set_defaults(func=func)
+        return p
+
+    p_init = add("init", cmd_sweep_init, "write ROOT/sweep.json from a preset")
+    p_init.add_argument("--preset", choices=["tiny", "full"], default="tiny")
+    p_init.add_argument(
+        "--set", action="append", default=[], metavar="KEY=VALUE",
+        help="override a sweep entry by dotted key, e.g. --set n_epochs=100 (repeatable)",
+    )  # fmt: skip
+    p_init.add_argument("--force", action="store_true", help="overwrite an existing sweep.json")
+    add("list", cmd_sweep_list, "print `index directory` for every setting")
+    add("count", cmd_sweep_count, "print the number of settings")
+    add("status", cmd_sweep_status, "print done / partial / missing for every setting")
+    p_run = add("run", cmd_sweep_run, "train one setting (--index) or all of them in order")
+    p_run.add_argument("--index", type=int, default=None, help="setting index (see `sweep list`)")
+
+
 # ---------------------------------------------------------------------------- entry point
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m fct", description=__doc__.splitlines()[0])
@@ -314,6 +425,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_plot = add("plot", cmd_plot, "draw the figures that need trained / solved results")
     p_plot.add_argument("--which", choices=["all", *FIGURES], default="all")
     add("plot-example", cmd_plot_example, "draw the example figure (needs no results)")
+    _add_sweep_parser(sub)
     return parser
 
 
