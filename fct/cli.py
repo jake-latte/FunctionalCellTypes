@@ -10,6 +10,7 @@ import argparse
 import functools
 import json
 import sys
+import traceback
 from collections.abc import Callable, Sequence
 from functools import cached_property
 from pathlib import Path
@@ -42,12 +43,12 @@ from fct.draw import (
     plot_training_history,
 )
 from fct.meanfield import load_meanfield, net_kernels, run_meanfield
-from fct.model import MLP, make_net
+from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
     SweepConfig,
+    SweepError,
     expand,
-    get_setting,
     load_sweep,
     preset,
     run_setting,
@@ -56,7 +57,7 @@ from fct.sweep import (
     setting_status,
     sweep_path,
 )
-from fct.train import History, load_trained, train
+from fct.train import History, load_trained, train_from_config
 
 FIGURE_DPI = 150
 
@@ -164,18 +165,11 @@ def _lazy_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str
 
 def cmd_train(args: argparse.Namespace) -> int:
     cfg, dataset = _load_inputs(args.cache_dir)
-    net = make_net(
-        cfg.net,
-        dataset.x.shape[1],
-        dataset.y.shape[1],
-        resolve_device(cfg),
-        resolve_dtype(cfg.dtype),
-    )
     final = cache_paths(args.cache_dir).train / "final.pt"
     if final.exists():
         print(f"loaded trained model from {final}")
     monitor = _lazy_mir_monitor(dataset, cfg) if cfg.train.monitor_int > 0 else None
-    train(cfg, dataset, net, args.cache_dir, log=print, monitor=monitor)
+    train_from_config(cfg, dataset, args.cache_dir, log=print, monitor=monitor)
     return 0
 
 
@@ -361,18 +355,38 @@ def cmd_sweep_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_all(sweep: SweepConfig, root: Path) -> None:
+    """Run every setting, continuing past failures; raise CliError listing the failed indices.
+
+    A failure is printed with its index, exception type and message (plus the traceback for
+    anything that is not a sweep configuration error), so nothing is swallowed silently.
+    """
+    failed = []
+    for i in range(len(expand(sweep))):
+        try:
+            run_setting(sweep, i, root, log=print)
+        except Exception as err:  # noqa: BLE001 - reported with type, message and traceback
+            failed.append(i)
+            print(f"error: setting {i} failed: {type(err).__name__}: {err}", file=sys.stderr)
+            if not isinstance(err, SweepError):
+                traceback.print_exc()
+    if failed:
+        raise CliError(f"{len(failed)} of {len(expand(sweep))} settings failed: {failed}")
+
+
 def cmd_sweep_run(args: argparse.Namespace) -> int:
-    """One setting with --index (a SLURM array task), else every setting in order."""
+    """One setting with --index (a SLURM array task), else every setting in order.
+
+    Only sweep errors (bad index, config mismatch) become CliError; anything raised by
+    training keeps its traceback.
+    """
     sweep = _load_sweep(args.root)
+    if args.index is None:
+        _run_all(sweep, args.root)
+        return 0
     try:
-        if args.index is None:
-            indices = range(len(expand(sweep)))
-        else:
-            get_setting(sweep, args.index)  # fail before any work on a bad index
-            indices = [args.index]
-        for i in indices:
-            run_setting(sweep, i, args.root, log=print)
-    except ValueError as err:
+        run_setting(sweep, args.index, args.root, log=print)
+    except SweepError as err:
         raise CliError(str(err)) from err
     return 0
 

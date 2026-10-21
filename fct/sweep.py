@@ -23,19 +23,17 @@ from fct.config import (
     Config,
     DataConfig,
     NetConfig,
+    NonNegInt,
     PosFloat,
     PosInt,
+    StrictModel,
     TrainConfig,
-    _Strict,
     load_config,
-    resolve_device,
-    resolve_dtype,
     save_config,
 )
 from fct.data import get_dataset, task_dims
-from fct.model import make_net
 from fct.monitor import make_mir_monitor
-from fct.train import train
+from fct.train import train_from_config
 
 SWEEP_FILE = "sweep.json"
 # Grid axes. The order here is the order of `expand`: task is the slowest axis, rate_lambda the
@@ -48,6 +46,10 @@ RATE_LAMBDAS = (0.0, 1e-3)
 Status = Literal["done", "partial", "missing"]
 
 
+class SweepError(ValueError):
+    """A sweep-level failure the user can fix: a bad index or a changed sweep config."""
+
+
 class Setting(NamedTuple):
     task: str
     L: int
@@ -56,28 +58,28 @@ class Setting(NamedTuple):
 
 
 # ---------------------------------------------------------------------------- config
-class LinearTeacherParams(_Strict):
+class LinearTeacherParams(StrictModel):
     n_features: PosInt  # m: dimension of both x and y
     n_latents: PosInt
     latent_range: PosFloat
 
 
-class ObjectActionParams(_Strict):
+class ObjectActionParams(StrictModel):
     grid_size: PosInt
-    max_objects: Annotated[int, Field(ge=0)]
+    max_objects: NonNegInt
 
 
-class WhatWhereParams(_Strict):
+class WhatWhereParams(StrictModel):
     n_motifs: PosInt
 
 
-class Seeds(_Strict):
+class Seeds(StrictModel):
     data: int = 0
     net: int = 0
     train: int = 0
 
 
-class SweepConfig(_Strict):
+class SweepConfig(StrictModel):
     """Shared settings of the 36 runs; see `preset` for the two ready-made sizes.
 
     The same data, net and training seeds are used for every setting, so settings differ only
@@ -88,7 +90,7 @@ class SweepConfig(_Strict):
 
     N: PosInt
     P: PosInt
-    n_epochs: Annotated[int, Field(ge=0)]
+    n_epochs: NonNegInt
     lr: PosFloat
     log_int: PosInt
     save_int: PosInt
@@ -203,7 +205,7 @@ def expand(sweep: SweepConfig) -> list[Setting]:
 def get_setting(sweep: SweepConfig, index: int) -> Setting:
     settings = expand(sweep)
     if not 0 <= index < len(settings):
-        raise ValueError(f"index {index} is out of range; valid indices are 0..{len(settings) - 1}")
+        raise SweepError(f"index {index} is out of range; valid indices are 0..{len(settings) - 1}")
     return settings[index]
 
 
@@ -250,7 +252,7 @@ def _write_config_once(cfg: Config, directory: Path) -> None:
     if not path.exists():
         save_config(cfg, path)
     elif load_config(path) != cfg:
-        raise ValueError(
+        raise SweepError(
             f"{path} differs from the config sweep.json builds for this setting; "
             "use a fresh ROOT or delete the setting directory"
         )
@@ -269,11 +271,4 @@ def run_setting(
         return
     log(f"setting {index}: {directory}")
     dataset = get_dataset(directory, cfg)
-    net = make_net(
-        cfg.net,
-        dataset.x.shape[1],
-        dataset.y.shape[1],
-        resolve_device(cfg),
-        resolve_dtype(cfg.dtype),
-    )
-    train(cfg, dataset, net, directory, log=log, monitor=make_mir_monitor(dataset, cfg))
+    train_from_config(cfg, dataset, directory, log=log, monitor=make_mir_monitor(dataset, cfg))

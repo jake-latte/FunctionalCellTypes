@@ -245,6 +245,28 @@ def train(
     return net, history
 
 
+def train_from_config(
+    cfg: Config,
+    dataset: Dataset,
+    cache_dir: Path,
+    log: Callable[[str], None] = print,
+    monitor: Monitor | None = None,
+) -> tuple[MLP, History]:
+    """Build the net the config describes for `dataset` and `train` it (see `train`).
+
+    The one place that turns a config and a dataset into a net, so the CLI and the sweep
+    start every run identically.
+    """
+    net = make_net(
+        cfg.net,
+        dataset.x.shape[1],
+        dataset.y.shape[1],
+        resolve_device(cfg),
+        resolve_dtype(cfg.dtype),
+    )
+    return train(cfg, dataset, net, cache_dir, log=log, monitor=monitor)
+
+
 def load_trained(
     cache_dir: Path, cfg: Config, device: torch.device, dtype: torch.dtype
 ) -> tuple[MLP, History]:
