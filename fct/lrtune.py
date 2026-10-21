@@ -545,6 +545,21 @@ def selection_markdown(title: str, selection: Selection) -> str:
     return "\n".join([*lines, "", f"best: {selection.best:g}{tie}"])
 
 
+def group_table_markdown(scores: Sequence[Score], keys: Sequence[str] = ("task", "L")) -> str:
+    """One table, a row per group of `keys` and a column per lr: `mean rank / median gap` of
+    that lr in that group, with the group's selected lr last."""
+    by_group = select_by(scores, keys)
+    lrs = sorted({s.lr for s in scores})
+    header = "| " + " | ".join([*keys, *(f"{lr:g}" for lr in lrs), "best"]) + " |"
+    lines = [header, "|" + "---|" * (len(keys) + len(lrs) + 1)]
+    for group, selection in by_group.items():
+        by_lr = {s.lr: s for s in selection.summaries}
+        cells = [f"{by_lr[lr].mean_rank:.1f} / {_format_gap(by_lr[lr].median_gap)}" for lr in lrs]
+        best = "/".join(f"{lr:g}" for lr in selection.tied)
+        lines.append("| " + " | ".join([*map(str, group), *cells, best]) + " |")
+    return "\n".join(lines)
+
+
 def report_markdown(
     rows: Sequence[Row], key: str = "heldout_mse", learned_only: bool = False
 ) -> str:
@@ -557,7 +572,10 @@ def report_markdown(
         raise ValueError("no settings to report on (none learned anything?)")
     scores = rank_learning_rates(rows, key=key)
     verdict = global_verdict(scores)
-    parts = [selection_markdown("all settings", select(scores))]
+    parts = [
+        "**mean rank / median gap by task and depth**\n\n" + group_table_markdown(scores),
+        selection_markdown("all settings", select(scores)),
+    ]
     for name, keys in (("depth", ("L",)), ("task", ("task",)), ("task and depth", ("task", "L"))):
         for group, selection in select_by(scores, keys).items():
             parts.append(selection_markdown(f"{name} {group}", selection))
