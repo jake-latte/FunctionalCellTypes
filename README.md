@@ -65,7 +65,7 @@ with equations, are in `notebooks/modularity.ipynb` and `fct/modularity.py`.
 directory `ROOT` that holds `sweep.json`; setting `i` is a normal cache directory
 `ROOT/<task>/L{L}_{phi}_r{rate}/`. Two presets exist: `tiny` (seconds per setting on a CPU, a pipeline
 check that learns nothing meaningful) and `full` (cluster sizes; the numbers in it are placeholders to
-be tuned). The weight regulariser stays at its library default.
+be tuned). The weight regulariser stays at its library default (1e-4).
 
 ```sh
 uv run python -m fct sweep init ROOT --preset tiny        # write ROOT/sweep.json (--set n_epochs=100 ...)

@@ -74,11 +74,12 @@ a fresh cache directory or delete the stale artefact (principle 9).
 | analysis   | data, net, train, analysis                 |
 
 Every artefact additionally depends on `dtype`; `section_hash` always includes it. The hash of any set of sections that
-includes `train` also folds in `config.LOSS_VERSION`, the version of the loss definition in `compute_loss`: it is code, not a
-config field, and must be increased whenever the loss changes meaning. Version 2 is the rate penalty averaged over the
-samples (version 1 summed it), so all train caches (`train/ckpt_*.pt`, `train/final.pt`), sweep caches, and every meanfield
-cache (hash includes the train section) made before that change are rejected once with `StaleCacheError`; data caches are
-unaffected. Use fresh cache directories or delete the old ones.
+includes `train` also folds in `config.LOSS_VERSION`, the version of the loss definition in `compute_loss`. It is code,
+not a config field, and must be increased whenever the loss changes meaning. Version 2 averages the rate penalty over the
+samples (version 1 summed it): every train cache (`train/ckpt_*.pt`, `train/final.pt`), sweep cache and meanfield cache made
+before that change is rejected once with `StaleCacheError`; data caches are unaffected. Use fresh cache directories or
+delete the old ones. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
+enters the hash by value.
 
 ## Saved files
 
@@ -110,7 +111,7 @@ class NetConfig(BaseModel):
     seed: int = 0
 class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
-    weight_lambda: float = 1e-3; rate_lambda: float = 1e-3
+    weight_lambda: float = 1e-4; rate_lambda: float = 1e-3
     log_int: int = 100; save_int: int = 100; seed: int = 0
     monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
     monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
@@ -249,7 +250,9 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # we
 
 ```python
 def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[str, Tensor]]
-    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2; weight_l2 = sum of squares of every parameter, rate_l2 = phi(h)^2 summed over neurons and layers and AVERAGED over the P samples (the notebook, cell 5, sums over the samples too: the library departs from it by design, so rate_lambda does not scale with P); dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
+    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2
+    # weight_l2 = sum of squares of every parameter, rate_l2 = phi(h)^2 summed over neurons and layers and AVERAGED over the P samples (the notebook sums over the samples; the library departs from it by design)
+    # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
 History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus the monitor_* keys below when monitored
 def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
           monitor: Callable[[MLP], dict[str, list]] | None = None) -> tuple[MLP, History]
@@ -464,7 +467,7 @@ class Setting(NamedTuple): task: str; L: int; phi: str; rate_lambda: float
 class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto"
-    # task parameters are validated at load time by building each task's DataConfig; weight_lambda is the TrainConfig default (1e-3)
+    # task parameters are validated at load time by building each task's DataConfig; weight_lambda is the TrainConfig default (1e-4)
 def preset(name: str) -> SweepConfig                     # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full": N=256, P=4096, 15000 epochs (placeholders to tune); ValueError otherwise
 def save_sweep(sweep, root) / load_sweep(root) -> SweepConfig   # ROOT/sweep.json; load raises FileNotFoundError naming the path
 def expand(sweep) -> list[Setting]                       # itertools.product(SWEEP_TASKS, LAYERS, PHIS, RATE_LAMBDAS): task slowest, rate_lambda fastest; index i is stable and independent of the preset

@@ -23,11 +23,11 @@ PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
 
 
-# Version of the training-loss definition (`fct.train.compute_loss`). It is folded into every
-# hash that includes the "train" section, so artefacts produced under another definition of the
-# loss are rejected as stale instead of being mixed with new ones. Increase it whenever the
-# loss changes in a way the TrainConfig fields do not express.
-# 1: rate penalty summed over the samples. 2: rate penalty averaged over the samples.
+# Version of the training-loss definition (`fct.train.compute_loss`). The loss belongs to the
+# train section but is code, not a config field, so it is hashed separately: artefacts made
+# under another definition are rejected as stale instead of mixed with new ones. Increase it
+# whenever the loss changes in a way the TrainConfig fields do not express. History: 1 summed
+# the rate penalty over the samples, 2 averages it.
 LOSS_VERSION = 2
 
 
@@ -94,7 +94,7 @@ class NetConfig(StrictModel):
 class TrainConfig(StrictModel):
     n_epochs: NonNegInt = 15_000
     lr: PosFloat = 1e-3
-    weight_lambda: NonNegFloat = 1e-3
+    weight_lambda: NonNegFloat = 1e-4
     rate_lambda: NonNegFloat = 1e-3
     log_int: PosInt = 100
     save_int: PosInt = 100
@@ -173,9 +173,8 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections: the
-        loss definition belongs to the train section but is code, not a config field. Canonical JSON (sorted keys) makes the hash independent of
-        field and argument order.
+        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections.
+        Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
             raise ValueError("section_hash needs at least one section name")
@@ -183,7 +182,7 @@ class Config(StrictModel):
         if unknown:
             raise ValueError(f"unknown config sections {sorted(unknown)}")
         hashed = self.model_dump(include={*sections, "dtype"})
-        if "train" in sections:
+        if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
         canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]

@@ -505,8 +505,9 @@ def plot_loss_curves(history: Mapping[str, ArrayLike], ax: Axes | None = None) -
     """The logged training terms against epoch on a log axis.
 
     The total loss is 0.5*N*mse + lambda_w*weight_l2 + lambda_r*rate_l2 (rate_l2 averaged
-    over the samples), so the three raw terms are drawn as logged and do not add up to the loss curve. A series that is zero at
-    every epoch cannot be seen on a log axis and is marked "(zero)" in the legend instead.
+    over the samples), so the three raw terms are drawn as logged and do not add up to the
+    loss curve. A series that is zero at every epoch cannot be seen on a log axis and is marked
+    "(zero)" in the legend instead.
 
     The legend sits outside the axis, to its right: that assumes a constrained-layout figure
     such as `fig_loss_curves` makes; with a caller-supplied `ax` it may be clipped.

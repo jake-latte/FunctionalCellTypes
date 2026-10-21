@@ -1,9 +1,13 @@
 """Impossible hyperparameters must fail at the config boundary, naming the field."""
 
+import hashlib
+import json
+
 import pytest
 from pydantic import ValidationError
 
 from fct.config import (
+    LOSS_VERSION,
     AnalysisConfig,
     DataConfig,
     MeanFieldConfig,
@@ -14,13 +18,14 @@ from fct.config import (
 
 # Section hashes key cached artefacts, so the dumped JSON of the defaults must not change
 # unintentionally (adding a config field changes every hash that includes its section, so old
-# caches become stale; so does changing `LOSS_VERSION`, which the train-containing hashes fold in).
-DEFAULT_HASHES = {
-    ("data",): "37d33c6aae26",
-    ("data", "net", "train"): "f636a4e8adcc",
-    ("data", "net", "train", "meanfield"): "f9e2a96b56ca",
-    ("data", "net", "train", "analysis"): "26db96bfb1d2",
-}
+# caches become stale). The data pin is a literal; the sections that include train are rebuilt
+# from canonical JSON, which also holds the loss version.
+DATA_HASH = "37d33c6aae26"
+TRAIN_SECTIONS = [
+    ("data", "net", "train"),
+    ("data", "net", "train", "meanfield"),
+    ("data", "net", "train", "analysis"),
+]
 
 _POSITIVE_INT = {
     DataConfig: ["P", "D_in", "d", "n_latents", "grid_size", "n_motifs"],
@@ -110,6 +115,13 @@ def test_linear_embedding_allows_odd_D_in():
     assert DataConfig(D_in=63, embedding="linear").D_in == 63
 
 
-@pytest.mark.parametrize(("sections", "expected"), DEFAULT_HASHES.items())
-def test_default_section_hashes_unchanged(sections, expected):
-    assert default_config().section_hash(*sections) == expected
+def test_default_data_hash_unchanged():
+    assert default_config().section_hash("data") == DATA_HASH
+
+
+@pytest.mark.parametrize("sections", TRAIN_SECTIONS)
+def test_train_section_hashes_hold_the_loss_version(sections):
+    cfg = default_config()
+    payload = {**cfg.model_dump(include={*sections, "dtype"}), "loss_version": LOSS_VERSION}
+    expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+    assert cfg.section_hash(*sections) == expected

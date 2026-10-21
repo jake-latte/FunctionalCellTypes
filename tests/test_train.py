@@ -303,38 +303,32 @@ def test_rate_l2_does_not_depend_on_the_number_of_samples():
 def test_history_logs_the_averaged_rate_l2(tmp_path):
     cfg = _cfg(n_epochs=1, log_int=1)
     ds, net = _setup(cfg)
-    _, parts = compute_loss(net, ds.x, ds.y, cfg.train.weight_lambda, cfg.train.rate_lambda)
+    summed = net.phi(net(ds.x)[0]).square().sum().item()  # before the first step
     _, hist = train(cfg, ds, net, tmp_path, log=lambda s: None)
-    assert hist["rate_l2"][0] == pytest.approx(parts["rate_l2"].item())
-    summed = net.phi(make_net(cfg.net, ds.x.shape[1], ds.y.shape[1], CPU, F64)(ds.x)[0])
-    assert hist["rate_l2"][0] == pytest.approx(summed.square().sum().item() / ds.x.shape[0])
+    assert hist["rate_l2"][0] == pytest.approx(summed / ds.x.shape[0])
 
 
-def test_final_written_under_the_old_loss_is_rejected(tmp_path, monkeypatch):
-    cfg = _cfg()
-    ds, net = _setup(cfg)
-    with monkeypatch.context() as old:
-        old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
-        train(cfg, ds, net, tmp_path, log=lambda s: None)
-    with pytest.raises(StaleCacheError):
-        load_trained(tmp_path, cfg, CPU, F64)
-    _, fresh = _setup(cfg)
-    with pytest.raises(StaleCacheError):
-        train(cfg, ds, fresh, tmp_path, log=lambda s: None)
-
-
-def test_checkpoint_written_under_the_old_loss_is_rejected_on_resume(tmp_path, monkeypatch):
+@pytest.mark.parametrize("interrupt_at", [None, 10], ids=["final.pt", "checkpoint"])
+def test_artefact_written_under_the_old_loss_is_rejected(tmp_path, monkeypatch, interrupt_at):
+    """A finished run (final.pt) or an interrupted one (ckpt_*.pt) from the previous loss
+    definition must not be loaded or resumed."""
     cfg = _cfg()
     ds, net = _setup(cfg)
 
     def stop(line):
-        if line.startswith("[") and _epoch_of(line) == 10:
+        if line.startswith("[") and _epoch_of(line) == interrupt_at:
             raise Interrupt
 
     with monkeypatch.context() as old:
         old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
-        with pytest.raises(Interrupt):
-            train(cfg, ds, net, tmp_path, log=stop)
+        if interrupt_at is None:
+            train(cfg, ds, net, tmp_path, log=lambda s: None)
+        else:
+            with pytest.raises(Interrupt):
+                train(cfg, ds, net, tmp_path, log=stop)
+    if interrupt_at is None:
+        with pytest.raises(StaleCacheError):
+            load_trained(tmp_path, cfg, CPU, F64)
     _, fresh = _setup(cfg)
     with pytest.raises(StaleCacheError):
         train(cfg, ds, fresh, tmp_path, log=lambda s: None)

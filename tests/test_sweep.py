@@ -145,6 +145,11 @@ def test_done_wins_over_leftover_checkpoint(tiny, tmp_path):
 
 
 # ---------------------------------------------------------------------------- running
+def test_sweep_uses_the_library_weight_regulariser(tiny):
+    # The sweep never sets weight_lambda; this notices a change of the library default.
+    assert {setting_config(tiny, s).train.weight_lambda for s in expand(tiny)} == {1e-4}
+
+
 @pytest.mark.parametrize("task", SWEEP_TASKS)
 def test_run_setting_trains_and_records_monitor_per_task(tiny, tmp_path, task):
     i = _index_of(tiny, task, L=3, phi="relu", rate=1e-3)
@@ -154,7 +159,7 @@ def test_run_setting_trains_and_records_monitor_per_task(tiny, tmp_path, task):
 
     cfg = load_config(cache_paths(setting_dir(tmp_path, setting)).config)
     assert (cfg.data.task, cfg.net.L, cfg.net.phi, cfg.train.rate_lambda) == (task, 3, "relu", 1e-3)
-    assert cfg.train.weight_lambda == 1e-3
+    assert cfg.train.weight_lambda == 1e-4
     assert cfg.dtype == "float32"
 
     history = _final(tmp_path, tiny, i)["history"]
