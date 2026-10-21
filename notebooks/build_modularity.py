@@ -21,7 +21,8 @@ from nbclient import NotebookClient
 from nbformat import NotebookNode
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
-from fct.report import MIR_EXPLANATION, ROOT_ENV
+from fct.explanations import MIR_EXPLANATION
+from fct.report import ROOT_ENV
 from fct.sweep import SWEEP_TASKS, expand, preset
 
 SOURCE_OUT = Path(__file__).with_name("modularity.ipynb")
@@ -50,7 +51,7 @@ from fct.report import (
     task_items,
 )
 
-mpl.rcParams["figure.dpi"] = 100  # fonts come from fct.draw.STYLE_RC; 100 dpi keeps the size moderate
+mpl.rcParams["figure.dpi"] = 100  # about 1300 px for a 13 in figure
 RESULTS = load_results(ROOT or sweep_root_from_env())
 show([overview_text(RESULTS)])"""
 

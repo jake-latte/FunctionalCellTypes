@@ -34,7 +34,7 @@ def test_source_notebook_has_a_cell_per_setting_and_task_and_no_outputs():
 
 
 def test_explanation_cell_sits_between_the_setup_and_the_first_task():
-    from fct.report import MIR_EXPLANATION
+    from fct.explanations import MIR_EXPLANATION
 
     nb = build_notebook()
     (index,) = [i for i, c in enumerate(nb.cells) if c.source == MIR_EXPLANATION]
@@ -43,9 +43,14 @@ def test_explanation_cell_sits_between_the_setup_and_the_first_task():
     assert nb.cells[index + 1].source == f"## {SWEEP_TASKS[0]}"
 
 
-def test_notebook_dpi_is_legible_but_not_the_small_default():
+def test_running_the_setup_cell_sets_a_legible_dpi(tmp_path):
+    import matplotlib as mpl
+
+    save_sweep(preset("tiny"), tmp_path)
     setup = next(c.source for c in build_notebook().cells if "load_results(" in c.source)
-    assert 'rcParams["figure.dpi"] = 100' in setup
+    with mpl.rc_context():  # restores the caller's rcParams afterwards
+        exec(setup, {"ROOT": tmp_path})  # noqa: S102  (runs the notebook source itself)
+        assert mpl.rcParams["figure.dpi"] == 100
 
 
 def test_each_setting_cell_names_one_distinct_grid_setting():

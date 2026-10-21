@@ -30,6 +30,9 @@ from typing import Literal, NamedTuple
 import torch
 from torch import Tensor
 
+DEAD_TOL = 1e-12  # a neuron whose total information is at most this is dead
+NOISE_FACTOR = 2.0  # shuffle correction: raw total <= NOISE_FACTOR * null total means noise
+
 
 def rank_bins(values: Tensor, n_bins: int) -> Tensor:
     """Equal-frequency bin index (int64, in [0, n_bins)) of every entry, per column.
@@ -172,7 +175,7 @@ def _shuffled_member_information(
 def _subtract_null(member_mi: Tensor, null: Tensor) -> Tensor:
     """Bias-corrected member information: subtract the shuffled mean, clamp at 0, and zero
     the rows whose raw total is not above twice their null total (indistinguishable from noise)."""
-    noise_like = member_mi.sum(dim=1) <= 2 * null.sum(dim=1)
+    noise_like = member_mi.sum(dim=1) <= NOISE_FACTOR * null.sum(dim=1)
     corrected = (member_mi - null).clamp(min=0.0)
     corrected[noise_like] = 0.0
     return corrected
@@ -225,7 +228,7 @@ def neuron_factor_information(
     return FactorInformation(member_mi, member_mi @ membership.to(member_mi.device), group_names)
 
 
-def preference(group_mi: Tensor, tol: float = 1e-12) -> tuple[Tensor, Tensor]:
+def preference(group_mi: Tensor, tol: float = DEAD_TOL) -> tuple[Tensor, Tensor]:
     """Preference r = max / sum per neuron: (N, K) group informations -> r (N,), dead (N,) bool.
 
     Needs K >= 2 groups (with one group the preference is trivially 1). A neuron whose total information is <= tol (constant firing, or a rate unrelated to every
