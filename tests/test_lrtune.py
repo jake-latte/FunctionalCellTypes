@@ -370,3 +370,14 @@ def test_subset_indices_and_trial_names():
     assert trial_root(Path("b"), 3e-4, 2) == Path("b/lr_0.0003_seed2")
     trial = trial_sweep(sweep, 3e-4, 2)
     assert trial.lr == 3e-4 and trial.seeds.data == trial.seeds.net == trial.seeds.train == 2
+
+
+def test_report_markdown_names_the_best_lr_and_the_verdict():
+    from fct.lrtune import report_markdown
+
+    text = report_markdown(_table(lambda task, L: 1e-3))
+    assert "best: 0.001" in text and "suffices: True" in text
+    assert "task and depth ('linear_teacher', 1)" in text
+    mixed = report_markdown(_table(lambda task, L: 1e-2 if L == 1 else 1e-3, penalty=0.5))
+    assert "suffices: False" in mixed
+    assert "depth (1,)" in mixed and "depth (5,)" in mixed

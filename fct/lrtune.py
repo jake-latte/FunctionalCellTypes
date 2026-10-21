@@ -484,6 +484,47 @@ def collect_rows(
     return rows
 
 
+# ---------------------------------------------------------------------------- report
+def _format_gap(value: float) -> str:
+    return "fail" if math.isinf(value) else f"{100 * value:.0f}%"
+
+
+def selection_markdown(title: str, selection: Selection) -> str:
+    """A markdown table of one `Selection`: per lr the mean rank, median and worst gap to the
+    setting's best lr, and failures; the chosen lr (and any tie) is named under the table."""
+    lines = [
+        f"**{title}**",
+        "",
+        "| lr | mean rank | median gap | worst gap | failed |",
+        "|---|---|---|---|---|",
+    ]
+    for s in selection.summaries:
+        worst = _format_gap(s.worst_ratio - 1)
+        failed = f"{s.n_failed}/{s.n_settings}"
+        median = _format_gap(s.median_gap)
+        lines.append(f"| {s.lr:g} | {s.mean_rank:.2f} | {median} | {worst} | {failed} |")
+    tied = ", ".join(f"{lr:g}" for lr in selection.tied)
+    tie = f" (tied: {tied})" if len(selection.tied) > 1 else ""
+    return "\n".join([*lines, "", f"best: {selection.best:g}{tie}"])
+
+
+def report_markdown(rows: Sequence[Row]) -> str:
+    """The selection report of a result table: all settings, per depth, per task, per task and
+    depth, and the verdict on a single global lr."""
+    scores = rank_learning_rates(rows)
+    verdict = global_verdict(scores)
+    parts = [selection_markdown("all settings", select(scores))]
+    for name, keys in (("depth", ("L",)), ("task", ("task",)), ("task and depth", ("task", "L"))):
+        for group, selection in select_by(scores, keys).items():
+            parts.append(selection_markdown(f"{name} {group}", selection))
+    parts.append(
+        f"single global lr {verdict.lr:g}: median gap {_format_gap(verdict.median_gap)}, "
+        f"worst gap {_format_gap(verdict.worst_ratio - 1)}, failed {verdict.n_failed}; "
+        f"suffices: {verdict.single_suffices}"
+    )
+    return "\n\n".join(parts)
+
+
 # ---------------------------------------------------------------------------- command line
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m fct.lrtune", description=__doc__)
@@ -502,6 +543,9 @@ def _parser() -> argparse.ArgumentParser:
         cmd.add_argument("--layers", type=int, nargs="+", default=[1, 5])
         if name == "collect":
             cmd.add_argument("--csv", type=Path, required=True)
+    report = sub.add_parser("report", help="print the selection report of result CSVs")
+    report.add_argument("csv", type=Path, nargs="+")
+    report.add_argument("--fig-dir", type=Path, help="also save the figures here")
     return parser
 
 
@@ -510,6 +554,22 @@ def _load_template(base: Path) -> SweepConfig:
     if not path.exists():
         raise FileNotFoundError(f"{path} not found; run `init` first")
     return SweepConfig.model_validate_json(path.read_text())
+
+
+def _report(csvs: Sequence[Path], fig_dir: Path | None) -> int:
+    rows = [row for path in csvs for row in read_rows_csv(path)]
+    print(report_markdown(rows))
+    if fig_dir is not None:
+        from fct.lrplot import fig_gap_vs_lr, fig_heldout_vs_lr  # plotting is not needed to tune
+
+        scores = rank_learning_rates(rows)
+        best = {k: sel.best for k, sel in select_by(scores, ("task", "L")).items()}
+        fig_dir.mkdir(parents=True, exist_ok=True)
+        fig_heldout_vs_lr(rows, best).savefig(fig_dir / "heldout_vs_lr.png", dpi=150)
+        tasks = list(dict.fromkeys(r["task"] for r in rows))
+        gaps = fig_gap_vs_lr(scores, tasks, sorted({r["L"] for r in rows}))
+        gaps.savefig(fig_dir / "gap_vs_lr.png", dpi=150)
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -521,6 +581,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.base.mkdir(parents=True, exist_ok=True)
         (args.base / TUNING_FILE).write_text(template.model_dump_json(indent=2) + "\n")
         return 0
+    if args.command == "report":
+        return _report(args.csv, args.fig_dir)
     template = _load_template(args.base)
     indices = subset_indices(template, args.tasks, args.layers)
     if args.command == "run":
