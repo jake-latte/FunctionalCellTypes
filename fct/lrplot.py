@@ -12,6 +12,7 @@ from fct.lrtune import Row, collapse_seeds
 # One colour per phi (colour-blind safe) and one line style per rate regulariser.
 PHI_COLOURS = {"tanh": "#0072B2", "relu": "#D55E00"}
 RATE_STYLES = {0.0: "-", 1e-3: "--"}
+MIN_REL_SPAN = 0.05  # smallest y-range shown, as a fraction of the largest value
 FAILURE_MARKER_Y = 0.96  # axes fraction at which a diverged run is marked
 
 
@@ -22,6 +23,7 @@ def plot_metric_vs_lr(
     L: int,
     key: str = "heldout_mse",
     best_lr: float | None = None,
+    logy: bool = False,
 ) -> Axes:
     """Column `key` of the result table against lr (log x) for each phi x rate_lambda of one
     task and depth.
@@ -62,8 +64,24 @@ def plot_metric_vs_lr(
     if best_lr is not None:
         ax.axvline(best_lr, color="0.6", lw=0.8, zorder=0)
     ax.set_xscale("log")
+    lrs = sorted({r["lr"] for r in cells})
+    ax.set_xticks(lrs, [f"{lr:.0e}".replace("e-0", "e-") for lr in lrs], fontsize=7)
+    ax.minorticks_off()
+    if logy:
+        ax.set_yscale("log")
+    else:
+        _keep_span(ax, [r[key] for r in cells if not r["diverged"]])
     ax.set_title(f"{task}, L={L}", fontsize=9)
     return ax
+
+
+def _keep_span(ax: Axes, values: Sequence[float], rel: float = MIN_REL_SPAN) -> None:
+    """Make the y-range at least `rel` of the largest value, so that differences below that
+    are not stretched to fill the panel; plain tick labels (no offset)."""
+    lo, hi, top = min(values), max(values), max(abs(v) for v in values)
+    pad = max(0.0, rel * top - (hi - lo)) / 2
+    ax.set_ylim(lo - pad - 0.05 * (hi - lo), hi + pad + 0.05 * (hi - lo))
+    ax.ticklabel_format(axis="y", useOffset=False)
 
 
 def fig_metric_vs_lr(
@@ -86,9 +104,7 @@ def fig_metric_vs_lr(
     for i, task in enumerate(tasks):
         for j, L in enumerate(depths):
             best = (best_by_group or {}).get((task, L))
-            ax = plot_metric_vs_lr(axes[i, j], rows, task, L, key, best)
-            if logy:
-                ax.set_yscale("log")
+            ax = plot_metric_vs_lr(axes[i, j], rows, task, L, key, best, logy)
             ax.set_xlabel("learning rate" if i == len(tasks) - 1 else "")
             ax.set_ylabel(ylabel if j == 0 else "")
     handles, labels = axes[0, 0].get_legend_handles_labels()
