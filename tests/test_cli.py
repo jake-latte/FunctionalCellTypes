@@ -14,7 +14,7 @@ from fct.train import MONITOR_EPOCH, MONITOR_PREFIX
 TINY = [
     "data.P=64", "data.D_in=8", "net.N=8", "net.L=2",
     "train.n_epochs=6", "train.save_int=3", "train.log_int=3",
-    "meanfield.n_points=8", "meanfield.n_chains=64", "meanfield.n_outer=2",
+    "meanfield.n_points=8", "meanfield.rate_tilt=1e-5", "meanfield.n_chains=64", "meanfield.n_outer=2",
     "meanfield.n_inner_max=3", "meanfield.warmup_trans=10", "meanfield.n_init_samples=256",
     "meanfield.save_int=1", "analysis.n_grid=5", "analysis.n_components=3", "device=cpu",
 ]  # fmt: skip

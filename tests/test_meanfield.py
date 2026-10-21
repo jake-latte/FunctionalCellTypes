@@ -322,6 +322,7 @@ def small_config(beta=1e3):
         train=TrainConfig(weight_lambda=1e-3, rate_lambda=1e-3),
         meanfield=MeanFieldConfig(
             n_points=10,
+            rate_tilt=1e-3 / 12,  # rate_lambda / P: required, see run_meanfield
             beta=beta,
             n_chains=32,
             n_outer=2,
@@ -422,3 +423,22 @@ def test_net_kernels_reject_more_points_than_data():
     net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
     with pytest.raises(ValueError, match="n_points"):
         net_kernels(net, small, cfg)
+
+
+@pytest.mark.parametrize("rate_lambda, tilt", [(1e-3, None), (0.0, None), (1e-3, 1e-4)])
+def test_run_meanfield_needs_an_explicit_tilt_only_for_a_nonzero_rate_penalty(
+    tmp_path, rate_lambda, tilt
+):
+    cfg = small_config()
+    cfg = cfg.model_copy(
+        update={
+            "train": cfg.train.model_copy(update={"rate_lambda": rate_lambda}),
+            "meanfield": cfg.meanfield.model_copy(update={"rate_tilt": tilt}),
+        }
+    )
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
+    if rate_lambda != 0 and tilt is None:
+        with pytest.raises(ValueError, match=r"rate_tilt.*rate_lambda / P"):
+            run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+    else:
+        run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)

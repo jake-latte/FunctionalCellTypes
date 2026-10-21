@@ -1020,8 +1020,8 @@ PROVISIONAL_NOTE = (
 
 
 def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> None:
-    """Name the status ("partial", "missing") across the row of an unfinished setting that has
-    no values; a provisional row keeps its values (see `_hatch_provisional_rows`)."""
+    """Name the status ("partial", "missing", "stale") across the row of an unfinished setting
+    that has no values; a provisional row keeps its values (see `_hatch_provisional_rows`)."""
     for row, status in enumerate(row_status):
         if status not in ("done", PROVISIONAL):
             ax.text(

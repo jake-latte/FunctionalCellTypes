@@ -276,6 +276,21 @@ def test_rate_l2_is_the_sum_over_neurons_averaged_over_samples():
     assert loss.item() == pytest.approx(0.5 * 6.5)  # only the rate term remains
 
 
+def test_loss_golden_value_is_tied_to_the_loss_version():
+    # Change the expected value and LOSS_VERSION together whenever the loss definition changes:
+    # LOSS_VERSION is what rejects caches made under the previous definition.
+    assert fct.config.LOSS_VERSION == 2
+    net = _two_sample_net()
+    with torch.no_grad():
+        net.V.copy_(torch.tensor([[1.0], [0.5]], dtype=F64))
+    x = torch.tensor([[3.0], [-2.0]], dtype=F64)
+    y = torch.tensor([[1.0], [0.0]], dtype=F64)
+    # z = [0.75, -0.5], mse = 0.15625, weight_l2 = 3.25, rate_l2 = (9 + 4) / 2 = 6.5
+    loss, _ = compute_loss(net, x, y, weight_lambda=0.1, rate_lambda=0.2)
+    assert loss.item() == pytest.approx(0.5 * 2 * 0.15625 + 0.1 * 3.25 + 0.2 * 6.5)
+    assert loss.item() == pytest.approx(1.78125)
+
+
 def test_loss_is_assembled_from_the_parts():
     net = _two_sample_net()
     with torch.no_grad():

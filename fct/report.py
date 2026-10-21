@@ -238,6 +238,12 @@ def _with_data(
 _UNREADABLE = (OSError, ValueError, TypeError, RuntimeError, EOFError, pickle.UnpicklingError)
 
 
+STALE_NOTE = (
+    "train/final.pt was written under a different config or loss definition (an older "
+    "LOSS_VERSION, or another weight_lambda or setting); rerun in a fresh sweep ROOT"
+)
+
+
 def _not_shown(setting: Setting, relative: Path, note: str) -> SettingResult:
     return SettingResult(setting, "partial", relative, note=note)
 
@@ -273,19 +279,22 @@ def _load_partial(directory: Path, relative: Path, setting: Setting, cfg: Config
 
 def load_setting_result(root: Path, sweep: SweepConfig, setting: Setting) -> SettingResult:
     """Load one setting: a done one from train/final.pt, a partial one from its latest
-    checkpoint (then `provisional`, with the epoch reached), a missing one not at all.
+    checkpoint (then `provisional`, with the epoch reached), a missing one not at all, and a
+    stale one (finished under another config or loss definition) not at all, with a note.
 
     Read-only: a setting whose data/dataset.pt is missing is reported as "partial" with a note,
     because loading it through `get_dataset` would generate and write the file. A finished
-    setting whose artefacts do not match the sweep config raises; for a partial one an
-    unreadable or stale dataset or checkpoint file is reported in `note` instead, since its
+    setting whose dataset or other artefacts do not match the sweep config raises; for a partial
+    one an unreadable or stale dataset or checkpoint file is reported in `note` instead, since its
     checkpoint may be replaced by a running job at any moment. Other exceptions (from the
     model code) propagate: they are bugs, not bad files."""
     directory = setting_dir(root, setting)
     relative = directory.relative_to(root)
-    status = setting_status(root, setting)
+    status = setting_status(root, sweep, setting)
     if status == "missing":
         return SettingResult(setting, status, relative)
+    if status == "stale":
+        return SettingResult(setting, status, relative, note=STALE_NOTE)
     cfg = _cpu_config(sweep, setting)
     if status == "partial":
         return _load_partial(directory, relative, setting, cfg)
@@ -470,13 +479,16 @@ def summary_text(fm: FinalMIR) -> str:
 
 
 def overview_text(results: list[SettingResult]) -> str:
-    """Counts of done, partial (provisional or without data) and missing settings."""
-    n = {s: sum(r.status == s for r in results) for s in ("done", "partial", "missing")}
+    """Counts of done, partial (provisional or without data), missing and stale settings."""
+    n = {s: sum(r.status == s for r in results) for s in ("done", "partial", "missing", "stale")}
     n_prov = sum(r.provisional for r in results)
     text = f"{len(results)} settings: {n['done']} done, {n_prov} partial (provisional)"
     if n["partial"] > n_prov:
         text += f", {n['partial'] - n_prov} partial without data (see their notes)"
-    return f"{text}, {n['missing']} missing."
+    text += f", {n['missing']} missing"
+    return text + (
+        f", {n['stale']} stale (old loss or config; see their notes)." if n["stale"] else "."
+    )
 
 
 def _list_numbers(values: list[float], fmt: str = ".3f") -> str:
@@ -535,6 +547,7 @@ def setting_text(result: SettingResult) -> str:
             or {
                 "missing": "no checkpoint found",
                 "partial": "a checkpoint exists but there is no final.pt",
+                "stale": STALE_NOTE,
             }[result.status]
         )
         return f"**{label}: {result.status}** ({reason}; under `{result.directory}`); not shown."

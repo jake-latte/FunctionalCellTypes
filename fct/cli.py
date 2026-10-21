@@ -342,16 +342,18 @@ def cmd_sweep_list(args: argparse.Namespace) -> int:
 
 
 def cmd_sweep_status(args: argparse.Namespace) -> int:
+    sweep = _load_sweep(args.root)
     states = [
-        (i, setting_status(args.root, s), _setting_name(args.root, s))
-        for i, s in enumerate(expand(_load_sweep(args.root)))
+        (i, setting_status(args.root, sweep, s), _setting_name(args.root, s))
+        for i, s in enumerate(expand(sweep))
     ]
     for i, state, name in states:
         print(f"{i} {state} {name}")
     counts = [
-        sum(state == kind for _, state, _ in states) for kind in ("done", "partial", "missing")
+        sum(state == kind for _, state, _ in states)
+        for kind in ("done", "partial", "missing", "stale")
     ]
-    print("{} done, {} partial, {} missing".format(*counts))
+    print("{} done, {} partial, {} missing, {} stale".format(*counts))
     return 0
 
 

@@ -76,8 +76,10 @@ a fresh cache directory or delete the stale artefact (principle 9).
 Every artefact additionally depends on `dtype`; `section_hash` always includes it. The hash of any set of sections that
 includes `train` also folds in `config.LOSS_VERSION`, the version of the loss definition in `compute_loss`. It is code,
 not a config field, and must be increased whenever the loss changes meaning. Version 2 averages the rate penalty over the
-samples (version 1 summed it): every train cache (`train/ckpt_*.pt`, `train/final.pt`), sweep cache and meanfield cache made
-before that change is rejected once with `StaleCacheError`; data caches are unaffected. Use fresh cache directories or
+samples (version 1 summed it): every train cache (`train/ckpt_*.pt`, `train/final.pt`) and meanfield cache made before that
+change is rejected with `StaleCacheError` the next time it is loaded; data caches are unaffected. A sweep ROOT whose
+settings were finished before the change is not silently reused: `sweep status` lists them as `stale`, `run_setting` raises
+`StaleCacheError` instead of calling them done, and the results notebook shows them with a note and no results. Use fresh cache directories or
 delete the old ones. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
 enters the hash by value.
 
@@ -312,6 +314,12 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then
     # replaces the checkpoints
 def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> SolveResult
+    # rate tilt: the solver's tilt is a per-sample coefficient of phi^T phi summed over the n_points solved points, whereas the
+    # trained loss averages the penalty over its P_train samples (per-sample coefficient rate_lambda / P_train). Taking
+    # rate_tilt = rate_lambda would therefore describe an objective P_train times too strong, so there is NO default: ValueError
+    # if train.rate_lambda != 0 and meanfield.rate_tilt is None. rate_tilt = rate_lambda / P_train is the same objective when
+    # n_points == P_train; with fewer points the solved subset is a different problem, and rate_lambda / n_points treats it as
+    # the whole training set (as the mapping alpha = lambda_w n_points D_out / beta already does). Which to use is the PI's decision.
     # X = dataset.x[:n_points], Y = dataset.y[:n_points]; lambda_w/lambda_r from cfg.train; phi/g/L from cfg.net
     # hash = section_hash("data","net","train","meanfield"); returns final.pt if present
 def net_kernels(net: MLP, dataset: Dataset, cfg: Config) -> Tensor   # (L, P, P) float64
@@ -475,7 +483,7 @@ def get_setting(sweep, index) -> Setting                 # SweepError (a ValueEr
 def setting_dir(root, setting) -> Path                   # ROOT/<task>/L{L}_{phi}_r{rate:g}
 def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep
 def setting_config(sweep, setting) -> Config             # data, net (seed = seeds.net), train (rate_lambda = the swept value, monitor_* from the sweep), dtype, device
-def setting_status(root, setting) -> "done" | "partial" | "missing"   # done = train/final.pt exists; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
+def setting_status(root, sweep, setting) -> "done" | "partial" | "missing" | "stale"   # done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stale = a final.pt with another hash; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
 def run_setting(sweep, index, root, log=print) -> None
     # first validates/writes config.json (SweepError if an existing one differs: the sweep changed under existing artefacts; this
     # check comes BEFORE the done check, so a changed sweep raises even for a done setting), then returns at once if done,
@@ -512,7 +520,7 @@ notebook to the git-ignored `tmp/modularity.ipynb` (it records the ROOT it was r
 which carries all logic and tests. Only the source notebook (`--no-execute`, no outputs) is committed.
 
 ```python
-@dataclass SettingResult: setting; status ("done"|"partial"|"missing"); directory (relative to ROOT); note; history, examples (ExampleOutputs), metrics, data_cfg, epoch, n_epochs
+@dataclass SettingResult: setting; status ("done"|"partial"|"missing"|"stale"); directory (relative to ROOT); note; history, examples (ExampleOutputs), metrics, data_cfg, epoch, n_epochs
     # the data fields are None unless done, or partial with a readable checkpoint; epoch = epochs completed (n_epochs for done), n_epochs = the sweep's total
     # .provisional = status partial and history is not None (a running setting shown from its latest checkpoint); .progress = "epoch X of N" (ValueError if no data)
     # .mir_epoch = epoch of the last monitor call in the history: a checkpoint at epoch s never holds the monitor call of epoch s, so it lags `epoch`
@@ -539,7 +547,7 @@ def mir_table_markdown(fm) / summary_text(fm) / overview_text(results) / setting
     # summary_text: "N of M settings finished, K provisional (still running)"; extremes of the corrected MIR over layer-cells with ties
     # listed; means pool the layer-cells where raw, corrected and chance are all finite and give their count. ALL statistics are over
     # FINISHED settings only (provisional rows are blanked first); provisional settings are listed apart with their epoch.
-    # overview_text: "36 settings: 12 done, 4 partial (provisional), 20 missing" (+ ", N partial without data" for unusable checkpoints)
+    # overview_text: "36 settings: 12 done, 4 partial (provisional), 20 missing" (+ ", N partial without data" for unusable checkpoints, ", N stale" for finished settings of another config or loss definition; a stale setting has a note, no data)
     # mir_table_markdown: provisional rows are named "label \* (MIR@m, ckpt e/N)" and a footnote (MIR from epoch m; checkpoint at epoch e of N) says the values are not final
     # setting_text raises ValueError naming any history key a DONE setting needs but lacks; a provisional one is headed
     # "partial, epoch X of N", says "so far", and states when there is no logged epoch or no MIR yet
@@ -577,7 +585,7 @@ python -m fct plot-example CACHE_DIR                                 # result-in
 python -m fct sweep init ROOT [--preset tiny|full] [--set n_epochs=100 ...] [--force]   # writes ROOT/sweep.json; --set takes dotted keys like `init`
 python -m fct sweep list ROOT      # "<index> <task>/L{L}_{phi}_r{rate}" per setting
 python -m fct sweep count ROOT     # 36
-python -m fct sweep status ROOT    # "<index> done|partial|missing <dir>" per setting, then "N done, N partial, N missing"
+python -m fct sweep status ROOT    # "<index> done|partial|missing|stale <dir>" per setting, then "N done, N partial, N missing, N stale"
 python -m fct sweep run ROOT [--index i]   # train setting i (a SLURM array task); without --index, all settings in order
 ```
 

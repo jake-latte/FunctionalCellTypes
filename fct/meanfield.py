@@ -15,10 +15,11 @@ expectation under that density, which the per-layer `SingleSiteHMC` chains provi
     ∂S/∂Φ_L = -½ Φ̂_L - c A Y Yᵀ A,  A = (αI + Φ_L)⁻¹      (Eq. 31c)
 
 Mapping of the network's (β, λ_w, λ_r) onto the action (overridable in MeanFieldConfig):
-prior_scale = 1/λ_w, α = λ_w P D_out / β, c = learning_prefactor = ½, rate tilt = λ_r.
-The tilt multiplies φᵀφ summed over the P solved points, i.e. the summed rate penalty; the
-network's rate penalty is averaged over its samples, so the two differ by a factor P unless
-`MeanFieldConfig.rate_tilt` is set accordingly.
+prior_scale = 1/λ_w, α = λ_w P D_out / β, c = learning_prefactor = ½.  The rate tilt λ_r
+multiplies φᵀφ summed over the P solved points, a per-sample coefficient; `solve` takes it as
+`lambda_r`.  The trained network's rate penalty is averaged over its P_train samples, so its
+per-sample coefficient is rate_lambda / P_train: `run_meanfield` does not guess and requires
+`MeanFieldConfig.rate_tilt` to be set whenever train.rate_lambda != 0.
 
 Layers: `solve` is the computation (it touches disk only when given a checkpoint_dir),
 `run_meanfield` / `load_meanfield` are the cache-directory I/O.  The outer loop mutates one
@@ -848,11 +849,34 @@ def _meanfield_hash(cfg: Config) -> str:
     return cfg.section_hash("data", "net", "train", "meanfield")
 
 
+def _require_explicit_rate_tilt(cfg: Config, n_train: int) -> None:
+    """The rate tilt has no default that matches the trained loss, so it must be set.
+
+    The trained loss averages the rate penalty over its n_train samples: rate_lambda / n_train
+    per sample. The solver's tilt is a per-sample coefficient over the n_points solved points.
+    With n_points == n_train, rate_tilt = rate_lambda / n_train is the same objective; with
+    fewer points the solved subset is a different problem, and rate_lambda / n_points treats it
+    as if it were the whole training set (as the mapping of alpha does)."""
+    if cfg.meanfield.rate_tilt is not None or cfg.train.rate_lambda == 0 or n_train == 1:
+        return
+    raise ValueError(
+        f"train.rate_lambda={cfg.train.rate_lambda:g} but meanfield.rate_tilt is not set. The "
+        f"trained loss averages the rate penalty over its P={n_train} samples, so a default of "
+        f"rate_tilt=rate_lambda would describe an objective {n_train} times too strong. Set "
+        f"meanfield.rate_tilt explicitly: rate_lambda / P = {cfg.train.rate_lambda / n_train:g} "
+        f"matches the trained loss when n_points == P (n_points={cfg.meanfield.n_points}); "
+        f"rate_lambda / n_points = {cfg.train.rate_lambda / cfg.meanfield.n_points:g} treats "
+        "the solved points as the whole training set."
+    )
+
+
 def run_meanfield(
     cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log: Log = print
 ) -> SolveResult:
     """Solve on the first cfg.meanfield.n_points training points, caching under
-    CACHE_DIR/meanfield (returns final.pt if present, resumes from a checkpoint otherwise)."""
+    CACHE_DIR/meanfield (returns final.pt if present, resumes from a checkpoint otherwise).
+    ValueError if train.rate_lambda != 0 and meanfield.rate_tilt is not set."""
+    _require_explicit_rate_tilt(cfg, dataset.x.shape[0])
     X, Y = _solver_inputs(dataset, cfg)
     return solve(
         X,
