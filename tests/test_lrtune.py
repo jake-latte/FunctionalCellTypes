@@ -17,6 +17,7 @@ from fct.lrtune import (
     evaluate_setting,
     global_verdict,
     heldout_dataset,
+    learned_settings,
     loss_curve_stats,
     rank_learning_rates,
     read_rows_csv,
@@ -51,6 +52,7 @@ def _table(best_lr, lrs=LRS, seeds=(0,), penalty=0.3, nan_at=()):
                     "lr": lr,
                     "seed": seed,
                     "heldout_mse": float("nan") if failed else mse,
+                    "null_mse": 100 * BASE[task],
                     "diverged": failed,
                 }
             )
@@ -395,3 +397,22 @@ def test_report_markdown_names_the_best_lr_and_the_verdict():
     mixed = report_markdown(_table(lambda task, L: 1e-2 if L == 1 else 1e-3, penalty=0.5))
     assert "suffices: False" in mixed
     assert "depth (1,)" in mixed and "depth (5,)" in mixed
+
+
+def test_ranking_on_another_column_and_the_learned_filter():
+    table = _table(lambda task, L: 1e-3)
+    for row in table:  # the loss prefers the largest lr everywhere
+        row["loss"] = 1.0 / row["lr"]
+    assert select(rank_learning_rates(table, key="loss")).best == max(LRS)
+    # one setting collapses at every lr: its held-out MSE equals the zero net's
+    collapsed = ("object_action", 5, "relu", 0.0)
+    for row in table:
+        if _setting_key_of(row) == collapsed:
+            row["heldout_mse"] = row["null_mse"]
+    kept = learned_settings(table)
+    assert len(kept) == len(table) - len(LRS)
+    assert all(_setting_key_of(r) != collapsed for r in kept)
+
+
+def _setting_key_of(row):
+    return (row["task"], row["L"], row["phi"], row["rate_lambda"])

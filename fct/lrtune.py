@@ -62,6 +62,7 @@ COLUMNS: dict[str, type] = {
     "diverged": bool,
     "train_mse": float,
     "heldout_mse": float,
+    "null_mse": float,  # held-out MSE of the zero network, the collapsed solution
     "loss": float,
     "max_spike": float,
     "tail_drop": float,
@@ -71,6 +72,7 @@ SETTING_KEYS = ("task", "L", "phi", "rate_lambda")
 HELD_OUT_SEED_OFFSET = 1000  # held-out seed = training data seed + this, never a training seed
 SPIKE_START = 0.25  # fraction of the logged curve after which a loss spike counts
 TIE_RTOL = 1e-3  # held-out MSEs closer than this (relative) are tied in the ranking
+LEARNED_MARGIN = 0.9  # a net has learned if its held-out MSE is below this x the zero net's
 TAIL = 0.1  # the final fraction of the curve over which "still decreasing" is judged
 TUNING_FILE = "template.json"
 TIMINGS_FILE = "timings.csv"
@@ -166,8 +168,9 @@ def _setting_key(row: Row) -> tuple:
     return tuple(row[k] for k in SETTING_KEYS)
 
 
-def collapse_seeds(rows: Iterable[Row]) -> list[Row]:
-    """One row per (setting, lr): the median held-out MSE over seeds, diverged if any seed did.
+def collapse_seeds(rows: Iterable[Row], keys: Sequence[str] = ("heldout_mse",)) -> list[Row]:
+    """One row per (setting, lr): the median over seeds of each column in `keys`, all of them
+    NaN and `diverged` set if any seed diverged.
 
     Raises ValueError on two rows for the same (setting, lr, seed)."""
     groups: dict[tuple, list[Row]] = defaultdict(list)
@@ -181,51 +184,68 @@ def collapse_seeds(rows: Iterable[Row]) -> list[Row]:
     collapsed = []
     for group in groups.values():
         diverged = any(r["diverged"] for r in group)
-        values = [float(r["heldout_mse"]) for r in group]
-        value = math.nan if diverged else statistics.median(values)
-        collapsed.append({**group[0], "heldout_mse": value, "diverged": diverged, "seed": -1})
+        medians = {
+            k: math.nan if diverged else statistics.median(float(r[k]) for r in group) for k in keys
+        }
+        collapsed.append({**group[0], **medians, "diverged": diverged, "seed": -1})
     return collapsed
 
 
+def learned_settings(rows: Iterable[Row], margin: float = LEARNED_MARGIN) -> list[Row]:
+    """The rows of the settings where some lr gives a held-out MSE below `margin` times that of
+    the zero network. In the others every lr ends at the collapsed solution, so the
+    learning rate cannot be judged by what the net has learned."""
+    rows = list(rows)
+    best: dict[tuple, bool] = defaultdict(bool)
+    for r in collapse_seeds(rows, ("heldout_mse", "null_mse")):
+        if not r["diverged"]:
+            best[_setting_key(r)] |= r["heldout_mse"] < margin * r["null_mse"]
+    return [r for r in rows if best[_setting_key(r)]]
+
+
 class Score(NamedTuple):
-    """One (setting, lr) cell: rank of this lr among the setting's lrs (1 = best, ties share a
-    mean rank, failures last) and the relative gap of its held-out MSE to the setting's best."""
+    """One (setting, lr) cell: its value of the ranked column, the rank of this lr among the
+    setting's lrs (1 = lowest, ties share a mean rank, failures last) and the relative gap of
+    the value to the setting's best."""
 
     task: str
     L: int
     phi: str
     rate_lambda: float
     lr: float
-    mse: float
+    value: float
     rank: float
     gap: float
     failed: bool
 
 
-def rank_learning_rates(rows: Iterable[Row], tie_rtol: float = TIE_RTOL) -> list[Score]:
-    """Rank the learning rates inside each setting on the held-out MSE.
+def rank_learning_rates(
+    rows: Iterable[Row], tie_rtol: float = TIE_RTOL, key: str = "heldout_mse"
+) -> list[Score]:
+    """Rank the learning rates inside each setting on column `key` (lower is better; the
+    held-out MSE by default).
 
     A run that diverged, or whose MSE is not finite, is a failure: it ranks last and its gap is
     infinite. Every setting must have been run with the same set of learning rates.
     """
     by_setting: dict[tuple, list[Row]] = defaultdict(list)
-    for row in collapse_seeds(rows):
+    for row in collapse_seeds(rows, (key,)):
         by_setting[_setting_key(row)].append(row)
     lr_sets = {frozenset(r["lr"] for r in group) for group in by_setting.values()}
     if len(lr_sets) != 1:
         raise ValueError(f"settings were run with different learning rates: {lr_sets}")
     scores = []
-    for key, group in by_setting.items():
-        values = np.array([float(r["heldout_mse"]) for r in group])
+    for setting, group in by_setting.items():
+        values = np.array([float(r[key]) for r in group])
         failed = np.array([bool(r["diverged"]) for r in group]) | ~np.isfinite(values)
         values = np.where(failed, np.inf, values)
         best = values.min()
         if best <= 0:
-            raise ValueError(f"setting {key} has a held-out MSE <= 0: {best}")
+            raise ValueError(f"setting {setting} has {key} <= 0: {best}")
         ranks = average_ranks(values, tie_rtol)
         for r, v, rank, bad in zip(group, values, ranks, failed):
             gap = math.inf if bad else v / best - 1
-            scores.append(Score(*key, r["lr"], float(v), float(rank), float(gap), bool(bad)))
+            scores.append(Score(*setting, r["lr"], float(v), float(rank), float(gap), bool(bad)))
     return scores
 
 
@@ -343,6 +363,7 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
         loss, parts = compute_loss(net, train.x, train.y, tc.weight_lambda, tc.rate_lambda)
     stats = loss_curve_stats(history)
     train_mse, held_mse = parts["mse"].item(), mse(net, held)
+    null_mse = held.y.square().mean().item()
     final = [train_mse, held_mse, loss.item()]
     mir = history["monitor_mir_corrected"][-1]
     return {
@@ -355,6 +376,7 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
         "diverged": stats["diverged"] or not all(math.isfinite(v) for v in final),
         "train_mse": train_mse,
         "heldout_mse": held_mse,
+        "null_mse": null_mse,
         "loss": final[2],
         "max_spike": stats["max_spike"],
         "tail_drop": stats["tail_drop"],
@@ -521,10 +543,17 @@ def selection_markdown(title: str, selection: Selection) -> str:
     return "\n".join([*lines, "", f"best: {selection.best:g}{tie}"])
 
 
-def report_markdown(rows: Sequence[Row]) -> str:
-    """The selection report of a result table: all settings, per depth, per task, per task and
-    depth, and the verdict on a single global lr."""
-    scores = rank_learning_rates(rows)
+def report_markdown(
+    rows: Sequence[Row], key: str = "heldout_mse", learned_only: bool = False
+) -> str:
+    """The selection report of a result table ranked on column `key`: all settings, per depth,
+    per task, per task and depth, and the verdict on a single global lr. `learned_only` first
+    drops the settings in which no lr beats the zero network (see `learned_settings`)."""
+    if learned_only:
+        rows = learned_settings(rows)
+    if not rows:
+        raise ValueError("no settings to report on (none learned anything?)")
+    scores = rank_learning_rates(rows, key=key)
     verdict = global_verdict(scores)
     parts = [selection_markdown("all settings", select(scores))]
     for name, keys in (("depth", ("L",)), ("task", ("task",)), ("task and depth", ("task", "L"))):
@@ -559,6 +588,10 @@ def _parser() -> argparse.ArgumentParser:
     report = sub.add_parser("report", help="print the selection report of result CSVs")
     report.add_argument("csv", type=Path, nargs="+")
     report.add_argument("--fig-dir", type=Path, help="also save the figures here")
+    report.add_argument(
+        "--key", default="heldout_mse", choices=["heldout_mse", "train_mse", "loss"]
+    )
+    report.add_argument("--learned-only", action="store_true")
     return parser
 
 
@@ -569,9 +602,9 @@ def _load_template(base: Path) -> SweepConfig:
     return SweepConfig.model_validate_json(path.read_text())
 
 
-def _report(csvs: Sequence[Path], fig_dir: Path | None) -> int:
+def _report(csvs: Sequence[Path], fig_dir: Path | None, key: str, learned_only: bool) -> int:
     rows = [row for path in csvs for row in read_rows_csv(path)]
-    print(report_markdown(rows))
+    print(report_markdown(rows, key, learned_only))
     if fig_dir is not None:
         from fct.lrplot import fig_metric_vs_lr  # plotting is not needed to tune
 
@@ -596,7 +629,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         (args.base / TUNING_FILE).write_text(template.model_dump_json(indent=2) + "\n")
         return 0
     if args.command == "report":
-        return _report(args.csv, args.fig_dir)
+        return _report(args.csv, args.fig_dir, args.key, args.learned_only)
     template = _load_template(args.base)
     indices = subset_indices(template, args.tasks, args.layers)
     if args.command == "run":

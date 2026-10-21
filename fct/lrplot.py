@@ -30,7 +30,7 @@ def plot_metric_vs_lr(
     the axes at its lr, since it has no value to draw; `best_lr` adds a vertical guide. At
     depth 1 phi acts only through the rate regulariser, so the tanh and relu lines coincide for
     rate_lambda = 0: tanh is drawn thick and relu thin on top so both stay visible."""
-    cells = [r for r in collapse_seeds(rows) if r["task"] == task and r["L"] == L]
+    cells = [r for r in collapse_seeds(rows, (key,)) if r["task"] == task and r["L"] == L]
     if not cells:
         raise ValueError(f"no rows for task {task!r}, L={L}")
     for phi, rate in itertools.product(PHI_COLOURS, RATE_STYLES):
