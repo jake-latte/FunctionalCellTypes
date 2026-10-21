@@ -23,11 +23,11 @@ PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
 
 
-class _Strict(BaseModel):
+class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class DataConfig(_Strict):
+class DataConfig(StrictModel):
     """Data settings. `task` selects the generator and only that task's fields are read: the
     fields of other tasks are ignored, but they still enter the cache hash, so changing one
     makes an existing data cache stale. Sizes and counts are PosInt (>= 1) except
@@ -75,7 +75,7 @@ class DataConfig(_Strict):
         return self
 
 
-class NetConfig(_Strict):
+class NetConfig(StrictModel):
     N: PosInt = 100
     L: PosInt = 3
     g: PosFloat = 1.0
@@ -83,7 +83,7 @@ class NetConfig(_Strict):
     seed: int = 0
 
 
-class TrainConfig(_Strict):
+class TrainConfig(StrictModel):
     n_epochs: NonNegInt = 15_000
     lr: PosFloat = 1e-3
     weight_lambda: NonNegFloat = 1e-3
@@ -98,7 +98,7 @@ class TrainConfig(_Strict):
     monitor_shuffles: PosInt = 5
 
 
-class MeanFieldConfig(_Strict):
+class MeanFieldConfig(StrictModel):
     n_points: PosInt = 100  # solve on the first n_points training points
     beta: PosFloat = 1e6
     readout: Literal["h", "phi"] = "h"
@@ -145,14 +145,14 @@ class MeanFieldConfig(_Strict):
     seed: int = 0
 
 
-class AnalysisConfig(_Strict):
+class AnalysisConfig(StrictModel):
     n_grid: PosInt = 25  # test grid is n_grid x n_grid
     n_components: PosInt = 10  # PCA components per layer
     plot_layer: NonNegInt = 0  # layer whose neuron maps are drawn
     n_cols: PosInt = 8  # columns in the neuron-map grid
 
 
-class Config(_Strict):
+class Config(StrictModel):
     data: DataConfig = DataConfig()
     net: NetConfig = NetConfig()
     train: TrainConfig = TrainConfig()

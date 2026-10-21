@@ -24,7 +24,8 @@ fct/
   modularity.py    # neuron-factor mutual information, preference, MIR (pure)
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
-  cli.py           # argparse CLI: init / train / solve / plot / plot-example
+  sweep.py         # the 36-setting grid: SweepConfig, expand, run_setting, status
+  cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
   __main__.py      # `python -m fct ...` -> cli.main()
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
@@ -247,6 +248,8 @@ def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
     # checkpoint every save_int epochs and at the end (final.pt); hash = section_hash("data","net","train")
     # monitor: required exactly when cfg.train.monitor_int > 0 (ValueError otherwise, before anything runs)
+def train_from_config(cfg: Config, dataset: Dataset, cache_dir: Path, log=print, monitor=None) -> tuple[MLP, History]
+    # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the sweep
 def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[MLP, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
 ```
 
@@ -434,6 +437,41 @@ History keys. `train.py` records `epoch`, `mse`, `weight_l2`, `rate_l2`, `loss` 
 `ValueError` for a missing key (the message names it), an empty history, columns of different length, or a
 different number of layers in different monitor calls.
 
+## sweep.py
+
+The grid of the study (3 tasks x hidden layers {1,3,5} x phi {tanh,relu} x rate_lambda {0,1e-3} = 36 settings) in one
+place, so SLURM array jobs and local checks share a code path. Layout under a sweep `ROOT`:
+
+```
+ROOT/sweep.json                      # SweepConfig, written by `sweep init`
+ROOT/<task>/L{L}_{phi}_r{rate}/      # one normal fct cache dir per setting, e.g. what_where/L3_relu_r0.001, linear_teacher/L1_tanh_r0
+```
+
+```python
+SWEEP_TASKS = ("linear_teacher", "object_action", "what_where"); LAYERS = (1, 3, 5); PHIS = ("tanh", "relu"); RATE_LAMBDAS = (0.0, 1e-3)
+class Setting(NamedTuple): task: str; L: int; phi: str; rate_lambda: float
+class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
+                             # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
+                             # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto"
+    # task parameters are validated at load time by building each task's DataConfig; weight_lambda is the TrainConfig default (1e-3)
+def preset(name: str) -> SweepConfig                     # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full": N=256, P=4096, 15000 epochs (placeholders to tune); ValueError otherwise
+def save_sweep(sweep, root) / load_sweep(root) -> SweepConfig   # ROOT/sweep.json; load raises FileNotFoundError naming the path
+def expand(sweep) -> list[Setting]                       # itertools.product(SWEEP_TASKS, LAYERS, PHIS, RATE_LAMBDAS): task slowest, rate_lambda fastest; index i is stable and independent of the preset
+def get_setting(sweep, index) -> Setting                 # SweepError (a ValueError) "index i is out of range; valid indices are 0..35"
+def setting_dir(root, setting) -> Path                   # ROOT/<task>/L{L}_{phi}_r{rate:g}
+def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep
+def setting_config(sweep, setting) -> Config             # data, net (seed = seeds.net), train (rate_lambda = the swept value, monitor_* from the sweep), dtype, device
+def setting_status(root, setting) -> "done" | "partial" | "missing"   # done = train/final.pt exists; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
+def run_setting(sweep, index, root, log=print) -> None
+    # first validates/writes config.json (SweepError if an existing one differs: the sweep changed under existing artefacts; this
+    # check comes BEFORE the done check, so a changed sweep raises even for a done setting), then returns at once if done,
+    # else get_dataset + train_from_config(cfg, dataset, dir, log, monitor=make_mir_monitor(dataset, cfg)); resumes a partial run exactly (see train.py)
+```
+
+All settings share the seeds, so they differ only in the swept axes. The history of a finished setting has the `monitor_*` keys of
+monitor.py. The monitor runs at epochs 0, k*monitor_int for every k with k*monitor_int < n_epochs, and n_epochs, so
+when n_epochs is not a multiple of monitor_int the last two entries are closer than monitor_int (n_epochs=7, monitor_int=2: 0, 2, 4, 6, 7).
+
 ## cli.py
 
 ```
@@ -442,7 +480,18 @@ python -m fct train CACHE_DIR                                        # builds th
 python -m fct solve CACHE_DIR
 python -m fct plot CACHE_DIR [--which all|learning|representation|neurons|training|solver|kernels]   # result-dependent figures -> CACHE_DIR/figures/
 python -m fct plot-example CACHE_DIR                                 # result-independent figure
+
+python -m fct sweep init ROOT [--preset tiny|full] [--set n_epochs=100 ...] [--force]   # writes ROOT/sweep.json; --set takes dotted keys like `init`
+python -m fct sweep list ROOT      # "<index> <task>/L{L}_{phi}_r{rate}" per setting
+python -m fct sweep count ROOT     # 36
+python -m fct sweep status ROOT    # "<index> done|partial|missing <dir>" per setting, then "N done, N partial, N missing"
+python -m fct sweep run ROOT [--index i]   # train setting i (a SLURM array task); without --index, all settings in order
 ```
+
+The sweep subcommands exit 1 with one stderr line for a missing or invalid sweep.json, an out-of-range index, or a setting whose
+config.json differs from what sweep.json builds (`SweepError`); an error raised by training itself propagates with its traceback.
+`run` without `--index` continues past a failing setting, prints `error: setting i failed: <Type>: <message>` (and the traceback for
+anything but a `SweepError`), and exits 1 listing the failed indices.
 
 `--which all` (default) draws each figure whose inputs exist and lists the skipped ones — learning|representation|neurons|training need train/final.pt, solver needs meanfield/final.pt, kernels needs both; a single `--which` with missing inputs exits 1.
 
