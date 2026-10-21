@@ -10,7 +10,11 @@ written to `tmp/lr_tune*/` (git-ignored).
 (`weight_lambda = 1e-3`, `rate_lambda in {0, 1e-3}`) 15 of the 24 tuned settings converge to the all-zero
 network, so they carry no information on the learning rate needed to learn anything. L = 3 and the
 other 12 grid settings were not run, and lr = 1e-4 was not run at 15000 epochs (only at 6000 and 60000).
-The PI accepted lr = 1e-3 as good enough and asked for no further tuning. The recommendation stands only
+The PI accepted lr = 1e-3 as good enough and asked for no further tuning. All runs here used the loss
+as it was when they were made (rate penalty summed over the P samples, `weight_lambda = 1e-3`). The PI
+then decided to average the rate penalty over P and to lower the default `weight_lambda` to 1e-4
+(`docs/issues/average-rate-penalty.md`); those runs are not reproducible with the current code and the
+learning rate was not re-tuned under the new loss. The recommendation stands only
 for the regulariser scales that were tested; if they change, the learning rate should be re-checked.
 
 - Use one global `lr = 1e-3` with 15000 epochs (the `full` preset already has it; no preset change).
