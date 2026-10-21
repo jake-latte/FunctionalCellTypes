@@ -25,8 +25,10 @@ fct/
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   sweep.py         # the 36-setting grid: SweepConfig, expand, run_setting, status
+  report.py        # what the results notebook shows: read-only load of a sweep ROOT, final-MIR table, prose from numbers
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
   __main__.py      # `python -m fct ...` -> cli.main()
+notebooks/         # build_modularity.py builds + executes modularity.ipynb (cells are one-line fct.report calls)
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
 docs/issues/*.md   # work items
@@ -471,6 +473,43 @@ def run_setting(sweep, index, root, log=print) -> None
 All settings share the seeds, so they differ only in the swept axes. The history of a finished setting has the `monitor_*` keys of
 monitor.py. The monitor runs at epochs 0, k*monitor_int for every k with k*monitor_int < n_epochs, and n_epochs, so
 when n_epochs is not a multiple of monitor_int the last two entries are closer than monitor_int (n_epochs=7, monitor_int=2: 0, 2, 4, 6, 7).
+
+## report.py and notebooks/
+
+The results notebook `notebooks/modularity.ipynb` is generated: `notebooks/build_modularity.py` holds its source
+(`build_notebook()`: a summary cell per task, then a cell per setting, each selecting its setting by name with
+`find_result(RESULTS, task, L, phi, rate)`, so a reordered grid fails loudly instead of mislabelling), and
+`execute_notebook(nb, root)` runs a deep copy in a fresh kernel (no timing metadata, so equal runs give equal notebooks) after
+`with_root` has put `ROOT = '<root>'` into the tagged parameter cell; the source `nb` stays output-free. In the source the cell
+is `ROOT = None`, which falls back to `$FCT_SWEEP_ROOT`. `python notebooks/build_modularity.py ROOT` writes the executed
+notebook to the git-ignored `tmp/modularity.ipynb` (it records the ROOT it was run on and its figures are large). Every code cell after setup is one `show(...)` call into `fct.report`,
+which carries all logic and tests. Only the source notebook (`--no-execute`, no outputs) is committed.
+
+```python
+@dataclass SettingResult: setting; status ("done"|"partial"|"missing"); directory (relative to ROOT); note; history, examples (ExampleOutputs), metrics, data_cfg (None unless done)
+@dataclass FinalMIR: task; labels; status; raw, corrected, chance  (n_settings, 5) arrays, NaN for absent layers and unfinished settings
+
+def sweep_root_from_env() -> Path               # $FCT_SWEEP_ROOT; RuntimeError if unset
+def load_results(root) -> list[SettingResult]   # 36 entries in grid order; FileNotFoundError if no sweep.json
+    # read-only: nothing is generated or cached under ROOT; only "done" settings are read (on the CPU), validated against the config
+    # rebuilt from sweep.json (StaleCacheError if the artefacts were written under another config); a done setting whose
+    # data/dataset.pt is missing is reported as "partial" with a note
+def find_result(results, task, L, phi, rate_lambda) -> SettingResult    # ValueError if absent
+def final_mir(results, task) -> FinalMIR        # last monitor call; ValueError for a done setting without monitor history
+def mir_table_markdown(fm) / summary_text(fm) / overview_text(results) / setting_text(result)   # prose generated from the numbers
+    # summary_text: extremes of the corrected MIR over layer-cells with ties listed; means pool the layer-cells where raw, corrected
+    # and chance are all finite and give their count; setting_text raises ValueError naming any history key it needs but lacks
+def setting_items(result) -> list[str | Figure] # prose + loss curves + example outputs + MIR history; prose only (with the reason) if not done
+def task_items(results, task) -> list[str | Figure]    # summary prose, table, draw.fig_mir_heatmaps
+def show(items)                                 # the only IPython use
+```
+
+`draw.py` has the heatmaps: `plot_mir_heatmap(values, row_labels, row_status, title, ax, vmin, vmax, colorbar)` (NaN cells grey, unfinished
+rows labelled with their status, ValueError instead of clipping a value outside [vmin, vmax]) and `fig_mir_heatmaps(panels, row_labels,
+row_status, title)` (one shared scale [min(0, data), max(1, data)] and one colourbar).
+
+A missing or interrupted setting renders as one bold line naming it and its directory (relative to ROOT); its row in the table and
+heatmap is labelled with the status. Prediction metrics are on the whole training set (the sweep has no held-out data).
 
 ## cli.py
 
