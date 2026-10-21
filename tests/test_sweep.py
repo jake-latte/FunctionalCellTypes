@@ -19,6 +19,7 @@ from fct.sweep import (
     preset,
     run_setting,
     save_sweep,
+    setting_config,
     setting_dir,
     setting_status,
     sweep_path,
@@ -37,6 +38,11 @@ def _index_of(sweep, task, L=1, phi="tanh", rate=1e-3) -> int:
     wanted = (task, L, phi, rate)
     settings = expand(sweep)
     return next(i for i, s in enumerate(settings) if (s.task, s.L, s.phi, s.rate_lambda) == wanted)
+
+
+def _monitor_epochs(sweep) -> list[int]:
+    """Epochs 0, k*monitor_int (< n_epochs), and n_epochs: the schedule `train` follows."""
+    return [*range(0, sweep.n_epochs, sweep.monitor_int), sweep.n_epochs]
 
 
 def _final(root, sweep, i):
@@ -80,6 +86,9 @@ def test_presets_differ_in_size_and_validate():
     assert tiny.n_epochs < full.n_epochs and tiny.N < full.N and tiny.P < full.P
     assert tiny.dtype == full.dtype == "float32"
     assert tiny.device == "cpu"
+    for sweep in (tiny, full):
+        assert SweepConfig.model_validate(sweep.model_dump()) == sweep
+        assert len([setting_config(sweep, s) for s in expand(sweep)]) == 36
     with pytest.raises(ValueError, match="unknown preset"):
         preset("huge")
 
@@ -149,9 +158,8 @@ def test_run_setting_trains_and_records_monitor_per_task(tiny, tmp_path, task):
     assert cfg.dtype == "float32"
 
     history = _final(tmp_path, tiny, i)["history"]
-    n_calls = tiny.n_epochs // tiny.monitor_int + 1
-    assert history[MONITOR_EPOCH][0] == 0 and history[MONITOR_EPOCH][-1] == tiny.n_epochs
-    assert len(history[MONITOR_EPOCH]) == n_calls
+    assert history[MONITOR_EPOCH] == _monitor_epochs(tiny)
+    n_calls = len(_monitor_epochs(tiny))
     for key in MIR_MONITOR_KEYS:
         calls = history[f"{MONITOR_PREFIX}{key}"]
         assert len(calls) == n_calls and all(len(layers) == 3 for layers in calls)
@@ -230,13 +238,72 @@ def test_cli_init_refuses_overwrite_and_applies_set(tmp_path, capsys):
     assert _cli(capsys, "init", tmp_path, "--preset", "tiny", "--force")[0] == 0
 
 
-def test_cli_missing_sweep_json_and_bad_index_fail_clearly(tmp_path, capsys):
-    for sub in ("list", "count", "status", "run"):
-        code, _, err = _cli(capsys, sub, tmp_path)
-        assert code == 1 and "sweep.json" in err and "sweep init" in err
+def test_monitor_schedule_when_n_epochs_is_not_a_multiple(tiny, tmp_path):
+    sweep = tiny.model_copy(update={"n_epochs": 7})
+    run_setting(sweep, 0, tmp_path, **QUIET)
+    history = _final(tmp_path, sweep, 0)["history"]
+    assert history[MONITOR_EPOCH] == [0, 2, 4, 6, 7] == _monitor_epochs(sweep)
+
+
+@pytest.mark.parametrize("sub", ["list", "count", "status", "run"])
+def test_cli_missing_sweep_json_fails_clearly(tmp_path, capsys, sub):
+    code, _, err = _cli(capsys, sub, tmp_path)
+    assert code == 1 and "sweep.json" in err and "sweep init" in err
+
+
+def test_cli_bad_index_fails_clearly(tmp_path, capsys):
     _cli(capsys, "init", tmp_path, "--preset", "tiny")
     code, _, err = _cli(capsys, "run", tmp_path, "--index", 36)
     assert code == 1 and "0..35" in err
+
+
+@pytest.mark.parametrize("text", ["{not json", '{"N": 8}'])
+def test_cli_invalid_sweep_json_fails_clearly(tmp_path, capsys, text):
+    (tmp_path / "sweep.json").write_text(text)
+    code, _, err = _cli(capsys, "count", tmp_path)
+    assert code == 1 and "not a valid sweep config" in err
+
+
+@pytest.mark.parametrize("bad", ["typo=1", "linear_teacher.nope=1", "nosection.x=1", "no_equals"])
+def test_cli_init_with_bad_key_fails_cleanly(tmp_path, capsys, bad):
+    code, _, err = _cli(capsys, "init", tmp_path, "--set", bad)
+    assert code == 1 and err.startswith("error:")
+    assert not (tmp_path / "sweep.json").exists()
+
+
+def test_cli_run_all_runs_every_setting_in_order(tmp_path, capsys, monkeypatch):
+    calls = []
+    monkeypatch.setattr("fct.cli.run_setting", lambda sweep, i, root, log: calls.append(i))
+    _cli(capsys, "init", tmp_path, "--preset", "tiny")
+    code, _, _ = _cli(capsys, "run", tmp_path)
+    assert code == 0 and calls == list(range(36))
+
+
+def test_cli_run_all_continues_past_failures_and_lists_them(tmp_path, capsys, monkeypatch):
+    calls = []
+
+    def flaky(sweep, i, root, log):
+        calls.append(i)
+        if i in (3, 10):
+            raise RuntimeError(f"boom {i}")
+
+    monkeypatch.setattr("fct.cli.run_setting", flaky)
+    _cli(capsys, "init", tmp_path, "--preset", "tiny")
+    code, _, err = _cli(capsys, "run", tmp_path)
+    assert code == 1 and calls == list(range(36))
+    assert "setting 3 failed: RuntimeError: boom 3" in err
+    assert "setting 10 failed: RuntimeError: boom 10" in err
+    assert "Traceback" in err and "[3, 10]" in err
+
+
+def test_unexpected_error_in_a_single_run_keeps_its_traceback(tmp_path, capsys, monkeypatch):
+    def broken(sweep, i, root, log):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("fct.cli.run_setting", broken)
+    _cli(capsys, "init", tmp_path, "--preset", "tiny")
+    with pytest.raises(RuntimeError, match="boom"):
+        main(["sweep", "run", str(tmp_path), "--index", "0"])
 
 
 def test_cli_run_index_then_status(tmp_path, capsys):
