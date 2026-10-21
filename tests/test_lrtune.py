@@ -58,6 +58,19 @@ def _table(best_lr, lrs=LRS, seeds=(0,), penalty=0.3, nan_at=()):
 
 
 # ---------------------------------------------------------------------------- ranks
+def test_average_ranks_tie_values_within_the_relative_tolerance():
+    values = np.array([1.0, 1.0005, 2.0, 1.0009, 2.0015])
+    assert average_ranks(values, rtol=1e-3).tolist() == [2.0, 2.0, 4.5, 2.0, 4.5]
+    assert average_ranks(values).tolist() == [1.0, 2.0, 4.0, 3.0, 5.0]
+
+
+def test_ranking_ignores_differences_below_the_resolution():
+    table = _table(lambda task, L: 1e-3, penalty=0.0)
+    for k, row in enumerate(table):
+        row["heldout_mse"] *= 1 + 1e-6 * (k % 3)  # numerical noise only
+    assert select(rank_learning_rates(table)).tied == LRS
+
+
 def test_average_ranks_share_ties_and_put_nonfinite_last():
     values = np.array([3.0, 1.0, 1.0, np.nan, np.inf])
     assert average_ranks(values).tolist() == [3.0, 1.5, 1.5, 4.5, 4.5]
@@ -344,18 +357,16 @@ def test_an_overfitting_net_is_worse_on_held_out_data_than_on_its_training_data(
 
 # ---------------------------------------------------------------------------- plotting
 def test_figures_draw_from_a_table_and_mark_failures():
-    from fct.lrplot import fig_gap_vs_lr, fig_heldout_vs_lr, plot_heldout_vs_lr
+    from fct.lrplot import fig_metric_vs_lr, plot_metric_vs_lr
 
     rows = _table(lambda task, L: 1e-3, nan_at={("linear_teacher", 5, 1e-2)})
-    fig = fig_heldout_vs_lr(rows, {("linear_teacher", 1): 1e-3})
+    fig = fig_metric_vs_lr(rows, best_by_group={("linear_teacher", 1): 1e-3})
     assert len(fig.axes) == len(TASKS) * 2
     ax = fig.axes[1]  # linear_teacher, L=5: one red cross per failed (phi, rate) at lr 1e-2
     crosses = [line for line in ax.lines if line.get_marker() == "x"]
     assert sum(len(line.get_xdata()) for line in crosses) == 4
-    scores = rank_learning_rates(rows)
-    assert len(fig_gap_vs_lr(scores, TASKS, (1, 5)).axes) == 2
     with pytest.raises(ValueError, match="no rows"):
-        plot_heldout_vs_lr(fig.axes[0], rows, "what_where", 1)
+        plot_metric_vs_lr(fig.axes[0], rows, "what_where", 1)
 
 
 def test_subset_indices_and_trial_names():

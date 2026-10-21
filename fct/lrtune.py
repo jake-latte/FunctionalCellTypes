@@ -70,6 +70,7 @@ COLUMNS: dict[str, type] = {
 SETTING_KEYS = ("task", "L", "phi", "rate_lambda")
 HELD_OUT_SEED_OFFSET = 1000  # held-out seed = training data seed + this, never a training seed
 SPIKE_START = 0.25  # fraction of the logged curve after which a loss spike counts
+TIE_RTOL = 1e-3  # held-out MSEs closer than this (relative) are tied in the ranking
 TAIL = 0.1  # the final fraction of the curve over which "still decreasing" is judged
 TUNING_FILE = "template.json"
 TIMINGS_FILE = "timings.csv"
@@ -140,13 +141,25 @@ def loss_curve_stats(history: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------- ranking
-def average_ranks(values: np.ndarray) -> np.ndarray:
+def average_ranks(values: np.ndarray, rtol: float = 0.0) -> np.ndarray:
     """Ranks 1.. in ascending order, ties sharing their mean rank; non-finite values rank last
-    (tied with each other)."""
+    (tied with each other). Values within a relative `rtol` of the smallest value of their
+    cluster are tied, so differences below the resolution of the measurement do not rank."""
     keys = np.where(np.isfinite(values), values, np.inf)
-    _unique, inverse, counts = np.unique(keys, return_inverse=True, return_counts=True)
-    first = np.cumsum(counts) - counts + 1
-    return (first + (counts - 1) / 2)[inverse]
+    order = np.argsort(keys, kind="stable")
+    cluster = np.zeros(len(keys), dtype=int)
+    start = keys[order[0]]
+    for rank, i in enumerate(order[1:], start=1):
+        if keys[i] > start * (1 + rtol):
+            start = keys[i]
+            cluster[rank] = cluster[rank - 1] + 1
+        else:
+            cluster[rank] = cluster[rank - 1]
+    ranks = np.empty(len(keys))
+    for c in np.unique(cluster):
+        members = np.flatnonzero(cluster == c)
+        ranks[order[members]] = members.mean() + 1
+    return ranks
 
 
 def _setting_key(row: Row) -> tuple:
@@ -189,7 +202,7 @@ class Score(NamedTuple):
     failed: bool
 
 
-def rank_learning_rates(rows: Iterable[Row]) -> list[Score]:
+def rank_learning_rates(rows: Iterable[Row], tie_rtol: float = TIE_RTOL) -> list[Score]:
     """Rank the learning rates inside each setting on the held-out MSE.
 
     A run that diverged, or whose MSE is not finite, is a failure: it ranks last and its gap is
@@ -209,7 +222,7 @@ def rank_learning_rates(rows: Iterable[Row]) -> list[Score]:
         best = values.min()
         if best <= 0:
             raise ValueError(f"setting {key} has a held-out MSE <= 0: {best}")
-        ranks = average_ranks(values)
+        ranks = average_ranks(values, tie_rtol)
         for r, v, rank, bad in zip(group, values, ranks, failed):
             gap = math.inf if bad else v / best - 1
             scores.append(Score(*key, r["lr"], float(v), float(rank), float(gap), bool(bad)))
@@ -257,7 +270,7 @@ def select(scores: Sequence[Score]) -> Selection:
     summaries = tuple(_summarise(lr, cells[lr]) for lr in sorted(cells))
     fewest = min(s.n_failed for s in summaries)
     eligible = [s for s in summaries if s.n_failed == fewest]
-    key = lambda s: (round(s.mean_rank, 9), round(s.median_gap, 9))
+    key = lambda s: (round(s.mean_rank, 9), round(s.median_gap, 3))
     top = min(key(s) for s in eligible)
     tied = tuple(s.lr for s in eligible if key(s) == top)
     return Selection(best=tied[0], tied=tied, summaries=summaries)
@@ -560,15 +573,16 @@ def _report(csvs: Sequence[Path], fig_dir: Path | None) -> int:
     rows = [row for path in csvs for row in read_rows_csv(path)]
     print(report_markdown(rows))
     if fig_dir is not None:
-        from fct.lrplot import fig_gap_vs_lr, fig_heldout_vs_lr  # plotting is not needed to tune
+        from fct.lrplot import fig_metric_vs_lr  # plotting is not needed to tune
 
-        scores = rank_learning_rates(rows)
-        best = {k: sel.best for k, sel in select_by(scores, ("task", "L")).items()}
+        best = {
+            k: sel.best for k, sel in select_by(rank_learning_rates(rows), ("task", "L")).items()
+        }
         fig_dir.mkdir(parents=True, exist_ok=True)
-        fig_heldout_vs_lr(rows, best).savefig(fig_dir / "heldout_vs_lr.png", dpi=150)
-        tasks = list(dict.fromkeys(r["task"] for r in rows))
-        gaps = fig_gap_vs_lr(scores, tasks, sorted({r["L"] for r in rows}))
-        gaps.savefig(fig_dir / "gap_vs_lr.png", dpi=150)
+        fig = fig_metric_vs_lr(rows, best_by_group=best)
+        fig.savefig(fig_dir / "heldout_vs_lr.png", dpi=150)
+        loss = fig_metric_vs_lr(rows, "loss", "final regularised training loss", logy=True)
+        loss.savefig(fig_dir / "loss_vs_lr.png", dpi=150)
     return 0
 
 
