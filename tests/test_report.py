@@ -35,46 +35,10 @@ from fct.sweep import (
     save_sweep,
     setting_dir,
 )
+from tests.report_helpers import known, synthetic_history, synthetic_results
 
 QUIET = {"log": lambda s: None}
 TASKS = ("linear_teacher", "object_action", "what_where")
-
-
-# ---------------------------------------------------------------- known final values
-def known(setting: Setting, layer: int, kind: str) -> float:
-    """Final MIR of `layer` (0-based) of `setting`: unique per (setting, layer, kind) and exact
-    in binary, so the table can be compared with ==."""
-    index = expand(preset("tiny")).index(setting)
-    offset = {"raw": 0.5, "corrected": 0.25, "chance": 0.125}[kind]
-    return offset + index / 128 + layer / 1024
-
-
-def synthetic_history(setting: Setting) -> dict:
-    """A history whose FIRST monitor call has different values, so only the last is final."""
-
-    def column(kind: str) -> list[list[float]]:
-        first = [-1.0] * setting.L
-        last = [known(setting, layer, kind) for layer in range(setting.L)]
-        return [first, last]
-
-    return {
-        "monitor_epoch": [0, 6],
-        "monitor_mir": column("raw"),
-        "monitor_mir_corrected": column("corrected"),
-        "monitor_mir_chance": column("chance"),
-        "monitor_n_dead": [[0] * setting.L, [1] * setting.L],
-        "monitor_n_dead_corrected": [[0] * setting.L, [2] * setting.L],
-    }
-
-
-def synthetic_results(missing=()) -> list[SettingResult]:
-    out = []
-    for s in expand(preset("tiny")):
-        if s in missing:
-            out.append(SettingResult(s, "missing", Path("nowhere")))
-        else:
-            out.append(SettingResult(s, "done", Path("here"), history=synthetic_history(s)))
-    return out
 
 
 def test_final_mir_equals_known_values_for_every_setting():
@@ -300,16 +264,18 @@ def test_setting_items_for_a_missing_setting_is_one_visible_message(partial_root
     assert "missing" in message and setting_label(r.setting) in message
 
 
-def test_interrupted_setting_is_reported_not_loaded(tmp_path):
+def test_interrupted_setting_is_shown_as_provisional_from_its_checkpoint(tmp_path):
     sweep = preset("tiny")
     save_sweep(sweep, tmp_path)
     run_setting(sweep, 0, tmp_path, **QUIET)
     # an interrupted run keeps its checkpoints but never wrote final.pt
     (setting_dir(tmp_path, expand(sweep)[0]) / "train" / "final.pt").unlink()
     r = load_results(tmp_path)[0]
-    assert r.status == "partial" and r.history is None
-    (message,) = setting_items(r)
-    assert "partial" in message and "no final.pt" in message
+    assert r.status == "partial" and r.provisional and r.history is not None
+    text, *figs = setting_items(r)
+    assert "partial, epoch 4 of 6" in text and len(figs) == 3
+    for fig in figs:
+        plt.close(fig)
 
 
 def test_summary_over_a_partial_sweep_counts_the_finished_settings(partial_root):

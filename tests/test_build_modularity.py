@@ -4,7 +4,7 @@ sweep (most settings missing) that must render a message for each missing settin
 import nbformat
 import pytest
 
-from fct.sweep import SWEEP_TASKS, expand, preset, run_setting, save_sweep
+from fct.sweep import SWEEP_TASKS, expand, preset, run_setting, save_sweep, setting_dir
 from notebooks.build_modularity import (
     build_notebook,
     execute_notebook,
@@ -14,6 +14,7 @@ from notebooks.build_modularity import (
 
 QUIET = {"log": lambda s: None}
 N_SETTINGS = 36
+FIGURES_PER_SETTING = 3  # loss curves, example outputs, MIR history
 
 
 def _code(nb) -> str:
@@ -128,8 +129,7 @@ def test_executed_notebook_holds_exactly_the_expected_figures(executed):
     png = sum(
         "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
     )
-    per_done_setting = 3  # loss curves, example outputs, MIR history
-    assert png == per_done_setting + len(SWEEP_TASKS)  # plus one heatmap figure per task
+    assert png == FIGURES_PER_SETTING + len(SWEEP_TASKS)  # plus one heatmap figure per task
 
 
 def test_executing_leaves_the_source_notebook_output_free(executed):
@@ -154,3 +154,21 @@ def test_write_notebook_round_trips(tmp_path, executed):
     _, nb, _ = executed
     path = write_notebook(nb, tmp_path / "out.ipynb")
     assert nbformat.read(path, as_version=4).cells[0].source == nb.cells[0].source
+
+
+def test_executes_on_a_mix_of_done_partial_and_missing_settings(tmp_path):
+    sweep = preset("tiny")
+    save_sweep(sweep, tmp_path)
+    for index in (0, 1):
+        run_setting(sweep, index, tmp_path, **QUIET)
+    # an interrupted run: its checkpoint stays, final.pt never appeared
+    (setting_dir(tmp_path, expand(sweep)[1]) / "train" / "final.pt").unlink()
+    nb = execute_notebook(build_notebook(), tmp_path)
+    text = _text_outputs(nb)
+    assert "ERROR" not in text
+    assert f"1 done, 1 partial (provisional), {N_SETTINGS - 2} missing" in text
+    assert "partial, epoch 4 of 6" in text and "1 provisional (still running)" in text
+    png = sum(
+        "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
+    )
+    assert png == 2 * FIGURES_PER_SETTING + len(SWEEP_TASKS)

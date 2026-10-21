@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
@@ -60,6 +61,8 @@ _GREY = "#52514e"  # reference lines and the trained-network overlay
 FIG_WIDTH = 13.0  # inches; the width of the full-width results figures
 HEATMAP_WIDTH = FIG_WIDTH + 1  # the shared colourbar sits outside the panels
 ANNOTATION_SIZE = 12  # numbers written inside heatmap cells
+PROVISIONAL_COLOR = "#e69f00"  # orange: distinct from viridis and from the grey of missing cells
+PROVISIONAL_HATCH = "//"  # hatch pattern over the cells of a provisional heatmap row
 STYLE_RC = {
     "font.size": 14,
     "axes.titlesize": 16,
@@ -819,7 +822,18 @@ def _plot_output_vector(true: ArrayLike, pred: ArrayLike, ax: Axes) -> Axes:
     return ax
 
 
-def _fig_linear_teacher(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
+def _legend_and_title(
+    fig: Figure, handles: Sequence[Artist], labels: Sequence[str], ncol: int, title: str
+) -> None:
+    """The figure legend on top, or, when there is a title, below the figure: constrained layout
+    lets a title and a legend outside the axes overlap at the top."""
+    if title:
+        fig.suptitle(title)
+    where = "lower" if title else "upper"
+    fig.legend(handles, labels, loc=f"outside {where} center", ncol=ncol, frameon=False)
+
+
+def _fig_linear_teacher(outputs: ExampleOutputs, cfg: DataConfig, n: int, title: str) -> Figure:
     fig = plt.figure(figsize=(FIG_WIDTH, 2.4 * n + 1.5), layout="constrained")
     left, right = fig.add_gridspec(1, 2, width_ratios=[2, 1])
     rows = left.subgridspec(n, 1)
@@ -836,14 +850,14 @@ def _fig_linear_teacher(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Fig
         example_axes.append(ax)
     example_axes[-1].set_xlabel("output index")
     handles, labels = example_axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside upper center", ncol=2, frameon=False)
+    _legend_and_title(fig, handles, labels, 2, title)
     plot_prediction_scatter(
         outputs.y_true, outputs.y_pred, ax=fig.add_subplot(right), r2=_pooled_r2(outputs)
     )
     return fig
 
 
-def _fig_object_action(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
+def _fig_object_action(outputs: ExampleOutputs, cfg: DataConfig, n: int, title: str) -> Figure:
     if outputs.y_true.shape[1] != len(ACTION_NAMES):
         raise ValueError(f"object_action outputs need {len(ACTION_NAMES)} columns")
     agent_rc, objects = decode_object_action(outputs.x[:n], cfg.grid_size)
@@ -862,13 +876,7 @@ def _fig_object_action(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figu
         )
         axes[i, 0].set_title(f"example {int(outputs.indices[i])}")
     handles, labels = axes[0, 1].get_legend_handles_labels()
-    fig.legend(
-        handles + _object_grid_handles(),
-        labels + ["object", "agent"],
-        loc="outside upper center",
-        ncol=5,
-        frameon=False,
-    )
+    _legend_and_title(fig, handles + _object_grid_handles(), labels + ["object", "agent"], 5, title)
     return fig
 
 
@@ -877,7 +885,7 @@ def _decision_text(name: str, y_true: Tensor, y_pred: Tensor) -> str:
     return f"{name} {pred} (true {true}): {'right' if pred == true else 'WRONG'}"
 
 
-def _fig_what_where(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
+def _fig_what_where(outputs: ExampleOutputs, cfg: DataConfig, n: int, title: str) -> Figure:
     images = decode_what_where(outputs.x[:n])
     where_t, what_t = split_what_where(outputs.y_true[:n], cfg.n_motifs)
     where_p, what_p = split_what_where(outputs.y_pred[:n], cfg.n_motifs)
@@ -902,13 +910,15 @@ def _fig_what_where(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
     axes[0, 1].set_title("where (macro-cell)")
     axes[0, 2].set_title("what (motif)")
     handles, labels = axes[0, 1].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside upper center", ncol=2, frameon=False)
+    _legend_and_title(fig, handles, labels, 2, title)
     return fig
 
 
-def _fig_position(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
+def _fig_position(outputs: ExampleOutputs, cfg: DataConfig, n: int, title: str) -> Figure:
     fig, ax = plt.subplots(figsize=(7, 7), layout="constrained")
     plot_prediction_scatter(outputs.y_true, outputs.y_pred, ax=ax, r2=_pooled_r2(outputs))
+    if title:
+        fig.suptitle(title)
     return fig
 
 
@@ -942,7 +952,11 @@ def _check_outputs(outputs: ExampleOutputs) -> None:
 
 @_styled
 def fig_example_outputs(
-    task: str, outputs: ExampleOutputs, data_cfg: DataConfig, n_show: int | None = None
+    task: str,
+    outputs: ExampleOutputs,
+    data_cfg: DataConfig,
+    n_show: int | None = None,
+    title: str = "",
 ) -> Figure:
     """Per-task picture of the first `n_show` examples (default 4, 6, 4, 4 for linear_teacher,
     object_action, what_where, position).
@@ -952,7 +966,8 @@ def fig_example_outputs(
     object_action: the scene next to true vs predicted action values. what_where: the input
     image next to true vs predicted `where` and `what` outputs, titled with the argmax
     decisions. position: true vs predicted scatter. `data_cfg` must be the config the outputs
-    came from (its task, grid size and motif count are checked against the outputs).
+    came from (its task, grid size and motif count are checked against the outputs). A `title`
+    heads the figure and moves the legend to its bottom.
     """
     build, default_n = _renderer(task)
     if data_cfg.task != task:
@@ -961,7 +976,7 @@ def fig_example_outputs(
     n_show = default_n if n_show is None else n_show
     if n_show < 1:
         raise ValueError(f"n_show must be at least 1, got {n_show}")
-    return build(outputs, data_cfg, min(n_show, len(outputs.indices)))
+    return build(outputs, data_cfg, min(n_show, len(outputs.indices)), title)
 
 
 # --------------------------------------------------------------------------- final MIR heatmaps
@@ -973,12 +988,16 @@ def _add_mir_colorbar(fig: Figure, image, axes: Axes | Sequence[Axes], **kwargs)
     fig.colorbar(image, ax=axes, label="MIR", **kwargs)
 
 
-def _annotate_cells(ax: Axes, values: np.ndarray, vmin: float, vmax: float) -> None:
-    """Write each finite value in its cell, in white on dark and black on light cells."""
+def _annotate_cells(
+    ax: Axes, values: np.ndarray, shades: np.ndarray, vmin: float, vmax: float
+) -> None:
+    """Write each finite value in its cell, in white on dark and black on light cells; `shades`
+    are the values the cells are coloured by (they differ from `values` only where a
+    provisional value is clipped for colour)."""
     middle = (vmin + vmax) / 2
     for (row, col), value in np.ndenumerate(values):
         if np.isfinite(value):
-            colour = "white" if value < middle else "black"
+            colour = "white" if shades[row, col] < middle else "black"
             ax.text(
                 col,
                 row,
@@ -990,10 +1009,19 @@ def _annotate_cells(ax: Axes, values: np.ndarray, vmin: float, vmax: float) -> N
             )
 
 
+PROVISIONAL = "provisional"  # row status of a running setting whose cells hold checkpoint values
+PROVISIONAL_NOTE = (
+    "hatched rows (*) are provisional: values from the latest checkpoint, not final.\n"
+    "Their colours are clipped to the scale of the finished rows; the printed numbers are exact.\n"
+    "MIR@m: epoch of the last MIR measurement; ckpt e/N: checkpoint epoch of N."
+)
+
+
 def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> None:
-    """Name the status ("partial", "missing") across the row of an unfinished setting."""
+    """Name the status ("partial", "missing") across the row of an unfinished setting that has
+    no values; a provisional row keeps its values (see `_hatch_provisional_rows`)."""
     for row, status in enumerate(row_status):
-        if status != "done":
+        if status not in ("done", PROVISIONAL):
             ax.text(
                 (n_cols - 1) / 2,
                 row,
@@ -1003,6 +1031,24 @@ def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> 
                 fontsize=ANNOTATION_SIZE,
                 style="italic",
                 color=_GREY,
+            )
+
+
+def _hatch_provisional_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> None:
+    """Hatch the cells of provisional rows, so a number from a running setting is never read
+    as a final one."""
+    for row, status in enumerate(row_status):
+        if status == PROVISIONAL:
+            ax.add_patch(
+                Rectangle(
+                    (-0.5, row - 0.5),  # imshow cells are centred on integers
+                    n_cols,
+                    1,
+                    fill=False,
+                    hatch=PROVISIONAL_HATCH,
+                    edgecolor=PROVISIONAL_COLOR,
+                    lw=0,
+                )
             )
 
 
@@ -1026,8 +1072,11 @@ def plot_mir_heatmap(
     colorbar: bool = True,
 ) -> Axes:
     """Settings (rows) by layer (columns) heatmap of a final MIR array, NaN where there is no
-    value (grey). Each cell carries its value and an unfinished setting's row its status.
-    A value outside [vmin, vmax] is an error, not silently clipped. A figure that shows
+    value (grey). Each cell carries its value and an unfinished setting's row its status; a row
+    with status "provisional" keeps its values and is hatched.
+    A finished value outside [vmin, vmax] is an error, not silently clipped; a provisional
+    row's colours are clipped to the range (its printed numbers are not), so a running setting
+    cannot dictate the scale. A figure that shows
     several heatmaps on one scale passes `colorbar=False` and adds one for all of them."""
     values = _np(values)
     if values.ndim != 2 or not values.shape[0] == len(row_labels) == len(row_status):
@@ -1035,15 +1084,18 @@ def plot_mir_heatmap(
             f"values {values.shape} do not match {len(row_labels)} labels / "
             f"{len(row_status)} statuses"
         )
-    _check_in_range(values, vmin, vmax)
+    provisional = np.array([s == PROVISIONAL for s in row_status], dtype=bool)
+    _check_in_range(values[~provisional], vmin, vmax)
+    shades = np.where(provisional[:, None], np.clip(values, vmin, vmax), values)
     ax = _get_ax(ax, figsize=(7, 6))
     cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)
-    image = ax.imshow(np.ma.masked_invalid(values), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+    image = ax.imshow(np.ma.masked_invalid(shades), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
     ax.set_xticks(range(values.shape[1]), [f"layer {i + 1}" for i in range(values.shape[1])])
     ax.set_yticks(range(len(row_labels)), list(row_labels))
     ax.tick_params(length=0)
-    _annotate_cells(ax, values, vmin, vmax)
+    _annotate_cells(ax, values, shades, vmin, vmax)
     _label_unfinished_rows(ax, row_status, values.shape[1])
+    _hatch_provisional_rows(ax, row_status, values.shape[1])
     ax.set_title(title)
     if colorbar:
         _add_mir_colorbar(ax.figure, image, ax, fraction=0.046, pad=0.03)
@@ -1058,9 +1110,11 @@ def fig_mir_heatmaps(
     title: str = "",
 ) -> Figure:
     """One heatmap per named panel side by side on a shared colour scale and colourbar. The
-    scale is [min(0, data), max(1, data)], so a value outside [0, 1] (round-off) is shown, not clipped."""
+    scale is [min(0, data), max(1, data)] over the finished rows, so a finished value outside
+    [0, 1] (round-off) is shown, not clipped; provisional rows do not enter the scale."""
     arrays = {name: _np(a) for name, a in panels.items()}
-    finite = np.concatenate([a[np.isfinite(a)] for a in arrays.values()])
+    finished = np.array([s != PROVISIONAL for s in row_status], dtype=bool)
+    finite = np.concatenate([a[finished][np.isfinite(a[finished])] for a in arrays.values()])
     vmin = min(0.0, float(finite.min())) if finite.size else 0.0
     vmax = max(1.0, float(finite.max())) if finite.size else 1.0
     fig, axes = plt.subplots(
@@ -1076,4 +1130,6 @@ def fig_mir_heatmaps(
     _add_mir_colorbar(fig, axes[-1].images[0], axes, shrink=0.6)
     if title:
         fig.suptitle(title)
+    if PROVISIONAL in row_status:
+        fig.supxlabel(PROVISIONAL_NOTE)
     return fig
