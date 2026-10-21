@@ -11,6 +11,7 @@ from fct.cache import cache_paths
 from fct.config import DataConfig
 from fct.data import make_dataset
 from fct.lrtune import (
+    COLUMNS,
     average_ranks,
     collapse_seeds,
     evaluate_setting,
@@ -315,6 +316,8 @@ def test_evaluate_setting_scores_a_finished_setting_without_touching_its_cache(t
     again = evaluate_setting(tmp_path, sweep, expand(sweep)[index], held_out_seed=77)
     assert _snapshot(tmp_path) == before
     assert row == again
+    # plain Python types: a numpy float would be written to the CSV as 'np.float64(...)'
+    assert {k: type(v) for k, v in row.items()} == COLUMNS
     assert math.isfinite(row["train_mse"]) and math.isfinite(row["heldout_mse"])
     assert not row["diverged"] and row["lr"] == sweep.lr and row["task"] == "linear_teacher"
     assert len(row["mir_corrected"].split(";")) == expand(sweep)[index].L

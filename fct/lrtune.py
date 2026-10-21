@@ -134,8 +134,8 @@ def loss_curve_stats(history: dict) -> dict:
     tail_start = int((1 - TAIL) * (len(loss) - 1))
     return {
         "diverged": False,
-        "max_spike": max([1.0, *ratios]),
-        "tail_drop": 1 - loss[-1] / loss[tail_start],
+        "max_spike": float(max([1.0, *ratios])),
+        "tail_drop": float(1 - loss[-1] / loss[tail_start]),
     }
 
 
@@ -357,7 +357,7 @@ def write_rows_csv(rows: Sequence[Row], path: Path) -> None:
         writer = csv.DictWriter(f, fieldnames=list(COLUMNS))
         writer.writeheader()
         writer.writerows(
-            {k: repr(row[k]) if isinstance(row[k], float) else row[k] for k in COLUMNS}
+            {k: repr(float(row[k])) if isinstance(row[k], float) else row[k] for k in COLUMNS}
             for row in rows
         )
 
