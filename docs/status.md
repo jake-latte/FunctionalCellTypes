@@ -36,17 +36,25 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
 | add-modularity-metrics | `fct/modularity.py`: rank binning, plug-in MI (nats), preference r, MIR, dead neurons, shuffled-label baseline, shuffle-based bias correction |
 | add-result-plots | `analyse.py` example outputs / decoders / `prediction_report` (both R^2 conventions); `draw.py` loss curves, MIR history (raw, corrected, chance, dead counts), per-task example figures |
 
-## State (2026-10-21): all work items merged; STOPPED for the PI's review
-Merged into main, each reviewed by fresh correctness + style reviewers (fixes applied): add-task-generators,
-add-modularity-metrics, add-result-plots, add-mir-training-monitor, add-sweep-runner (`fct/sweep.py`,
-`python -m fct sweep ...`), add-slurm-scripts (`jobs/fct_sweep.sh`, never submitted), add-results-notebook
-(`fct/report.py`, `notebooks/build_modularity.py`, source notebook `notebooks/modularity.ipynb`).
-`run-tiny-pipeline` is `in review`: tiny preset ran 36/36 on CPU, 3 settings on the T1000 (pinned by UUID),
-notebook executed into git-ignored `tmp/modularity.ipynb`. Nothing was submitted.
-Next (PI): review code and the small results, set the `full` preset sizes in `fct/sweep.py` (N=256, P=4096,
-15000 epochs are placeholders), tune `--cpus-per-task/--mem/-t` in `jobs/fct_sweep.sh`, run `--dry-run`,
-submit. Then rebuild the notebook on the real ROOT (executed notebooks are NOT committed: PI decision).
-New TrainConfig monitor fields changed config hashes: pre-existing caches are invalid (one-off).
+## State (2026-10-21, evening): all items merged; STOPPED for the PI's review
+Merged, each reviewed by fresh correctness + style reviewers: task generators, modularity metrics, result
+plots, MIR training monitor, sweep runner (`fct/sweep.py`), SLURM script (`jobs/fct_sweep.sh`, never
+submitted), results notebook (`fct/report.py`, `notebooks/build_modularity.py`, source notebook only),
+plot feedback (larger figures, MIR explanation in `fct/explanations.py`), partial results (running
+settings shown from their latest checkpoint, provisional), learning-rate tuning (`fct/lrtune.py`,
+`docs/lr_tuning.md`: lr = 1e-3 accepted by the PI, provisional), and the loss change.
+LOSS CHANGE (PI decisions): the rate penalty is averaged over P (`LOSS_VERSION = 2`), the default
+`weight_lambda` is 1e-4, `rate_lambda` unchanged, lr 1e-3 not re-tuned. Every earlier train, sweep and
+meanfield cache is stale (`sweep status` shows `stale`). With these defaults `what_where` learns; the
+averaged rate penalty at `rate_lambda = 1e-3` is small (see docs/issues/average-rate-penalty.md).
+Mean-field now needs an explicit `meanfield.rate_tilt` when `rate_lambda != 0` (PI to decide the default:
+`rate_lambda / P_train` or `rate_lambda / n_points`).
+`run-tiny-pipeline` is `in review`: tiny preset 36/36 on CPU, 3 settings on the T1000, notebook executed
+into git-ignored `tmp/modularity.ipynb`. Nothing was submitted.
+Next (PI): review; decide the `rate_lambda` values for the sweep (deferred) and the mean-field tilt; set the
+`full` preset sizes in `fct/sweep.py` (N=256, P=4096, 15000 epochs are placeholders); tune the SBATCH
+cpus/mem/time in `jobs/fct_sweep.sh`; `--dry-run`; submit. Build the notebook on the real ROOT with
+`python notebooks/build_modularity.py ROOT` (it can run while jobs are still running).
 
 ## Decisions to flag to the PI at review (assumptions I made; easy to change)
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};
