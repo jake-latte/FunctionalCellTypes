@@ -79,7 +79,7 @@ def fig_metric_vs_lr(
     fig, axes = plt.subplots(
         len(tasks),
         len(depths),
-        figsize=(3.8 * len(depths), 2.6 * len(tasks)),
+        figsize=(4.2 * len(depths), 3.2 * len(tasks)),
         squeeze=False,
         layout="constrained",
     )
