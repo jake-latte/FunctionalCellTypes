@@ -36,46 +36,17 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
 | add-modularity-metrics | `fct/modularity.py`: rank binning, plug-in MI (nats), preference r, MIR, dead neurons, shuffled-label baseline, shuffle-based bias correction |
 | add-result-plots | `analyse.py` example outputs / decoders / `prediction_report` (both R^2 conventions); `draw.py` loss curves, MIR history (raw, corrected, chance, dead counts), per-task example figures |
 
-## In flight: branch `add-mir-training-monitor` (NOT merged; worktree
-`.claude/worktrees/agent-ab2a0046294391610`, head 69b4e07, work item status `in review`)
-Adds `TrainConfig.monitor_int/monitor_bins/monitor_shuffles`, `train(..., monitor=...)` hook (called at
-epoch starts after the checkpoint and once after the last step; resume-exact), `fct/monitor.py`
-`make_mir_monitor` (history keys `monitor_epoch`, `monitor_mir`, `monitor_mir_corrected`,
-`monitor_mir_chance`, `monitor_n_dead`, `monitor_n_dead_corrected`), CLI wiring. First review: no
-correctness bugs. Review-fix round applied afterwards (one MI pass per layer; schedule tidy; lazy CLI
-monitor; design.md cost: about 1.5 s/call object_action, 0.22 s/call what_where at N=256, L=5, P=4096,
-CPU); suite there: 589 passed, 2 skipped. TO DO: (a) read the fix commits `15eefca`, `69b4e07` and run a
-fresh re-review (correctness: numbers unchanged vs the separate `network_mir`/`shuffled_mir` calls;
-resume exactness; style); (b) run its CUDA test once on a GPU pinned by UUID if not yet done; (c) set
-the work item `status: done`, merge into main with a review summary in the merge message, remove the
-worktree (slow; do in background) and delete the branch.
-
-## Remaining work items (not started). Same workflow: worker per item in a worktree, TDD or
-synthetic-data-first, then a fresh correctness reviewer and a fresh style reviewer, fixes, merge.
-1. `add-sweep-runner` (needs the monitor merged). New `fct/sweep.py` + CLI subcommands
-   `python -m fct sweep init|list|count|status|run ROOT [--index i]`. A `SweepConfig` (pydantic,
-   `ROOT/sweep.json`; presets `tiny` for local checks and `full` for the cluster; per-task data
-   parameters; N, P, n_epochs, lr, dtype (default float32), monitor_int, seeds) expands to
-   3 tasks x L{1,3,5} x phi{tanh,relu} x rate_lambda{0,1e-3} = 36 settings; setting i lives in
-   `ROOT/<task>/L{L}_{phi}_r{rate}/` (a normal fct cache dir). `run --index i` builds that setting's
-   Config (set `data.D_in` from `data.task_dims`), `get_dataset`, `make_net`, `train` with
-   `make_mir_monitor`; idempotent and resumable; `status` reports done / partial / missing.
-   `weight_lambda` stays at the library default 1e-3 (the brief says "regularised MSE").
-2. `add-slurm-scripts`. `jobs/fct_sweep.sh` modelled on `DMFT/jobs/dmft_sweep.sh`: actions
-   `--submit [--index N]`, `--dry-run`, `--list`, `--status`; array over settings with a concurrency
-   cap; `#SBATCH -p gpu --gres=gpu:1`, exclude the P5000 nodes `gpu-380-10,gpu-380-12,gpu-380-14`,
-   logs under the project `tmp/logs/`; runs `.venv/bin/python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID`.
-   Tests: `bash -n`, `--dry-run`, and a PATH-poisoned fake `sbatch` that fails if called. NEVER run
-   `--submit`. Write into this repo's `jobs/` (DMFT/jobs is read-only template).
-3. `add-results-notebook`. `modularity.ipynb` (source kept in the repo, e.g. `notebooks/` with a
-   builder; executed with outputs): reads a sweep ROOT; per task and setting: loss curves
-   (`draw.plot_loss_curves`), example outputs (`draw.fig_example_outputs`), MIR per layer over
-   training (`draw.fig_mir_history`: raw with the shuffled baseline, corrected, dead counts); summary
-   table/heatmap of final MIR per layer across the 36 settings; prediction metrics
-   (`analyse.prediction_report`). Prose generated from numbers; no logic in cells.
-4. `run-tiny-pipeline`. Run the `tiny` preset for all 36 settings locally (CPU and one tiny GPU smoke
-   run pinned by UUID), execute the notebook on it, commit the executed notebook. Then STOP: the PI
-   reviews the code and the small results and submits the full jobs themselves.
+## State (2026-10-21): all work items merged; STOPPED for the PI's review
+Merged into main, each reviewed by fresh correctness + style reviewers (fixes applied): add-task-generators,
+add-modularity-metrics, add-result-plots, add-mir-training-monitor, add-sweep-runner (`fct/sweep.py`,
+`python -m fct sweep ...`), add-slurm-scripts (`jobs/fct_sweep.sh`, never submitted), add-results-notebook
+(`fct/report.py`, `notebooks/build_modularity.py`, source notebook `notebooks/modularity.ipynb`).
+`run-tiny-pipeline` is `in review`: tiny preset ran 36/36 on CPU, 3 settings on the T1000 (pinned by UUID),
+notebook executed into git-ignored `tmp/modularity.ipynb`. Nothing was submitted.
+Next (PI): review code and the small results, set the `full` preset sizes in `fct/sweep.py` (N=256, P=4096,
+15000 epochs are placeholders), tune `--cpus-per-task/--mem/-t` in `jobs/fct_sweep.sh`, run `--dry-run`,
+submit. Then rebuild the notebook on the real ROOT (executed notebooks are NOT committed: PI decision).
+New TrainConfig monitor fields changed config hashes: pre-existing caches are invalid (one-off).
 
 ## Decisions to flag to the PI at review (assumptions I made; easy to change)
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};
