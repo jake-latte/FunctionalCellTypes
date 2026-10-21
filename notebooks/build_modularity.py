@@ -128,7 +128,9 @@ def write_notebook(nb: NotebookNode, path: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("root", nargs="?", type=Path, help=f"sweep ROOT (default ${ROOT_ENV})")
-    parser.add_argument("--out", type=Path, help="default: the source notebook, or tmp/ if executed")
+    parser.add_argument(
+        "--out", type=Path, help="default: the source notebook, or tmp/ if executed"
+    )
     parser.add_argument("--no-execute", action="store_true", help="write the source only")
     args = parser.parse_args(argv)
     nb = build_notebook()
