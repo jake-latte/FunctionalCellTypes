@@ -414,19 +414,22 @@ plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_s
 # Result figures. `history` is the train.py history extended by the monitor with the keys below.
 plot_loss_curves(history, ax=None)                    # total loss (solid) and the RAW logged mse (dashed), weight_l2 (dotted), rate_l2 (dash-dot) vs epoch, log y;
                                                       # the raw terms are not the weighted terms of the loss, so they do not add up to it; an all-zero series is labelled "(zero)"
+                                                      # the legend sits outside the axis, to the right, so it never covers a curve
+fig_loss_curves(history, title="") -> Figure          # plot_loss_curves as a full-width (FIG_WIDTH) titled figure
 plot_training_history(history, ax=None)               # = plot_loss_curves
 plot_mir_history(history, ax=None, which="raw", legend=True)   # one solid line per layer (LAYER_COLORS[layer]) vs monitor_epoch;
                                                       # which="raw": monitor_mir plus monitor_mir_chance dotted in the layer colour, y fixed to [-0.05, 1.05];
                                                       # "corrected": monitor_mir_corrected, lower y limit extended to min(-0.05, data min - 0.05)
 plot_dead_neurons(history, ax=None, legend=True)      # monitor_n_dead_corrected per layer vs monitor_epoch
 fig_mir_history(history, title="") -> Figure          # three panels sharing epoch: raw (+ baseline, legend), corrected, dead neurons
-plot_prediction_scatter(y_true, y_pred, ax=None, r2=None)   # all entries, identity line; r2 (computed by the caller) shown in the legend as "R² on these examples"
+plot_prediction_scatter(y_true, y_pred, ax=None, r2=None)   # all entries, identity line; r2 (computed by the caller) shown in a legend below the axis as "R² on these examples"
 plot_paired_bars(y_true, y_pred, labels, ax=None, threshold=None)   # true / predicted value per output; artists labelled, the caller makes the (figure-level) legend
 plot_object_grid(agent_rc, objects, ax=None)          # one scene: squares = objects, ring+dot = agent (visible on an object); row 0 at the top (up = toward row 0); ValueError unless objects is (G,G) and the agent is inside
 plot_motif_image(image, ax=None, n_macro=3, motif_size=3)   # (n_macro*motif_size)² image with the macro grid at motif_size*k - 0.5
 plot_example_outputs(task, outputs: ExampleOutputs, ax=None, r2=None) -> Axes   # NOT task specific: predicted vs true scatter of all entries (task only validated)
 fig_example_outputs(task, outputs, data_cfg, n_show=None) -> Figure
-    # linear_teacher (4 examples: true/pred stems + scatter), object_action (6: scene + paired action bars with a 0.5 line),
+    # linear_teacher (4 examples: ONE axis per example, shared x = output index and shared y, true as a hollow ring on a stem and
+    # predicted as a filled diamond at the same x, one figure-level legend, + scatter of all entries), object_action (6: scene + paired action bars with a 0.5 line),
     # what_where (4: image + where / what bars, titled with the argmax decisions), position (scatter), each with one figure-level legend;
     # R² on the shown outputs is computed here via analyse.r_squared (omitted if the targets are constant).
     # ValueError: task not in data.TASKS, data_cfg.task != task, empty outputs, n_show < 1, or outputs inconsistent with data_cfg
@@ -474,10 +477,21 @@ All settings share the seeds, so they differ only in the swept axes. The history
 monitor.py. The monitor runs at epochs 0, k*monitor_int for every k with k*monitor_int < n_epochs, and n_epochs, so
 when n_epochs is not a multiple of monitor_int the last two entries are closer than monitor_int (n_epochs=7, monitor_int=2: 0, 2, 4, 6, 7).
 
+Size and style: the figures read in the results notebook (`fig_loss_curves`, `fig_mir_history`, `fig_example_outputs`,
+`fig_mir_heatmaps`) are built under `plt.rc_context(STYLE_RC)` (the `_styled` decorator), so they look the same in the CLI, the
+notebook and a script. All sizes live in `draw.py`: `FIG_WIDTH = 13` inches, `STYLE_RC` (font 14, axes title 16, labels 14, ticks
+12, legend 13, figure title 18, line width 2.5, marker size 8), `LINE_WIDTH`, `ANNOTATION_SIZE` (heatmap cell numbers, 12).
+Function bodies take text sizes from the rc parameters rather than hard-coding them; heights are per row of panels. The
+notebook sets `figure.dpi = 100` (about 1300 px wide, executed size ~14 MB for the 36-setting sweep; executed notebooks are not
+committed). The solver dashboard, neuron maps and other training-time figures keep their own sizes.
+
 ## report.py and notebooks/
 
 The results notebook `notebooks/modularity.ipynb` is generated: `notebooks/build_modularity.py` holds its source
-(`build_notebook()`: a summary cell per task, then a cell per setting, each selecting its setting by name with
+(`build_notebook()`: the intro, parameter and setup cells, the markdown cell `report.MIR_EXPLANATION` (equations defining
+the rates, rank bins, plug-in MI, preference, MIR, dead neurons, the raw MIR and its cardinality floor, the shuffled chance
+baseline and the corrected MIR, and how to read the plots and tables; it restates `fct/modularity.py`, and a test checks its
+key terms and that its `$`/`$$` equations are balanced), a summary cell per task, then a cell per setting, each selecting its setting by name with
 `find_result(RESULTS, task, L, phi, rate)`, so a reordered grid fails loudly instead of mislabelling), and
 `execute_notebook(nb, root)` runs a deep copy in a fresh kernel (no timing metadata, so equal runs give equal notebooks) after
 `with_root` has put `ROOT = '<root>'` into the tagged parameter cell; the source `nb` stays output-free. In the source the cell

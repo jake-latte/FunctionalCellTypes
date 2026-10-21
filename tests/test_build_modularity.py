@@ -33,6 +33,21 @@ def test_source_notebook_has_a_cell_per_setting_and_task_and_no_outputs():
     assert _code(nb).count("task_items(RESULTS,") == len(SWEEP_TASKS)
 
 
+def test_explanation_cell_sits_between_the_setup_and_the_first_task():
+    from fct.report import MIR_EXPLANATION
+
+    nb = build_notebook()
+    (index,) = [i for i, c in enumerate(nb.cells) if c.source == MIR_EXPLANATION]
+    assert nb.cells[index].cell_type == "markdown"
+    assert "RESULTS = load_results" in nb.cells[index - 1].source
+    assert nb.cells[index + 1].source == f"## {SWEEP_TASKS[0]}"
+
+
+def test_notebook_dpi_is_legible_but_not_the_small_default():
+    setup = next(c.source for c in build_notebook().cells if "load_results(" in c.source)
+    assert 'rcParams["figure.dpi"] = 100' in setup
+
+
 def test_each_setting_cell_names_one_distinct_grid_setting():
     """Cells select settings by name; together they name exactly the grid."""
     named = {

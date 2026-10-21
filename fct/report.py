@@ -30,7 +30,7 @@ from fct.analyse import ExampleOutputs, example_outputs, pick_examples, predicti
 from fct.cache import cache_paths
 from fct.config import Config, DataConfig, resolve_dtype
 from fct.data import get_dataset
-from fct.draw import fig_example_outputs, fig_mir_heatmaps, fig_mir_history, plot_loss_curves
+from fct.draw import fig_example_outputs, fig_loss_curves, fig_mir_heatmaps, fig_mir_history
 from fct.sweep import (
     LAYERS,
     Setting,
@@ -96,6 +96,130 @@ class FinalMIR:
 
 def setting_label(setting: Setting) -> str:
     return f"L{setting.L} {setting.phi} r={setting.rate_lambda:g}"
+
+
+# ---------------------------------------------------------------------------- explanation
+# Markdown for the notebook (Jupyter renders $...$ and $$...$$). It restates what
+# fct/modularity.py computes; tests/test_report.py checks its key terms and that every equation
+# is balanced, but not its agreement with the code, so edit both together.
+MIR_EXPLANATION = r"""## What the MIR numbers mean
+
+All quantities are computed by `fct/modularity.py`, for one hidden layer at a time, at each
+monitor call during training (`fct.monitor.make_mir_monitor`, which calls `layer_mir_report`).
+
+### Setup: rates, bins, factors
+
+For a layer of $N$ neurons and the $P$ training inputs $x_p$, the **rate** of neuron $i$ is its
+post-activation value $r_{ip} = \phi(h_{i}(x_p))$. The task provides ground-truth **factors**
+$F_m$ (one integer or real label per input, e.g. the latents $z_j$ of `linear_teacher`;
+`where` and `what` for `what_where`; the agent position, one occupancy bit per grid cell and
+one bit per action for `object_action`), collected into $K$ **factor groups** $g_1,\dots,g_K$
+(`linear_teacher`: one group per latent; `what_where`: `where`, `what`; `object_action`:
+`position`, `objects`, `actions`).
+
+Rates are discretised into $B$ equal-frequency **rank bins** (`rank_bins`, $B$ =
+`monitor_bins`, 10 by default). With the midrank
+$m_{ip} = \tfrac12\big(\#\{q: r_{iq} < r_{ip}\} + \#\{q: r_{iq} \le r_{ip}\}\big)$ the bin is
+
+$$b_{ip} = \Big\lfloor \frac{B\, m_{ip}}{P} \Big\rfloor \in \{0,\dots,B-1\},$$
+
+so tied rates (a ReLU's mass at zero) share one bin and the bins are invariant to monotone
+transforms of the rate. Integer factors are categorical with $C_m$ distinct labels; real-valued
+factors are rank-binned the same way into $C_m = B$ labels (`factor_labels`).
+
+### Mutual information, preference, MIR
+
+The **plug-in mutual information** (`mutual_information`, in nats) between the binned rate of
+neuron $i$ and factor $F_m$ uses the empirical joint frequencies $\hat p$ over the $P$ samples:
+
+$$I_{im} = \sum_{b,c} \hat p(b,c)\,\log\frac{\hat p(b,c)}{\hat p(b)\,\hat p(c)} \;\ge 0 .$$
+
+The information about a group is the **sum** over its members (the information about their
+joint configuration cannot be estimated by a plug-in estimator):
+
+$$I_{ik} = \sum_{m \in g_k} I_{im}.$$
+
+The **preference** of neuron $i$ (`preference`; called `r` in the code) is the share of its
+information that sits in its best group:
+
+$$\rho_i = \frac{\max_k I_{ik}}{\sum_{k} I_{ik}} \in \Big[\tfrac1K, 1\Big].$$
+
+A **dead neuron** is one whose total information $\sum_k I_{ik}$ is at most $10^{-12}$ (constant
+firing, or a rate unrelated to every factor at floating-point level). Its preference is
+undefined; it is set to exactly $\rho_i = 1/K$, so it adds nothing to the numerator below instead
+of producing NaN. The layer's **modularity index** (`mir`, normalised so that chance preference
+$1/K$ maps to 0 and perfect preference 1 maps to 1) is
+
+$$\mathrm{MIR} = \frac{\bar\rho - 1/K}{1 - 1/K}, \qquad \bar\rho = \frac1N \sum_{i=1}^{N} \rho_i .$$
+
+It is 1 when every neuron carries information about one group only and 0 when information is
+spread evenly over the $K$ groups (or neurons are dead).
+
+### Raw (plug-in) MIR and why it has a floor
+
+The **raw MIR** is the formula above applied to the plain plug-in informations
+(`layer_mir`, `bias_correction="none"`; the `monitor_mir` curve). The plug-in estimate is biased
+upward: for a rate independent of a factor, with $B$ rate bins and $C$ factor labels,
+
+$$\mathbb{E}[\hat I] \approx \frac{(B-1)(C-1)}{2P}\ \text{nats}.$$
+
+The bias grows with the factor's cardinality $C$, so even completely unrelated neurons have
+positive information, concentrated in the group with the most labels, and $\max_k / \sum_k$ of
+positive numbers is never exactly $1/K$. The raw MIR of noise neurons therefore sits above 0 by
+an amount that depends on the cardinalities of the factors, not on the network. For example at
+$P = 8192$ and $B = 10$, noise neurons score a raw MIR of about 0.89 with one 25-way and two
+binary factors, but about 0.10 with three five-way factors. A raw MIR is only interpretable
+next to its chance baseline.
+
+### Chance baseline
+
+The **chance baseline** (`shuffled_mir`; `monitor_mir_chance`) is the raw MIR of the same layer
+when the link between rates and factors is destroyed: all factors are permuted across the $P$
+samples with **one shared random permutation** $\pi$ (so dependencies between the factors are
+kept, rates are untouched), the plug-in informations are recomputed as $I_{im}^{\pi}$ and the
+raw MIR formula is applied. The baseline is the mean of this raw MIR over $S$ permutations
+($S$ = `monitor_shuffles`, 5 by default; a seeded generator, so it is deterministic):
+
+$$\mathrm{MIR}_{\text{chance}} = \frac1S \sum_{s=1}^{S} \mathrm{MIR}\big[I^{\pi_s}\big].$$
+
+A raw MIR is only evidence of modularity to the extent that it exceeds this baseline.
+
+### Corrected MIR
+
+The **corrected MIR** (`layer_mir`, `bias_correction="shuffle"`; `monitor_mir_corrected`)
+removes the bias before the preferences are formed. `layer_mir_report` uses the same $S$
+permutations as the baseline, so no extra shuffles are drawn (`n_shuffles` = $S$). For every
+neuron and factor (member, not group) the mean shuffled information is the null
+$\bar I^{0}_{im} = \frac1S\sum_s I^{\pi_s}_{im}$ and the corrected information is
+
+$$\tilde I_{im} = \max\big(I_{im} - \bar I^{0}_{im},\, 0\big) .$$
+
+A neuron whose raw total is not clearly above its null, $\sum_m I_{im} \le 2\sum_m \bar I^{0}_{im}$,
+is indistinguishable from noise and all its $\tilde I_{im}$ are set to 0, which makes it dead
+($\rho_i = 1/K$). (Without this step the leftover noise residuals, mostly in one factor, would
+give noise neurons a spuriously high preference.) The corrected informations are summed within
+groups, and $\rho_i$ and the MIR are computed exactly as above:
+
+$$\mathrm{MIR}_{\text{corrected}} = \frac{\bar{\tilde\rho} - 1/K}{1 - 1/K}.$$
+
+Noise neurons contribute exactly $1/K$, so the corrected MIR of an unrelated layer is about 0
+whatever the cardinalities, and no baseline has to be subtracted from it. Because $\rho_i \ge 1/K$,
+it cannot go below 0; it is a modularity of the neurons that carry detectable information,
+diluted by those that do not.
+
+### Reading the plots and tables
+
+- **raw MIR panel**: one solid line per layer (marker o) is the raw MIR; the dotted line of
+  the same colour (marker x) is that layer's chance baseline. Read the gap between them.
+- **corrected MIR panel**: one line per layer; 0 means indistinguishable from unrelated
+  neurons, 1 means every informative neuron is selective for one group.
+- **dead-neuron panel**: the number of dead neurons of each layer under the corrected estimate
+  (`monitor_n_dead_corrected`): neurons with constant firing or no information beyond the
+  shuffled null. At most $N$ per layer.
+- **heatmaps and table**: one row per setting, one column per layer, the value at the last
+  monitor call, in three panels or column groups: `raw`, `corrected` and `chance baseline`.
+  Grey cells are layers the setting does not have or settings that have not finished.
+"""
 
 
 # ---------------------------------------------------------------------------- I/O
@@ -339,11 +463,9 @@ def setting_items(result: SettingResult) -> list[Item]:
     if result.status != "done":
         return [text]
     title = f"{result.setting.task} {setting_label(result.setting)}"
-    loss_ax = plot_loss_curves(result.history)
-    loss_ax.set_title(title, fontsize=10)
     return [
         text,
-        loss_ax.figure,
+        fig_loss_curves(result.history, title=title),
         fig_example_outputs(result.setting.task, result.examples, result.data_cfg),
         fig_mir_history(result.history, title=title),
     ]
