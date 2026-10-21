@@ -6,8 +6,9 @@ machines without a display). A `plot_*` function creates a figure only when it i
 `ax`, so each one can be dropped into a larger figure unchanged.
 """
 
+import functools
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import NamedTuple
 
 import matplotlib.pyplot as plt
@@ -50,6 +51,27 @@ LAYER_COLORS = [
     "#e34948",
 ]
 _GREY = "#52514e"  # reference lines and the trained-network overlay
+
+# Sizes of the results figures, in one place. A notebook is read at full width, so the figures
+# are wide and their text is large enough to read without zooming; heights are per row of
+# panels. `STYLE_RC` is applied while a results figure is built (see `_styled`), so every title,
+# label, tick and legend in it takes its size from here and nothing below hard-codes a font size.
+FIG_WIDTH = 13.0  # inches; the width of every full-width results figure
+ROW_HEIGHT = 2.6  # inches per row of example panels
+ANNOTATION_SIZE = 12  # numbers written inside heatmap cells
+STYLE_RC = {
+    "font.size": 14,
+    "axes.titlesize": 16,
+    "axes.labelsize": 14,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12,
+    "legend.fontsize": 13,
+    "figure.titlesize": 18,
+    "lines.linewidth": 2.5,
+    "lines.markersize": 8,
+    "axes.linewidth": 1.2,
+}
+LINE_WIDTH = STYLE_RC["lines.linewidth"]
 
 
 class Overlay(NamedTuple):
@@ -99,6 +121,18 @@ SOLVER_N_COLS = 4
 
 
 # --------------------------------------------------------------------------- helpers
+
+
+def _styled(build: Callable[..., Figure]) -> Callable[..., Figure]:
+    """Build a figure under `STYLE_RC`; the text sizes are fixed when each artist is created,
+    so the figure keeps them after the context is left."""
+
+    @functools.wraps(build)
+    def wrapper(*args, **kwargs) -> Figure:
+        with plt.rc_context(STYLE_RC):
+            return build(*args, **kwargs)
+
+    return wrapper
 
 
 def _np(x: ArrayLike) -> np.ndarray:
@@ -476,11 +510,21 @@ def plot_loss_curves(history: Mapping[str, ArrayLike], ax: Axes | None = None) -
         values = _np(cols[key])
         if not np.any(values > 0):
             label += " (zero)"
-        ax.plot(epoch, values, lw=1.5, color=color, ls=linestyle, label=label)
+        ax.plot(epoch, values, lw=LINE_WIDTH, color=color, ls=linestyle, label=label)
     ax.set(xlabel="epoch", ylabel="logged value (raw terms, not additive)", yscale="log")
     ax.grid(alpha=0.25, lw=0.5)
-    ax.legend(frameon=False)
+    # Beside the axis, so it never covers a curve.
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
     return ax
+
+
+@_styled
+def fig_loss_curves(history: Mapping[str, ArrayLike], title: str = "") -> Figure:
+    """`plot_loss_curves` as a full-width figure with an optional title."""
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, 5.5), layout="constrained")
+    plot_loss_curves(history, ax=ax)
+    ax.set_title(title)
+    return fig
 
 
 def _layer_series(history: Mapping, keys: Sequence[str], what: str) -> dict[str, np.ndarray]:
@@ -543,13 +587,13 @@ def plot_mir_history(
     epoch, mir = series["monitor_epoch"], series[keys[0]]
     ax = _get_ax(ax)
     for layer in range(mir.shape[1]):  # markers keep a single monitor call visible
-        ax.plot(epoch, mir[:, layer], lw=1.5, marker="o", ms=3, color=_layer_color(layer))
+        ax.plot(epoch, mir[:, layer], lw=LINE_WIDTH, marker="o", color=_layer_color(layer))
     extra = []
     if which == "raw":
         for layer in range(mir.shape[1]):
             chance = series["monitor_mir_chance"][:, layer]
-            ax.plot(epoch, chance, ls=":", lw=1.5, marker="x", ms=3, color=_layer_color(layer))
-        extra = [Line2D([], [], color=_GREY, ls=":", marker="x", ms=3, label="chance baseline")]
+            ax.plot(epoch, chance, ls=":", lw=LINE_WIDTH, marker="x", color=_layer_color(layer))
+        extra = [Line2D([], [], color=_GREY, ls=":", marker="x", label="chance baseline")]
     ax.set(xlabel="epoch", ylabel="MIR" + (" (corrected)" if which == "corrected" else ""))
     ax.set_ylim(*_mir_ylim(mir, which))
     _format_epoch_axis(ax, epoch)
@@ -568,9 +612,8 @@ def plot_dead_neurons(history: Mapping, ax: Axes | None = None, legend: bool = T
         ax.plot(
             series["monitor_epoch"],
             counts[:, layer],
-            lw=1.5,
+            lw=LINE_WIDTH,
             marker="o",
-            ms=3,
             color=_layer_color(layer),
         )
     ax.set(xlabel="epoch", ylabel="dead neurons")
@@ -583,21 +626,23 @@ def plot_dead_neurons(history: Mapping, ax: Axes | None = None, legend: bool = T
     return ax
 
 
+@_styled
 def fig_mir_history(history: Mapping, title: str = "") -> Figure:
     """Raw MIR with its chance baseline, corrected MIR, and dead-neuron counts, sharing epoch."""
     fig, axes = plt.subplots(
         3,
         1,
         sharex=True,
-        figsize=(8, 8),
+        figsize=(FIG_WIDTH, 10),
         gridspec_kw={"height_ratios": [3, 3, 1.6]},
         layout="constrained",
     )
     plot_mir_history(history, ax=axes[0], which="raw")
     plot_mir_history(history, ax=axes[1], which="corrected", legend=False)
     plot_dead_neurons(history, ax=axes[2], legend=False)
-    axes[0].set_title("raw MIR (dotted: chance baseline)", fontsize=10)
-    axes[1].set_title("corrected MIR", fontsize=10)
+    axes[0].set_title("raw MIR (dotted: chance baseline)")
+    axes[1].set_title("corrected MIR")
+    axes[2].set_title("dead neurons (corrected estimate)")
     for ax in axes[:2]:
         ax.set_xlabel("")
     if title:
@@ -619,10 +664,11 @@ def plot_prediction_scatter(
     ax = _get_ax(ax)
     lim = [min(t.min(), p.min()), max(t.max(), p.max())]
     label = "identity" if r2 is None else f"identity (R² on these examples = {r2:.2f})"
-    ax.plot(lim, lim, "--", color=_GREY, lw=1, label=label)
-    ax.scatter(t, p, s=12, alpha=0.6, color=PRED_COLOR)
+    ax.plot(lim, lim, "--", color=_GREY, lw=1.5, label=label)
+    ax.scatter(t, p, s=36, alpha=0.7, color=PRED_COLOR)
     ax.set(xlabel="true output", ylabel="predicted output", aspect="equal")
-    ax.legend(frameon=False, loc="upper left")
+    # Below the axis: a long R² label would run over the points inside a narrow panel.
+    ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.18))
     return ax
 
 
@@ -643,8 +689,8 @@ def plot_paired_bars(
     ax.bar(x - 0.2, _np(y_true), width=0.4, color=TRUE_COLOR, label="true")
     ax.bar(x + 0.2, _np(y_pred), width=0.4, color=PRED_COLOR, label="predicted")
     if threshold is not None:
-        ax.axhline(threshold, color=_GREY, ls="--", lw=1, label=f"threshold {threshold}")
-    ax.set_xticks(x, [str(v) for v in labels], fontsize=8)
+        ax.axhline(threshold, color=_GREY, ls="--", lw=1.5, label=f"threshold {threshold}")
+    ax.set_xticks(x, [str(v) for v in labels])
     ax.axhline(0, color=_GREY, lw=0.5)
     return ax
 
@@ -679,7 +725,7 @@ def plot_object_grid(agent_rc: ArrayLike, objects: ArrayLike, ax: Axes | None = 
             )
         )
     ax.add_patch(
-        Circle((agent_col, agent_row), AGENT_RING_RADIUS, fill=False, ec=AGENT_COLOR, lw=2.5)
+        Circle((agent_col, agent_row), AGENT_RING_RADIUS, fill=False, ec=AGENT_COLOR, lw=3)
     )
     ax.add_patch(Circle((agent_col, agent_row), AGENT_DOT_RADIUS, color=AGENT_COLOR))
     ax.set_xlim(-0.5, n - 0.5)
@@ -748,28 +794,42 @@ def _pooled_r2(outputs: ExampleOutputs) -> float | None:
         return None
 
 
+def _plot_output_vector(true: ArrayLike, pred: ArrayLike, ax: Axes) -> Axes:
+    """True and predicted value of every output index on one axis: the true value as a hollow
+    ring on a stem from zero, the prediction as a filled diamond at the same x, so the gap
+    between them is read directly and a good prediction sits inside its ring."""
+    t, p = _np(true), _np(pred)
+    x = np.arange(len(t))
+    ax.vlines(x, 0, t, color=TRUE_COLOR, lw=LINE_WIDTH)
+    ax.axhline(0, color=_GREY, lw=1)
+    ax.plot(x, t, "o", ms=14, mfc="none", mec=TRUE_COLOR, mew=LINE_WIDTH, label="true")
+    ax.plot(x, p, "D", ms=8, color=PRED_COLOR, label="predicted")
+    ax.set_xticks(x)
+    ax.margins(y=0.25)  # keep end markers off the frame
+    return ax
+
+
 def _fig_linear_teacher(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
-    fig = plt.figure(figsize=(11, 1.6 * n + 1.5), layout="constrained")
+    fig = plt.figure(figsize=(FIG_WIDTH, 2.4 * n + 1.5), layout="constrained")
     left, right = fig.add_gridspec(1, 2, width_ratios=[2, 1])
-    examples = left.subgridspec(n, 1, hspace=0.3)
-    bottoms = []
+    rows = left.subgridspec(n, 1)
+    example_axes: list[Axes] = []
     for i in range(n):
-        pair = examples[i].subgridspec(2, 1, hspace=0.05)  # true row directly above predicted
-        top = fig.add_subplot(pair[0])
-        bottom = fig.add_subplot(pair[1], sharex=top, sharey=top)
-        for ax, values, color, name in (
-            (top, outputs.y_true[i], TRUE_COLOR, "true"),
-            (bottom, outputs.y_pred[i], PRED_COLOR, "pred"),
-        ):
-            ax.stem(_np(values), linefmt=color, markerfmt="o", basefmt=_GREY)
-            ax.set_ylabel(name)
-            ax.margins(y=0.2)  # keep end markers off the frame
-        top.tick_params(labelbottom=False)
-        top.set_title(f"example {int(outputs.indices[i])}", fontsize=9, loc="left")
-        bottoms.append(bottom)
-    bottoms[-1].set_xlabel("output index")
-    scatter_ax = fig.add_subplot(right)
-    plot_prediction_scatter(outputs.y_true, outputs.y_pred, ax=scatter_ax, r2=_pooled_r2(outputs))
+        # One shared y scale, so examples are comparable; x is the output index.
+        first = example_axes[0] if example_axes else None
+        ax = fig.add_subplot(rows[i], sharex=first, sharey=first)
+        _plot_output_vector(outputs.y_true[i], outputs.y_pred[i], ax)
+        ax.set_title(f"example {int(outputs.indices[i])}", loc="left")
+        ax.set_ylabel("output value")
+        if i < n - 1:
+            ax.tick_params(labelbottom=False)
+        example_axes.append(ax)
+    example_axes[-1].set_xlabel("output index")
+    handles, labels = example_axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside upper center", ncol=2, frameon=False)
+    plot_prediction_scatter(
+        outputs.y_true, outputs.y_pred, ax=fig.add_subplot(right), r2=_pooled_r2(outputs)
+    )
     return fig
 
 
@@ -780,8 +840,8 @@ def _fig_object_action(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figu
     fig, axes = plt.subplots(
         n,
         2,
-        figsize=(8, 2.2 * n + 0.8),
-        gridspec_kw={"width_ratios": [1, 1.6]},
+        figsize=(FIG_WIDTH, 2.9 * n + 1.0),
+        gridspec_kw={"width_ratios": [1, 1.8]},
         squeeze=False,
         layout="constrained",
     )
@@ -790,7 +850,7 @@ def _fig_object_action(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figu
         plot_paired_bars(
             outputs.y_true[i], outputs.y_pred[i], ACTION_NAMES, ax=axes[i, 1], threshold=0.5
         )
-        axes[i, 0].set_title(f"example {int(outputs.indices[i])}", fontsize=9)
+        axes[i, 0].set_title(f"example {int(outputs.indices[i])}")
     handles, labels = axes[0, 1].get_legend_handles_labels()
     fig.legend(
         handles + _object_grid_handles(),
@@ -814,7 +874,7 @@ def _fig_what_where(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
     fig, axes = plt.subplots(
         n,
         3,
-        figsize=(12, 2.4 * n + 0.8),
+        figsize=(FIG_WIDTH, 3.0 * n + 1.2),
         gridspec_kw={"width_ratios": [1, 1.3, 1.3]},
         squeeze=False,
         layout="constrained",
@@ -826,18 +886,18 @@ def _fig_what_where(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
         axes[i, 0].set_title(
             f"{_decision_text('where', where_t[i], where_p[i])}\n"
             f"{_decision_text('what', what_t[i], what_p[i])}",
-            fontsize=8,
+            fontsize="small",  # two lines of text per panel title
         )
         axes[i, 1].set_ylabel("output")
-    axes[0, 1].set_title("where (macro-cell)", fontsize=9)
-    axes[0, 2].set_title("what (motif)", fontsize=9)
+    axes[0, 1].set_title("where (macro-cell)")
+    axes[0, 2].set_title("what (motif)")
     handles, labels = axes[0, 1].get_legend_handles_labels()
     fig.legend(handles, labels, loc="outside upper center", ncol=2, frameon=False)
     return fig
 
 
 def _fig_position(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
-    fig, ax = plt.subplots(figsize=(5, 5), layout="constrained")
+    fig, ax = plt.subplots(figsize=(7, 7), layout="constrained")
     plot_prediction_scatter(outputs.y_true, outputs.y_pred, ax=ax, r2=_pooled_r2(outputs))
     return fig
 
@@ -870,13 +930,15 @@ def _check_outputs(outputs: ExampleOutputs) -> None:
         raise ValueError("ExampleOutputs fields have different numbers of rows")
 
 
+@_styled
 def fig_example_outputs(
     task: str, outputs: ExampleOutputs, data_cfg: DataConfig, n_show: int | None = None
 ) -> Figure:
     """Per-task picture of the first `n_show` examples (default 4, 6, 4, 4 for linear_teacher,
     object_action, what_where, position).
 
-    linear_teacher: true and predicted output vectors as stems, plus a scatter of all entries.
+    linear_teacher: one axis per example with the true (ring) and predicted (diamond) output
+    vector on the same axis, plus a scatter of all entries.
     object_action: the scene next to true vs predicted action values. what_where: the input
     image next to true vs predicted `where` and `what` outputs, titled with the argmax
     decisions. position: true vs predicted scatter. `data_cfg` must be the config the outputs
@@ -907,7 +969,15 @@ def _annotate_cells(ax: Axes, values: np.ndarray, vmin: float, vmax: float) -> N
     for (row, col), value in np.ndenumerate(values):
         if np.isfinite(value):
             colour = "white" if value < middle else "black"
-            ax.text(col, row, f"{value:.2f}", ha="center", va="center", fontsize=7, color=colour)
+            ax.text(
+                col,
+                row,
+                f"{value:.2f}",
+                ha="center",
+                va="center",
+                fontsize=ANNOTATION_SIZE,
+                color=colour,
+            )
 
 
 def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> None:
@@ -920,7 +990,7 @@ def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> 
                 status,
                 ha="center",
                 va="center",
-                fontsize=8,
+                fontsize=ANNOTATION_SIZE,
                 style="italic",
                 color=_GREY,
             )
@@ -956,7 +1026,7 @@ def plot_mir_heatmap(
             f"{len(row_status)} statuses"
         )
     _check_in_range(values, vmin, vmax)
-    ax = _get_ax(ax, figsize=(5, 5))
+    ax = _get_ax(ax, figsize=(7, 6))
     cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)
     image = ax.imshow(np.ma.masked_invalid(values), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
     ax.set_xticks(range(values.shape[1]), [f"layer {i + 1}" for i in range(values.shape[1])])
@@ -964,12 +1034,13 @@ def plot_mir_heatmap(
     ax.tick_params(length=0)
     _annotate_cells(ax, values, vmin, vmax)
     _label_unfinished_rows(ax, row_status, values.shape[1])
-    ax.set_title(title, fontsize=10)
+    ax.set_title(title)
     if colorbar:
         _add_mir_colorbar(ax.figure, image, ax, fraction=0.046, pad=0.03)
     return ax
 
 
+@_styled
 def fig_mir_heatmaps(
     panels: Mapping[str, ArrayLike],
     row_labels: Sequence[str],
@@ -985,7 +1056,7 @@ def fig_mir_heatmaps(
     fig, axes = plt.subplots(
         1,
         len(arrays),
-        figsize=(5 * len(arrays), 0.4 * len(row_labels) + 1.8),
+        figsize=(FIG_WIDTH + 1, 0.55 * len(row_labels) + 2.6),
         sharey=True,
         layout="constrained",
     )

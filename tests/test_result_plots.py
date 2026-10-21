@@ -379,3 +379,66 @@ def test_motif_image_grid_follows_macro_count_and_motif_size(n_macro, motif_size
 def test_plot_motif_image_rejects_a_wrong_image_shape():
     with pytest.raises(ValueError, match="shape"):
         draw.plot_motif_image(torch.zeros(8, 9))
+
+
+# ----------------------------------------------------------------- size and style
+
+
+def test_style_has_readable_sizes_and_wide_figures():
+    rc = draw.STYLE_RC
+    assert 13 <= rc["font.size"] <= 14
+    assert rc["xtick.labelsize"] >= 11 and rc["ytick.labelsize"] >= 11
+    assert rc["axes.titlesize"] > rc["font.size"] and rc["axes.labelsize"] >= rc["font.size"]
+    assert 12 <= draw.FIG_WIDTH <= 14
+
+
+@pytest.mark.parametrize("task", list(CONFIGS))
+def test_example_figures_are_full_width_with_readable_ticks(task):
+    outputs, cfg = _outputs(task)
+    fig = draw.fig_example_outputs(task, outputs, cfg)
+    assert fig.get_figwidth() >= 12 or task == "position"
+    ticks = [t.get_fontsize() for ax in fig.axes for t in ax.get_xticklabels()]
+    assert min(ticks) >= 11
+
+
+def test_fig_loss_curves_is_wide_titled_and_keeps_the_legend_off_the_curves():
+    fig = draw.fig_loss_curves(_loss_history(), title="setting A")
+    assert fig.get_figwidth() >= 12
+    (ax,) = fig.axes
+    assert ax.get_title() == "setting A"
+    assert ax.get_legend()._loc == 6  # "center left" of the anchor outside the axis
+
+
+def test_fig_mir_history_and_heatmaps_are_full_width():
+    assert draw.fig_mir_history(_monitor_history(2)).get_figwidth() >= 12
+    values = np.array([[0.1, 0.2], [0.3, np.nan]])
+    fig = draw.fig_mir_heatmaps({"raw": values}, ["a", "b"], ["done", "done"])
+    assert fig.get_figwidth() >= 12
+
+
+def test_the_style_applies_without_the_caller_setting_rcparams():
+    fig = draw.fig_mir_history(_monitor_history(2))
+    assert fig.axes[0].xaxis.label.get_fontsize() >= 13
+
+
+def test_linear_teacher_overlays_true_and_predicted_on_one_axis_per_example():
+    outputs, cfg = _outputs("linear_teacher", n=4)
+    fig = draw.fig_example_outputs("linear_teacher", outputs, cfg, n_show=3)
+    *examples, scatter = fig.axes
+    assert len(examples) == 3  # one axis per example, not a true/pred pair
+    assert not scatter.get_title() and scatter.get_xlabel() == "true output"
+    for ax, idx in zip(examples, outputs.indices[:3]):
+        assert f"example {int(idx)}" in ax.get_title("left")
+        labels = {a.get_label() for a in ax.lines + ax.collections + ax.containers}
+        assert {"true", "predicted"} <= labels
+        # both series have one marker per output index at the same x positions
+        xs = {
+            a.get_label(): list(a.get_xdata())
+            for a in ax.lines
+            if a.get_label() in {"true", "predicted"}
+        }
+        assert xs["true"] == xs["predicted"] == list(range(outputs.y_true.shape[1]))
+    texts = [t.get_text() for t in fig.legends[0].get_texts()]
+    assert texts == ["true", "predicted"]
+    # shared y scale across the example axes
+    assert all(ax.get_shared_y_axes().joined(ax, examples[0]) for ax in examples)
