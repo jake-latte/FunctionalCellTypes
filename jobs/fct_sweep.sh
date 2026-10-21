@@ -51,23 +51,38 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="${FCT_PROJECT:-$(dirname "${SELF_DIR}")}"
 PYTHON="${FCT_PYTHON:-${PROJECT}/.venv/bin/python}"
+# The python is run after a cd into the project, so a relative FCT_PYTHON must be
+# resolved against the caller's directory first.
+[[ "${PYTHON}" == /* || "${PYTHON}" != */* ]] || PYTHON="${PWD}/${PYTHON}"
 LOG_DIR="${PROJECT}/tmp/logs"
 
 # ── Parse CLI: ROOT, one action, optional --index N ───────────────────────────
 ROOT="${FCT_SWEEP_ROOT:-}"
+ROOT_GIVEN=""
 ACTION=""
 INDEX=""
+INDEX_GIVEN=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --submit|--dry-run|--list|--status)
             [[ -z "${ACTION}" ]] || die "only one action allowed (got ${ACTION} and $1). ${USAGE}"
             ACTION="$1"; shift ;;
-        --index)   INDEX="${2:?--index requires a value}"; shift 2 ;;
-        --index=*) INDEX="${1#*=}"; shift ;;
+        --index)
+            [[ $# -ge 2 ]] || die "--index requires a value. ${USAGE}"
+            INDEX="$2"; INDEX_GIVEN=1; shift 2 ;;
+        --index=*) INDEX="${1#*=}"; INDEX_GIVEN=1; shift ;;
         -*) die "Unrecognised argument: '$1'. ${USAGE}" ;;
-        *)  ROOT="$1"; shift ;;
+        *)  [[ -z "${ROOT_GIVEN}" ]] || die "more than one ROOT given ('${ROOT}' and '$1'). ${USAGE}"
+            ROOT="$1"; ROOT_GIVEN=1; shift ;;
     esac
 done
+
+if [[ -n "${INDEX_GIVEN}" ]]; then
+    [[ "${INDEX}" =~ ^[0-9]+$ ]] || die "--index needs a non-negative integer (got '${INDEX}')."
+    INDEX=$((10#${INDEX}))   # base 10: '010' is setting 10, not octal 8; '08' is valid
+    [[ "${ACTION}" == "--submit" || "${ACTION}" == "--dry-run" ]] \
+        || die "--index only applies to --submit and --dry-run."
+fi
 
 [[ -n "${ROOT}" ]] || die "no sweep ROOT given (pass it as an argument or set FCT_SWEEP_ROOT). ${USAGE}"
 [[ -d "${ROOT}" ]] || die "sweep ROOT '${ROOT}' does not exist."
@@ -78,6 +93,9 @@ fct() { (cd "${PROJECT}" && "${PYTHON}" -m fct "$@"); }
 # ── Job execution (runs inside SLURM: no action, array task id set) ───────────
 if [[ -z "${ACTION}" ]]; then
     [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "no action given. ${USAGE}"
+    # Without FCT_PROJECT the project would be guessed from SLURM's spool copy of this script.
+    [[ -n "${FCT_PROJECT:-}" ]] || die "array task started without FCT_PROJECT; submit with --submit."
+    [[ -f "${PYTHON}" && -x "${PYTHON}" ]] || die "python '${PYTHON}' is not an executable file."
     echo "========================================================"
     echo "Job: ${SLURM_JOB_ID:-?}, array task: ${SLURM_ARRAY_TASK_ID}"
     echo "Node: $(hostname), GPU: ${CUDA_VISIBLE_DEVICES:-auto}"
@@ -99,8 +117,11 @@ esac
 N_TOTAL=$(fct sweep count "${ROOT}") || die "could not read the sweep size from ${ROOT}/sweep.json."
 [[ "${N_TOTAL}" =~ ^[0-9]+$ ]] || die "could not determine sweep size (got '${N_TOTAL}')."
 
-if [[ -n "${INDEX}" ]]; then
-    if ! [[ "${INDEX}" =~ ^[0-9]+$ ]] || (( INDEX >= N_TOTAL )); then
+# --export is comma-delimited, so a comma in either path would split it.
+[[ "${PROJECT}${PYTHON}" != *,* ]] || die "project or python path contains a comma; sbatch --export cannot carry it."
+
+if [[ -n "${INDEX_GIVEN}" ]]; then
+    if (( INDEX >= N_TOTAL )); then
         die "--index '${INDEX}' out of range [0, ${N_TOTAL})"
     fi
     ARRAY_SPEC="${INDEX}"
