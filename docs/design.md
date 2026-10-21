@@ -25,6 +25,7 @@ fct/
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   sweep.py         # the 36-setting grid: SweepConfig, expand, run_setting, status
+  explanations.py  # MIR_EXPLANATION: the notebook's markdown/LaTeX definition of raw, corrected and chance-baseline MIR
   report.py        # what the results notebook shows: read-only load of a sweep ROOT, final-MIR table, prose from numbers
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
   __main__.py      # `python -m fct ...` -> cli.main()
@@ -414,19 +415,22 @@ plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_s
 # Result figures. `history` is the train.py history extended by the monitor with the keys below.
 plot_loss_curves(history, ax=None)                    # total loss (solid) and the RAW logged mse (dashed), weight_l2 (dotted), rate_l2 (dash-dot) vs epoch, log y;
                                                       # the raw terms are not the weighted terms of the loss, so they do not add up to it; an all-zero series is labelled "(zero)"
+                                                      # the legend sits outside the axis, to the right, so it never covers a curve
+fig_loss_curves(history, title="") -> Figure          # plot_loss_curves as a full-width (FIG_WIDTH) titled figure
 plot_training_history(history, ax=None)               # = plot_loss_curves
 plot_mir_history(history, ax=None, which="raw", legend=True)   # one solid line per layer (LAYER_COLORS[layer]) vs monitor_epoch;
                                                       # which="raw": monitor_mir plus monitor_mir_chance dotted in the layer colour, y fixed to [-0.05, 1.05];
-                                                      # "corrected": monitor_mir_corrected, lower y limit extended to min(-0.05, data min - 0.05)
+                                                      # "corrected": monitor_mir_corrected, same range (the corrected MIR is >= 0 up to round-off; the lower limit extends only if a value goes below -0.05)
 plot_dead_neurons(history, ax=None, legend=True)      # monitor_n_dead_corrected per layer vs monitor_epoch
 fig_mir_history(history, title="") -> Figure          # three panels sharing epoch: raw (+ baseline, legend), corrected, dead neurons
-plot_prediction_scatter(y_true, y_pred, ax=None, r2=None)   # all entries, identity line; r2 (computed by the caller) shown in the legend as "R² on these examples"
+plot_prediction_scatter(y_true, y_pred, ax=None, r2=None)   # all entries, identity line; r2 (computed by the caller) shown in a legend below the axis as "R² on these examples"
 plot_paired_bars(y_true, y_pred, labels, ax=None, threshold=None)   # true / predicted value per output; artists labelled, the caller makes the (figure-level) legend
 plot_object_grid(agent_rc, objects, ax=None)          # one scene: squares = objects, ring+dot = agent (visible on an object); row 0 at the top (up = toward row 0); ValueError unless objects is (G,G) and the agent is inside
 plot_motif_image(image, ax=None, n_macro=3, motif_size=3)   # (n_macro*motif_size)² image with the macro grid at motif_size*k - 0.5
 plot_example_outputs(task, outputs: ExampleOutputs, ax=None, r2=None) -> Axes   # NOT task specific: predicted vs true scatter of all entries (task only validated)
 fig_example_outputs(task, outputs, data_cfg, n_show=None) -> Figure
-    # linear_teacher (4 examples: true/pred stems + scatter), object_action (6: scene + paired action bars with a 0.5 line),
+    # linear_teacher (4 examples: ONE axis per example, shared x = output index and shared y, true as a hollow ring on a stem and
+    # predicted as a filled diamond at the same x, one figure-level legend, + scatter of all entries), object_action (6: scene + paired action bars with a 0.5 line),
     # what_where (4: image + where / what bars, titled with the argmax decisions), position (scatter), each with one figure-level legend;
     # R² on the shown outputs is computed here via analyse.r_squared (omitted if the targets are constant).
     # ValueError: task not in data.TASKS, data_cfg.task != task, empty outputs, n_show < 1, or outputs inconsistent with data_cfg
@@ -474,10 +478,24 @@ All settings share the seeds, so they differ only in the swept axes. The history
 monitor.py. The monitor runs at epochs 0, k*monitor_int for every k with k*monitor_int < n_epochs, and n_epochs, so
 when n_epochs is not a multiple of monitor_int the last two entries are closer than monitor_int (n_epochs=7, monitor_int=2: 0, 2, 4, 6, 7).
 
+Size and style: the four figures read in the results notebook (`fig_loss_curves`, `fig_mir_history`, `fig_example_outputs`,
+`fig_mir_heatmaps`) are built under `plt.rc_context(STYLE_RC)` (the `_styled` decorator), so they look the same wherever they
+are called from (the CLI's `plot` figures are other functions and keep their own sizes). Fonts and line widths are centralised in
+`draw.py`: `STYLE_RC` (font 14, axes title 16, labels 14, ticks 12, legend 13, figure title 18, line width 2.5, marker size 8,
+axes line width 1.2), `LINE_WIDTH`, `MARKER_SIZE`, `ANNOTATION_SIZE` (heatmap cell numbers, 12) and the widths `FIG_WIDTH = 13` and
+`HEATMAP_WIDTH = FIG_WIDTH + 1` inches. Function bodies take text sizes from the rc parameters rather than hard-coding them.
+Heights stay in each `fig_*` and grow with the number of rows of panels. The legends of `plot_loss_curves` (right of the axis) and
+`plot_prediction_scatter` (below it) assume such a constrained-layout figure and may clip in a caller-supplied `ax`. The notebook
+sets `figure.dpi = 100` (about 1300 px wide; the executed notebook of the 36-setting sweep is ~14 MB and is not committed).
+
 ## report.py and notebooks/
 
 The results notebook `notebooks/modularity.ipynb` is generated: `notebooks/build_modularity.py` holds its source
-(`build_notebook()`: a summary cell per task, then a cell per setting, each selecting its setting by name with
+(`build_notebook()`: the intro, parameter and setup cells, the markdown cell `explanations.MIR_EXPLANATION` (equations defining
+the rates, rank bins, plug-in MI, preference, MIR, dead neurons, the raw MIR and its cardinality floor, the shuffled chance
+baseline and the corrected MIR, and how to read the plots and tables; it restates `fct/modularity.py`, and a test checks its
+numbers that have a source in the code (dead threshold `modularity.DEAD_TOL`, noise factor `modularity.NOISE_FACTOR`, the
+`TrainConfig` monitor defaults) are filled in from it, and tests recompute the quoted floor examples and check the `$`/`$$` equations are balanced), a summary cell per task, then a cell per setting, each selecting its setting by name with
 `find_result(RESULTS, task, L, phi, rate)`, so a reordered grid fails loudly instead of mislabelling), and
 `execute_notebook(nb, root)` runs a deep copy in a fresh kernel (no timing metadata, so equal runs give equal notebooks) after
 `with_root` has put `ROOT = '<root>'` into the tagged parameter cell; the source `nb` stays output-free. In the source the cell
@@ -486,30 +504,58 @@ notebook to the git-ignored `tmp/modularity.ipynb` (it records the ROOT it was r
 which carries all logic and tests. Only the source notebook (`--no-execute`, no outputs) is committed.
 
 ```python
-@dataclass SettingResult: setting; status ("done"|"partial"|"missing"); directory (relative to ROOT); note; history, examples (ExampleOutputs), metrics, data_cfg (None unless done)
-@dataclass FinalMIR: task; labels; status; raw, corrected, chance  (n_settings, 5) arrays, NaN for absent layers and unfinished settings
+@dataclass SettingResult: setting; status ("done"|"partial"|"missing"); directory (relative to ROOT); note; history, examples (ExampleOutputs), metrics, data_cfg, epoch, n_epochs
+    # the data fields are None unless done, or partial with a readable checkpoint; epoch = epochs completed (n_epochs for done), n_epochs = the sweep's total
+    # .provisional = status partial and history is not None (a running setting shown from its latest checkpoint); .progress = "epoch X of N" (ValueError if no data)
+    # .mir_epoch = epoch of the last monitor call in the history: a checkpoint at epoch s never holds the monitor call of epoch s, so it lags `epoch`
+    # note = why a partial setting has no data (dataset file missing, checkpoint unreadable or from another config)
+@dataclass FinalMIR: task; labels; status; mir_epoch, epoch, n_epochs (per row; None unless provisional); raw, corrected, chance  (n_settings, 5) arrays, NaN for absent layers and settings with no data
+    # .provisional (derived: partial with data); a provisional row holds the MIR of its latest monitor call (NaN if none yet), so the arrays
+    # include provisional rows: use .finished_only() (provisional rows blanked) for any statistic. display_labels() add "* (MIR@m, ckpt e/N)"
+    # to provisional rows (the MIR's epoch m is not the checkpoint's); row_status() gives draw.py's "provisional"
 
 def sweep_root_from_env() -> Path               # $FCT_SWEEP_ROOT; RuntimeError if unset
 def load_results(root) -> list[SettingResult]   # 36 entries in grid order; FileNotFoundError if no sweep.json
-    # read-only: nothing is generated or cached under ROOT; only "done" settings are read (on the CPU), validated against the config
-    # rebuilt from sweep.json (StaleCacheError if the artefacts were written under another config); a done setting whose
-    # data/dataset.pt is missing is reported as "partial" with a note
+    # read-only: nothing is generated, cached or written under ROOT (a running job may be writing to it); settings are read on the CPU,
+    # validated against the config rebuilt from sweep.json. done: from final.pt (StaleCacheError if written under another config).
+    # partial: from the latest checkpoint via train.load_latest_checkpoint -> the same data as a done setting (history exactly as
+    # checkpointed, examples and metrics from the checkpointed weights) plus epoch/n_epochs, status stays "partial". The checkpoint
+    # being replaced while read is retried once. A checkpoint that cannot be read, is from another config hash, or is inconsistent
+    # (corrupt file, StaleCacheError, epoch > n_epochs, weights that do not fit the net) gives status "partial", no data and a `note`; an unreadable
+    # dataset file gives a note "dataset not readable". Exceptions that are not about a bad file (a bug in the model code) propagate.
+    # A dataset file that is missing (done or partial) also gives "partial" with a note, no data. No checkpoint: "missing".
+    # A checkpoint at epoch 0 or without a monitor entry loads (no loss curve / MIR yet; the prose says so).
 def find_result(results, task, L, phi, rate_lambda) -> SettingResult    # ValueError if absent
 def final_mir(results, task) -> FinalMIR        # last monitor call; ValueError for a done setting without monitor history
 def mir_table_markdown(fm) / summary_text(fm) / overview_text(results) / setting_text(result)   # prose generated from the numbers
-    # summary_text: extremes of the corrected MIR over layer-cells with ties listed; means pool the layer-cells where raw, corrected
-    # and chance are all finite and give their count; setting_text raises ValueError naming any history key it needs but lacks
-def setting_items(result) -> list[str | Figure] # prose + loss curves + example outputs + MIR history; prose only (with the reason) if not done
+    # summary_text: "N of M settings finished, K provisional (still running)"; extremes of the corrected MIR over layer-cells with ties
+    # listed; means pool the layer-cells where raw, corrected and chance are all finite and give their count. ALL statistics are over
+    # FINISHED settings only (provisional rows are blanked first); provisional settings are listed apart with their epoch.
+    # overview_text: "36 settings: 12 done, 4 partial (provisional), 20 missing" (+ ", N partial without data" for unusable checkpoints)
+    # mir_table_markdown: provisional rows are named "label \* (MIR@m, ckpt e/N)" and a footnote (MIR from epoch m; checkpoint at epoch e of N) says the values are not final
+    # setting_text raises ValueError naming any history key a DONE setting needs but lacks; a provisional one is headed
+    # "partial, epoch X of N", says "so far", and states when there is no logged epoch or no MIR yet
+def setting_items(result) -> list[str | Figure] # prose + loss curves + example outputs + MIR history; prose only (with the reason) if no data.
+    # A provisional setting's figures are titled "<task> <label> — partial, epoch X of N"; a figure with no data yet (no logged epoch,
+    # no monitor call) is omitted
 def task_items(results, task) -> list[str | Figure]    # summary prose, table, draw.fig_mir_heatmaps
 def show(items)                                 # the only IPython use
 ```
 
 `draw.py` has the heatmaps: `plot_mir_heatmap(values, row_labels, row_status, title, ax, vmin, vmax, colorbar)` (NaN cells grey, unfinished
 rows labelled with their status, ValueError instead of clipping a value outside [vmin, vmax]) and `fig_mir_heatmaps(panels, row_labels,
-row_status, title)` (one shared scale [min(0, data), max(1, data)] and one colourbar).
+row_status, title)` (one shared scale [min(0, data), max(1, data)] and one colourbar; values outside [0, 1] are shown, not clipped).
+A row status `draw.PROVISIONAL` ("provisional") keeps its values and gets an orange hatch (`PROVISIONAL_COLOR`, `PROVISIONAL_HATCH`) over the row;
+the colour scale is computed from the finished rows only, so a provisional value cannot rescale the figure: its cell colour is clipped to the scale
+while its printed number is exact (`fig_mir_heatmaps` says so in `PROVISIONAL_NOTE` under the panels). `fig_example_outputs(..., title="")` heads the figure; with a title the legend moves to the bottom
+(constrained layout lets a top legend and a title overlap).
+`train.load_latest_checkpoint(cache_dir, cfg, device, dtype) -> (net, history, epoch)` is the read-only counterpart of `load_trained` for the latest checkpoint
+(OSError if none or if it fails twice; ValueError naming the file if unreadable, from another config, or its weights do not fit the net; the read is
+repeated once after an OSError, e.g. a vanished file or a stale NFS handle during checkpoint rotation).
 
-A missing or interrupted setting renders as one bold line naming it and its directory (relative to ROOT); its row in the table and
-heatmap is labelled with the status. Prediction metrics are on the whole training set (the sweep has no held-out data).
+A missing setting, or a partial one without usable data, renders as one bold line naming it, the reason and its directory (relative to ROOT); its row in
+the table and heatmap is labelled with the status. A running setting is drawn like a finished one but labelled "partial, epoch X of N" everywhere, its
+table and heatmap rows are marked provisional, and it never enters a summary statistic, so a provisional number cannot be read as a final one. Prediction metrics are on the whole training set (the sweep has no held-out data).
 
 ## cli.py
 

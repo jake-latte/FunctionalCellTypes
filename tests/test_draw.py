@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from fct import draw
-from fct.analyse import GridPredictions, LayerPCA
+from fct.analyse import ExampleOutputs, GridPredictions, LayerPCA
 from fct.config import DataConfig
 from fct.data import Dataset
 
@@ -334,3 +334,22 @@ def test_fig_solver_history_skips_absent_keys():
 
 def test_show_is_never_called():
     assert ".show(" not in inspect.getsource(draw)
+
+
+@pytest.mark.parametrize("title", ["", "a banner"])
+def test_fig_example_outputs_title_puts_the_legend_below_the_axes(title):
+    outputs = ExampleOutputs(
+        indices=torch.arange(2),
+        x=torch.zeros(2, 4),
+        y_true=torch.randn(2, 4),
+        y_pred=torch.randn(2, 4),
+    )
+    cfg = DataConfig(task="linear_teacher", P=8, D_in=4, n_latents=2, latent_range=1.0)
+    fig = draw.fig_example_outputs("linear_teacher", outputs, cfg, title=title)
+    fig.canvas.draw()
+    legend = fig.legends[0].get_window_extent()
+    axes_bottom = min(ax.get_window_extent().y0 for ax in fig.axes)
+    axes_top = max(ax.get_window_extent().y1 for ax in fig.axes)
+    assert fig.get_suptitle() == title
+    assert (legend.y1 <= axes_bottom) if title else (legend.y0 >= axes_top)
+    plt.close(fig)

@@ -21,6 +21,7 @@ from nbclient import NotebookClient
 from nbformat import NotebookNode
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
+from fct.explanations import MIR_EXPLANATION
 from fct.report import ROOT_ENV
 from fct.sweep import SWEEP_TASKS, expand, preset
 
@@ -30,11 +31,15 @@ EXECUTE_TIMEOUT_S = 1800
 
 INTRO = """# Modularity of hidden layers across the sweep
 
-Per task and setting: loss curves, example outputs of the final net, MIR per layer over
-training (raw with its chance baseline, shuffle-corrected, dead-neuron counts) and prediction
-metrics. A summary table and heatmap of the final MIR per layer open each task. All numbers and
-sentences below are computed from the sweep ROOT named in the parameter cell; settings that
-have not finished are listed with a message instead of being drawn."""
+Per task and setting: loss curves, example outputs of the trained net (of the latest checkpoint
+for a setting still running), MIR per layer over training (raw with its chance baseline,
+shuffle-corrected, dead-neuron counts) and prediction metrics. A summary table and heatmap of the
+final MIR per layer open each task. All numbers and sentences below are computed from the sweep
+ROOT named in the parameter cell. A setting that is still running is shown from its latest
+checkpoint and labelled "partial, epoch X of N"; its numbers are provisional (marked `*` in the
+table, hatched in the heatmap) and are left out of the summary statistics. A setting with no
+checkpoint, or whose checkpoint or dataset file is unreadable, stale or missing, is listed with a
+message instead of being drawn."""
 
 PARAMETERS = """ROOT = None  # the sweep ROOT (holds sweep.json); None reads $FCT_SWEEP_ROOT"""
 
@@ -50,7 +55,7 @@ from fct.report import (
     task_items,
 )
 
-mpl.rcParams["figure.dpi"] = 60  # keeps the executed notebook small
+mpl.rcParams["figure.dpi"] = 100  # about 1300 px for a 13 in figure
 RESULTS = load_results(ROOT or sweep_root_from_env())
 show([overview_text(RESULTS)])"""
 
@@ -78,6 +83,7 @@ def build_notebook() -> NotebookNode:
         new_markdown_cell(INTRO, id=ids.next()),
         new_code_cell(PARAMETERS, id=ids.next(), metadata={"tags": ["parameters"]}),
         new_code_cell(SETUP, id=ids.next()),
+        new_markdown_cell(MIR_EXPLANATION, id=ids.next()),
     ]
     # The grid does not depend on the sweep's sizes, so any preset gives the same order.
     settings = expand(preset("tiny"))
