@@ -337,3 +337,36 @@ def test_an_overfitting_net_is_worse_on_held_out_data_than_on_its_training_data(
     run_setting(sweep, index, tmp_path, log=lambda s: None)
     row = evaluate_setting(tmp_path, sweep, expand(sweep)[index], held_out_seed=77)
     assert row["heldout_mse"] > 3 * row["train_mse"]
+
+
+# ---------------------------------------------------------------------------- plotting
+def test_figures_draw_from_a_table_and_mark_failures():
+    from fct.lrplot import fig_gap_vs_lr, fig_heldout_vs_lr, plot_heldout_vs_lr
+
+    rows = _table(lambda task, L: 1e-3, nan_at={("linear_teacher", 5, 1e-2)})
+    fig = fig_heldout_vs_lr(rows, {("linear_teacher", 1): 1e-3})
+    assert len(fig.axes) == len(TASKS) * 2
+    ax = fig.axes[1]  # linear_teacher, L=5: one red cross per failed (phi, rate) at lr 1e-2
+    crosses = [line for line in ax.lines if line.get_marker() == "x"]
+    assert sum(len(line.get_xdata()) for line in crosses) == 4
+    scores = rank_learning_rates(rows)
+    assert len(fig_gap_vs_lr(scores, TASKS, (1, 5)).axes) == 2
+    with pytest.raises(ValueError, match="no rows"):
+        plot_heldout_vs_lr(fig.axes[0], rows, "what_where", 1)
+
+
+def test_subset_indices_and_trial_names():
+    from pathlib import Path
+
+    from fct.lrtune import subset_indices, trial_root, trial_sweep
+
+    sweep = preset("tiny")
+    indices = subset_indices(sweep, ["what_where"], [1, 5])
+    settings = [expand(sweep)[i] for i in indices]
+    assert len(indices) == 8 and {s.L for s in settings} == {1, 5}
+    assert {s.task for s in settings} == {"what_where"}
+    with pytest.raises(ValueError, match="unknown"):
+        subset_indices(sweep, ["nope"], [1])
+    assert trial_root(Path("b"), 3e-4, 2) == Path("b/lr_0.0003_seed2")
+    trial = trial_sweep(sweep, 3e-4, 2)
+    assert trial.lr == 3e-4 and trial.seeds.data == trial.seeds.net == trial.seeds.train == 2
