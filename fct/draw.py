@@ -890,3 +890,109 @@ def fig_example_outputs(
     if n_show < 1:
         raise ValueError(f"n_show must be at least 1, got {n_show}")
     return build(outputs, data_cfg, min(n_show, len(outputs.indices)))
+
+
+# --------------------------------------------------------------------------- final MIR heatmaps
+_MISSING_GREY = "#d9d9d9"  # cells with no value: a layer the setting lacks, or an unfinished run
+
+
+def _add_mir_colorbar(fig: Figure, image, axes: Axes | Sequence[Axes], **kwargs) -> None:
+    """The one colourbar code path of the MIR heatmaps."""
+    fig.colorbar(image, ax=axes, label="MIR", **kwargs)
+
+
+def _annotate_cells(ax: Axes, values: np.ndarray, vmin: float, vmax: float) -> None:
+    """Write each finite value in its cell, in white on dark and black on light cells."""
+    middle = (vmin + vmax) / 2
+    for (row, col), value in np.ndenumerate(values):
+        if np.isfinite(value):
+            colour = "white" if value < middle else "black"
+            ax.text(col, row, f"{value:.2f}", ha="center", va="center", fontsize=7, color=colour)
+
+
+def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> None:
+    """Name the status ("partial", "missing") across the row of an unfinished setting."""
+    for row, status in enumerate(row_status):
+        if status != "done":
+            ax.text(
+                (n_cols - 1) / 2,
+                row,
+                status,
+                ha="center",
+                va="center",
+                fontsize=8,
+                style="italic",
+                color=_GREY,
+            )
+
+
+def _check_in_range(values: np.ndarray, vmin: float, vmax: float) -> None:
+    finite = values[np.isfinite(values)]
+    if finite.size and (finite.min() < vmin or finite.max() > vmax):
+        raise ValueError(
+            f"values span [{finite.min():.3f}, {finite.max():.3f}], outside the colour range "
+            f"[{vmin}, {vmax}]; they would be clipped"
+        )
+
+
+def plot_mir_heatmap(
+    values: ArrayLike,
+    row_labels: Sequence[str],
+    row_status: Sequence[str],
+    title: str = "",
+    ax: Axes | None = None,
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    colorbar: bool = True,
+) -> Axes:
+    """Settings (rows) by layer (columns) heatmap of a final MIR array, NaN where there is no
+    value (grey). Each cell carries its value and an unfinished setting's row its status.
+    A value outside [vmin, vmax] is an error, not silently clipped. A figure that shows
+    several heatmaps on one scale passes `colorbar=False` and adds one for all of them."""
+    values = _np(values)
+    if values.ndim != 2 or not values.shape[0] == len(row_labels) == len(row_status):
+        raise ValueError(
+            f"values {values.shape} do not match {len(row_labels)} labels / "
+            f"{len(row_status)} statuses"
+        )
+    _check_in_range(values, vmin, vmax)
+    ax = _get_ax(ax, figsize=(5, 5))
+    cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)
+    image = ax.imshow(np.ma.masked_invalid(values), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+    ax.set_xticks(range(values.shape[1]), [f"layer {i + 1}" for i in range(values.shape[1])])
+    ax.set_yticks(range(len(row_labels)), list(row_labels))
+    ax.tick_params(length=0)
+    _annotate_cells(ax, values, vmin, vmax)
+    _label_unfinished_rows(ax, row_status, values.shape[1])
+    ax.set_title(title, fontsize=10)
+    if colorbar:
+        _add_mir_colorbar(ax.figure, image, ax, fraction=0.046, pad=0.03)
+    return ax
+
+
+def fig_mir_heatmaps(
+    panels: Mapping[str, ArrayLike],
+    row_labels: Sequence[str],
+    row_status: Sequence[str],
+    title: str = "",
+) -> Figure:
+    """One heatmap per named panel side by side on a shared colour scale and colourbar. The
+    scale is [min(0, data), max(1, data)], so a corrected MIR below zero is shown, not clipped."""
+    arrays = {name: _np(a) for name, a in panels.items()}
+    finite = np.concatenate([a[np.isfinite(a)] for a in arrays.values()])
+    vmin = min(0.0, float(finite.min())) if finite.size else 0.0
+    vmax = max(1.0, float(finite.max())) if finite.size else 1.0
+    fig, axes = plt.subplots(
+        1,
+        len(arrays),
+        figsize=(5 * len(arrays), 0.4 * len(row_labels) + 1.8),
+        sharey=True,
+        layout="constrained",
+    )
+    axes = list(np.atleast_1d(axes))
+    for ax, (name, values) in zip(axes, arrays.items(), strict=True):
+        plot_mir_heatmap(values, row_labels, row_status, name, ax, vmin, vmax, colorbar=False)
+    _add_mir_colorbar(fig, axes[-1].images[0], axes, shrink=0.6)
+    if title:
+        fig.suptitle(title)
+    return fig

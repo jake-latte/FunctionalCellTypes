@@ -8,7 +8,7 @@ status: todo
 
 # Run the tiny preset end to end, then stop for review
 
-Run the `tiny` preset for all 36 settings locally (CPU, plus one tiny GPU smoke run pinned by UUID, T1000 preferred), execute the notebook on it, commit the executed notebook. Depends on the three items above.
+Run the `tiny` preset for all 36 settings locally (CPU, plus one tiny GPU smoke run pinned by UUID, T1000 preferred), execute the notebook on it into the git-ignored tmp/ (do not commit the executed notebook; only the source notebook is committed). Depends on the three items above.
 
 ## Acceptance criteria
 - All 36 settings `done` in `status`; notebook executed without errors.
