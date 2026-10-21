@@ -1,59 +1,105 @@
 # Functional Cell Types
 
-Modular LaTeX document. One file per section under `sections/`; each compiles
-on its own (via the `subfiles` package) so sections can be worked on
-independently.
+`fct` is a Python package for studying how deep networks come to represent the factors of a task.
+It has two parts that share one configuration, cache and command-line interface:
 
-## Build
+1. **Mean-field theory.** Train a deep network on a regression task, then solve the matching
+   saddle-point equations (single-site HMC sampler, checkpointed) and compare kernels.
+2. **Modularity study.** Train feed-forward networks on three tasks with known factors and measure
+   whether hidden neurons become modular for those factors, using a mutual-information
+   modularity index (MIR) per hidden layer, tracked through training.
+
+The package is `fct/`; `docs/design.md` is the interface contract between its modules, `docs/status.md`
+records the state of the modularity study, and `docs/issues/` holds the written work items.
+
+## Install
+
+The environment is managed with [`uv`](https://docs.astral.sh/uv/); `uv.lock` pins every dependency
+and the first `uv sync` downloads the CUDA-enabled torch wheel (several GB). Python >= 3.12.
 
 ```sh
-make                                    # full document -> build/main.pdf
-make sec SEC=02_renormalisation_group   # one section   -> build/02_renormalisation_group.pdf
-make clean                              # removes build/
+uv sync                                  # create the environment (dev tools included)
+unset VIRTUAL_ENV                        # if your shell carries another project's venv
 ```
 
-All intermediate files and PDFs go into `build/`, which is gitignored.
+## Package layout
 
-In VS Code with LaTeX Workshop, `.vscode/settings.json` makes Ctrl+Alt+B
-compile whichever file is open (a section on its own, or everything from
-`main.tex`), writes output to `build/`, and hides that folder in the explorer.
+| Module | Purpose |
+|---|---|
+| `config.py` | pydantic `Config` (data / net / train / meanfield / analysis), JSON I/O, per-section hashes |
+| `tasks.py`, `data.py` | the task generators (below) and the `Dataset` (inputs, targets, ground-truth factors and groups) |
+| `model.py`, `train.py` | MLP and the training loop with checkpoint / resume and an optional monitor hook |
+| `modularity.py` | rank binning, plug-in mutual information, preference ratio, MIR, dead neurons, shuffle baseline and bias correction (pure functions) |
+| `monitor.py` | `make_mir_monitor`: the training hook that records per-layer MIR during training |
+| `sweep.py` | the 36-setting grid: `SweepConfig`, `expand`, `run_setting`, `setting_status` |
+| `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
+| `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
+| `hmc.py`, `meanfield.py` | HMC sampler and the mean-field saddle-point solver |
+| `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
+| `notebooks/` | `build_modularity.py` builds the results notebook; `modularity.ipynb` is its source (no outputs) |
+| `jobs/fct_sweep.sh` | SLURM array script for the sweep |
+| `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
 
-## Layout
+## The modularity study
 
-| File              | Purpose                                                   |
-|-------------------|-----------------------------------------------------------|
-| `main.tex`        | Title, section order, bibliography. Edit to add/reorder.  |
-| `preamble.tex`    | Packages, theorem environments, layout.                   |
-| `macros.tex`      | Notation (`\R`, `\E`, `\norm`, `\RG`, ...). Edit globally. |
-| `sections/*.tex`  | One section per file.                                     |
-| `references.bib`  | Bibliography (biblatex + biber, author-year).             |
-| `figures/`        | Graphics; `\includegraphics{name}` resolves here.         |
+**Tasks** (`fct/tasks.py`, selected with `data.task`; each returns the ground-truth factors used for scoring):
 
-## Adding a section
+- `linear_teacher`: inputs and targets are generated from latent variables through random linear maps
+  (`W_X`, `W_Y`, i.i.d. N(0, 1/k)); one factor group per latent.
+- `object_action`: a G x G grid with an agent cell and an object map; the target is the optimal action
+  (stay, up, down, left, right) toward the nearest object. Factor groups: agent position, object
+  occupancy bits, action bits.
+- `what_where`: a 9 x 9 grid of 3 x 3 macro-cells, one binary 3 x 3 motif placed in a macro-cell
+  (a library of all 511 non-empty patterns); the target is `where` (which cell) and `what` (which motif).
 
-1. Create `sections/05_new_section.tex`:
-   ```latex
-   \documentclass[../main.tex]{subfiles}
-   \begin{document}
-   \section{New Section}
-   \label{sec:new}
-   ...
-   \end{document}
-   ```
-2. Add `\subfile{sections/05_new_section}` to `main.tex` where it should appear.
+**Modularity index.** For each hidden layer the code bins neuron rates by rank, estimates the mutual
+information between each neuron and each factor group (plug-in, in nats), turns it into a preference
+ratio per neuron, and averages to the layer's MIR. Neurons carrying no information about any factor are
+counted as dead. Three numbers are reported, because the raw plug-in estimate has a
+cardinality-dependent floor: the **raw** MIR, the **chance baseline** (the raw MIR recomputed with the
+factor labels shuffled) and the **corrected** MIR (the shuffled null removed). Their exact definitions,
+with equations, are in `notebooks/modularity.ipynb` and `fct/modularity.py`.
 
-Renaming or reordering is just editing the `\subfile` list in `main.tex`.
-Numbering starts at 0 (Motivation is Section 0) because of
-`\setcounter{section}{-1}` in `main.tex`; delete that line for 1-based numbering.
-
-## Python library
-
-The `fct` package trains deep networks and solves the matching mean-field theory. The
-environment is managed with `uv`; `uv.lock` pins every dependency. The first `uv sync`
-downloads the CUDA-enabled torch wheel (several GB).
+**Sweep.** The grid is 3 tasks x hidden layers {1, 3, 5} x phi {tanh, relu} x rate regulariser
+{0, 1e-3} = 36 settings, indexed in a fixed order (task slowest, rate fastest). A sweep lives in a
+directory `ROOT` that holds `sweep.json`; setting `i` is a normal cache directory
+`ROOT/<task>/L{L}_{phi}_r{rate}/`. Two presets exist: `tiny` (seconds per setting on a CPU, a pipeline
+check that learns nothing meaningful) and `full` (cluster sizes; the numbers in it are placeholders to
+be tuned). The weight regulariser stays at its library default.
 
 ```sh
-uv sync                                                             # create the environment
+uv run python -m fct sweep init ROOT --preset tiny        # write ROOT/sweep.json (--set n_epochs=100 ...)
+uv run python -m fct sweep list ROOT                      # "<index> <task>/L{L}_{phi}_r{rate}"
+uv run python -m fct sweep count ROOT                     # 36
+uv run python -m fct sweep run ROOT --index 7             # train one setting (resumable); no --index: all
+uv run python -m fct sweep status ROOT                    # done / partial / missing per setting
+```
+
+**Cluster.** `jobs/fct_sweep.sh` submits the sweep as a SLURM array on the GPU partition (one setting
+per task, a concurrency cap, logs under `tmp/logs/`). Check what it would run before submitting:
+
+```sh
+bash jobs/fct_sweep.sh ROOT --dry-run                     # print the sbatch command, run nothing
+bash jobs/fct_sweep.sh ROOT --submit [--index N]          # FCT_MAX_CONCURRENT caps running tasks (default 4)
+bash jobs/fct_sweep.sh ROOT --list | --status
+```
+
+**Results notebook.** The notebook shows, per task and setting, loss curves, example outputs of the
+trained network, and MIR per layer over training, plus a summary table and heatmap of the final MIR
+across the sweep. All logic is in `fct/report.py`; the cells only call it. Only the source notebook is
+committed. Build and execute it on a sweep (the output goes to the git-ignored `tmp/` by default):
+
+```sh
+uv run python notebooks/build_modularity.py ROOT                 # execute on ROOT -> tmp/modularity.ipynb
+uv run python notebooks/build_modularity.py --no-execute         # rebuild the committed source notebook
+```
+
+## Python library: single runs and the mean-field solver
+
+A single run is one cache directory. `train` records the per-layer MIR during training when
+`train.monitor_int > 0` (set `train.monitor_bins`, `train.monitor_shuffles` for its cost).
+
+```sh
 uv run python -m fct init CACHE_DIR --set data.P=512 --set net.L=2  # write CACHE_DIR/config.json
 uv run python -m fct train CACHE_DIR          # generate data, train the network
 uv run python -m fct solve CACHE_DIR          # mean-field saddle-point solver
@@ -91,3 +137,51 @@ uv run pytest         # tests (CPU only, synthetic data)
 uv run ruff check fct tests            # lint
 uv run ruff format --check fct tests   # formatting
 ```
+
+## Paper (LaTeX)
+
+The manuscript lives in `Latex/`; run the commands below from that directory. It is a modular LaTeX document. One file per section under `sections/`; each compiles
+on its own (via the `subfiles` package) so sections can be worked on
+independently.
+
+### Build
+
+```sh
+make                                    # full document -> build/main.pdf
+make sec SEC=02_renormalisation_group   # one section   -> build/02_renormalisation_group.pdf
+make clean                              # removes build/
+```
+
+All intermediate files and PDFs go into `build/`, which is gitignored.
+
+In VS Code with LaTeX Workshop, `.vscode/settings.json` makes Ctrl+Alt+B
+compile whichever file is open (a section on its own, or everything from
+`main.tex`), writes output to `build/`, and hides that folder in the explorer.
+
+### Layout
+
+| File              | Purpose                                                   |
+|-------------------|-----------------------------------------------------------|
+| `main.tex`        | Title, section order, bibliography. Edit to add/reorder.  |
+| `preamble.tex`    | Packages, theorem environments, layout.                   |
+| `macros.tex`      | Notation (`\R`, `\E`, `\norm`, `\RG`, ...). Edit globally. |
+| `sections/*.tex`  | One section per file.                                     |
+| `references.bib`  | Bibliography (biblatex + biber, author-year).             |
+| `figures/`        | Graphics; `\includegraphics{name}` resolves here.         |
+
+### Adding a section
+
+1. Create `sections/05_new_section.tex`:
+   ```latex
+   \documentclass[../main.tex]{subfiles}
+   \begin{document}
+   \section{New Section}
+   \label{sec:new}
+   ...
+   \end{document}
+   ```
+2. Add `\subfile{sections/05_new_section}` to `main.tex` where it should appear.
+
+Renaming or reordering is just editing the `\subfile` list in `main.tex`.
+Numbering starts at 0 (Motivation is Section 0) because of
+`\setcounter{section}{-1}` in `main.tex`; delete that line for 1-based numbering.
