@@ -1,14 +1,17 @@
 """Learning-rate tuning of the sweep: score trained settings on held-out data, then pick a rate.
 
 Layers (kept apart so the logic is testable without a disk or a GPU):
-- pure: `heldout_dataset`, `loss_curve_stats`, the table logic (`collapse_seeds`,
+- pure: `loss_curve_stats`, the table logic (`collapse_seeds`,
   `rank_learning_rates`, `select`, `select_by`, `global_verdict`);
 - I/O edge: `evaluate_setting` (reads a finished setting, writes nothing), the CSV functions,
   `tuning_template`, `run_trials`, `collect_rows` and the command line (`python -m fct.lrtune`).
 
 Every trial is a normal sweep: one ROOT per (learning rate, seed) filled by `fct.sweep.run_setting`,
 so tuning exercises the code path of the real run. A result row has the keys of `COLUMNS`.
-The objective is the held-out MSE; the MIR is recorded for context and never used to choose.
+The held-out MSE and the regularised loss are the criteria; the MIR is recorded for context and
+never used to choose. Held-out data comes from `fct.tasks.resample`.
+
+This is a separate entry point (`python -m fct.lrtune`), not a subcommand of `python -m fct`.
 """
 
 import argparse
@@ -27,8 +30,8 @@ import numpy as np
 import torch
 
 from fct.cache import cache_paths
-from fct.config import Config, DataConfig, resolve_device, resolve_dtype
-from fct.data import get_dataset, make_dataset
+from fct.config import Config, resolve_device, resolve_dtype
+from fct.data import get_dataset
 from fct.model import MLP
 from fct.sweep import (
     LAYERS,
@@ -46,7 +49,7 @@ from fct.sweep import (
     setting_dir,
     setting_status,
 )
-from fct.tasks import Dataset, _place_motifs
+from fct.tasks import Dataset, resample
 from fct.train import compute_loss, load_trained
 
 Row = dict[str, object]
@@ -70,50 +73,32 @@ COLUMNS: dict[str, type] = {
     "mir_corrected": str,  # final corrected MIR of each hidden layer, ';'-joined
 }
 SETTING_KEYS = ("task", "L", "phi", "rate_lambda")
+CRITERIA = {  # rankable columns -> axis label
+    "loss": "final regularised training loss",
+    "heldout_mse": "held-out MSE",
+    "train_mse": "training MSE",
+}
 HELD_OUT_SEED_OFFSET = 1000  # held-out seed = training data seed + this, never a training seed
 SPIKE_START = 0.25  # fraction of the logged curve after which a loss spike counts
-TIE_RTOL = 1e-3  # held-out MSEs closer than this (relative) are tied in the ranking
+# Values closer than this (relative) are tied in a ranking. Final MSEs of nets that ended at the
+# same solution agree to about 1e-4 (float32 summation order, different checkpoints); 1e-3 is the
+# next decade up, so such nets tie while a 1% difference still ranks.
+TIE_RTOL = 1e-3
 LEARNED_MARGIN = 0.9  # a net has learned if its held-out MSE is below this x the zero net's
 TAIL = 0.1  # the final fraction of the curve over which "still decreasing" is judged
+MAX_MEDIAN_GAP = 0.10  # verdict: median relative gap to each setting's best lr at most this ...
+MAX_WORST_RATIO = 2.0  # ... and no setting more than this many times worse than its best
+DEFAULT_LAYERS = (min(LAYERS), max(LAYERS))  # the shallow and deep extremes of the grid
+LOGGED_POINTS = 100  # history entries per run (log_int = n_epochs / this)
+CHECKPOINTS = 10  # checkpoints per run
+MONITOR_CALLS = 4  # MIR monitor calls per run, besides the final one
+REQUIRED_HISTORY = ("epoch", "loss", "mse", "monitor_mir_corrected")
 TUNING_FILE = "template.json"
 TIMINGS_FILE = "timings.csv"
+FIGURE_DPI = 150
 
 
-# ---------------------------------------------------------------------------- held-out data
-def heldout_dataset(
-    cfg: DataConfig, train: Dataset, seed: int, device: torch.device, dtype: torch.dtype
-) -> Dataset:
-    """Fresh samples of the task that `train` was drawn from, using data seed `seed`.
-
-    A task generator draws its task definition (the linear teacher's W_X and W_Y, the what-where
-    motif set) from the same seeded stream as the samples, so a new seed alone would be a
-    different task. The new samples are therefore re-expressed with the training definition
-    taken from `train.extras`. Pure: nothing is read or written on disk.
-    """
-    if cfg.task not in SWEEP_TASKS:
-        raise ValueError(
-            f"held-out data is defined for the sweep tasks {SWEEP_TASKS}, not {cfg.task!r}"
-        )
-    if seed == cfg.seed:
-        raise ValueError(f"held-out seed must differ from the training data seed {cfg.seed}")
-    new = make_dataset(cfg.model_copy(update={"seed": seed}), device, dtype)
-    if cfg.task == "linear_teacher":
-        z = torch.stack([new.factors[f"z{i}"] for i in range(cfg.n_latents)], dim=1)
-        w_x, w_y = train.extras["W_X"], train.extras["W_Y"]
-        return Dataset(
-            x=z @ w_x.T, y=z @ w_y.T, Q=None, period=None, factors=new.factors,
-            groups=new.groups, extras=train.extras,
-        )  # fmt: skip
-    if cfg.task == "what_where":
-        motifs = train.extras["motifs"]
-        x = _place_motifs(new.factors["where"], motifs[new.factors["what"]]).to(dtype)
-        return Dataset(
-            x=x, y=new.y, Q=None, period=None, factors=new.factors, groups=new.groups,
-            extras=train.extras,
-        )  # fmt: skip
-    return new
-
-
+# ---------------------------------------------------------------------------- scoring
 def mse(net: MLP, data: Dataset) -> float:
     """Mean squared error over all outputs (the `mse` of `compute_loss`)."""
     with torch.no_grad():
@@ -122,17 +107,24 @@ def mse(net: MLP, data: Dataset) -> float:
 
 # ---------------------------------------------------------------------------- loss curve
 def loss_curve_stats(history: dict) -> dict:
-    """Stability and convergence of one logged loss curve.
+    """Stability and convergence of one logged loss curve (at least two logged points).
 
     - `diverged`: a non-finite loss or mse was logged;
     - `max_spike`: the largest ratio of a logged loss to the best loss since the first quarter
       of the curve, at least 1 (1 = no spike; inf if diverged);
     - `tail_drop`: relative fall of the loss over the final tenth of the curve; clearly positive
       means the run was still improving, i.e. under-trained (nan if diverged).
+
+    The regularised loss is positive; a non-positive loss in a finite curve is an error, since
+    the ratios would be meaningless.
     """
     loss = np.asarray(history["loss"], dtype=float)
+    if len(loss) < 2:
+        raise ValueError(f"need at least 2 logged loss values, got {len(loss)}")
     if not (np.isfinite(loss).all() and np.isfinite(np.asarray(history["mse"], dtype=float)).all()):
         return {"diverged": True, "max_spike": math.inf, "tail_drop": math.nan}
+    if (loss <= 0).any():
+        raise ValueError(f"the regularised loss must be positive, got min {loss.min()}")
     start = int(SPIKE_START * len(loss))
     ratios = [loss[i] / loss[start:i].min() for i in range(start + 1, len(loss))]
     tail_start = int((1 - TAIL) * (len(loss) - 1))
@@ -148,6 +140,8 @@ def average_ranks(values: np.ndarray, rtol: float = 0.0) -> np.ndarray:
     """Ranks 1.. in ascending order, ties sharing their mean rank; non-finite values rank last
     (tied with each other). Values within a relative `rtol` of the smallest value of their
     cluster are tied, so differences below the resolution of the measurement do not rank."""
+    if len(values) == 0:
+        raise ValueError("cannot rank an empty set of values")
     keys = np.where(np.isfinite(values), values, np.inf)
     order = np.argsort(keys, kind="stable")
     cluster = np.zeros(len(keys), dtype=int)
@@ -165,43 +159,74 @@ def average_ranks(values: np.ndarray, rtol: float = 0.0) -> np.ndarray:
     return ranks
 
 
-def _setting_key(row: Row) -> tuple:
+def setting_key(row: Row) -> tuple:
     return tuple(row[k] for k in SETTING_KEYS)
 
 
 def collapse_seeds(rows: Iterable[Row], keys: Sequence[str] = ("heldout_mse",)) -> list[Row]:
-    """One row per (setting, lr): the median over seeds of each column in `keys`, all of them
-    NaN and `diverged` set if any seed diverged.
+    """One row per (setting, lr): the median over seeds of each column in `keys`.
 
-    Raises ValueError on two rows for the same (setting, lr, seed)."""
+    A collapsed row holds only the setting, `lr`, the `keys` medians, `n_seeds` (how many seeds
+    it summarises) and `diverged`; if any seed diverged the medians are NaN and `diverged` is
+    True. It has no `seed` and is not a result row. Raises ValueError on two rows for the same
+    (setting, lr, seed), e.g. from two run lengths: select one with `filter_rows` first.
+    """
     groups: dict[tuple, list[Row]] = defaultdict(list)
     seen = set()
     for row in rows:
-        key = (*_setting_key(row), row["lr"], row["seed"])
+        key = (*setting_key(row), row["lr"], row["seed"])
         if key in seen:
-            raise ValueError(f"duplicate result row for {key}")
+            raise ValueError(
+                f"duplicate result row for {key}: rows of more than one run length? "
+                "select one with filter_rows(n_epochs=...)"
+            )
         seen.add(key)
-        groups[(*_setting_key(row), row["lr"])].append(row)
+        groups[(*setting_key(row), row["lr"])].append(row)
     collapsed = []
-    for group in groups.values():
+    for (*setting, lr), group in groups.items():
         diverged = any(r["diverged"] for r in group)
         medians = {
             k: math.nan if diverged else statistics.median(float(r[k]) for r in group) for k in keys
         }
-        collapsed.append({**group[0], **medians, "diverged": diverged, "seed": -1})
+        collapsed.append(
+            dict(zip(SETTING_KEYS, setting))
+            | {"lr": lr, "n_seeds": len(group), "diverged": diverged}
+            | medians
+        )
     return collapsed
 
 
-def learned_settings(rows: Iterable[Row], margin: float = LEARNED_MARGIN) -> list[Row]:
-    """The rows of the settings where some lr gives a held-out MSE below `margin` times that of
-    the zero network. In the others every lr ends at the collapsed solution, so the
-    learning rate cannot be judged by what the net has learned."""
-    rows = list(rows)
-    best: dict[tuple, bool] = defaultdict(bool)
-    for r in collapse_seeds(rows, ("heldout_mse", "null_mse")):
+def filter_rows(
+    rows: Iterable[Row], seeds: Sequence[int] | None = None, n_epochs: int | None = None
+) -> list[Row]:
+    """The rows of the given seeds and run length (None keeps all)."""
+    return [
+        r
+        for r in rows
+        if (seeds is None or r["seed"] in seeds) and (n_epochs is None or r["n_epochs"] == n_epochs)
+    ]
+
+
+def learned_settings(rows: Sequence[Row], margin: float = LEARNED_MARGIN) -> list[Row]:
+    """The rows of the settings whose converged net has learned something.
+
+    Rule: for each setting only its longest run length is considered (the converged value; a
+    transient of a shorter run does not count); the setting has learned if, at that length, some
+    lr that did not diverge gives a median-over-seeds held-out MSE below `margin` times the
+    median held-out MSE of the zero network. In the other settings every lr ends at the collapsed
+    solution, so the learning rate cannot be judged by what the net has learned. The returned
+    rows are those longest-length rows of the learned settings.
+    """
+    longest: dict[tuple, int] = {}
+    for r in rows:
+        key = setting_key(r)
+        longest[key] = max(longest.get(key, 0), r["n_epochs"])
+    converged = [r for r in rows if r["n_epochs"] == longest[setting_key(r)]]
+    learned: dict[tuple, bool] = defaultdict(bool)
+    for r in collapse_seeds(converged, ("heldout_mse", "null_mse")):
         if not r["diverged"]:
-            best[_setting_key(r)] |= r["heldout_mse"] < margin * r["null_mse"]
-    return [r for r in rows if best[_setting_key(r)]]
+            learned[setting_key(r)] |= r["heldout_mse"] < margin * r["null_mse"]
+    return [r for r in converged if learned[setting_key(r)]]
 
 
 class Score(NamedTuple):
@@ -231,7 +256,7 @@ def rank_learning_rates(
     """
     by_setting: dict[tuple, list[Row]] = defaultdict(list)
     for row in collapse_seeds(rows, (key,)):
-        by_setting[_setting_key(row)].append(row)
+        by_setting[setting_key(row)].append(row)
     lr_sets = {frozenset(r["lr"] for r in group) for group in by_setting.values()}
     if len(lr_sets) != 1:
         raise ValueError(f"settings were run with different learning rates: {lr_sets}")
@@ -254,7 +279,7 @@ class LrSummary(NamedTuple):
     lr: float
     mean_rank: float
     median_gap: float
-    worst_ratio: float  # largest held-out MSE ratio to a setting's best (inf if any failure)
+    worst_ratio: float  # largest ratio of the ranked value to a setting's best (inf if any failure)
     n_failed: int
     n_settings: int
 
@@ -277,6 +302,14 @@ def _summarise(lr: float, cells: list[Score]) -> LrSummary:
     )
 
 
+def _tie_key(summary: LrSummary) -> tuple:
+    """Rates with the same key are tied: ranks are averages of halves, so they agree exactly when
+    equal (6 decimals only absorb float summation noise); the median gap is compared at the
+    resolution of the ranking, `TIE_RTOL`."""
+    gap = summary.median_gap
+    return (round(summary.mean_rank, 6), gap if math.isinf(gap) else round(gap / TIE_RTOL))
+
+
 def select(scores: Sequence[Score]) -> Selection:
     """The learning rate with the lowest mean rank over `scores` (ties: lowest median gap).
 
@@ -291,9 +324,8 @@ def select(scores: Sequence[Score]) -> Selection:
     summaries = tuple(_summarise(lr, cells[lr]) for lr in sorted(cells))
     fewest = min(s.n_failed for s in summaries)
     eligible = [s for s in summaries if s.n_failed == fewest]
-    key = lambda s: (round(s.mean_rank, 9), round(s.median_gap, 3))
-    top = min(key(s) for s in eligible)
-    tied = tuple(s.lr for s in eligible if key(s) == top)
+    top = min(_tie_key(s) for s in eligible)
+    tied = tuple(s.lr for s in eligible if _tie_key(s) == top)
     return Selection(best=tied[0], tied=tied, summaries=summaries)
 
 
@@ -315,7 +347,9 @@ class Verdict(NamedTuple):
 
 
 def global_verdict(
-    scores: Sequence[Score], max_median_gap: float = 0.10, max_ratio: float = 2.0
+    scores: Sequence[Score],
+    max_median_gap: float = MAX_MEDIAN_GAP,
+    max_ratio: float = MAX_WORST_RATIO,
 ) -> Verdict:
     """Whether the globally best lr can serve every setting: no failure, the median relative
     held-out gap to each setting's best lr at most `max_median_gap`, and no setting more than
@@ -347,7 +381,8 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
     """Score one finished setting: final train and held-out MSE, loss curve stats, final MIR.
 
     Read-only on ROOT: the training dataset is loaded from its cache (never generated), and
-    the held-out data is built in memory. FileNotFoundError if the setting is not finished.
+    the held-out data is built in memory. FileNotFoundError if the setting is not finished;
+    ValueError if its history lacks the loss curve or the MIR monitor entries.
     """
     directory = setting_dir(root, setting)
     if setting_status(root, setting) != "done":
@@ -358,7 +393,12 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
     device, dtype = resolve_device(cfg), resolve_dtype(cfg.dtype)
     train = get_dataset(directory, cfg)
     net, history = load_trained(directory, cfg, device, dtype)
-    held = heldout_dataset(cfg.data, train, held_out_seed, device, dtype)
+    missing = [k for k in REQUIRED_HISTORY if not history.get(k)]
+    if missing:
+        raise ValueError(
+            f"{directory}: the training history lacks {missing}; was the run monitored?"
+        )
+    held = resample(cfg.data, train, held_out_seed, device, dtype)
     tc = cfg.train
     with torch.no_grad():
         loss, parts = compute_loss(net, train.x, train.y, tc.weight_lambda, tc.rate_lambda)
@@ -417,18 +457,19 @@ def read_rows_csv(path: Path) -> list[Row]:
 
 # ---------------------------------------------------------------------------- I/O: trials
 def tuning_template(
-    N: int, P: int, n_epochs: int, n_checks: int = 4, base: str = "full"
+    N: int, P: int, n_epochs: int, n_checks: int = MONITOR_CALLS, base: str = "full"
 ) -> SweepConfig:
-    """The `base` preset with tuning sizes, on the GPU, logging 100 points per run and
-    monitoring MIR `n_checks` times (cheap, but the final MIR is always recorded)."""
-    log_int = max(1, n_epochs // 100)
+    """The `base` preset with tuning sizes, on the GPU, logging `LOGGED_POINTS` points and
+    saving `CHECKPOINTS` checkpoints per run and monitoring MIR `n_checks` times (cheap, but the
+    final MIR is always recorded)."""
+    log_int = max(1, n_epochs // LOGGED_POINTS)
     return preset(base).model_copy(
         update={
             "N": N,
             "P": P,
             "n_epochs": n_epochs,
             "log_int": log_int,
-            "save_int": max(log_int, n_epochs // 10),
+            "save_int": max(log_int, n_epochs // CHECKPOINTS),
             "monitor_int": max(1, n_epochs // n_checks),
             "device": "cuda",
         }
@@ -560,18 +601,30 @@ def group_table_markdown(scores: Sequence[Score], keys: Sequence[str] = ("task",
     return "\n".join(lines)
 
 
+def _ranked_rows(rows: Sequence[Row], learned_only: bool) -> list[Row]:
+    """The rows a report ranks: all, or only those of the settings that learned."""
+    rows = learned_settings(rows) if learned_only else list(rows)
+    if not rows:
+        raise ValueError("no settings to report on (none learned anything?)")
+    return rows
+
+
 def report_markdown(
-    rows: Sequence[Row], key: str = "heldout_mse", learned_only: bool = False
+    rows: Sequence[Row],
+    key: str = "loss",
+    learned_only: bool = False,
+    max_median_gap: float = MAX_MEDIAN_GAP,
+    max_ratio: float = MAX_WORST_RATIO,
 ) -> str:
     """The selection report of a result table ranked on column `key`: all settings, per depth,
     per task, per task and depth, and the verdict on a single global lr. `learned_only` first
-    drops the settings in which no lr beats the zero network (see `learned_settings`)."""
-    if learned_only:
-        rows = learned_settings(rows)
-    if not rows:
-        raise ValueError("no settings to report on (none learned anything?)")
-    scores = rank_learning_rates(rows, key=key)
-    verdict = global_verdict(scores)
+    drops the settings in which no lr beats the zero network (see `learned_settings`).
+
+    The verdict is printed only for the regularised loss or for the settings that learned: a
+    held-out or training MSE ranks the learning rates of a collapsed setting (every converged
+    lr at the zero network) by how little they have trained, so a verdict from it would mislead.
+    """
+    scores = rank_learning_rates(_ranked_rows(rows, learned_only), key=key)
     parts = [
         "**mean rank / median gap by task and depth**\n\n" + group_table_markdown(scores),
         selection_markdown("all settings", select(scores)),
@@ -579,11 +632,19 @@ def report_markdown(
     for name, keys in (("depth", ("L",)), ("task", ("task",)), ("task and depth", ("task", "L"))):
         for group, selection in select_by(scores, keys).items():
             parts.append(selection_markdown(f"{name} {group}", selection))
-    parts.append(
-        f"single global lr {verdict.lr:g}: median gap {_format_gap(verdict.median_gap)}, "
-        f"worst gap {_format_gap(verdict.worst_ratio - 1)}, failed {verdict.n_failed}; "
-        f"suffices: {verdict.single_suffices}"
-    )
+    if key == "loss" or learned_only:
+        verdict = global_verdict(scores, max_median_gap, max_ratio)
+        parts.append(
+            f"single global lr {verdict.lr:g}: median gap {_format_gap(verdict.median_gap)}, "
+            f"worst gap {_format_gap(verdict.worst_ratio - 1)}, failed {verdict.n_failed}; "
+            f"suffices (median gap <= {max_median_gap:.0%}, worst <= {max_ratio:g}x): "
+            f"{verdict.single_suffices}"
+        )
+    else:
+        parts.append(
+            f"no verdict: ranking on {key} over settings that may have collapsed is confounded; "
+            "use --key loss or --learned-only"
+        )
     return "\n\n".join(parts)
 
 
@@ -602,16 +663,16 @@ def _parser() -> argparse.ArgumentParser:
         cmd.add_argument("--lrs", type=float, nargs="+", required=True)
         cmd.add_argument("--seeds", type=int, nargs="+", default=[0])
         cmd.add_argument("--tasks", nargs="+", default=list(SWEEP_TASKS))
-        cmd.add_argument("--layers", type=int, nargs="+", default=[1, 5])
+        cmd.add_argument("--layers", type=int, nargs="+", default=list(DEFAULT_LAYERS))
         if name == "collect":
             cmd.add_argument("--csv", type=Path, required=True)
     report = sub.add_parser("report", help="print the selection report of result CSVs")
     report.add_argument("csv", type=Path, nargs="+")
     report.add_argument("--fig-dir", type=Path, help="also save the figures here")
-    report.add_argument(
-        "--key", default="heldout_mse", choices=["heldout_mse", "train_mse", "loss"]
-    )
+    report.add_argument("--key", default="loss", choices=list(CRITERIA))
     report.add_argument("--learned-only", action="store_true")
+    report.add_argument("--max-median-gap", type=float, default=MAX_MEDIAN_GAP)
+    report.add_argument("--max-ratio", type=float, default=MAX_WORST_RATIO)
     report.add_argument("--seeds", type=int, nargs="+", help="use only these seeds")
     report.add_argument("--n-epochs", type=int, help="use only runs of this length")
     return parser
@@ -625,25 +686,18 @@ def _load_template(base: Path) -> SweepConfig:
 
 
 def _report(args: argparse.Namespace) -> int:
-    csvs, fig_dir = args.csv, args.fig_dir
-    rows = [row for path in csvs for row in read_rows_csv(path)]
-    if args.seeds is not None:
-        rows = [row for row in rows if row["seed"] in args.seeds]
-    if args.n_epochs is not None:
-        rows = [row for row in rows if row["n_epochs"] == args.n_epochs]
-    key, learned_only = args.key, args.learned_only
-    print(report_markdown(rows, key, learned_only))
-    if fig_dir is not None:
+    rows = [row for path in args.csv for row in read_rows_csv(path)]
+    rows = filter_rows(rows, args.seeds, args.n_epochs)
+    print(report_markdown(rows, args.key, args.learned_only, args.max_median_gap, args.max_ratio))
+    if args.fig_dir is not None:
         from fct.lrplot import fig_metric_vs_lr  # plotting is not needed to tune
 
-        best = {
-            k: sel.best for k, sel in select_by(rank_learning_rates(rows), ("task", "L")).items()
-        }
-        fig_dir.mkdir(parents=True, exist_ok=True)
-        fig = fig_metric_vs_lr(rows, best_by_group=best)
-        fig.savefig(fig_dir / "heldout_vs_lr.png", dpi=150)
-        loss = fig_metric_vs_lr(rows, "loss", "final regularised training loss", logy=True)
-        loss.savefig(fig_dir / "loss_vs_lr.png", dpi=150)
+        shown = _ranked_rows(rows, args.learned_only)
+        scores = rank_learning_rates(shown, key=args.key)
+        best = {k: sel.best for k, sel in select_by(scores, ("task", "L")).items()}
+        args.fig_dir.mkdir(parents=True, exist_ok=True)
+        fig = fig_metric_vs_lr(shown, args.key, CRITERIA[args.key], args.key == "loss", best)
+        fig.savefig(args.fig_dir / f"{args.key}_vs_lr.png", dpi=FIGURE_DPI)
     return 0
 
 

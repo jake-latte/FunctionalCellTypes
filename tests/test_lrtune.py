@@ -1,36 +1,52 @@
-"""Learning-rate tuning: result table logic on hand-built tables, and the held-out evaluation."""
+"""Learning-rate tuning: result table logic on hand-built tables, the evaluation of finished
+settings, the runner and the command line on a tiny CPU sweep."""
 
 import itertools
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 
-from fct.cache import cache_paths
-from fct.config import DataConfig
-from fct.data import make_dataset
+from fct import lrtune
+from fct.cache import cache_paths, latest_checkpoint
+from fct.lrplot import fig_metric_vs_lr, plot_metric_vs_lr
 from fct.lrtune import (
     COLUMNS,
+    TIMINGS_FILE,
     average_ranks,
     collapse_seeds,
     evaluate_setting,
+    filter_rows,
     global_verdict,
-    heldout_dataset,
+    group_table_markdown,
     learned_settings,
     loss_curve_stats,
+    main,
     rank_learning_rates,
     read_rows_csv,
+    report_markdown,
+    run_trials,
     select,
     select_by,
+    setting_key,
+    subset_indices,
+    trial_root,
+    trial_sweep,
+    tuning_template,
     write_rows_csv,
 )
-from fct.sweep import expand, preset, run_setting, save_sweep, setting_dir
+from fct.sweep import expand, preset, run_setting, save_sweep, setting_dir, setting_status
 
 LRS = (1e-4, 1e-3, 1e-2)
 TASKS = ("linear_teacher", "object_action")
 WORST_SETTING = ("object_action", 5, "relu", 0.0)
 BASE = {"linear_teacher": 0.5, "object_action": 20.0}  # different loss scales per task
+
+
+def _depth_dependent_best(task, L):
+    return 1e-2 if L == 1 else 1e-3
 
 
 def _table(best_lr, lrs=LRS, seeds=(0,), penalty=0.3, nan_at=()):
@@ -51,6 +67,7 @@ def _table(best_lr, lrs=LRS, seeds=(0,), penalty=0.3, nan_at=()):
                     "rate_lambda": rate,
                     "lr": lr,
                     "seed": seed,
+                    "n_epochs": 6000,
                     "heldout_mse": float("nan") if failed else mse,
                     "null_mse": 100 * BASE[task],
                     "diverged": failed,
@@ -96,7 +113,7 @@ def test_ranks_are_within_setting_so_loss_scale_does_not_matter():
 
 
 def test_per_depth_best_differs_and_is_reported_per_group():
-    best = lambda task, L: 1e-2 if L == 1 else 1e-3
+    best = _depth_dependent_best
     by_group = select_by(rank_learning_rates(_table(best)), ("task", "L"))
     assert by_group[("linear_teacher", 1)].best == 1e-2
     assert by_group[("object_action", 5)].best == 1e-3
@@ -136,7 +153,7 @@ def test_global_verdict_true_when_one_lr_is_best_everywhere():
 
 
 def test_global_verdict_false_when_best_lr_differs_by_depth_by_a_factor_of_10():
-    best = lambda task, L: 1e-2 if L == 1 else 1e-3
+    best = _depth_dependent_best
     verdict = global_verdict(rank_learning_rates(_table(best, penalty=0.5)))
     assert not verdict.single_suffices
     assert verdict.median_gap > 0.10
@@ -174,44 +191,82 @@ def test_duplicate_rows_for_one_setting_lr_seed_are_rejected():
         collapse_seeds(table + table[:1])
 
 
+def _cell(rows, task="linear_teacher", L=1, phi="tanh", rate=0.0, lr=1e-3):
+    return [r for r in rows if setting_key(r) == (task, L, phi, rate) and r["lr"] == lr]
+
+
 def test_collapse_seeds_takes_the_median_and_fails_if_any_seed_diverged():
     table = _table(lambda task, L: 1e-3, seeds=(0, 1, 2))
-    first = [
-        r
-        for r in table
-        if (r["task"], r["L"], r["phi"], r["rate_lambda"], r["lr"])
-        == ("linear_teacher", 1, "tanh", 0.0, 1e-3)
-    ]
+    first = _cell(table)
     for row, value in zip(first, (1.0, 5.0, 2.0)):
         row["heldout_mse"] = value
     collapsed = collapse_seeds(table)
     assert len(collapsed) == len(table) // 3
-    hit = [
-        r
-        for r in collapsed
-        if r["lr"] == 1e-3
-        and r["task"] == "linear_teacher"
-        and r["L"] == 1
-        and r["phi"] == "tanh"
-        and r["rate_lambda"] == 0.0
-    ]
-    assert hit[0]["heldout_mse"] == 2.0 and not hit[0]["diverged"]
+    (hit,) = _cell(collapsed)
+    assert hit["heldout_mse"] == 2.0 and not hit["diverged"] and hit["n_seeds"] == 3
+    assert "seed" not in hit  # a collapsed row summarises seeds and is not a result row
     first[0]["diverged"] = True
-    again = collapse_seeds(table)
-    hit = [
+    (hit,) = _cell(collapse_seeds(table))
+    assert hit["diverged"] and math.isnan(hit["heldout_mse"])
+
+
+def test_rows_of_two_run_lengths_need_a_filter_first():
+    table = _table(lambda task, L: 1e-3)
+    longer = [r | {"n_epochs": 15000} for r in table]
+    with pytest.raises(ValueError, match="run length"):
+        collapse_seeds(table + longer)
+    assert len(filter_rows(table + longer, n_epochs=15000)) == len(table)
+    assert filter_rows(table, seeds=[1]) == []
+    assert len(filter_rows(table, seeds=[0])) == len(table)
+
+
+def test_learned_settings_judges_the_longest_run_not_a_transient():
+    short = _table(lambda task, L: 1e-3)  # learns everywhere at 6000 epochs ...
+    longer = [
         r
-        for r in again
-        if r["lr"] == 1e-3
-        and r["task"] == "linear_teacher"
-        and r["L"] == 1
-        and r["phi"] == "tanh"
-        and r["rate_lambda"] == 0.0
-    ]
-    assert hit[0]["diverged"] and math.isnan(hit[0]["heldout_mse"])
+        | {
+            "n_epochs": 15000,
+            "heldout_mse": r["null_mse"] if r["task"] == "object_action" else r["heldout_mse"],
+        }
+        for r in short
+    ]  # ... but object_action has collapsed to the zero net by 15000
+    kept = learned_settings(short + longer)
+    assert {r["task"] for r in kept} == {"linear_teacher"}
+    assert {r["n_epochs"] for r in kept} == {15000}  # the converged rows are returned
+    assert len(kept) == len(longer) // 2
+
+
+def test_a_setting_where_only_a_diverged_lr_beats_the_zero_net_has_not_learned():
+    table = _table(lambda task, L: 1e-3)
+    for r in table:
+        r["heldout_mse"] = r["null_mse"]
+    first = _cell(table, lr=1e-3)[0]
+    first["heldout_mse"], first["diverged"] = 0.0, True
+    assert all(setting_key(r) != setting_key(first) for r in learned_settings(table))
+
+
+# ---------------------------------------------------------------------------- guards
+def test_average_ranks_rejects_empty_input():
+    with pytest.raises(ValueError, match="empty"):
+        average_ranks(np.array([]))
+
+
+def test_loss_curve_stats_rejects_too_short_and_non_positive_curves():
+    with pytest.raises(ValueError, match="at least 2"):
+        loss_curve_stats(_history([]))
+    with pytest.raises(ValueError, match="at least 2"):
+        loss_curve_stats(_history([1.0]))
+    with pytest.raises(ValueError, match="positive"):
+        loss_curve_stats(_history([1.0, 0.5, 0.0, 0.0]))
+
+
+def test_selection_rejects_empty_scores():
+    with pytest.raises(ValueError, match="no scores"):
+        select([])
 
 
 # ---------------------------------------------------------------------------- loss curve
-def _history(losses, n_epochs=None):
+def _history(losses):
     epochs = list(range(len(losses)))
     return {"epoch": epochs, "loss": list(losses), "mse": list(losses)}
 
@@ -239,11 +294,16 @@ def test_loss_curve_stats_flags_non_finite_loss():
 
 
 # ---------------------------------------------------------------------------- csv
-def test_csv_round_trip_keeps_types_and_nan(tmp_path):
-    rows = _table(lambda task, L: 1e-3, nan_at={("linear_teacher", 5, 1e-3)})
+def _full_rows(**kw):
+    rows = _table(lambda task, L: 1e-3, **kw)
     for r in rows:
-        r |= {"n_epochs": 6000, "train_mse": 0.5, "loss": 1.5, "max_spike": 1.0, "tail_drop": 0.0}
+        r |= {"train_mse": 0.5, "loss": 1.5, "max_spike": 1.0, "tail_drop": 0.0}
         r["mir_corrected"] = "0.1;0.2"
+    return rows
+
+
+def test_csv_round_trip_keeps_types_and_nan(tmp_path):
+    rows = _full_rows(nan_at={("linear_teacher", 5, 1e-3)})
     path = tmp_path / "t.csv"
     write_rows_csv(rows, path)
     back = read_rows_csv(path)
@@ -254,65 +314,25 @@ def test_csv_round_trip_keeps_types_and_nan(tmp_path):
     assert back[0]["mir_corrected"] == "0.1;0.2"
 
 
-# ---------------------------------------------------------------------------- held-out data
-def _data_cfg(task, seed=0, P=24):
-    fields = {
-        "linear_teacher": {"D_in": 6, "n_latents": 2, "latent_range": 1.0},
-        "object_action": {"D_in": 18, "grid_size": 3, "max_objects": 2},
-        "what_where": {"D_in": 81, "n_motifs": 4},
-    }[task]
-    return DataConfig(task=task, P=P, seed=seed, **fields)
+def test_csv_with_a_wrong_header_or_a_bad_boolean_fails_loudly(tmp_path):
+    path = tmp_path / "t.csv"
+    write_rows_csv(_full_rows(), path)
+    text = path.read_text()
+    (tmp_path / "header.csv").write_text(text.replace("heldout_mse", "heldout"))
+    with pytest.raises(ValueError, match="columns"):
+        read_rows_csv(tmp_path / "header.csv")
+    (tmp_path / "bool.csv").write_text(text.replace("False", "no", 1))
+    with pytest.raises(ValueError, match="boolean"):
+        read_rows_csv(tmp_path / "bool.csv")
 
 
-@pytest.mark.parametrize("task", ["linear_teacher", "object_action", "what_where"])
-def test_heldout_dataset_has_the_training_shapes_and_is_deterministic(task):
-    cfg = _data_cfg(task)
-    train = make_dataset(cfg, torch.device("cpu"), torch.float32)
-    a = heldout_dataset(cfg, train, 7, torch.device("cpu"), torch.float32)
-    b = heldout_dataset(cfg, train, 7, torch.device("cpu"), torch.float32)
-    c = heldout_dataset(cfg, train, 8, torch.device("cpu"), torch.float32)
-    assert a.x.shape == train.x.shape and a.y.shape == train.y.shape
-    assert torch.equal(a.x, b.x) and torch.equal(a.y, b.y)
-    assert not torch.equal(a.x, train.x) and not torch.equal(a.x, c.x)
-
-
-def test_heldout_linear_teacher_keeps_the_training_teacher():
-    cfg = _data_cfg("linear_teacher")
-    train = make_dataset(cfg, torch.device("cpu"), torch.float32)
-    new = heldout_dataset(cfg, train, 7, torch.device("cpu"), torch.float32)
-    z = torch.stack([new.factors[f"z{i}"] for i in range(2)], dim=1)
-    assert torch.allclose(new.y, z @ train.extras["W_Y"].T)
-    assert torch.allclose(new.x, z @ train.extras["W_X"].T)
-
-
-def test_heldout_what_where_keeps_the_training_motifs():
-    cfg = _data_cfg("what_where", P=200)
-    train = make_dataset(cfg, torch.device("cpu"), torch.float32)
-    new = heldout_dataset(cfg, train, 7, torch.device("cpu"), torch.float32)
-    motifs = {tuple(m.tolist()) for m in train.extras["motifs"]}
-    # every held-out image holds, in its macro-cell, one of the training motifs
-    where, what = new.factors["where"], new.factors["what"]
-    for i in range(20):
-        r, c = divmod(int(where[i]), 3)
-        patch = new.x[i].reshape(9, 9)[3 * r : 3 * r + 3, 3 * c : 3 * c + 3].reshape(-1)
-        assert tuple(patch.tolist()) in motifs
-        assert torch.equal(patch, train.extras["motifs"][what[i]])
-
-
-def test_heldout_dataset_rejects_the_same_seed_and_unknown_tasks():
-    cfg = _data_cfg("linear_teacher")
-    train = make_dataset(cfg, torch.device("cpu"), torch.float32)
-    with pytest.raises(ValueError, match="seed"):
-        heldout_dataset(cfg, train, cfg.seed, torch.device("cpu"), torch.float32)
-    pos = DataConfig(task="position", P=8, D_in=4)
-    with pytest.raises(ValueError, match="task"):
-        heldout_dataset(
-            pos,
-            make_dataset(pos, torch.device("cpu"), torch.float32),
-            5,
-            torch.device("cpu"),
-            torch.float32,
-        )
+# ---------------------------------------------------------------------------- evaluation
+def _finished_tiny(tmp_path, task="linear_teacher", **update):
+    sweep = preset("tiny").model_copy(update=update)
+    save_sweep(sweep, tmp_path)
+    index = next(i for i, s in enumerate(expand(sweep)) if s.task == task)
+    run_setting(sweep, index, tmp_path, log=lambda s: None)
+    return sweep, expand(sweep)[index]
 
 
 def _snapshot(root):
@@ -322,21 +342,19 @@ def _snapshot(root):
 
 
 def test_evaluate_setting_scores_a_finished_setting_without_touching_its_cache(tmp_path):
-    sweep = preset("tiny")
-    save_sweep(sweep, tmp_path)
-    index = next(i for i, s in enumerate(expand(sweep)) if s.task == "linear_teacher")
-    run_setting(sweep, index, tmp_path, log=lambda s: None)
+    sweep, setting = _finished_tiny(tmp_path)
     before = _snapshot(tmp_path)
-    row = evaluate_setting(tmp_path, sweep, expand(sweep)[index], held_out_seed=77)
-    again = evaluate_setting(tmp_path, sweep, expand(sweep)[index], held_out_seed=77)
+    row = evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
+    again = evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
     assert _snapshot(tmp_path) == before
     assert row == again
     # plain Python types: a numpy float would be written to the CSV as 'np.float64(...)'
     assert {k: type(v) for k, v in row.items()} == COLUMNS
     assert math.isfinite(row["train_mse"]) and math.isfinite(row["heldout_mse"])
     assert not row["diverged"] and row["lr"] == sweep.lr and row["task"] == "linear_teacher"
-    assert len(row["mir_corrected"].split(";")) == expand(sweep)[index].L
-    assert cache_paths(setting_dir(tmp_path, expand(sweep)[index])).train.exists()
+    assert row["n_epochs"] == sweep.n_epochs and row["null_mse"] > 0
+    assert len(row["mir_corrected"].split(";")) == setting.L
+    assert cache_paths(setting_dir(tmp_path, setting)).train.exists()
 
 
 def test_evaluate_setting_fails_loudly_for_an_unfinished_setting(tmp_path):
@@ -346,36 +364,40 @@ def test_evaluate_setting_fails_loudly_for_an_unfinished_setting(tmp_path):
         evaluate_setting(tmp_path, sweep, expand(sweep)[0], held_out_seed=77)
 
 
+def test_evaluate_setting_fails_loudly_without_a_dataset_cache(tmp_path):
+    sweep, setting = _finished_tiny(tmp_path)
+    (cache_paths(setting_dir(tmp_path, setting)).data / "dataset.pt").unlink()
+    with pytest.raises(FileNotFoundError, match="refusing to generate"):
+        evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
+
+
+def test_evaluate_setting_fails_loudly_if_the_history_has_no_monitor_entries(tmp_path, monkeypatch):
+    sweep, setting = _finished_tiny(tmp_path)
+    real = lrtune.load_trained
+
+    def without_monitor(*args):
+        net, history = real(*args)
+        return net, {k: v for k, v in history.items() if not k.startswith("monitor_")}
+
+    monkeypatch.setattr(lrtune, "load_trained", without_monitor)
+    with pytest.raises(ValueError, match="monitor_mir_corrected"):
+        evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
+
+
 def test_an_overfitting_net_is_worse_on_held_out_data_than_on_its_training_data(tmp_path):
     # 8 training points of a discrete task, 128 units: the net memorises them, so the held-out
     # MSE is far above the training MSE.
-    sweep = preset("tiny").model_copy(update={"P": 8, "N": 128, "n_epochs": 400, "lr": 1e-2})
-    save_sweep(sweep, tmp_path)
-    index = next(i for i, s in enumerate(expand(sweep)) if s.task == "object_action")
-    run_setting(sweep, index, tmp_path, log=lambda s: None)
-    row = evaluate_setting(tmp_path, sweep, expand(sweep)[index], held_out_seed=77)
+    sweep, setting = _finished_tiny(tmp_path, "object_action", P=8, N=128, n_epochs=400, lr=1e-2)
+    row = evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
     assert row["heldout_mse"] > 3 * row["train_mse"]
 
 
-# ---------------------------------------------------------------------------- plotting
-def test_figures_draw_from_a_table_and_mark_failures():
-    from fct.lrplot import fig_metric_vs_lr, plot_metric_vs_lr
-
-    rows = _table(lambda task, L: 1e-3, nan_at={("linear_teacher", 5, 1e-2)})
-    fig = fig_metric_vs_lr(rows, best_by_group={("linear_teacher", 1): 1e-3})
-    assert len(fig.axes) == len(TASKS) * 2
-    ax = fig.axes[1]  # linear_teacher, L=5: one red cross per failed (phi, rate) at lr 1e-2
-    crosses = [line for line in ax.lines if line.get_marker() == "x"]
-    assert sum(len(line.get_xdata()) for line in crosses) == 4
-    with pytest.raises(ValueError, match="no rows"):
-        plot_metric_vs_lr(fig.axes[0], rows, "what_where", 1)
+# ---------------------------------------------------------------------------- runner
+def _tiny_template():
+    return preset("tiny")  # CPU, seconds per setting
 
 
 def test_subset_indices_and_trial_names():
-    from pathlib import Path
-
-    from fct.lrtune import subset_indices, trial_root, trial_sweep
-
     sweep = preset("tiny")
     indices = subset_indices(sweep, ["what_where"], [1, 5])
     settings = [expand(sweep)[i] for i in indices]
@@ -388,15 +410,114 @@ def test_subset_indices_and_trial_names():
     assert trial.lr == 3e-4 and trial.seeds.data == trial.seeds.net == trial.seeds.train == 2
 
 
-def test_report_markdown_names_the_best_lr_and_the_verdict():
-    from fct.lrtune import report_markdown
+def test_tuning_template_overrides_sizes_and_the_intervals_follow_them():
+    t = tuning_template(N=32, P=64, n_epochs=1000)
+    assert (t.N, t.P, t.n_epochs, t.device) == (32, 64, 1000, "cuda")
+    assert t.log_int == 10 and t.save_int == 100 and t.monitor_int == 250
+    tiny = tuning_template(N=8, P=32, n_epochs=3)  # intervals never drop below 1
+    assert tiny.log_int == tiny.save_int == tiny.monitor_int == 1
 
-    text = report_markdown(_table(lambda task, L: 1e-3))
-    assert "best: 0.001" in text and "suffices: True" in text
+
+def test_run_trials_writes_one_sweep_per_lr_and_seed_and_times_new_work_only(tmp_path):
+    log = []
+    run_trials(_tiny_template(), tmp_path, [0.01, 0.001], [0, 1], [0], log=log.append)
+    assert log[0] == "device: cpu"
+    for lr, seed in itertools.product([0.01, 0.001], [0, 1]):
+        root = trial_root(tmp_path, lr, seed)
+        sweep = trial_sweep(_tiny_template(), lr, seed)
+        assert setting_status(root, expand(sweep)[0]) == "done"
+    lines = (tmp_path / TIMINGS_FILE).read_text().splitlines()
+    assert lines[0] == "lr,seed,index,seconds,device" and len(lines) == 5
+    run_trials(_tiny_template(), tmp_path, [0.01, 0.001], [0, 1], [0], log=log.append)
+    assert len((tmp_path / TIMINGS_FILE).read_text().splitlines()) == 5  # nothing new ran
+
+
+def test_run_trials_resumes_an_interrupted_setting_from_its_checkpoint(tmp_path):
+    template = _tiny_template()
+    run_trials(template, tmp_path, [0.01], [0], [0], log=lambda s: None)
+    sweep, root = trial_sweep(template, 0.01, 0), trial_root(tmp_path, 0.01, 0)
+    train_dir = cache_paths(setting_dir(root, expand(sweep)[0])).train
+    final_before = torch.load(train_dir / "final.pt", weights_only=True)["net_state_dict"]
+    (train_dir / "final.pt").unlink()
+    assert latest_checkpoint(train_dir) is not None
+    assert setting_status(root, expand(sweep)[0]) == "partial"
+    run_trials(template, tmp_path, [0.01], [0], [0], log=lambda s: None)
+    final_after = torch.load(train_dir / "final.pt", weights_only=True)["net_state_dict"]
+    assert all(torch.equal(final_before[k], final_after[k]) for k in final_before)
+    assert len((tmp_path / TIMINGS_FILE).read_text().splitlines()) == 3  # header + two runs
+
+
+def test_a_trial_root_with_a_different_sweep_is_refused(tmp_path):
+    run_trials(_tiny_template(), tmp_path, [0.01], [0], [0], log=lambda s: None)
+    changed = _tiny_template().model_copy(update={"N": 9})
+    with pytest.raises(ValueError, match="differs"):
+        run_trials(changed, tmp_path, [0.01], [0], [0], log=lambda s: None)
+
+
+# ---------------------------------------------------------------------------- command line
+def test_cli_init_run_collect_report_on_a_tiny_cpu_sweep(tmp_path, capsys):
+    base, table = tmp_path / "base", tmp_path / "rows.csv"
+    sizes = ["--N", "8", "--P", "32", "--epochs", "6"]
+    assert main(["init", str(base), *sizes, "--device", "cpu"]) == 0
+    where = ["--lrs", "0.01", "0.001", "--tasks", "linear_teacher", "--layers", "1"]
+    assert main(["run", str(base), *where]) == 0
+    assert main(["collect", str(base), *where, "--csv", str(table)]) == 0
+    rows = read_rows_csv(table)
+    assert len(rows) == 2 * 4 and {r["lr"] for r in rows} == {0.01, 0.001}
+    assert all(r["n_epochs"] == 6 for r in rows)
+    capsys.readouterr()
+    figs = tmp_path / "figs"
+    assert main(["report", str(table), "--fig-dir", str(figs)]) == 0
+    out = capsys.readouterr().out
+    assert "suffices (median gap <= 10%, worst <= 2x)" in out  # default key: the loss
+    assert (figs / "loss_vs_lr.png").exists()
+    assert main(["report", str(table), "--key", "heldout_mse", "--n-epochs", "6"]) == 0
+    assert "no verdict" in capsys.readouterr().out
+    assert main(["report", str(table), "--key", "heldout_mse", "--max-ratio", "1.0001"]) == 0
+    assert "no verdict" in capsys.readouterr().out
+
+
+def test_cli_run_without_init_fails_loudly(tmp_path):
+    with pytest.raises(FileNotFoundError, match="init"):
+        main(["run", str(tmp_path), "--lrs", "0.01"])
+
+
+def test_report_verdict_only_for_the_loss_or_the_learned_settings():
+    table = _table(lambda task, L: 1e-3)
+    for r in table:
+        r["loss"] = r["heldout_mse"]
+    assert "suffices" in report_markdown(table)  # the default key is the loss
+    assert "no verdict" in report_markdown(table, key="heldout_mse")
+    assert "suffices" in report_markdown(table, key="heldout_mse", learned_only=True)
+    for r in table:
+        r["heldout_mse"] = r["null_mse"]
+    with pytest.raises(ValueError, match="none learned"):
+        report_markdown(table, key="heldout_mse", learned_only=True)
+
+
+def test_report_thresholds_are_parameters():
+    table = _table(_depth_dependent_best, penalty=0.1)
+    for r in table:
+        r["loss"] = r["heldout_mse"]
+    strict = report_markdown(table, max_median_gap=0.01)
+    lax = report_markdown(table, max_median_gap=0.5, max_ratio=5.0)
+    assert "suffices (median gap <= 1%, worst <= 2x): False" in strict
+    assert "suffices (median gap <= 50%, worst <= 5x): True" in lax
+
+
+def test_report_markdown_names_the_best_lr_and_the_verdict():
+    table = _table(lambda task, L: 1e-3)
+    for r in table:
+        r["loss"] = r["heldout_mse"]
+    text = report_markdown(table)
+    assert "best: 0.001" in text and "suffices (median gap <= 10%, worst <= 2x): True" in text
     assert "task and depth ('linear_teacher', 1)" in text
-    mixed = report_markdown(_table(lambda task, L: 1e-2 if L == 1 else 1e-3, penalty=0.5))
-    assert "suffices: False" in mixed
-    assert "depth (1,)" in mixed and "depth (5,)" in mixed
+    mixed = _table(_depth_dependent_best, penalty=0.5)
+    for r in mixed:
+        r["loss"] = r["heldout_mse"]
+    text = report_markdown(mixed)
+    assert "): False" in text
+    assert "depth (1,)" in text and "depth (5,)" in text
 
 
 def test_ranking_on_another_column_and_the_learned_filter():
@@ -405,24 +526,52 @@ def test_ranking_on_another_column_and_the_learned_filter():
         row["loss"] = 1.0 / row["lr"]
     assert select(rank_learning_rates(table, key="loss")).best == max(LRS)
     # one setting collapses at every lr: its held-out MSE equals the zero net's
-    collapsed = ("object_action", 5, "relu", 0.0)
     for row in table:
-        if _setting_key_of(row) == collapsed:
+        if setting_key(row) == WORST_SETTING:
             row["heldout_mse"] = row["null_mse"]
     kept = learned_settings(table)
     assert len(kept) == len(table) - len(LRS)
-    assert all(_setting_key_of(r) != collapsed for r in kept)
-
-
-def _setting_key_of(row):
-    return (row["task"], row["L"], row["phi"], row["rate_lambda"])
+    assert all(setting_key(r) != WORST_SETTING for r in kept)
 
 
 def test_group_table_has_a_row_per_task_and_depth_with_the_best_lr():
-    from fct.lrtune import group_table_markdown
-
-    best = lambda task, L: 1e-2 if L == 1 else 1e-3
-    lines = group_table_markdown(rank_learning_rates(_table(best))).splitlines()
+    lines = group_table_markdown(rank_learning_rates(_table(_depth_dependent_best))).splitlines()
     assert len(lines) == 2 + len(TASKS) * 2
     row = next(line for line in lines if line.startswith("| linear_teacher | 1 "))
     assert row.endswith("| 0.01 |") and "1.0 / 0%" in row
+
+
+# ---------------------------------------------------------------------------- plotting
+def test_figures_draw_from_a_table_and_mark_failures():
+    rows = _table(lambda task, L: 1e-3, nan_at={("linear_teacher", 5, 1e-2)})
+    fig = fig_metric_vs_lr(rows, best_by_group={("linear_teacher", 1): 1e-3})
+    assert len(fig.axes) == len(TASKS) * 2
+    ax = fig.axes[1]  # linear_teacher, L=5: one red cross per failed (phi, rate) at lr 1e-2
+    crosses = [line for line in ax.lines if line.get_marker() == "x"]
+    assert sum(len(line.get_xdata()) for line in crosses) == 4
+    with pytest.raises(ValueError, match="no rows"):
+        plot_metric_vs_lr(rows, "what_where", 1, ax=fig.axes[0])
+
+
+def test_plot_creates_its_own_axes_when_none_is_given():
+    rows = _table(lambda task, L: 1e-3)
+    ax = plot_metric_vs_lr(rows, "linear_teacher", 1)
+    assert len(ax.get_legend_handles_labels()[1]) == 4
+
+
+def test_an_unexpected_rate_lambda_is_drawn_and_an_unknown_phi_is_refused():
+    rows = _table(lambda task, L: 1e-3)
+    odd = [r | {"rate_lambda": 0.5} for r in rows if r["rate_lambda"] == 1e-3]
+    ax = plot_metric_vs_lr([r for r in rows if r["rate_lambda"] == 0.0] + odd, "linear_teacher", 1)
+    assert {line.get_label() for line in ax.lines} >= {"tanh, r=0.5", "relu, r=0.5"}
+    bad = [r | {"phi": "gelu"} for r in rows]
+    with pytest.raises(ValueError, match="gelu"):
+        plot_metric_vs_lr(bad, "linear_teacher", 1)
+
+
+def test_all_zero_values_get_a_non_degenerate_y_range():
+    rows = _table(lambda task, L: 1e-3)
+    for r in rows:
+        r["heldout_mse"] = 0.0
+    low, high = plot_metric_vs_lr(rows, "linear_teacher", 1).get_ylim()
+    assert high > low
