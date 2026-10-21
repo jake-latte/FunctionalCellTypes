@@ -10,6 +10,7 @@ from fct.cache import (
     latest_checkpoint,
     load_artefact,
     load_or_compute,
+    read_config_hash,
     save_artefact,
     write_checkpoint,
 )
@@ -178,3 +179,16 @@ def test_write_checkpoint_writes_before_deleting(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         write_checkpoint(tmp_path, "ckpt_", 2, {"s": 2}, "h")
     assert (tmp_path / "ckpt_000002.pt").exists()
+
+
+def test_read_config_hash_returns_the_stored_hash_without_checking_it(tmp_path):
+    save_artefact(tmp_path / "a.pt", {"w": torch.zeros(3)}, "abc123")
+    assert read_config_hash(tmp_path / "a.pt") == "abc123"
+
+
+@pytest.mark.parametrize("content", [b"", b"not a torch file", b"PK\x03\x04truncated"])
+def test_read_config_hash_names_an_unreadable_file(tmp_path, content):
+    path = tmp_path / "broken.pt"
+    path.write_bytes(content)
+    with pytest.raises(ValueError, match=r"broken\.pt.*unreadable"):
+        read_config_hash(path)

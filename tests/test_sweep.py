@@ -6,7 +6,8 @@ import pytest
 import torch
 from pydantic import ValidationError
 
-from fct.cache import cache_paths
+import fct.config
+from fct.cache import StaleCacheError, cache_paths, save_artefact
 from fct.cli import main
 from fct.config import load_config
 from fct.monitor import MIR_MONITOR_KEYS
@@ -122,39 +123,48 @@ def test_invalid_task_parameters_fail_at_load(tiny):
 
 
 # ---------------------------------------------------------------------------- status
+def _write_final(train_dir, sweep, setting):
+    """A minimal final.pt carrying the config hash of `setting` under the current code."""
+    cfg = setting_config(sweep, setting)
+    save_artefact(train_dir / "final.pt", {"epoch": 0}, cfg.section_hash("data", "net", "train"))
+
+
 def test_status_done_partial_missing(tiny, tmp_path):
     settings = expand(tiny)
     train = cache_paths(setting_dir(tmp_path, settings[0])).train
-    train.mkdir(parents=True)
-    (train / "final.pt").touch()
+    _write_final(train, tiny, settings[0])
     train = cache_paths(setting_dir(tmp_path, settings[1])).train
     train.mkdir(parents=True)
     (train / "ckpt_000002.pt").touch()
     other = cache_paths(setting_dir(tmp_path, settings[2]))
     other.data.mkdir(parents=True)  # data alone is not training progress
-    states = [setting_status(tmp_path, s) for s in settings[:4]]
+    states = [setting_status(tmp_path, tiny, s) for s in settings[:4]]
     assert states == ["done", "partial", "missing", "missing"]
 
 
 def test_done_wins_over_leftover_checkpoint(tiny, tmp_path):
     train = cache_paths(setting_dir(tmp_path, expand(tiny)[0])).train
-    train.mkdir(parents=True)
-    (train / "final.pt").touch()
+    _write_final(train, tiny, expand(tiny)[0])
     (train / "ckpt_000002.pt").touch()
-    assert setting_status(tmp_path, expand(tiny)[0]) == "done"
+    assert setting_status(tmp_path, tiny, expand(tiny)[0]) == "done"
 
 
 # ---------------------------------------------------------------------------- running
+def test_sweep_uses_the_library_weight_regulariser(tiny):
+    # The sweep never sets weight_lambda; this notices a change of the library default.
+    assert {setting_config(tiny, s).train.weight_lambda for s in expand(tiny)} == {1e-4}
+
+
 @pytest.mark.parametrize("task", SWEEP_TASKS)
 def test_run_setting_trains_and_records_monitor_per_task(tiny, tmp_path, task):
     i = _index_of(tiny, task, L=3, phi="relu", rate=1e-3)
     run_setting(tiny, i, tmp_path, **QUIET)
     setting = expand(tiny)[i]
-    assert setting_status(tmp_path, setting) == "done"
+    assert setting_status(tmp_path, tiny, setting) == "done"
 
     cfg = load_config(cache_paths(setting_dir(tmp_path, setting)).config)
     assert (cfg.data.task, cfg.net.L, cfg.net.phi, cfg.train.rate_lambda) == (task, 3, "relu", 1e-3)
-    assert cfg.train.weight_lambda == 1e-3
+    assert cfg.train.weight_lambda == 1e-4
     assert cfg.dtype == "float32"
 
     history = _final(tmp_path, tiny, i)["history"]
@@ -197,7 +207,7 @@ def test_interrupt_and_resume_gives_the_uninterrupted_history(tiny, tmp_path):
 
     with pytest.raises(Interrupt):
         run_setting(tiny, i, tmp_path / "broken", log=stop_at_epoch_4)
-    assert setting_status(tmp_path / "broken", expand(tiny)[i]) == "partial"
+    assert setting_status(tmp_path / "broken", tiny, expand(tiny)[i]) == "partial"
     run_setting(tiny, i, tmp_path / "broken", **QUIET)
 
     resumed = _final(tmp_path / "broken", tiny, i)["history"]
@@ -314,4 +324,55 @@ def test_cli_run_index_then_status(tmp_path, capsys):
     lines = status.strip().splitlines()
     assert lines[0].split()[:2] == ["0", "done"]
     assert lines[1].split()[:2] == ["1", "missing"]
-    assert "1 done, 0 partial, 35 missing" in lines[-1]
+    assert "1 done, 0 partial, 35 missing, 0 stale" in lines[-1]
+
+
+# ---------------------------------------------------------------------------- stale results
+def _old_loss(monkeypatch):
+    monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+
+
+def test_finished_setting_from_the_old_loss_is_stale_not_done(tiny, tmp_path, monkeypatch):
+    with monkeypatch.context() as old:
+        _old_loss(old)
+        run_setting(tiny, 0, tmp_path, **QUIET)
+    setting = expand(tiny)[0]
+    assert setting_status(tmp_path, tiny, setting) == "stale"
+
+    with pytest.raises(StaleCacheError, match="delete the sweep ROOT or use a fresh one"):
+        run_setting(tiny, 0, tmp_path, **QUIET)
+    with pytest.raises(StaleCacheError, match=str(setting_dir(tmp_path, setting))):
+        run_setting(tiny, 0, tmp_path, **QUIET)
+
+
+def test_finished_setting_with_another_weight_lambda_is_stale(tiny, tmp_path, monkeypatch):
+    setting = expand(tiny)[0]
+    other = setting_config(tiny, setting)
+    changed = other.train.model_copy(update={"weight_lambda": 1e-3})
+    other = other.model_copy(update={"train": changed})
+    train = cache_paths(setting_dir(tmp_path, setting)).train
+    save_artefact(train / "final.pt", {"epoch": 0}, other.section_hash("data", "net", "train"))
+    assert setting_status(tmp_path, tiny, setting) == "stale"
+
+
+def test_cli_status_counts_stale_settings_separately(tiny, tmp_path, capsys, monkeypatch):
+    _cli(capsys, "init", tmp_path, "--preset", "tiny")
+    with monkeypatch.context() as old:
+        _old_loss(old)
+        _cli(capsys, "run", tmp_path, "--index", 0)
+    _cli(capsys, "run", tmp_path, "--index", 1)
+    _, status, _ = _cli(capsys, "status", tmp_path)
+    lines = status.strip().splitlines()
+    assert lines[0].split()[:2] == ["0", "stale"]
+    assert lines[1].split()[:2] == ["1", "done"]
+    assert "1 done, 0 partial, 34 missing, 1 stale" in lines[-1]
+
+
+def test_an_unreadable_final_is_stale_not_a_crash(tiny, tmp_path):
+    settings = expand(tiny)
+    train = cache_paths(setting_dir(tmp_path, settings[0])).train
+    train.mkdir(parents=True)
+    (train / "final.pt").write_bytes(b"truncated")
+    assert setting_status(tmp_path, tiny, settings[0]) == "stale"
+    with pytest.raises(StaleCacheError, match="unreadable"):
+        run_setting(tiny, 0, tmp_path, **QUIET)

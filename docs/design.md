@@ -73,7 +73,15 @@ a fresh cache directory or delete the stale artefact (principle 9).
 | meanfield  | data, net, train, meanfield                |
 | analysis   | data, net, train, analysis                 |
 
-Every artefact additionally depends on `dtype`; `section_hash` always includes it.
+Every artefact additionally depends on `dtype`; `section_hash` always includes it. The hash of any set of sections that
+includes `train` also folds in `config.LOSS_VERSION`, the version of the loss definition in `compute_loss`. It is code,
+not a config field, and must be increased whenever the loss changes meaning. Version 2 averages the rate penalty over the
+samples (version 1 summed it): every train cache (`train/ckpt_*.pt`, `train/final.pt`) and meanfield cache made before that
+change is rejected with `StaleCacheError` the next time it is loaded; data caches are unaffected. A sweep ROOT whose
+settings were finished before the change is not silently reused: `sweep status` lists them as `stale`, `run_setting` raises
+`StaleCacheError` instead of calling them done, and the results notebook shows them with a note and no results. Use fresh cache directories or
+delete the old ones. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
+enters the hash by value.
 
 ## Saved files
 
@@ -105,7 +113,7 @@ class NetConfig(BaseModel):
     seed: int = 0
 class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
-    weight_lambda: float = 1e-3; rate_lambda: float = 1e-3
+    weight_lambda: float = 1e-4; rate_lambda: float = 1e-3
     log_int: int = 100; save_int: int = 100; seed: int = 0
     monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
     monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
@@ -140,7 +148,7 @@ class Config(BaseModel):
     meanfield: MeanFieldConfig = MeanFieldConfig(); analysis: AnalysisConfig = AnalysisConfig()
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
-    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype, first 12 hex chars; >=1 section required
+    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `LOSS_VERSION` when `train` is a section), first 12 hex chars; >=1 section required
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -249,7 +257,9 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # we
 
 ```python
 def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[str, Tensor]]
-    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2  (notebook cell 5); dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
+    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2
+    # weight_l2 = sum of squares of every parameter, rate_l2 = phi(h)^2 summed over neurons and layers and AVERAGED over the P samples (the notebook sums over the samples; the library departs from it by design)
+    # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
 History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus the monitor_* keys below when monitored
 def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
           monitor: Callable[[MLP], dict[str, list]] | None = None) -> tuple[MLP, History]
@@ -309,12 +319,19 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then
     # replaces the checkpoints
 def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> SolveResult
+    # rate tilt: the solver's tilt is a per-sample coefficient of phi^T phi summed over the n_points solved points, whereas the
+    # trained loss averages the penalty over its P_train samples (per-sample coefficient rate_lambda / P_train). Taking
+    # rate_tilt = rate_lambda would therefore describe an objective P_train times too strong, so there is NO default: ValueError
+    # if train.rate_lambda != 0 and meanfield.rate_tilt is None. rate_tilt = rate_lambda / P_train is the same objective when
+    # n_points == P_train; with fewer points the solved subset is a different problem, and rate_lambda / n_points treats it as
+    # the whole training set (as the mapping alpha = lambda_w n_points D_out / beta already does). The code forces an explicit choice until the PI decides the default mapping.
     # X = dataset.x[:n_points], Y = dataset.y[:n_points]; lambda_w/lambda_r from cfg.train; phi/g/L from cfg.net
     # hash = section_hash("data","net","train","meanfield"); returns final.pt if present
 def net_kernels(net: MLP, dataset: Dataset, cfg: Config) -> Tensor   # (L, P, P) float64
     # the trained net's empirical_kernels on exactly the solver's inputs (same slicing code as run_meanfield)
     # and cfg.meanfield.readout, the net evaluated in its own dtype; for the theory-vs-net kernels figure
 def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor, dict]   # Phi, Phi_hat, history
+    # raises RateTiltError (a ValueError) like run_meanfield when train.rate_lambda != 0 and meanfield.rate_tilt is None (P taken from cfg.data.P), so a result made before the check cannot load under an unstated objective; `fct solve` and `fct plot` turn it into one `error:` line (--set meanfield.rate_tilt=...)
 ```
 
 History values are stored per outer step; arrays become lists for saving. The
@@ -464,7 +481,7 @@ class Setting(NamedTuple): task: str; L: int; phi: str; rate_lambda: float
 class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto"
-    # task parameters are validated at load time by building each task's DataConfig; weight_lambda is the TrainConfig default (1e-3)
+    # task parameters are validated at load time by building each task's DataConfig; weight_lambda is the TrainConfig default (1e-4)
 def preset(name: str) -> SweepConfig                     # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full": N=256, P=4096, 15000 epochs (placeholders to tune); ValueError otherwise
 def save_sweep(sweep, root) / load_sweep(root) -> SweepConfig   # ROOT/sweep.json; load raises FileNotFoundError naming the path
 def expand(sweep) -> list[Setting]                       # itertools.product(SWEEP_TASKS, LAYERS, PHIS, RATE_LAMBDAS): task slowest, rate_lambda fastest; index i is stable and independent of the preset
@@ -472,7 +489,7 @@ def get_setting(sweep, index) -> Setting                 # SweepError (a ValueEr
 def setting_dir(root, setting) -> Path                   # ROOT/<task>/L{L}_{phi}_r{rate:g}
 def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep
 def setting_config(sweep, setting) -> Config             # data, net (seed = seeds.net), train (rate_lambda = the swept value, monitor_* from the sweep), dtype, device
-def setting_status(root, setting) -> "done" | "partial" | "missing"   # done = train/final.pt exists; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
+def setting_status(root, sweep, setting) -> "done" | "partial" | "missing" | "stale"   # done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stale = a final.pt with another hash; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
 def run_setting(sweep, index, root, log=print) -> None
     # first validates/writes config.json (SweepError if an existing one differs: the sweep changed under existing artefacts; this
     # check comes BEFORE the done check, so a changed sweep raises even for a done setting), then returns at once if done,
@@ -509,7 +526,7 @@ notebook to the git-ignored `tmp/modularity.ipynb` (it records the ROOT it was r
 which carries all logic and tests. Only the source notebook (`--no-execute`, no outputs) is committed.
 
 ```python
-@dataclass SettingResult: setting; status ("done"|"partial"|"missing"); directory (relative to ROOT); note; history, examples (ExampleOutputs), metrics, data_cfg, epoch, n_epochs
+@dataclass SettingResult: setting; status ("done"|"partial"|"missing"|"stale"); directory (relative to ROOT); note; history, examples (ExampleOutputs), metrics, data_cfg, epoch, n_epochs
     # the data fields are None unless done, or partial with a readable checkpoint; epoch = epochs completed (n_epochs for done), n_epochs = the sweep's total
     # .provisional = status partial and history is not None (a running setting shown from its latest checkpoint); .progress = "epoch X of N" (ValueError if no data)
     # .mir_epoch = epoch of the last monitor call in the history: a checkpoint at epoch s never holds the monitor call of epoch s, so it lags `epoch`
@@ -536,7 +553,7 @@ def mir_table_markdown(fm) / summary_text(fm) / overview_text(results) / setting
     # summary_text: "N of M settings finished, K provisional (still running)"; extremes of the corrected MIR over layer-cells with ties
     # listed; means pool the layer-cells where raw, corrected and chance are all finite and give their count. ALL statistics are over
     # FINISHED settings only (provisional rows are blanked first); provisional settings are listed apart with their epoch.
-    # overview_text: "36 settings: 12 done, 4 partial (provisional), 20 missing" (+ ", N partial without data" for unusable checkpoints)
+    # overview_text: "36 settings: 12 done, 4 partial (provisional), 20 missing" (+ ", N partial without data" for unusable checkpoints, ", N stale" for finished settings of another config or loss definition; a stale setting has a note, no data)
     # mir_table_markdown: provisional rows are named "label \* (MIR@m, ckpt e/N)" and a footnote (MIR from epoch m; checkpoint at epoch e of N) says the values are not final
     # setting_text raises ValueError naming any history key a DONE setting needs but lacks; a provisional one is headed
     # "partial, epoch X of N", says "so far", and states when there is no logged epoch or no MIR yet
@@ -608,7 +625,7 @@ python -m fct plot-example CACHE_DIR                                 # result-in
 python -m fct sweep init ROOT [--preset tiny|full] [--set n_epochs=100 ...] [--force]   # writes ROOT/sweep.json; --set takes dotted keys like `init`
 python -m fct sweep list ROOT      # "<index> <task>/L{L}_{phi}_r{rate}" per setting
 python -m fct sweep count ROOT     # 36
-python -m fct sweep status ROOT    # "<index> done|partial|missing <dir>" per setting, then "N done, N partial, N missing"
+python -m fct sweep status ROOT    # "<index> done|partial|missing|stale <dir>" per setting, then "N done, N partial, N missing, N stale"
 python -m fct sweep run ROOT [--index i]   # train setting i (a SLURM array task); without --index, all settings in order
 ```
 

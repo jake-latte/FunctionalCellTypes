@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import torch
 
+import fct.config
 import fct.train as train_module
 from fct.cache import cache_paths, write_checkpoint
 from fct.config import resolve_dtype
@@ -353,3 +354,25 @@ def test_a_checkpoint_whose_weights_do_not_fit_the_net_is_reported(root):
     torch.save(payload, ckpt)  # keeps the config hash, so only the weights are wrong
     r = load_first(root)
     assert r.history is None and ckpt.name in r.note
+
+
+# ---------------------------------------------------------------- stale finished settings
+def test_a_finished_setting_from_the_old_loss_is_listed_with_a_note(tmp_path, monkeypatch):
+    sweep = preset("tiny")
+    save_sweep(sweep, tmp_path)
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+        run_setting(sweep, 0, tmp_path, **QUIET)
+    run_setting(sweep, 1, tmp_path, **QUIET)
+
+    results = load_results(tmp_path)
+    stale, good = results[0], results[1]
+    assert stale.status == "stale" and stale.history is None and not stale.provisional
+    assert "LOSS_VERSION" in stale.note or "old loss" in stale.note
+    assert good.status == "done" and good.history is not None
+    assert "1 stale" in overview_text(results)
+    assert "stale" in setting_text(stale) and "not shown" in setting_text(stale)
+    assert len(setting_items(stale)) == 1
+    items = task_items(results, FIRST.task)  # the table, heatmap and summary still build
+    assert "(stale)" in items[0]
+    plt.close("all")

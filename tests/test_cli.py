@@ -14,7 +14,7 @@ from fct.train import MONITOR_EPOCH, MONITOR_PREFIX
 TINY = [
     "data.P=64", "data.D_in=8", "net.N=8", "net.L=2",
     "train.n_epochs=6", "train.save_int=3", "train.log_int=3",
-    "meanfield.n_points=8", "meanfield.n_chains=64", "meanfield.n_outer=2",
+    "meanfield.n_points=8", "meanfield.rate_tilt=1e-5", "meanfield.n_chains=64", "meanfield.n_outer=2",
     "meanfield.n_inner_max=3", "meanfield.warmup_trans=10", "meanfield.n_init_samples=256",
     "meanfield.save_int=1", "analysis.n_grid=5", "analysis.n_components=3", "device=cpu",
 ]  # fmt: skip
@@ -22,8 +22,8 @@ TINY = [
 FIGURES = ["learning", "representation", "neurons", "training", "solver", "kernels", "example"]
 
 
-def _init(cache, *extra):
-    args = ["init", str(cache)]
+def _init(cache, *extra, force=False):
+    args = ["init", str(cache), *(["--force"] if force else [])]
     for kv in [*TINY, *extra]:
         args += ["--set", kv]
     return main(args)
@@ -226,3 +226,23 @@ def test_fresh_run_without_factors_fails_loudly(tmp_path, monkeypatch):
     monkeypatch.setattr("fct.cli.make_mir_monitor", _no_factors)
     with pytest.raises(ValueError, match="factors"):
         main(["train", str(tmp_path)])
+
+
+def test_solve_without_a_rate_tilt_fails_cleanly(tmp_path, capsys):
+    _init(tmp_path, "meanfield.rate_tilt=null")
+    assert main(["train", str(tmp_path)]) == 0
+    capsys.readouterr()
+    assert main(["solve", str(tmp_path)]) == 1
+    err = capsys.readouterr().err.strip()
+    assert err.startswith("error:") and "\n" not in err
+    assert "--set meanfield.rate_tilt=" in err and "rate_lambda / P" in err
+
+
+def test_plot_solver_with_an_unset_rate_tilt_fails_cleanly(tmp_path, capsys):
+    _init(tmp_path)
+    assert main(["train", str(tmp_path)]) == 0
+    assert main(["solve", str(tmp_path)]) == 0
+    assert _init(tmp_path, "meanfield.rate_tilt=null", force=True) == 0
+    capsys.readouterr()
+    assert main(["plot", str(tmp_path), "--which", "solver"]) == 1
+    assert "--set meanfield.rate_tilt=" in capsys.readouterr().err

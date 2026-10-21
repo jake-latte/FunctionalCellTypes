@@ -42,7 +42,7 @@ from fct.draw import (
     fig_solver_history,
     plot_training_history,
 )
-from fct.meanfield import load_meanfield, net_kernels, run_meanfield
+from fct.meanfield import RateTiltError, load_meanfield, net_kernels, run_meanfield
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
@@ -179,7 +179,10 @@ def cmd_solve(args: argparse.Namespace) -> int:
     if n_points > P:
         raise CliError(f"meanfield.n_points={n_points} exceeds the dataset size data.P={P}")
     net, _ = _load_net(args.cache_dir, cfg)
-    run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
+    try:
+        run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
+    except RateTiltError as err:
+        raise CliError(str(err)) from err
     return 0
 
 
@@ -220,6 +223,8 @@ def _load_meanfield(cache_dir: Path, cfg: Config) -> tuple[Tensor, Tensor, Histo
         return load_meanfield(cache_dir, cfg, resolve_device(cfg))
     except FileNotFoundError as err:
         raise CliError(f"{err}; run `python -m fct solve {cache_dir}` first") from err
+    except RateTiltError as err:
+        raise CliError(str(err)) from err
 
 
 def _draw_learning(i: _Inputs) -> Figure:
@@ -342,16 +347,18 @@ def cmd_sweep_list(args: argparse.Namespace) -> int:
 
 
 def cmd_sweep_status(args: argparse.Namespace) -> int:
+    sweep = _load_sweep(args.root)
     states = [
-        (i, setting_status(args.root, s), _setting_name(args.root, s))
-        for i, s in enumerate(expand(_load_sweep(args.root)))
+        (i, setting_status(args.root, sweep, s), _setting_name(args.root, s))
+        for i, s in enumerate(expand(sweep))
     ]
     for i, state, name in states:
         print(f"{i} {state} {name}")
     counts = [
-        sum(state == kind for _, state, _ in states) for kind in ("done", "partial", "missing")
+        sum(state == kind for _, state, _ in states)
+        for kind in ("done", "partial", "missing", "stale")
     ]
-    print("{} done, {} partial, {} missing".format(*counts))
+    print("{} done, {} partial, {} missing, {} stale".format(*counts))
     return 0
 
 

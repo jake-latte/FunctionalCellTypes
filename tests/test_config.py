@@ -136,3 +136,17 @@ def test_resolve_dtype():
     assert resolve_dtype("float64") is torch.float64
     with pytest.raises(ValueError):
         resolve_dtype("float16")
+
+
+def test_loss_definition_enters_the_train_hash_only(monkeypatch):
+    import fct.config
+
+    cfg = default_config()
+    sections = ("data", "net", "train", "meanfield")
+    before = {s: cfg.section_hash(s) for s in sections}
+    combined = cfg.section_hash("data", "net", "train", "meanfield")  # the meanfield cache key
+    monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION + 1)
+    after = {s: cfg.section_hash(s) for s in sections}
+    assert after["train"] != before["train"]
+    assert all(after[s] == before[s] for s in ("data", "net", "meanfield"))
+    assert cfg.section_hash("data", "net", "train", "meanfield") != combined

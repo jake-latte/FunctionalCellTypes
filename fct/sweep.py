@@ -18,7 +18,7 @@ from typing import Annotated, Literal, NamedTuple, Self
 
 from pydantic import Field, model_validator
 
-from fct.cache import cache_paths, latest_checkpoint
+from fct.cache import StaleCacheError, cache_paths, latest_checkpoint, read_config_hash
 from fct.config import (
     Config,
     DataConfig,
@@ -43,7 +43,7 @@ LAYERS = (1, 3, 5)
 PHIS = ("tanh", "relu")
 RATE_LAMBDAS = (0.0, 1e-3)
 
-Status = Literal["done", "partial", "missing"]
+Status = Literal["done", "partial", "missing", "stale"]
 
 
 class SweepError(ValueError):
@@ -237,11 +237,23 @@ def setting_config(sweep: SweepConfig, setting: Setting) -> Config:
 
 
 # ---------------------------------------------------------------------------- disk
-def setting_status(root: Path, setting: Setting) -> Status:
-    """done = train/final.pt exists; partial = a checkpoint but no final.pt; else missing."""
+def _train_hash(cfg: Config) -> str:
+    return cfg.section_hash("data", "net", "train")
+
+
+def setting_status(root: Path, sweep: SweepConfig, setting: Setting) -> Status:
+    """done = train/final.pt exists and was written under this setting's current config (data,
+    net, train sections and the loss version); stale = a final.pt written under another, or one
+    that cannot be read;
+    partial = a checkpoint but no final.pt; else missing. Only the hash of final.pt is read."""
     train_dir = cache_paths(setting_dir(root, setting)).train
-    if (train_dir / "final.pt").exists():
-        return "done"
+    final = train_dir / "final.pt"
+    if final.exists():
+        current = _train_hash(setting_config(sweep, setting))
+        try:
+            return "done" if read_config_hash(final) == current else "stale"
+        except ValueError:  # an unreadable final.pt cannot be reused, whatever config it had
+            return "stale"
     return "partial" if latest_checkpoint(train_dir) is not None else "missing"
 
 
@@ -261,12 +273,22 @@ def _write_config_once(cfg: Config, directory: Path) -> None:
 def run_setting(
     sweep: SweepConfig, index: int, root: Path, log: Callable[[str], None] = print
 ) -> None:
-    """Train setting `index` into its cache directory; resumes a partial run, skips a done one."""
+    """Train setting `index` into its cache directory; resumes a partial run, skips a done one.
+
+    StaleCacheError if the setting was finished under another config or loss definition: its
+    results would silently stand in for a run of the current one."""
     setting = get_setting(sweep, index)
     directory = setting_dir(root, setting)
     cfg = setting_config(sweep, setting)
     _write_config_once(cfg, directory)
-    if setting_status(root, setting) == "done":
+    status = setting_status(root, sweep, setting)
+    if status == "stale":
+        raise StaleCacheError(
+            f"setting {index}: {directory}/train/final.pt was written under a different config "
+            "or loss definition than the current one, or is unreadable, so its results are not those of this "
+            "sweep. To rerun it, delete the sweep ROOT or use a fresh one."
+        )
+    if status == "done":
         log(f"setting {index} ({directory}) already done")
         return
     log(f"setting {index}: {directory}")

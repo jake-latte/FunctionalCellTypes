@@ -467,7 +467,8 @@ def fig_solver_history(
 # --------------------------------------------------------------------------- result figures
 
 # (history key, legend label, colour, linestyle): four distinct line styles. weight_l2 and
-# rate_l2 are the raw logged penalties, not the weighted terms that enter the loss.
+# rate_l2 are the raw logged penalties, not the weighted terms that enter the loss; rate_l2 is
+# already averaged over the samples, as it is in the loss.
 LOSS_STYLES = (
     ("loss", "loss (total)", LAYER_COLORS[0], "-"),
     ("mse", "mse (raw)", LAYER_COLORS[1], "--"),
@@ -503,9 +504,10 @@ def _history_columns(history: Mapping, keys: Sequence[str], what: str) -> dict[s
 def plot_loss_curves(history: Mapping[str, ArrayLike], ax: Axes | None = None) -> Axes:
     """The logged training terms against epoch on a log axis.
 
-    The total loss is 0.5*N*mse + lambda_w*weight_l2 + lambda_r*rate_l2, so the three raw
-    terms are drawn as logged and do not add up to the loss curve. A series that is zero at
-    every epoch cannot be seen on a log axis and is marked "(zero)" in the legend instead.
+    The total loss is 0.5*N*mse + lambda_w*weight_l2 + lambda_r*rate_l2 (rate_l2 averaged
+    over the samples), so the three raw terms are drawn as logged and do not add up to the
+    loss curve. A series that is zero at every epoch cannot be seen on a log axis and is marked
+    "(zero)" in the legend instead.
 
     The legend sits outside the axis, to its right: that assumes a constrained-layout figure
     such as `fig_loss_curves` makes; with a caller-supplied `ax` it may be clipped.
@@ -1018,8 +1020,8 @@ PROVISIONAL_NOTE = (
 
 
 def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> None:
-    """Name the status ("partial", "missing") across the row of an unfinished setting that has
-    no values; a provisional row keeps its values (see `_hatch_provisional_rows`)."""
+    """Name the status ("partial", "missing", "stale") across the row of an unfinished setting
+    that has no values; a provisional row keeps its values (see `_hatch_provisional_rows`)."""
     for row, status in enumerate(row_status):
         if status not in ("done", PROVISIONAL):
             ax.text(

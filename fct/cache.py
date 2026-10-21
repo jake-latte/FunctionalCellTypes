@@ -6,6 +6,7 @@ silently mixing results from different settings.
 """
 
 import os
+import pickle
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -89,6 +90,19 @@ def load_artefact(path: str | Path, expected_hash: str, device: torch.device | s
             f"{expected_hash!r}. Use a fresh cache directory or delete this file."
         )
     return payload
+
+
+def read_config_hash(path: str | Path) -> str | None:
+    """The config hash an artefact was written with, without reading its tensors: the file is
+    memory-mapped, so only the (small) pickled structure is touched. None if it has no hash;
+    ValueError naming the file ("unreadable") if it is empty, truncated or not an artefact."""
+    try:
+        payload = torch.load(Path(path), map_location="cpu", weights_only=True, mmap=True)
+    except (RuntimeError, EOFError, pickle.UnpicklingError, ValueError, OSError) as err:
+        raise ValueError(f"{path} is unreadable: {type(err).__name__}: {err}") from err
+    if not isinstance(payload, dict):
+        raise TypeError(f"{path} holds a {type(payload).__name__}, not an artefact dict")
+    return payload.get("config_hash")
 
 
 def load_or_compute(

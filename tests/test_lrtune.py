@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import torch
 
+import fct.config
 from fct import lrtune
 from fct.cache import cache_paths, latest_checkpoint
 from fct.lrplot import fig_metric_vs_lr, plot_metric_vs_lr
@@ -426,7 +427,7 @@ def test_run_trials_writes_one_sweep_per_lr_and_seed_and_times_new_work_only(tmp
     for lr, seed in itertools.product([0.01, 0.001], [0, 1]):
         root = trial_root(tmp_path, lr, seed)
         sweep = trial_sweep(_tiny_template(), lr, seed)
-        assert setting_status(root, expand(sweep)[0]) == "done"
+        assert setting_status(root, sweep, expand(sweep)[0]) == "done"
     lines = (tmp_path / TIMINGS_FILE).read_text().splitlines()
     assert lines[0] == "lr,seed,index,seconds,device" and len(lines) == 5
     run_trials(_tiny_template(), tmp_path, [0.01, 0.001], [0, 1], [0], log=log.append)
@@ -441,7 +442,7 @@ def test_run_trials_resumes_an_interrupted_setting_from_its_checkpoint(tmp_path)
     final_before = torch.load(train_dir / "final.pt", weights_only=True)["net_state_dict"]
     (train_dir / "final.pt").unlink()
     assert latest_checkpoint(train_dir) is not None
-    assert setting_status(root, expand(sweep)[0]) == "partial"
+    assert setting_status(root, sweep, expand(sweep)[0]) == "partial"
     run_trials(template, tmp_path, [0.01], [0], [0], log=lambda s: None)
     final_after = torch.load(train_dir / "final.pt", weights_only=True)["net_state_dict"]
     assert all(torch.equal(final_before[k], final_after[k]) for k in final_before)
@@ -576,3 +577,10 @@ def test_all_zero_values_get_a_non_degenerate_y_range():
         r["heldout_mse"] = 0.0
     low, high = plot_metric_vs_lr(rows, "linear_teacher", 1).get_ylim()
     assert high > low
+
+
+def test_evaluate_setting_says_stale_for_a_final_from_another_loss_version(tmp_path, monkeypatch):
+    sweep, setting = _finished_tiny(tmp_path)
+    monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION + 1)
+    with pytest.raises(FileNotFoundError, match="stale"):
+        evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
