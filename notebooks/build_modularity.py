@@ -31,13 +31,15 @@ EXECUTE_TIMEOUT_S = 1800
 
 INTRO = """# Modularity of hidden layers across the sweep
 
-Per task and setting: loss curves, example outputs of the final net, MIR per layer over
-training (raw with its chance baseline, shuffle-corrected, dead-neuron counts) and prediction
-metrics. A summary table and heatmap of the final MIR per layer open each task. All numbers and
-sentences below are computed from the sweep ROOT named in the parameter cell. A setting that is
-still running is shown from its latest checkpoint and labelled "partial, epoch X of N"; its numbers
-are provisional (marked `*` in the table, hatched in the heatmap) and are left out of the summary
-statistics. A setting with no checkpoint is listed with a message instead of being drawn."""
+Per task and setting: loss curves, example outputs of the trained net (of the latest checkpoint
+for a setting still running), MIR per layer over training (raw with its chance baseline,
+shuffle-corrected, dead-neuron counts) and prediction metrics. A summary table and heatmap of the
+final MIR per layer open each task. All numbers and sentences below are computed from the sweep
+ROOT named in the parameter cell. A setting that is still running is shown from its latest
+checkpoint and labelled "partial, epoch X of N"; its numbers are provisional (marked `*` in the
+table, hatched in the heatmap) and are left out of the summary statistics. A setting with no
+checkpoint, or whose checkpoint or dataset file is unreadable, stale or missing, is listed with a
+message instead of being drawn."""
 
 PARAMETERS = """ROOT = None  # the sweep ROOT (holds sweep.json); None reads $FCT_SWEEP_ROOT"""
 

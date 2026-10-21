@@ -14,6 +14,7 @@ from notebooks.build_modularity import (
 
 QUIET = {"log": lambda s: None}
 N_SETTINGS = 36
+FIGURES_PER_SETTING = 3  # loss curves, example outputs, MIR history
 
 
 def _code(nb) -> str:
@@ -128,8 +129,7 @@ def test_executed_notebook_holds_exactly_the_expected_figures(executed):
     png = sum(
         "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
     )
-    per_done_setting = 3  # loss curves, example outputs, MIR history
-    assert png == per_done_setting + len(SWEEP_TASKS)  # plus one heatmap figure per task
+    assert png == FIGURES_PER_SETTING + len(SWEEP_TASKS)  # plus one heatmap figure per task
 
 
 def test_executing_leaves_the_source_notebook_output_free(executed):
@@ -171,4 +171,4 @@ def test_executes_on_a_mix_of_done_partial_and_missing_settings(tmp_path):
     png = sum(
         "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
     )
-    assert png == 2 * 3 + len(SWEEP_TASKS)  # three figures per shown setting, a heatmap per task
+    assert png == 2 * FIGURES_PER_SETTING + len(SWEEP_TASKS)

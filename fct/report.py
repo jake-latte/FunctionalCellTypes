@@ -5,22 +5,24 @@ Three layers, as in the rest of the package:
 - I/O: `load_results` reads a sweep ROOT into one `SettingResult` per grid setting. A finished
   setting is read from final.pt; one still running from its latest checkpoint, and is then
   *provisional*: the same data, plus the epoch reached. A setting with no checkpoint, or whose
-  checkpoint cannot be used, is returned with its status (and a note) and no data, so a
-  partial sweep still loads.
+  checkpoint or dataset file cannot be used, is returned with its status (and a note) and no
+  data, so a partial sweep still loads.
 - Analysis (pure): `final_mir` collects the last MIR of every layer of a task's settings into
-  arrays (provisional rows flagged; `summary_text` leaves them out of every statistic); `mir_table_markdown`, `summary_text` and `setting_text` turn numbers into prose, so no
-  claim about the results is ever typed by hand.
+  arrays (provisional rows are flagged, and `FinalMIR.finished_only` and `summary_text` leave
+  them out of every statistic); `mir_table_markdown`, `summary_text` and `setting_text` turn
+  numbers into prose, so no claim about the results is ever typed by hand.
 - Plotting: the figures come from `fct.draw`; `setting_items` and `task_items` assemble them.
   `show` is the only function that touches IPython.
 
 Loading is read-only: nothing is generated, cached or written under ROOT, which a running job
-may be writing to. Settings are loaded on the CPU
-whatever device they were trained on, and are validated against the config rebuilt from
-sweep.json (a stale artefact raises, it is not shown).
+may be writing to. Settings are loaded on the CPU whatever device they were trained on, and are
+validated against the config rebuilt from sweep.json (a stale final.pt raises, it is not shown;
+a stale or unreadable checkpoint of a running setting is reported in its note).
 """
 
 import dataclasses
 import os
+import pickle
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -32,7 +34,7 @@ import torch
 from matplotlib.figure import Figure
 
 from fct.analyse import ExampleOutputs, example_outputs, pick_examples, prediction_report
-from fct.cache import StaleCacheError, cache_paths
+from fct.cache import cache_paths
 from fct.config import Config, DataConfig, resolve_dtype
 from fct.data import get_dataset
 from fct.draw import (
@@ -98,47 +100,91 @@ class SettingResult:
 
     @property
     def progress(self) -> str:
-        """ "epoch X of N" of a setting that has data, else ""."""
+        """ "epoch X of N" of a setting that has data; ValueError if it has none."""
         if self.epoch is None:
-            return ""
+            raise ValueError(f"{setting_label(self.setting)} has no data, so no progress")
         return f"epoch {self.epoch} of {self.n_epochs}"
+
+    @property
+    def mir_epoch(self) -> int | None:
+        """Epoch of the last monitor call in the history, None if there is none yet. A
+        checkpoint at epoch s never holds the monitor call of epoch s, so this lags `epoch`
+        by up to `monitor_int` epochs."""
+        monitored = (self.history or {}).get("monitor_epoch")
+        return monitored[-1] if monitored else None
 
 
 @dataclass(frozen=True)
 class FinalMIR:
     """Final MIR per layer of one task's settings, rows in grid order. Arrays are
     (n_settings, max layers); a layer the setting does not have, and every layer of a setting
-    with no data, is NaN. A provisional setting's row holds the MIR of its latest monitor call
-    (NaN if there is none yet) and is flagged in `provisional`, with its `epoch` and `n_epochs`;
-    done settings have `provisional` False."""
+    with no data, is NaN. A provisional setting's row holds the MIR of its last monitor call so
+    far (NaN if there is none yet); `mir_epoch` is the epoch of that call and `epoch` /
+    `n_epochs` the checkpoint's progress. All three are None for a setting that is not
+    provisional.
+
+    The arrays include provisional rows (the table and heatmap show them, marked): anything
+    that computes a statistic must use `finished_only()`."""
 
     task: str
     labels: list[str]
     status: list[Status]
-    provisional: list[bool]
+    mir_epoch: list[int | None]
     epoch: list[int | None]
     n_epochs: list[int | None]
     raw: np.ndarray
     corrected: np.ndarray
     chance: np.ndarray
 
+    @property
+    def provisional(self) -> list[bool]:
+        return [
+            s == "partial" and e is not None for s, e in zip(self.status, self.epoch, strict=True)
+        ]
+
     def array(self, which: str) -> np.ndarray:
         if which not in MIR_KINDS:
             raise ValueError(f"which must be one of {sorted(MIR_KINDS)}, got {which!r}")
         return getattr(self, which)
 
+    def finished_only(self) -> "FinalMIR":
+        """A copy with the rows of provisional settings blanked (NaN), so no statistic over
+        it can include them."""
+        blank = np.array(self.provisional)[:, None]
+        return dataclasses.replace(
+            self, **{kind: np.where(blank, np.nan, self.array(kind)) for kind in MIR_KINDS}
+        )
+
     def display_labels(self) -> list[str]:
-        """Row labels with a provisional row marked `*` and its progress."""
+        """Row labels; a provisional row is marked `*` with where its numbers come from."""
         return [
-            f"{label} * ({epoch}/{total})" if prov else label
-            for label, prov, epoch, total in zip(
-                self.labels, self.provisional, self.epoch, self.n_epochs, strict=True
+            f"{label} * ({_origin(m, e, n, short=True)})" if prov else label
+            for label, prov, m, e, n in zip(
+                self.labels,
+                self.provisional,
+                self.mir_epoch,
+                self.epoch,
+                self.n_epochs,
+                strict=True,
             )
         ]
 
     def row_status(self) -> list[str]:
         """Status per row as `fct.draw` names it: provisional rows are not just "partial"."""
-        return [PROVISIONAL if prov else s for s, prov in zip(self.status, self.provisional)]
+        return [
+            PROVISIONAL if prov else s
+            for s, prov in zip(self.status, self.provisional, strict=True)
+        ]
+
+
+def _origin(mir_epoch: int | None, epoch: int, n_epochs: int, short: bool = False) -> str:
+    """Where a provisional row's MIR comes from: the epoch of its last monitor call, which is
+    not the checkpoint's epoch."""
+    if short:
+        measured = f"MIR@{mir_epoch}" if mir_epoch is not None else "no MIR"
+        return f"{measured}, ckpt {epoch}/{n_epochs}"
+    measured = f"MIR from epoch {mir_epoch}" if mir_epoch is not None else "no MIR yet"
+    return f"{measured}; checkpoint at epoch {epoch} of {n_epochs}"
 
 
 def setting_label(setting: Setting) -> str:
@@ -187,20 +233,41 @@ def _with_data(
     )
 
 
+# What torch.load and the artefact loader raise for a truncated, foreign or stale file. Anything
+# else (a shape mismatch in the model code, a bug) is not a file problem and propagates.
+_UNREADABLE = (OSError, ValueError, TypeError, RuntimeError, EOFError, pickle.UnpicklingError)
+
+
+def _not_shown(setting: Setting, relative: Path, note: str) -> SettingResult:
+    return SettingResult(setting, "partial", relative, note=note)
+
+
+def _dataset_missing(directory: Path, relative: Path, setting: Setting, what: str):
+    """A "partial" result with a note if the dataset file is absent (it is never generated
+    here, because `get_dataset` would write it), else None."""
+    if (cache_paths(directory).data / "dataset.pt").exists():
+        return None
+    note = f"{what} exists but data/dataset.pt does not; data is never generated here"
+    return _not_shown(setting, relative, note)
+
+
 def _load_partial(directory: Path, relative: Path, setting: Setting, cfg: Config) -> SettingResult:
-    """A setting with a checkpoint but no final.pt, from its latest checkpoint. A checkpoint
-    that is unreadable, or from another config, is reported in `note` instead of raised: the
-    notebook is built while jobs run, and one bad file must not hide the other 35 settings."""
-    dataset_file = cache_paths(directory).data / "dataset.pt"
-    if not dataset_file.exists():
-        note = "a checkpoint exists but data/dataset.pt does not; data is never generated here"
-        return SettingResult(setting, "partial", relative, note=note)
+    """A setting with a checkpoint but no final.pt, from its latest checkpoint. A dataset file
+    or checkpoint that is unreadable, or from another config, is reported in `note` instead of
+    raised: the notebook is built while jobs run, and one bad file must not hide the other 35
+    settings."""
+    missing = _dataset_missing(directory, relative, setting, "a checkpoint")
+    if missing:
+        return missing
     cpu, dtype = torch.device("cpu"), resolve_dtype(cfg.dtype)
     try:
         dataset = get_dataset(directory, cfg)
+    except _UNREADABLE as err:
+        return _not_shown(setting, relative, f"dataset not readable: {err}")
+    try:
         net, history, epoch = load_latest_checkpoint(directory, cfg, cpu, dtype)
-    except (FileNotFoundError, ValueError, StaleCacheError) as err:
-        return SettingResult(setting, "partial", relative, note=f"checkpoint not shown: {err}")
+    except (OSError, ValueError) as err:
+        return _not_shown(setting, relative, f"checkpoint not shown: {err}")
     return _with_data(setting, "partial", relative, cfg, net, history, dataset, epoch)
 
 
@@ -210,8 +277,10 @@ def load_setting_result(root: Path, sweep: SweepConfig, setting: Setting) -> Set
 
     Read-only: a setting whose data/dataset.pt is missing is reported as "partial" with a note,
     because loading it through `get_dataset` would generate and write the file. A finished
-    setting whose artefacts do not match the sweep config raises; a partial one is reported in
-    `note`, since its checkpoint may be replaced by a running job at any moment."""
+    setting whose artefacts do not match the sweep config raises; for a partial one an
+    unreadable or stale dataset or checkpoint file is reported in `note` instead, since its
+    checkpoint may be replaced by a running job at any moment. Other exceptions (from the
+    model code) propagate: they are bugs, not bad files."""
     directory = setting_dir(root, setting)
     relative = directory.relative_to(root)
     status = setting_status(root, setting)
@@ -220,9 +289,9 @@ def load_setting_result(root: Path, sweep: SweepConfig, setting: Setting) -> Set
     cfg = _cpu_config(sweep, setting)
     if status == "partial":
         return _load_partial(directory, relative, setting, cfg)
-    if not (cache_paths(directory).data / "dataset.pt").exists():
-        note = "train/final.pt exists but data/dataset.pt does not; data is never generated here"
-        return SettingResult(setting, "partial", relative, note=note)
+    missing = _dataset_missing(directory, relative, setting, "train/final.pt")
+    if missing:
+        return missing
     dataset = get_dataset(directory, cfg)
     net, history = load_trained(directory, cfg, torch.device("cpu"), resolve_dtype(cfg.dtype))
     return _with_data(setting, status, relative, cfg, net, history, dataset, cfg.train.n_epochs)
@@ -285,7 +354,7 @@ def final_mir(results: list[SettingResult], task: str) -> FinalMIR:
         task=task,
         labels=[setting_label(r.setting) for r in rows],
         status=[r.status for r in rows],
-        provisional=[r.provisional for r in rows],
+        mir_epoch=[r.mir_epoch if r.provisional else None for r in rows],
         epoch=[r.epoch if r.provisional else None for r in rows],
         n_epochs=[r.n_epochs if r.provisional else None for r in rows],
         **{kind: np.stack([_mir_row(r, kind, width) for r in rows]) for kind in MIR_KINDS},
@@ -297,10 +366,12 @@ def _fmt(value: float) -> str:
 
 
 def _provisional_list(fm: FinalMIR) -> str:
-    """ "A (epoch 4 of 6), B (epoch 2 of 6)" for the provisional rows."""
+    """ "A (MIR from epoch 2; checkpoint at epoch 4 of 6), ..." for the provisional rows."""
     return ", ".join(
-        f"{label} (epoch {epoch} of {total})"
-        for label, prov, epoch, total in zip(fm.labels, fm.provisional, fm.epoch, fm.n_epochs)
+        f"{label} ({_origin(m, e, n)})"
+        for label, prov, m, e, n in zip(
+            fm.labels, fm.provisional, fm.mir_epoch, fm.epoch, fm.n_epochs, strict=True
+        )
         if prov
     )
 
@@ -329,14 +400,6 @@ def mir_table_markdown(fm: FinalMIR) -> str:
             f"latest checkpoint, not final: {_provisional_list(fm)}."
         )
     return "\n".join(lines)
-
-
-def _finished_only(fm: FinalMIR) -> FinalMIR:
-    """`fm` with the rows of provisional settings blanked, so no statistic can include them."""
-    blank = np.array(fm.provisional)[:, None]
-    return dataclasses.replace(
-        fm, **{kind: np.where(blank, np.nan, fm.array(kind)) for kind in MIR_KINDS}
-    )
 
 
 def _extreme_cells(fm: FinalMIR, highest: bool) -> tuple[float, list[tuple[str, int]]]:
@@ -397,7 +460,7 @@ def summary_text(fm: FinalMIR) -> str:
     if n_done == 0:
         text += " There is no finished setting to summarise."
     else:
-        text += _finished_statistics(_finished_only(fm))
+        text += _finished_statistics(fm.finished_only())
     if n_prov:
         text += (
             f" Provisional, not part of the statistics above: {_provisional_list(fm)}; "
@@ -436,7 +499,10 @@ def _provisional_text(result: SettingResult, label: str) -> str:
     """Prose for a setting read from its latest checkpoint. Everything is "so far", and what
     the checkpoint does not hold yet (no logged epoch, no monitor call) is said, not skipped."""
     h = result.history
-    head = f"**{label}: partial, {result.progress}** (provisional: the latest checkpoint of a run still going)"
+    head = (
+        f"**{label}: partial, {result.progress}** "
+        "(provisional: the latest checkpoint of a run still going)"
+    )
     if h.get("epoch"):
         loss = f"at the last logged epoch ({h['epoch'][-1]}) the loss is {h['loss'][-1]:.4g}"
         loss += f" (mse {h['mse'][-1]:.4g})."

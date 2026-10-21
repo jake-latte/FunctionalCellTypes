@@ -33,6 +33,3 @@ as long as it can never be mistaken for a final result.
 - `notebooks/build_modularity.py`: intro text; cells unchanged.
 - Tests: `tests/test_report_partial.py` (synthetic checkpoints with known contents),
   one end-to-end notebook execution on a mix of done / partial / missing settings.
-
-Notes for the reviewer: `final_mir` keeps provisional values in the arrays (the table and heatmap
-show them, marked), so anything else that reads `FinalMIR` arrays must check `provisional`.
