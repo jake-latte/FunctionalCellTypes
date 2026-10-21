@@ -197,13 +197,18 @@ def collapse_seeds(rows: Iterable[Row], keys: Sequence[str] = ("heldout_mse",)) 
 
 
 def filter_rows(
-    rows: Iterable[Row], seeds: Sequence[int] | None = None, n_epochs: int | None = None
+    rows: Iterable[Row],
+    seeds: Sequence[int] | None = None,
+    n_epochs: int | None = None,
+    lrs: Sequence[float] | None = None,
 ) -> list[Row]:
-    """The rows of the given seeds and run length (None keeps all)."""
+    """The rows of the given seeds, run length and learning rates (None keeps all)."""
     return [
         r
         for r in rows
-        if (seeds is None or r["seed"] in seeds) and (n_epochs is None or r["n_epochs"] == n_epochs)
+        if (seeds is None or r["seed"] in seeds)
+        and (n_epochs is None or r["n_epochs"] == n_epochs)
+        and (lrs is None or r["lr"] in lrs)
     ]
 
 
@@ -675,6 +680,7 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("--max-ratio", type=float, default=MAX_WORST_RATIO)
     report.add_argument("--seeds", type=int, nargs="+", help="use only these seeds")
     report.add_argument("--n-epochs", type=int, help="use only runs of this length")
+    report.add_argument("--lrs", type=float, nargs="+", help="use only these learning rates")
     return parser
 
 
@@ -687,7 +693,7 @@ def _load_template(base: Path) -> SweepConfig:
 
 def _report(args: argparse.Namespace) -> int:
     rows = [row for path in args.csv for row in read_rows_csv(path)]
-    rows = filter_rows(rows, args.seeds, args.n_epochs)
+    rows = filter_rows(rows, args.seeds, args.n_epochs, args.lrs)
     print(report_markdown(rows, args.key, args.learned_only, args.max_median_gap, args.max_ratio))
     if args.fig_dir is not None:
         from fct.lrplot import fig_metric_vs_lr  # plotting is not needed to tune

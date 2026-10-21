@@ -217,6 +217,7 @@ def test_rows_of_two_run_lengths_need_a_filter_first():
         collapse_seeds(table + longer)
     assert len(filter_rows(table + longer, n_epochs=15000)) == len(table)
     assert filter_rows(table, seeds=[1]) == []
+    assert {r["lr"] for r in filter_rows(table, lrs=[1e-3])} == {1e-3}
     assert len(filter_rows(table, seeds=[0])) == len(table)
 
 

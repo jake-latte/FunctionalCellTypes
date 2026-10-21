@@ -20,6 +20,11 @@ FAILURE_MARKER_Y = 0.96  # axes fraction at which a diverged run is marked
 ROW_HEIGHT = 3.4  # inches per row of panels
 
 
+def _draw_order(pair: tuple[str, float]) -> tuple:
+    phi, rate = pair
+    return (phi != "tanh", phi, rate)
+
+
 def _keep_span(ax: Axes, values: Sequence[float], rel: float = MIN_REL_SPAN) -> None:
     """Make the y-range at least `rel` of the largest value, so that differences below that
     are not stretched to fill the panel; plain tick labels (no offset). All-zero data get a
@@ -63,7 +68,8 @@ def plot_metric_vs_lr(
         with plt.rc_context(STYLE_RC):
             _, ax = plt.subplots(layout="constrained")
     width = plt.rcParams["lines.linewidth"]
-    for phi, rate in sorted({(r["phi"], r["rate_lambda"]) for r in cells}):
+    # tanh first, so its thick line lies under a coinciding relu line
+    for phi, rate in sorted({(r["phi"], r["rate_lambda"]) for r in cells}, key=_draw_order):
         line = sorted(
             (r for r in cells if r["phi"] == phi and r["rate_lambda"] == rate),
             key=lambda r: r["lr"],
