@@ -421,7 +421,7 @@ def _setting_key_of(row):
 def test_group_table_has_a_row_per_task_and_depth_with_the_best_lr():
     from fct.lrtune import group_table_markdown
 
-    best = lambda task, L: 1e-2 if L == 1 else 1e-3  # noqa: E731
+    best = lambda task, L: 1e-2 if L == 1 else 1e-3
     lines = group_table_markdown(rank_learning_rates(_table(best))).splitlines()
     assert len(lines) == 2 + len(TASKS) * 2
     row = next(line for line in lines if line.startswith("| linear_teacher | 1 "))
