@@ -990,10 +990,15 @@ def _annotate_cells(ax: Axes, values: np.ndarray, vmin: float, vmax: float) -> N
             )
 
 
+PROVISIONAL = "provisional"  # row status of a running setting whose cells hold checkpoint values
+PROVISIONAL_NOTE = "hatched rows (*) are provisional: values from the latest checkpoint, not final"
+
+
 def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> None:
-    """Name the status ("partial", "missing") across the row of an unfinished setting."""
+    """Name the status ("partial", "missing") across the row of an unfinished setting that has
+    no values; a provisional row keeps its values (see `_hatch_provisional_rows`)."""
     for row, status in enumerate(row_status):
-        if status != "done":
+        if status not in ("done", PROVISIONAL):
             ax.text(
                 (n_cols - 1) / 2,
                 row,
@@ -1003,6 +1008,18 @@ def _label_unfinished_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> 
                 fontsize=ANNOTATION_SIZE,
                 style="italic",
                 color=_GREY,
+            )
+
+
+def _hatch_provisional_rows(ax: Axes, row_status: Sequence[str], n_cols: int) -> None:
+    """Hatch the cells of provisional rows, so a number from a running setting is never read
+    as a final one."""
+    for row, status in enumerate(row_status):
+        if status == PROVISIONAL:
+            ax.add_patch(
+                Rectangle(
+                    (-0.5, row - 0.5), n_cols, 1, fill=False, hatch="//", edgecolor="white", lw=0
+                )
             )
 
 
@@ -1026,7 +1043,8 @@ def plot_mir_heatmap(
     colorbar: bool = True,
 ) -> Axes:
     """Settings (rows) by layer (columns) heatmap of a final MIR array, NaN where there is no
-    value (grey). Each cell carries its value and an unfinished setting's row its status.
+    value (grey). Each cell carries its value and an unfinished setting's row its status; a row
+    with status "provisional" keeps its values and is hatched.
     A value outside [vmin, vmax] is an error, not silently clipped. A figure that shows
     several heatmaps on one scale passes `colorbar=False` and adds one for all of them."""
     values = _np(values)
@@ -1044,6 +1062,7 @@ def plot_mir_heatmap(
     ax.tick_params(length=0)
     _annotate_cells(ax, values, vmin, vmax)
     _label_unfinished_rows(ax, row_status, values.shape[1])
+    _hatch_provisional_rows(ax, row_status, values.shape[1])
     ax.set_title(title)
     if colorbar:
         _add_mir_colorbar(ax.figure, image, ax, fraction=0.046, pad=0.03)
@@ -1076,4 +1095,6 @@ def fig_mir_heatmaps(
     _add_mir_colorbar(fig, axes[-1].images[0], axes, shrink=0.6)
     if title:
         fig.suptitle(title)
+    if PROVISIONAL in row_status:
+        fig.supxlabel(PROVISIONAL_NOTE)
     return fig

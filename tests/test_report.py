@@ -300,16 +300,18 @@ def test_setting_items_for_a_missing_setting_is_one_visible_message(partial_root
     assert "missing" in message and setting_label(r.setting) in message
 
 
-def test_interrupted_setting_is_reported_not_loaded(tmp_path):
+def test_interrupted_setting_is_shown_as_provisional_from_its_checkpoint(tmp_path):
     sweep = preset("tiny")
     save_sweep(sweep, tmp_path)
     run_setting(sweep, 0, tmp_path, **QUIET)
     # an interrupted run keeps its checkpoints but never wrote final.pt
     (setting_dir(tmp_path, expand(sweep)[0]) / "train" / "final.pt").unlink()
     r = load_results(tmp_path)[0]
-    assert r.status == "partial" and r.history is None
-    (message,) = setting_items(r)
-    assert "partial" in message and "no final.pt" in message
+    assert r.status == "partial" and r.provisional and r.history is not None
+    text, *figs = setting_items(r)
+    assert "partial, epoch 4 of 6" in text and len(figs) == 3
+    for fig in figs:
+        plt.close(fig)
 
 
 def test_summary_over_a_partial_sweep_counts_the_finished_settings(partial_root):

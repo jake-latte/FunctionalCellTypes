@@ -267,6 +267,13 @@ def train_from_config(
     return train(cfg, dataset, net, cache_dir, log=log, monitor=monitor)
 
 
+def _net_from_payload(payload: dict, cfg: Config, device: torch.device, dtype: torch.dtype) -> MLP:
+    state = payload["net_state_dict"]
+    net = make_net(cfg.net, state["U"].shape[1], state["V"].shape[1], device, dtype)
+    net.load_state_dict(state)
+    return net
+
+
 def load_trained(
     cache_dir: Path, cfg: Config, device: torch.device, dtype: torch.dtype
 ) -> tuple[MLP, History]:
@@ -277,7 +284,40 @@ def load_trained(
     if not final.exists():
         raise FileNotFoundError(f"no trained model at {final}; run training first")
     payload = _load_payload(final, cfg, device)
-    state = payload["net_state_dict"]
-    net = make_net(cfg.net, state["U"].shape[1], state["V"].shape[1], device, dtype)
-    net.load_state_dict(state)
-    return net, payload["history"]
+    return _net_from_payload(payload, cfg, device, dtype), payload["history"]
+
+
+def _read_latest(train_dir: Path, cfg: Config, device: torch.device) -> dict:
+    """Payload of the latest checkpoint. Whatever makes it unreadable (truncated file, other
+    config hash, inconsistent contents) is re-raised as a ValueError naming the file; only a
+    vanished file stays a FileNotFoundError, because that one is retried."""
+    ckpt = latest_checkpoint(train_dir)
+    if ckpt is None:
+        raise FileNotFoundError(f"no checkpoint in {train_dir}")
+    try:
+        return _load_payload(ckpt, cfg, device)
+    except FileNotFoundError:
+        raise
+    except Exception as err:
+        raise ValueError(f"cannot read {ckpt}: {type(err).__name__}: {err}") from err
+
+
+def load_latest_checkpoint(
+    cache_dir: Path, cfg: Config, device: torch.device, dtype: torch.dtype
+) -> tuple[MLP, History, int]:
+    """Read-only: the net, history and epoch reached (epochs completed) of the latest
+    checkpoint, for looking at a run that is still going.
+
+    A running job writes the new checkpoint before deleting the old one, so a checkpoint
+    that vanishes between listing and opening has been superseded: the listing is repeated
+    once. FileNotFoundError if there is no checkpoint (or it vanishes twice); ValueError naming
+    the file if it cannot be read or does not match `cfg`.
+    """
+    if dtype != resolve_dtype(cfg.dtype):
+        raise ValueError(f"dtype {dtype} does not match config dtype {cfg.dtype!r}")
+    train_dir = cache_paths(cache_dir).train
+    try:
+        payload = _read_latest(train_dir, cfg, device)
+    except FileNotFoundError:
+        payload = _read_latest(train_dir, cfg, device)
+    return _net_from_payload(payload, cfg, device, dtype), payload["history"], payload["epoch"]
