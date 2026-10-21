@@ -14,12 +14,12 @@ from fct.config import (
 
 # Section hashes key cached artefacts, so the dumped JSON of the defaults must not change
 # unintentionally (adding a config field changes every hash that includes its section, so old
-# caches become stale).
+# caches become stale; so does changing `LOSS_VERSION`, which the train-containing hashes fold in).
 DEFAULT_HASHES = {
     ("data",): "37d33c6aae26",
-    ("data", "net", "train"): "b0dc69885e46",
-    ("data", "net", "train", "meanfield"): "dbf1020c63da",
-    ("data", "net", "train", "analysis"): "9d009ed093eb",
+    ("data", "net", "train"): "f636a4e8adcc",
+    ("data", "net", "train", "meanfield"): "f9e2a96b56ca",
+    ("data", "net", "train", "analysis"): "26db96bfb1d2",
 }
 
 _POSITIVE_INT = {

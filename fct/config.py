@@ -23,6 +23,14 @@ PosFloat = Annotated[float, Field(gt=0)]
 NonNegFloat = Annotated[float, Field(ge=0)]
 
 
+# Version of the training-loss definition (`fct.train.compute_loss`). It is folded into every
+# hash that includes the "train" section, so artefacts produced under another definition of the
+# loss are rejected as stale instead of being mixed with new ones. Increase it whenever the
+# loss changes in a way the TrainConfig fields do not express.
+# 1: rate penalty summed over the samples. 2: rate penalty averaged over the samples.
+LOSS_VERSION = 2
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -165,7 +173,8 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. Canonical JSON (sorted keys) makes the hash independent of
+        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections: the
+        loss definition belongs to the train section but is code, not a config field. Canonical JSON (sorted keys) makes the hash independent of
         field and argument order.
         """
         if not sections:
@@ -174,6 +183,8 @@ class Config(StrictModel):
         if unknown:
             raise ValueError(f"unknown config sections {sorted(unknown)}")
         hashed = self.model_dump(include={*sections, "dtype"})
+        if "train" in sections:
+            hashed["loss_version"] = LOSS_VERSION
         canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 

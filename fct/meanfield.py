@@ -16,6 +16,9 @@ expectation under that density, which the per-layer `SingleSiteHMC` chains provi
 
 Mapping of the network's (β, λ_w, λ_r) onto the action (overridable in MeanFieldConfig):
 prior_scale = 1/λ_w, α = λ_w P D_out / β, c = learning_prefactor = ½, rate tilt = λ_r.
+The tilt multiplies φᵀφ summed over the P solved points, i.e. the summed rate penalty; the
+network's rate penalty is averaged over its samples, so the two differ by a factor P unless
+`MeanFieldConfig.rate_tilt` is set accordingly.
 
 Layers: `solve` is the computation (it touches disk only when given a checkpoint_dir),
 `run_meanfield` / `load_meanfield` are the cache-directory I/O.  The outer loop mutates one

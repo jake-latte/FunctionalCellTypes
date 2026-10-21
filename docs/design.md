@@ -73,7 +73,12 @@ a fresh cache directory or delete the stale artefact (principle 9).
 | meanfield  | data, net, train, meanfield                |
 | analysis   | data, net, train, analysis                 |
 
-Every artefact additionally depends on `dtype`; `section_hash` always includes it.
+Every artefact additionally depends on `dtype`; `section_hash` always includes it. The hash of any set of sections that
+includes `train` also folds in `config.LOSS_VERSION`, the version of the loss definition in `compute_loss`: it is code, not a
+config field, and must be increased whenever the loss changes meaning. Version 2 is the rate penalty averaged over the
+samples (version 1 summed it), so all train caches (`train/ckpt_*.pt`, `train/final.pt`), sweep caches, and every meanfield
+cache (hash includes the train section) made before that change are rejected once with `StaleCacheError`; data caches are
+unaffected. Use fresh cache directories or delete the old ones.
 
 ## Saved files
 
@@ -140,7 +145,7 @@ class Config(BaseModel):
     meanfield: MeanFieldConfig = MeanFieldConfig(); analysis: AnalysisConfig = AnalysisConfig()
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
-    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype, first 12 hex chars; >=1 section required
+    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `LOSS_VERSION` when `train` is a section), first 12 hex chars; >=1 section required
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -244,7 +249,7 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # we
 
 ```python
 def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[str, Tensor]]
-    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2  (notebook cell 5); dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
+    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2; weight_l2 = sum of squares of every parameter, rate_l2 = phi(h)^2 summed over neurons and layers and AVERAGED over the P samples (the notebook, cell 5, sums over the samples too: the library departs from it by design, so rate_lambda does not scale with P); dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
 History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus the monitor_* keys below when monitored
 def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
           monitor: Callable[[MLP], dict[str, list]] | None = None) -> tuple[MLP, History]

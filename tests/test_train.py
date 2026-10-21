@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+import fct.config
 from fct.cache import (
     StaleCacheError,
     cache_paths,
@@ -61,7 +62,7 @@ def test_compute_loss_matches_hand_computation():
     z = (h @ net.V) / 3  # (P, 1)
     mse = ((y - z) ** 2).mean()
     w2 = net.U.square().sum() + net.V.square().sum()
-    r2 = torch.relu(h).square().sum()
+    r2 = torch.relu(h).square().sum() / 2  # sum over neurons, mean over the P=2 samples
     expected = 0.5 * 3 * mse + lw * w2 + lr_ * r2
 
     loss, parts = compute_loss(net, x, y, lw, lr_)
@@ -86,7 +87,7 @@ def test_compute_loss_two_layers_sums_every_layer_and_every_weight():
     z = (h2 @ net.V) / 3
     mse = ((y - z) ** 2).mean()
     w2 = net.U.square().sum() + net.J[0].square().sum() + net.V.square().sum()
-    r2 = torch.tanh(h1).square().sum() + torch.tanh(h2).square().sum()
+    r2 = (torch.tanh(h1).square().sum() + torch.tanh(h2).square().sum()) / 2  # P = 2
     expected = 0.5 * 3 * mse + lw * w2 + lr_ * r2
 
     loss, parts = compute_loss(net, x, y, lw, lr_)
@@ -254,3 +255,86 @@ def test_train_rejects_net_with_other_dtype_than_config(tmp_path):
     net32 = make_net(cfg.net, 4, 2, CPU, torch.float32)
     with pytest.raises(ValueError, match="dtype"):
         train(cfg, ds, net32, tmp_path)
+
+
+def _two_sample_net():
+    """N=2, L=1, relu, with U chosen so that h = x @ U.T / sqrt(D_in) is known exactly."""
+    net = make_net(NetConfig(N=2, L=1, g=1.0, phi="relu", seed=0), 1, 1, CPU, F64)
+    with torch.no_grad():
+        net.U.copy_(torch.tensor([[1.0], [-1.0]], dtype=F64))
+        net.V.zero_()
+    return net
+
+
+def test_rate_l2_is_the_sum_over_neurons_averaged_over_samples():
+    net = _two_sample_net()
+    x = torch.tensor([[3.0], [-2.0]], dtype=F64)  # h = [[3, -3], [-2, 2]]; relu -> [[3,0],[0,2]]
+    y = torch.zeros(2, 1, dtype=F64)
+    loss, parts = compute_loss(net, x, y, weight_lambda=0.0, rate_lambda=0.5)
+    assert parts["rate_l2"].item() == pytest.approx((9 + 4) / 2)
+    assert parts["mse"].item() == 0.0  # V = 0 and y = 0
+    assert loss.item() == pytest.approx(0.5 * 6.5)  # only the rate term remains
+
+
+def test_loss_is_assembled_from_the_parts():
+    net = _two_sample_net()
+    with torch.no_grad():
+        net.V.fill_(1.0)
+    x = torch.tensor([[3.0], [-2.0]], dtype=F64)
+    y = torch.tensor([[1.0], [0.0]], dtype=F64)
+    lw, lr_ = 0.1, 0.2
+    loss, p = compute_loss(net, x, y, lw, lr_)
+    assert loss.item() == pytest.approx(
+        0.5 * net.N * p["mse"].item() + lw * p["weight_l2"].item() + lr_ * p["rate_l2"].item()
+    )
+    assert p["loss"].item() == pytest.approx(loss.item())
+
+
+def test_rate_l2_does_not_depend_on_the_number_of_samples():
+    cfg = _cfg()
+    ds, net = _setup(cfg)
+    _, once = compute_loss(net, ds.x, ds.y, 1e-3, 1e-3)
+    _, twice = compute_loss(net, ds.x.repeat(2, 1), ds.y.repeat(2, 1), 1e-3, 1e-3)
+    assert twice["rate_l2"].item() == pytest.approx(once["rate_l2"].item())
+    assert twice["mse"].item() == pytest.approx(once["mse"].item())
+    assert twice["loss"].item() == pytest.approx(once["loss"].item())
+
+
+def test_history_logs_the_averaged_rate_l2(tmp_path):
+    cfg = _cfg(n_epochs=1, log_int=1)
+    ds, net = _setup(cfg)
+    _, parts = compute_loss(net, ds.x, ds.y, cfg.train.weight_lambda, cfg.train.rate_lambda)
+    _, hist = train(cfg, ds, net, tmp_path, log=lambda s: None)
+    assert hist["rate_l2"][0] == pytest.approx(parts["rate_l2"].item())
+    summed = net.phi(make_net(cfg.net, ds.x.shape[1], ds.y.shape[1], CPU, F64)(ds.x)[0])
+    assert hist["rate_l2"][0] == pytest.approx(summed.square().sum().item() / ds.x.shape[0])
+
+
+def test_final_written_under_the_old_loss_is_rejected(tmp_path, monkeypatch):
+    cfg = _cfg()
+    ds, net = _setup(cfg)
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+        train(cfg, ds, net, tmp_path, log=lambda s: None)
+    with pytest.raises(StaleCacheError):
+        load_trained(tmp_path, cfg, CPU, F64)
+    _, fresh = _setup(cfg)
+    with pytest.raises(StaleCacheError):
+        train(cfg, ds, fresh, tmp_path, log=lambda s: None)
+
+
+def test_checkpoint_written_under_the_old_loss_is_rejected_on_resume(tmp_path, monkeypatch):
+    cfg = _cfg()
+    ds, net = _setup(cfg)
+
+    def stop(line):
+        if line.startswith("[") and _epoch_of(line) == 10:
+            raise Interrupt
+
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+        with pytest.raises(Interrupt):
+            train(cfg, ds, net, tmp_path, log=stop)
+    _, fresh = _setup(cfg)
+    with pytest.raises(StaleCacheError):
+        train(cfg, ds, fresh, tmp_path, log=lambda s: None)
