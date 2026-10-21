@@ -497,3 +497,20 @@ anything but a `SweepError`), and exits 1 listing the failed indices.
 
 `--set` takes dotted keys and JSON-ish values (`--set net.phi=tanh`,
 `--set data.cov=[[1,0],[0,1]]`); unknown keys fail loudly via pydantic.
+
+## jobs/fct_sweep.sh
+
+SLURM array over the sweep settings; written for the PI to submit. Tests exercise `--submit` only against a recording fake `sbatch` on PATH; agents never run it.
+
+```
+bash jobs/fct_sweep.sh ROOT --submit [--index N]   # sbatch --array=0-35%4 (or =N), logs in <project>/tmp/logs/
+bash jobs/fct_sweep.sh ROOT --dry-run [--index N]  # print that sbatch command, run nothing
+bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct sweep status`
+```
+
+`ROOT` is the first argument or `$FCT_SWEEP_ROOT`; it must exist and hold a `sweep.json`. Array size comes from `fct sweep count`.
+`FCT_MAX_CONCURRENT` (default 4) caps running tasks; `FCT_PYTHON` overrides `<project>/.venv/bin/python`. Each task runs
+`python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
+`--index` (digits only, read as base 10) applies to `--submit`/`--dry-run` only; a comma in the project or python path is rejected
+because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
+`tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
