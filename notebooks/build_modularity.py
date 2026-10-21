@@ -21,6 +21,7 @@ from nbclient import NotebookClient
 from nbformat import NotebookNode
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
+from fct.explanations import MIR_EXPLANATION
 from fct.report import ROOT_ENV
 from fct.sweep import SWEEP_TASKS, expand, preset
 
@@ -50,7 +51,7 @@ from fct.report import (
     task_items,
 )
 
-mpl.rcParams["figure.dpi"] = 60  # keeps the executed notebook small
+mpl.rcParams["figure.dpi"] = 100  # about 1300 px for a 13 in figure
 RESULTS = load_results(ROOT or sweep_root_from_env())
 show([overview_text(RESULTS)])"""
 
@@ -78,6 +79,7 @@ def build_notebook() -> NotebookNode:
         new_markdown_cell(INTRO, id=ids.next()),
         new_code_cell(PARAMETERS, id=ids.next(), metadata={"tags": ["parameters"]}),
         new_code_cell(SETUP, id=ids.next()),
+        new_markdown_cell(MIR_EXPLANATION, id=ids.next()),
     ]
     # The grid does not depend on the sweep's sizes, so any preset gives the same order.
     settings = expand(preset("tiny"))

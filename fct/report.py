@@ -30,7 +30,7 @@ from fct.analyse import ExampleOutputs, example_outputs, pick_examples, predicti
 from fct.cache import cache_paths
 from fct.config import Config, DataConfig, resolve_dtype
 from fct.data import get_dataset
-from fct.draw import fig_example_outputs, fig_mir_heatmaps, fig_mir_history, plot_loss_curves
+from fct.draw import fig_example_outputs, fig_loss_curves, fig_mir_heatmaps, fig_mir_history
 from fct.sweep import (
     LAYERS,
     Setting,
@@ -339,11 +339,9 @@ def setting_items(result: SettingResult) -> list[Item]:
     if result.status != "done":
         return [text]
     title = f"{result.setting.task} {setting_label(result.setting)}"
-    loss_ax = plot_loss_curves(result.history)
-    loss_ax.set_title(title, fontsize=10)
     return [
         text,
-        loss_ax.figure,
+        fig_loss_curves(result.history, title=title),
         fig_example_outputs(result.setting.task, result.examples, result.data_cfg),
         fig_mir_history(result.history, title=title),
     ]
