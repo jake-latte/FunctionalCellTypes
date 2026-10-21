@@ -819,7 +819,16 @@ def _plot_output_vector(true: ArrayLike, pred: ArrayLike, ax: Axes) -> Axes:
     return ax
 
 
-def _fig_linear_teacher(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
+def _legend_below_title(fig: Figure, handles: list, labels: list, ncol: int, title: str) -> None:
+    """The figure legend on top, or, when there is a title, below the figure: constrained layout
+    lets a title and a legend outside the axes overlap at the top."""
+    if title:
+        fig.suptitle(title)
+    where = "lower" if title else "upper"
+    fig.legend(handles, labels, loc=f"outside {where} center", ncol=ncol, frameon=False)
+
+
+def _fig_linear_teacher(outputs: ExampleOutputs, cfg: DataConfig, n: int, title: str) -> Figure:
     fig = plt.figure(figsize=(FIG_WIDTH, 2.4 * n + 1.5), layout="constrained")
     left, right = fig.add_gridspec(1, 2, width_ratios=[2, 1])
     rows = left.subgridspec(n, 1)
@@ -836,14 +845,14 @@ def _fig_linear_teacher(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Fig
         example_axes.append(ax)
     example_axes[-1].set_xlabel("output index")
     handles, labels = example_axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside upper center", ncol=2, frameon=False)
+    _legend_below_title(fig, handles, labels, 2, title)
     plot_prediction_scatter(
         outputs.y_true, outputs.y_pred, ax=fig.add_subplot(right), r2=_pooled_r2(outputs)
     )
     return fig
 
 
-def _fig_object_action(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
+def _fig_object_action(outputs: ExampleOutputs, cfg: DataConfig, n: int, title: str) -> Figure:
     if outputs.y_true.shape[1] != len(ACTION_NAMES):
         raise ValueError(f"object_action outputs need {len(ACTION_NAMES)} columns")
     agent_rc, objects = decode_object_action(outputs.x[:n], cfg.grid_size)
@@ -862,12 +871,8 @@ def _fig_object_action(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figu
         )
         axes[i, 0].set_title(f"example {int(outputs.indices[i])}")
     handles, labels = axes[0, 1].get_legend_handles_labels()
-    fig.legend(
-        handles + _object_grid_handles(),
-        labels + ["object", "agent"],
-        loc="outside upper center",
-        ncol=5,
-        frameon=False,
+    _legend_below_title(
+        fig, handles + _object_grid_handles(), labels + ["object", "agent"], 5, title
     )
     return fig
 
@@ -877,7 +882,7 @@ def _decision_text(name: str, y_true: Tensor, y_pred: Tensor) -> str:
     return f"{name} {pred} (true {true}): {'right' if pred == true else 'WRONG'}"
 
 
-def _fig_what_where(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
+def _fig_what_where(outputs: ExampleOutputs, cfg: DataConfig, n: int, title: str) -> Figure:
     images = decode_what_where(outputs.x[:n])
     where_t, what_t = split_what_where(outputs.y_true[:n], cfg.n_motifs)
     where_p, what_p = split_what_where(outputs.y_pred[:n], cfg.n_motifs)
@@ -902,13 +907,15 @@ def _fig_what_where(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
     axes[0, 1].set_title("where (macro-cell)")
     axes[0, 2].set_title("what (motif)")
     handles, labels = axes[0, 1].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside upper center", ncol=2, frameon=False)
+    _legend_below_title(fig, handles, labels, 2, title)
     return fig
 
 
-def _fig_position(outputs: ExampleOutputs, cfg: DataConfig, n: int) -> Figure:
+def _fig_position(outputs: ExampleOutputs, cfg: DataConfig, n: int, title: str) -> Figure:
     fig, ax = plt.subplots(figsize=(7, 7), layout="constrained")
     plot_prediction_scatter(outputs.y_true, outputs.y_pred, ax=ax, r2=_pooled_r2(outputs))
+    if title:
+        fig.suptitle(title)
     return fig
 
 
@@ -942,7 +949,11 @@ def _check_outputs(outputs: ExampleOutputs) -> None:
 
 @_styled
 def fig_example_outputs(
-    task: str, outputs: ExampleOutputs, data_cfg: DataConfig, n_show: int | None = None
+    task: str,
+    outputs: ExampleOutputs,
+    data_cfg: DataConfig,
+    n_show: int | None = None,
+    title: str = "",
 ) -> Figure:
     """Per-task picture of the first `n_show` examples (default 4, 6, 4, 4 for linear_teacher,
     object_action, what_where, position).
@@ -952,7 +963,8 @@ def fig_example_outputs(
     object_action: the scene next to true vs predicted action values. what_where: the input
     image next to true vs predicted `where` and `what` outputs, titled with the argmax
     decisions. position: true vs predicted scatter. `data_cfg` must be the config the outputs
-    came from (its task, grid size and motif count are checked against the outputs).
+    came from (its task, grid size and motif count are checked against the outputs). A `title`
+    heads the figure and moves the legend to its bottom.
     """
     build, default_n = _renderer(task)
     if data_cfg.task != task:
@@ -961,11 +973,12 @@ def fig_example_outputs(
     n_show = default_n if n_show is None else n_show
     if n_show < 1:
         raise ValueError(f"n_show must be at least 1, got {n_show}")
-    return build(outputs, data_cfg, min(n_show, len(outputs.indices)))
+    return build(outputs, data_cfg, min(n_show, len(outputs.indices)), title)
 
 
 # --------------------------------------------------------------------------- final MIR heatmaps
 _MISSING_GREY = "#d9d9d9"  # cells with no value: a layer the setting lacks, or an unfinished run
+PROVISIONAL_HATCH = "#e69f00"  # orange: distinct from viridis and from the grey of missing cells
 
 
 def _add_mir_colorbar(fig: Figure, image, axes: Axes | Sequence[Axes], **kwargs) -> None:
@@ -1018,7 +1031,13 @@ def _hatch_provisional_rows(ax: Axes, row_status: Sequence[str], n_cols: int) ->
         if status == PROVISIONAL:
             ax.add_patch(
                 Rectangle(
-                    (-0.5, row - 0.5), n_cols, 1, fill=False, hatch="//", edgecolor="white", lw=0
+                    (-0.5, row - 0.5),
+                    n_cols,
+                    1,
+                    fill=False,
+                    hatch="//",
+                    edgecolor=PROVISIONAL_HATCH,
+                    lw=0,
                 )
             )
 

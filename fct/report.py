@@ -507,10 +507,10 @@ def setting_items(result: SettingResult) -> list[Item]:
     items: list[Item] = [text]
     if result.status == "done" or result.history["epoch"]:
         items.append(fig_loss_curves(result.history, title=title))
-    examples = fig_example_outputs(result.setting.task, result.examples, result.data_cfg)
-    if result.provisional:
-        examples.suptitle(title)
-    items.append(examples)
+    shown = title if result.provisional else ""
+    items.append(
+        fig_example_outputs(result.setting.task, result.examples, result.data_cfg, title=shown)
+    )
     if result.status == "done" or _has_monitor_history(result.history):
         items.append(fig_mir_history(result.history, title=title))
     return items
