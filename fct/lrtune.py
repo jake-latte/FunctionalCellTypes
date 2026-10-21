@@ -390,7 +390,7 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
     ValueError if its history lacks the loss curve or the MIR monitor entries.
     """
     directory = setting_dir(root, setting)
-    if setting_status(root, setting) != "done":
+    if setting_status(root, sweep, setting) != "done":
         raise FileNotFoundError(f"{directory} is not finished (no train/final.pt)")
     if not (cache_paths(directory).data / "dataset.pt").exists():
         raise FileNotFoundError(f"{directory} has no data/dataset.pt; refusing to generate it")
@@ -533,7 +533,7 @@ def run_trials(
         sweep, root = trial_sweep(template, lr, seed), trial_root(base, lr, seed)
         _prepare_root(sweep, root)
         for i in indices:
-            was_done = setting_status(root, get_setting(sweep, i)) == "done"
+            was_done = setting_status(root, sweep, get_setting(sweep, i)) == "done"
             start = time.perf_counter()
             run_setting(sweep, i, root, log=log)
             if not was_done:
