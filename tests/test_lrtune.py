@@ -242,7 +242,7 @@ def test_loss_curve_stats_flags_non_finite_loss():
 def test_csv_round_trip_keeps_types_and_nan(tmp_path):
     rows = _table(lambda task, L: 1e-3, nan_at={("linear_teacher", 5, 1e-3)})
     for r in rows:
-        r |= {"train_mse": 0.5, "loss": 1.5, "max_spike": 1.0, "tail_drop": 0.0}
+        r |= {"n_epochs": 6000, "train_mse": 0.5, "loss": 1.5, "max_spike": 1.0, "tail_drop": 0.0}
         r["mir_corrected"] = "0.1;0.2"
     path = tmp_path / "t.csv"
     write_rows_csv(rows, path)

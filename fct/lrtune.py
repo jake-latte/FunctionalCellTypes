@@ -59,6 +59,7 @@ COLUMNS: dict[str, type] = {
     "rate_lambda": float,
     "lr": float,
     "seed": int,
+    "n_epochs": int,
     "diverged": bool,
     "train_mse": float,
     "heldout_mse": float,
@@ -373,6 +374,7 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
         "rate_lambda": setting.rate_lambda,
         "lr": sweep.lr,
         "seed": sweep.seeds.train,
+        "n_epochs": sweep.n_epochs,
         "diverged": stats["diverged"] or not all(math.isfinite(v) for v in final),
         "train_mse": train_mse,
         "heldout_mse": held_mse,
@@ -592,6 +594,8 @@ def _parser() -> argparse.ArgumentParser:
         "--key", default="heldout_mse", choices=["heldout_mse", "train_mse", "loss"]
     )
     report.add_argument("--learned-only", action="store_true")
+    report.add_argument("--seeds", type=int, nargs="+", help="use only these seeds")
+    report.add_argument("--n-epochs", type=int, help="use only runs of this length")
     return parser
 
 
@@ -602,8 +606,14 @@ def _load_template(base: Path) -> SweepConfig:
     return SweepConfig.model_validate_json(path.read_text())
 
 
-def _report(csvs: Sequence[Path], fig_dir: Path | None, key: str, learned_only: bool) -> int:
+def _report(args: argparse.Namespace) -> int:
+    csvs, fig_dir = args.csv, args.fig_dir
     rows = [row for path in csvs for row in read_rows_csv(path)]
+    if args.seeds is not None:
+        rows = [row for row in rows if row["seed"] in args.seeds]
+    if args.n_epochs is not None:
+        rows = [row for row in rows if row["n_epochs"] == args.n_epochs]
+    key, learned_only = args.key, args.learned_only
     print(report_markdown(rows, key, learned_only))
     if fig_dir is not None:
         from fct.lrplot import fig_metric_vs_lr  # plotting is not needed to tune
@@ -629,7 +639,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         (args.base / TUNING_FILE).write_text(template.model_dump_json(indent=2) + "\n")
         return 0
     if args.command == "report":
-        return _report(args.csv, args.fig_dir, args.key, args.learned_only)
+        return _report(args)
     template = _load_template(args.base)
     indices = subset_indices(template, args.tasks, args.layers)
     if args.command == "run":
