@@ -55,14 +55,18 @@ def test_mir_grid_rejects_a_duplicate_cell():
         (MirRecord(0.2, 0.01, 0, 0.5), "not on the grid"),
         (MirRecord(0.1, 0.01, 2, 0.5), "outside"),
         (MirRecord(0.1, 0.01, -1, 0.5), "outside"),
-        (MirRecord(0.1, 0.01, True, 0.5), "integer"),
-        (MirRecord(0.1, 0.01, 1.0, 0.5), "integer"),
         (MirRecord(0.1, 0.01, 0, float("nan")), "non-finite"),
     ],
 )
 def test_mir_grid_rejects_a_bad_record(record, match):
     with pytest.raises(ValueError, match=match):
         mir_grid([record], LR, LW, n_layers=2)
+
+
+@pytest.mark.parametrize("layer", [True, 1.0])
+def test_mir_grid_rejects_a_non_integer_layer(layer):
+    with pytest.raises(TypeError, match="integer"):
+        mir_grid([MirRecord(0.1, 0.01, layer, 0.5)], LR, LW, n_layers=2)
 
 
 def test_mir_grid_rejects_no_records_and_near_duplicate_grid_values():

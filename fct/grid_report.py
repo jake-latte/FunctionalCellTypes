@@ -33,7 +33,7 @@ def _index_of(values: np.ndarray, value: float, what: str) -> int:
 
 def _check_layer(layer: int, n_layers: int) -> None:
     if isinstance(layer, bool) or not isinstance(layer, int | np.integer):
-        raise ValueError(f"layer must be an integer, got {layer!r}")
+        raise TypeError(f"layer must be an integer, got {layer!r}")
     if not 0 <= layer < n_layers:
         raise ValueError(f"layer {layer} is outside [0, {n_layers})")
 
