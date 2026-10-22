@@ -4,251 +4,287 @@
   "task": "linear_teacher",
   "L": 1,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "69d3086bfd7e"
  },
  {
   "dir": "linear_teacher/L1_tanh_r0.001",
   "task": "linear_teacher",
   "L": 1,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "cee83fde139e"
  },
  {
   "dir": "linear_teacher/L1_relu_r0",
   "task": "linear_teacher",
   "L": 1,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "fc6281d9766e"
  },
  {
   "dir": "linear_teacher/L1_relu_r0.001",
   "task": "linear_teacher",
   "L": 1,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "ba587bf461a5"
  },
  {
   "dir": "linear_teacher/L3_tanh_r0",
   "task": "linear_teacher",
   "L": 3,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "a4e24ba3acf4"
  },
  {
   "dir": "linear_teacher/L3_tanh_r0.001",
   "task": "linear_teacher",
   "L": 3,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "93e214a6927a"
  },
  {
   "dir": "linear_teacher/L3_relu_r0",
   "task": "linear_teacher",
   "L": 3,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "0b0e48ff2434"
  },
  {
   "dir": "linear_teacher/L3_relu_r0.001",
   "task": "linear_teacher",
   "L": 3,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "e67ae4054098"
  },
  {
   "dir": "linear_teacher/L5_tanh_r0",
   "task": "linear_teacher",
   "L": 5,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "908f705f8ce3"
  },
  {
   "dir": "linear_teacher/L5_tanh_r0.001",
   "task": "linear_teacher",
   "L": 5,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "b2d4250b98b5"
  },
  {
   "dir": "linear_teacher/L5_relu_r0",
   "task": "linear_teacher",
   "L": 5,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "3ca0358da720"
  },
  {
   "dir": "linear_teacher/L5_relu_r0.001",
   "task": "linear_teacher",
   "L": 5,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "da0bf40916ea"
  },
  {
   "dir": "object_action/L1_tanh_r0",
   "task": "object_action",
   "L": 1,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "9aea62db80fe"
  },
  {
   "dir": "object_action/L1_tanh_r0.001",
   "task": "object_action",
   "L": 1,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "dd989859ad8a"
  },
  {
   "dir": "object_action/L1_relu_r0",
   "task": "object_action",
   "L": 1,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "070d4a07b69f"
  },
  {
   "dir": "object_action/L1_relu_r0.001",
   "task": "object_action",
   "L": 1,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "081ddc9b4bef"
  },
  {
   "dir": "object_action/L3_tanh_r0",
   "task": "object_action",
   "L": 3,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "c00d4e3ccf51"
  },
  {
   "dir": "object_action/L3_tanh_r0.001",
   "task": "object_action",
   "L": 3,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "33bb3c0a24fd"
  },
  {
   "dir": "object_action/L3_relu_r0",
   "task": "object_action",
   "L": 3,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "94fffcd49198"
  },
  {
   "dir": "object_action/L3_relu_r0.001",
   "task": "object_action",
   "L": 3,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "aa981cf1a512"
  },
  {
   "dir": "object_action/L5_tanh_r0",
   "task": "object_action",
   "L": 5,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "8ecb67bb6cc3"
  },
  {
   "dir": "object_action/L5_tanh_r0.001",
   "task": "object_action",
   "L": 5,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "9a0df47050a1"
  },
  {
   "dir": "object_action/L5_relu_r0",
   "task": "object_action",
   "L": 5,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "0dbf0c8cd0b0"
  },
  {
   "dir": "object_action/L5_relu_r0.001",
   "task": "object_action",
   "L": 5,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "d2f42af0b86c"
  },
  {
   "dir": "what_where/L1_tanh_r0",
   "task": "what_where",
   "L": 1,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "f18ecf0ed21e"
  },
  {
   "dir": "what_where/L1_tanh_r0.001",
   "task": "what_where",
   "L": 1,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "372344c71cb9"
  },
  {
   "dir": "what_where/L1_relu_r0",
   "task": "what_where",
   "L": 1,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "44011bfc00b5"
  },
  {
   "dir": "what_where/L1_relu_r0.001",
   "task": "what_where",
   "L": 1,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "25e152387947"
  },
  {
   "dir": "what_where/L3_tanh_r0",
   "task": "what_where",
   "L": 3,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "070fd171795e"
  },
  {
   "dir": "what_where/L3_tanh_r0.001",
   "task": "what_where",
   "L": 3,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "6445198044a9"
  },
  {
   "dir": "what_where/L3_relu_r0",
   "task": "what_where",
   "L": 3,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "92bbbfc5437e"
  },
  {
   "dir": "what_where/L3_relu_r0.001",
   "task": "what_where",
   "L": 3,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "ceaed8d527f4"
  },
  {
   "dir": "what_where/L5_tanh_r0",
   "task": "what_where",
   "L": 5,
   "phi": "tanh",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "2514cd5a7437"
  },
  {
   "dir": "what_where/L5_tanh_r0.001",
   "task": "what_where",
   "L": 5,
   "phi": "tanh",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "e4d2cdf60973"
  },
  {
   "dir": "what_where/L5_relu_r0",
   "task": "what_where",
   "L": 5,
   "phi": "relu",
-  "rate_lambda": 0.0
+  "rate_lambda": 0.0,
+  "train_hash": "903bca354ff9"
  },
  {
   "dir": "what_where/L5_relu_r0.001",
   "task": "what_where",
   "L": 5,
   "phi": "relu",
-  "rate_lambda": 0.001
+  "rate_lambda": 0.001,
+  "train_hash": "8c946ae41f89"
  }
 ]
