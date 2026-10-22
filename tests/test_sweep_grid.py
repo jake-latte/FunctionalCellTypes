@@ -16,6 +16,7 @@ from fct.sweep import (
     expand,
     find_setting_dir,
     get_setting,
+    grid_hash,
     load_sweep,
     phase_transition,
     preset,
@@ -374,3 +375,54 @@ def test_cli_init_axis_errors_are_one_line(tmp_path, capsys):
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny", "--axis", "net.L=[1]")
     assert code == 1 and "modularity" in err
     assert not (tmp_path / "sweep.json").exists()
+
+
+# ---------------------------------------------------------------------------- grid hash and guards
+def test_the_grid_hash_is_that_of_the_built_values_not_the_json_text():
+    ints = _with_grid({"train.rate_lambda": [0, 1e-3]})
+    floats = _with_grid({"train.rate_lambda": [0.0, 1e-3]})
+    assert grid_hash(ints) == grid_hash(floats)
+    assert grid_hash(ints) != grid_hash(_with_grid({"train.rate_lambda": [1e-3, 0.0]}))
+
+
+def test_the_base_task_is_in_the_hash_only_without_a_task_axis():
+    no_axis = {"net.L": [1, 2]}
+    assert grid_hash(_with_grid(no_axis)) != grid_hash(_with_grid(no_axis, task="what_where"))
+    task_axis = {"data.task": ["linear_teacher", "what_where"]}
+    assert grid_hash(_with_grid(task_axis)) == grid_hash(_with_grid(task_axis, task="what_where"))
+
+
+def test_a_re_init_that_only_respells_the_grid_reuses_the_directories(tmp_path):
+    first = _with_grid({"train.rate_lambda": [0, 1e-3]}, n_epochs=2)
+    run_setting(first, 0, tmp_path, **QUIET)
+    again = _with_grid({"train.rate_lambda": [0.0, 1e-3]}, n_epochs=2)
+    run_setting(again, 0, tmp_path, **QUIET)
+    found = find_setting_dir(tmp_path, again, {"train.rate_lambda": 0.0})
+    assert found.name.startswith("s0000_")
+
+
+def test_a_setting_json_without_a_grid_hash_is_a_sweep_error(small, tmp_path):
+    run_setting(small, 0, tmp_path, **QUIET)
+    directory = setting_dir(tmp_path, expand(small)[0])
+    record = json.loads((directory / "setting.json").read_text())
+    del record["grid_hash"]
+    (directory / "setting.json").write_text(json.dumps(record))
+    with pytest.raises(SweepError, match=str(directory)):
+        read_setting(directory, small)
+
+
+def test_nothing_run_says_how_old_directories_get_a_setting_json(small, tmp_path):
+    with pytest.raises(LookupError, match="next `sweep run`"):
+        find_setting_dir(tmp_path, small, {})
+
+
+def test_a_grid_too_large_for_the_directory_index_is_refused():
+    huge = {"train.lr": [float(i + 1) for i in range(100)], "net.N": list(range(1, 102))}
+    with pytest.raises(SweepError, match="at most 10000"):
+        expand(SweepConfig.model_construct(**{**preset("tiny").model_dump(), "grid": huge}))
+
+
+def test_same_value_treats_numpy_scalars_like_python_ones():
+    assert same_value(np.float64(1e-3), 1e-3) and same_value(np.int64(1), 1)
+    assert not same_value(np.True_, 1) and not same_value(1, np.True_)
+    assert same_value(np.True_, True)

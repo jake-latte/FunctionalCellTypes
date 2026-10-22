@@ -2,6 +2,7 @@
 sweep (most settings missing) that must render a message for each missing setting."""
 
 import ast
+from pathlib import Path
 
 import nbformat
 import pytest
@@ -184,3 +185,11 @@ def test_executes_on_a_mix_of_done_partial_and_missing_settings(tmp_path):
         "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
     )
     assert png == 2 * FIGURES_PER_SETTING + len(SWEEP_TASKS)
+
+
+def test_the_committed_notebook_is_what_the_builder_produces():
+    """The source notebook is generated; a stale copy would call an outdated API."""
+    committed = nbformat.read(Path(__file__).parents[1] / "notebooks" / "modularity.ipynb", 4)
+    assert [(c.cell_type, c.source) for c in committed.cells] == [
+        (c.cell_type, c.source) for c in build_notebook().cells
+    ]

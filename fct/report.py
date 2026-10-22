@@ -200,7 +200,7 @@ def _origin(mir_epoch: int | None, epoch: int, n_epochs: int, short: bool = Fals
 _LABEL_FORMATS = {"net.L": "L{}", "net.phi": "{}", "train.rate_lambda": "r={}"}
 
 
-def _label_value(value) -> str:
+def _label_value(value: Any) -> str:
     return f"{value:g}" if isinstance(value, float) else str(value)
 
 

@@ -21,6 +21,7 @@ import hashlib
 import itertools
 import json
 import math
+import numbers
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -300,20 +301,21 @@ def grid_of(sweep: SweepConfig) -> dict[str, list]:
     return MODULARITY_GRID if sweep.grid is None else sweep.grid
 
 
+def _is_section(node: Any) -> bool:
+    return isinstance(node, dict)
+
+
 def _set_leaf(tree: dict, axis: str, value: Any) -> None:
     """Set the Config field at the dotted path `axis` in a dumped config tree."""
     *parents, last = axis.split(".")
     node = tree
     for part in parents:
-        section = node.get(part)
-        is_section = isinstance(section, dict)
-        if not is_section:
+        node = node.get(part)
+        if not _is_section(node):
             raise ValueError(f"grid axis {axis!r}: {part!r} is not a config section")
-        node = section
     if last not in node:
         raise ValueError(f"grid axis {axis!r}: no config field {last!r}")
-    is_section = isinstance(node[last], dict)
-    if is_section:
+    if _is_section(node[last]):
         raise ValueError(f"grid axis {axis!r} is a config section; name one of its fields")
     node[last] = value
 
@@ -449,10 +451,25 @@ def setting_config(sweep: SweepConfig, setting: Setting) -> Config:
     return _config_from(sweep, setting.axes)
 
 
+def _dump_at(dump: dict, axis: str) -> Any:
+    node = dump
+    for part in axis.split("."):
+        node = node[part]
+    return node
+
+
 def grid_hash(sweep: SweepConfig) -> str:
-    """Short hash of the grid and base task: two sweeps with the same hash put the same values
-    at the same indices (the sizes may differ; those are checked by config.json)."""
-    canonical = json.dumps({"task": sweep.task, "grid": grid_of(sweep)}, sort_keys=False)
+    """Short hash of what the grid sets: the swept Config values of every setting, in index
+    order. It is taken on the built configs (as `_validate_axis` defines sameness), so `[0, 1e-3]`
+    and `[0.0, 1e-3]` agree. The base task counts only when `data.task` is not an axis. The
+    sizes are not in it; config.json checks those."""
+    grid = grid_of(sweep)
+    swept = [
+        [_dump_at(setting_config(sweep, s).model_dump(), axis) for axis in grid]
+        for s in expand(sweep)
+    ]
+    base_task = None if TASK_AXIS in grid else sweep.task
+    canonical = json.dumps({"axes": list(grid), "values": swept, "task": base_task})
     return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
@@ -509,16 +526,21 @@ def _write_setting_once(sweep: SweepConfig, setting: Setting, directory: Path) -
         )
 
 
-def read_setting(directory: Path, sweep: SweepConfig) -> dict:
-    """The `{"index", "grid_hash", "axes"}` record `run_setting` wrote in a setting directory.
-    SweepError, naming the directory, if it was written under another grid than `sweep`'s."""
+def _read_setting(directory: Path, current_hash: str) -> dict:
     record = json.loads((Path(directory) / SETTING_FILE).read_text())
-    if record["grid_hash"] != grid_hash(sweep):
+    if record.get("grid_hash") != current_hash:
         raise SweepError(
-            f"{directory} was written under another grid than this sweep.json's; "
-            "use a fresh ROOT or delete the directory"
+            f"{directory} has no grid hash or was written under another grid than this "
+            "sweep.json's; use a fresh ROOT or delete the directory"
         )
     return record
+
+
+def read_setting(directory: Path, sweep: SweepConfig) -> dict:
+    """The `{"index", "grid_hash", "axes"}` record `run_setting` wrote in a setting directory.
+    SweepError, naming the directory, if it was written under another grid than `sweep`'s (or
+    carries no grid hash)."""
+    return _read_setting(directory, grid_hash(sweep))
 
 
 def has_settings(root: Path) -> bool:
@@ -528,13 +550,14 @@ def has_settings(root: Path) -> bool:
 
 
 def same_value(a: Any, b: Any) -> bool:
-    """Equality for looking a setting up by its values: numbers (also inside lists) agree to
-    a relative `LOOKUP_REL_TOL`; a bool equals only a bool, so `True` never finds `L=1`."""
+    """Equality for looking a setting up by its values: numbers (also inside lists, and numpy
+    scalars) agree to a relative `LOOKUP_REL_TOL`; a bool equals only a bool, so `True` never
+    finds `L=1`."""
     if isinstance(a, list | tuple) and isinstance(b, list | tuple):
         return len(a) == len(b) and all(same_value(x, y) for x, y in zip(a, b, strict=True))
-    if isinstance(a, bool) or isinstance(b, bool):
-        return type(a) is type(b) and a == b
-    if isinstance(a, int | float) and isinstance(b, int | float):
+    if isinstance(a, bool | np.bool_) or isinstance(b, bool | np.bool_):
+        return isinstance(a, bool | np.bool_) and isinstance(b, bool | np.bool_) and a == b
+    if isinstance(a, numbers.Real) and isinstance(b, numbers.Real):
         return math.isclose(a, b, rel_tol=LOOKUP_REL_TOL)
     return a == b
 
@@ -546,14 +569,15 @@ def find_setting_dir(root: Path, sweep: SweepConfig, values: Mapping[str, Any]) 
     grid. Only the sweep's own directories are considered, so strays in ROOT cannot match."""
     if unknown := sorted(set(values) - set(grid_of(sweep))):
         raise LookupError(f"unknown axis {unknown}; the grid has axes {list(grid_of(sweep))}")
-    run = [
-        setting_dir(root, s)
-        for s in expand(sweep)
-        if (setting_dir(root, s) / SETTING_FILE).exists()
-    ]
+    directories = [setting_dir(root, s) for s in expand(sweep)]
+    run = [d for d in directories if (d / SETTING_FILE).exists()]
     if not run:
-        raise LookupError(f"no setting of this sweep has been run under {root}")
-    records = [(directory, read_setting(directory, sweep)["axes"]) for directory in run]
+        raise LookupError(
+            f"no setting of this sweep has been run under {root} (settings run before "
+            f"{SETTING_FILE} existed get one on their next `sweep run`)"
+        )
+    current = grid_hash(sweep)  # once: it builds every setting's config
+    records = [(directory, _read_setting(directory, current)["axes"]) for directory in run]
     matches = [
         directory
         for directory, axes in records

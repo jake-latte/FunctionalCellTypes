@@ -448,7 +448,7 @@ def _add_sweep_parser(sub) -> None:
     p_init.add_argument("--preset", choices=PRESET_NAMES, default="tiny")
     p_init.add_argument(
         "--n-lambda", type=int, default=None, metavar="N_LAMBDA",
-        help="points per log-spaced lambda axis (phase_transition only)",
+        help=f"points per log-spaced lambda axis (required by {list(GRID_PRESETS)}, else not allowed)",
     )  # fmt: skip
     p_init.add_argument(
         "--axis", action="append", default=[], metavar="PATH=[V,...]",
@@ -458,10 +458,13 @@ def _add_sweep_parser(sub) -> None:
         "--set", action="append", default=[], metavar="KEY=VALUE",
         help="override a sweep entry by dotted key, e.g. --set n_epochs=100 (repeatable)",
     )  # fmt: skip
-    p_init.add_argument("--force", action="store_true", help="overwrite an existing sweep.json")
+    p_init.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing sweep.json, and write one beside existing setting directories",
+    )  # fmt: skip
     add("list", cmd_sweep_list, "print `index directory` for every setting")
     add("count", cmd_sweep_count, "print the number of settings")
-    add("status", cmd_sweep_status, "print done / partial / missing for every setting")
+    add("status", cmd_sweep_status, "print done / partial / missing / stale for every setting")
     p_run = add("run", cmd_sweep_run, "train one setting (--index) or all of them in order")
     p_run.add_argument("--index", type=int, default=None, help="setting index (see `sweep list`)")
 
