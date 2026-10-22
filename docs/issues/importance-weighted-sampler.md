@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: awaiting your confirmation
+status: todo
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
@@ -15,9 +15,10 @@ PI brief (Mean Field 1): in addition to HMC, offer simple importance-weighted sa
 2. **Solver wiring.** `MeanFieldConfig.sampler: "hmc" | "importance"` (default "hmc", behaviour unchanged) and `n_importance_samples`, `importance_proposal_scale` (inflate the proposal covariance, default 1). `_new_sampler` dispatches on it.
 3. **Config / caches.** Split the mean-field config into problem-definition fields (`n_points`, `beta`, `readout`, `prior_scale`, `alpha`, `learning_prefactor`, `rate_tilt`: they define the equations being solved) and solver fields (everything about Algorithm 1, HMC, importance sampling, logging). Old flat `config.json` files still load (a pre-validator moves the flat keys into the solver group). The solver result's cache hash covers data, net, train and the *problem* fields; solver fields are stored in the artefact for provenance but only the explicitly-versioned ones that change the fixed point invalidate it. Training caches are unaffected (the meanfield section never entered their hash); adding solver fields never makes a training cache stale. A hash-pin test proves a config written by the current code loads and hashes identically.
 
-Questions for the PI:
-- Is the Gaussian prior N(0, Sigma_l) the intended proposal (it is the zero-tilt single-site density)? A tilt-aware Laplace proposal would be better when the tilt is strong but is a larger change.
-- Should changing sampler type or sample count make an existing meanfield result stale? Proposed: yes for `sampler` (different estimator), no for diagnostics-only fields.
+## PI decisions (2026-10-22)
+- Plan confirmed. The proposal is the Gaussian prior N(0, Sigma_l): keep the sampler as simple and transparent as possible, no tilt-aware / Laplace proposal.
+- Changing `sampler` makes an existing mean-field result stale (it enters the result hash); diagnostics-only fields do not.
+- Queued behind `remove-rate-penalty-p-scaling`, which edits the same files (meanfield.py, config.py, cli.py); starts from the merged main.
 
 ## Acceptance criteria
 - On a 1-D / small-P problem with a known single-site density (Gaussian tilt, closed form), both samplers recover `<psi psi^T>` within Monte-Carlo error; ESS and weight diagnostics behave (collapse flagged when the tilt is extreme).
