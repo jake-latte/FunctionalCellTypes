@@ -1196,12 +1196,20 @@ def _plot_ring(population: Population, radius: float, color: str, ax: Axes) -> N
     )
 
 
+def _check_drawable_dimension(space: LayerSpace) -> int:
+    """The dimension d of the space, if it can be drawn (1 or 2)."""
+    d = space.pre.embedding.positions.shape[1]
+    if d > 2:
+        raise ValueError(f"can only draw embeddings for d = 1 or 2, got d = {d}")
+    return d
+
+
 def plot_embedding(space: LayerSpace, ax: Axes | None = None) -> Axes:
     """Unit positions of the pre and post populations: on a ring (d = 1, pre outside, post
     inside) or on the plane (d = 2). The legend sits outside the axis, to the right, so the
     figure needs constrained layout (as `fig_kernel` uses) to leave room for it."""
+    d = _check_drawable_dimension(space)
     ax = _get_ax(ax)
-    d = space.pre.embedding.positions.shape[1]
     if d == 1:
         _plot_ring(space.pre, RING_RADIUS_PRE, LAYER_COLORS[0], ax)
         _plot_ring(space.post, RING_RADIUS_POST, LAYER_COLORS[1], ax)
@@ -1220,8 +1228,6 @@ def plot_embedding(space: LayerSpace, ax: Axes | None = None) -> Axes:
         ax.set_xlim(0, space.pre.embedding.box)
         ax.set_ylim(0, space.pre.embedding.box)
         ax.set_aspect("equal")
-    else:
-        raise ValueError(f"can only draw embeddings for d = 1 or 2, got d = {d}")
     ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.0, 0.5))
     return ax
 
@@ -1230,9 +1236,7 @@ def plot_embedding(space: LayerSpace, ax: Axes | None = None) -> Axes:
 def fig_kernel(space: LayerSpace) -> Figure:
     """One layer's spatial prior: K_pre and K_post as matrices, K against torus distance with
     the analytic curve, and the unit positions."""
-    d = space.pre.embedding.positions.shape[1]
-    if d > 2:
-        raise ValueError(f"can only draw embeddings for d = 1 or 2, got d = {d}")
+    _check_drawable_dimension(space)
     fig, axes = plt.subplots(2, 2, figsize=KERNEL_FIG_SIZE, layout="constrained")
     plot_kernel(space.pre.K, ax=axes[0, 0], title=f"K_pre ({space.pre.name})")
     plot_kernel(space.post.K, ax=axes[0, 1], title=f"K_post ({space.post.name})")

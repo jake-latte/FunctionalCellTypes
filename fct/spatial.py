@@ -55,6 +55,8 @@ N_IMAGE_SIGMAS = 8
 SYMMETRY_RTOL = 1e-10
 # Eigenvalues above -NEGATIVE_RTOL * max count as round-off rather than as negative.
 NEGATIVE_RTOL = 1e-10
+# Populations per network are limited to this, so (seed, index) pairs map to distinct seeds.
+SEED_STRIDE = 1000
 RelEig = Annotated[float, Field(gt=0, lt=1)]
 
 
@@ -64,8 +66,9 @@ RelEig = Annotated[float, Field(gt=0, lt=1)]
 class EmbeddingSpec(StrictModel):
     """How to place a population's units. `grid` is a regular lattice with `shape[k]` points
     along axis k (the product must equal the population size); for d = 1 `shape` may be omitted
-    and the n points are evenly spaced. `random` is uniform in the box, seeded by `seed` plus
-    the population index (input 0, hidden k = k, output L + 1) so populations differ."""
+    and the n points are evenly spaced. `random` is uniform in the box, seeded by the generator seed
+    `seed * SEED_STRIDE + population index` (input 0, hidden k = k, output L + 1), so populations
+    differ and no two (seed, index) pairs share a stream."""
 
     kind: Literal["grid", "random"] = "grid"
     shape: list[PosInt] | None = None
@@ -144,13 +147,14 @@ def _grid_shape(spec: EmbeddingSpec, n: int, d: int) -> list[int]:
     return shape
 
 
-def make_embedding(
-    spec: EmbeddingSpec, n: int, d: int, box: float, seed_offset: int = 0
-) -> Embedding:
-    """Positions for n units. `seed_offset` is added to `spec.seed` (random kind only); the
-    draw uses a local generator, so the global RNG is untouched."""
+def make_embedding(spec: EmbeddingSpec, n: int, d: int, box: float, index: int = 0) -> Embedding:
+    """Positions for n units; `index` is the population index (random kind only: it enters the
+    generator seed `spec.seed * SEED_STRIDE + index`). The draw uses a local generator, so the
+    global RNG is untouched."""
     if spec.kind == "random":
-        gen = torch.Generator().manual_seed(spec.seed + seed_offset)
+        if not 0 <= index < SEED_STRIDE:
+            raise ValueError(f"population index must lie in [0, {SEED_STRIDE}), got {index}")
+        gen = torch.Generator().manual_seed(spec.seed * SEED_STRIDE + index)
         return Embedding(torch.rand(n, d, generator=gen, dtype=DTYPE) * box, box)
     return Embedding(_grid_positions(_grid_shape(spec, n, d), box), box)
 
@@ -217,6 +221,8 @@ def _check_kernel(K: torch.Tensor) -> None:
     """Raise unless K is a finite, square, symmetric matrix."""
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
         raise ValueError(f"K must be square, got shape {tuple(K.shape)}")
+    if K.dtype != DTYPE:
+        raise ValueError(f"K must be {DTYPE}, got {K.dtype}")
     if not torch.isfinite(K).all():
         raise ValueError("K must be finite")
     if not torch.allclose(K, K.T, rtol=0, atol=SYMMETRY_RTOL * K.abs().max().item()):
@@ -283,8 +289,8 @@ class LayerSpace:
 def _make_population(
     name: str, spec: PopulationSpec, n: int, cfg: SpatialConfig, index: int
 ) -> Population:
-    """Population number `index` (0 input, 1..L hidden, L + 1 output), which offsets the seed."""
-    emb = make_embedding(spec.embedding, n, cfg.d, cfg.box, seed_offset=index)
+    """Population number `index` (0 input, 1..L hidden, L + 1 output), which enters the seed."""
+    emb = make_embedding(spec.embedding, n, cfg.d, cfg.box, index=index)
     K = periodic_gaussian_kernel(
         emb.positions, emb.positions, spec.kernel.length_scale, cfg.box, spec.kernel.amplitude
     )

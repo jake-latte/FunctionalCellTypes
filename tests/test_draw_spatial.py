@@ -2,10 +2,10 @@
 
 import matplotlib.pyplot as plt
 import pytest
-from conftest import assert_png
 
 from fct import draw
 from fct.spatial import EmbeddingSpec, PopulationSpec, SpatialConfig, build_spaces
+from tests.draw_helpers import assert_png
 
 
 def _random_cfg(d):
@@ -38,4 +38,12 @@ def test_fig_kernel_rejects_d3_without_opening_a_figure():
     n_before = len(plt.get_fignums())
     with pytest.raises(ValueError, match="d = 3"):
         draw.fig_kernel(space)
+    assert len(plt.get_fignums()) == n_before
+
+
+def test_plot_embedding_rejects_d3_without_opening_a_figure():
+    space = build_spaces(_random_cfg(d=3), m=4, N=4, L=1, n_out=2)[0]
+    n_before = len(plt.get_fignums())
+    with pytest.raises(ValueError, match="d = 3"):
+        draw.plot_embedding(space)
     assert len(plt.get_fignums()) == n_before

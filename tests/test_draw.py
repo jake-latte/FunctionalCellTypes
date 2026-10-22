@@ -7,12 +7,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import torch
-from conftest import assert_png as _assert_png
 
 from fct import draw
 from fct.analyse import ExampleOutputs, GridPredictions, LayerPCA
 from fct.config import DataConfig
 from fct.data import Dataset
+from tests.draw_helpers import assert_png as _assert_png
 
 P_GRID, L, N, K, P_TRAIN = 4, 2, 3, 3, 6
 

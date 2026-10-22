@@ -71,6 +71,12 @@ def test_make_embedding_random_is_seeded_and_in_box():
     assert a.shape == (50, 2) and a.min() >= 0 and a.max() < 2.0
 
 
+def test_make_embedding_gives_distinct_streams_to_distinct_seed_index_pairs():
+    a = make_embedding(EmbeddingSpec(kind="random", seed=0), 10, d=1, box=1.0, index=1)
+    b = make_embedding(EmbeddingSpec(kind="random", seed=1), 10, d=1, box=1.0, index=0)
+    assert not torch.equal(a.positions, b.positions)
+
+
 def test_make_embedding_leaves_global_rng_untouched():
     torch.manual_seed(123)
     before = torch.get_rng_state()
@@ -209,10 +215,15 @@ def test_penalty_matrix_counts_and_clamps_negative_eigenvalues():
     assert torch.linalg.eigvalsh(M).min().item() > 0
 
 
-def test_penalty_matrix_reports_the_floored_fraction_of_a_realistic_ring():
-    K_pop = build_spaces(SpatialConfig(), m=4, N=100, L=1, n_out=3)[0].post
-    assert K_pop.report.fraction_floored == K_pop.report.n_floored / 100
-    assert 0.0 <= K_pop.report.fraction_floored <= 1.0
+def test_build_spaces_floors_83_of_100_eigenvalues_of_a_default_ring():
+    pop = build_spaces(SpatialConfig(), m=4, N=100, L=1, n_out=3)[0].post
+    assert pop.report.n_floored == 83
+    assert pop.report.fraction_floored == 0.83
+
+
+def test_penalty_matrix_rejects_float32_k():
+    with pytest.raises(ValueError, match="float64"):
+        penalty_matrix(torch.eye(3, dtype=torch.float32), 1e-6)
 
 
 def test_penalty_matrix_rejects_asymmetric_k():

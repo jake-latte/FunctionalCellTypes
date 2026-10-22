@@ -674,7 +674,7 @@ PopulationSpec(embedding, kernel)
 SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6)   # hidden 1..L share `hidden`; grid in d > 1 needs a shape
 
 # pure computation (float64, CPU)
-make_embedding(spec, n, d, box, seed_offset=0) -> Embedding(positions (n, d), box)   # local generator: global RNG untouched
+make_embedding(spec, n, d, box, index=0) -> Embedding(positions (n, d), box)   # local generator: global RNG untouched
 torus_distance(x, y, box) -> (n, m)                       # Euclidean norm of per-axis minimum-image differences (figure only)
 periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post, n_pre)   # wrapped Gaussian, diagonal = amplitude
 wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
@@ -685,7 +685,7 @@ build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 la
 Populations are indexed 0 (input, m), 1..L (hidden 1..hidden L, N), L + 1 (output, n_out); layer l maps population l to l + 1,
 matching `MLP`: U is layer 0, J_1..J_{L-1} the hidden layers, the readout layer L. The post `Population` of layer l is the same
 object as the pre `Population` of layer l + 1 (embedding, K, M computed once). A random embedding uses seed
-`embedding.seed + population index`, so populations differ and runs repeat. `MLP.V` is stored (pre, post): for layer L the weight
+a generator seeded `embedding.seed * 1000 + population index` (at most 1000 populations), so populations differ, runs repeat and no two (seed, index) pairs collide. `MLP.V` is stored (pre, post): for layer L the weight
 in (post, pre) orientation is `V.T`.
 
 The floor. `M` is the inverse of `K` with eigenvalues floored at `min_rel_eig` times the largest. A smooth kernel has many
