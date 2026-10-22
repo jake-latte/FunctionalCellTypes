@@ -1,14 +1,14 @@
 ---
 type: data-science
 complexity: complex
-status: awaiting your confirmation
+status: blocked
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
 
 # Exemplar notebook: task, SGLD training, mean-field solve with live diagnostics
 
-Depends on `sgld-training` and `importance-weighted-sampler`. Linear teacher task.
+Confirmed by the PI 2026-10-22. Blocked until `sgld-training` and `importance-weighted-sampler` are merged. Linear teacher task.
 
 ## Proposed plan
 A source notebook (built by script, executed copy not committed) with sections, each a few cells:
