@@ -1,19 +1,42 @@
 """Spatial embeddings and factorised periodic Gaussian weight kernels.
 
-Every population (the input, each hidden layer, the output) gets a position in R^d for each of
-its units, on a torus [0, box)^d. The weight prior of layer l is K^l = K^post (x) K^pre with a
-Gaussian kernel on the torus for each factor; the penalty matrix is M = K^{-1}, built per
-factor (inverse of a Kronecker product is the Kronecker product of the inverses), so the
-(n_post n_pre)^2 matrix is never formed.
+Every unit of every population (the input, each hidden layer, the output) gets a position in
+R^d on the torus [0, box)^d. The weight prior of layer l is K^l = K^post (x) K^pre. Each factor
+is a Gaussian kernel on the torus, and the penalty is M = K^{-1} built per factor (the inverse
+of a Kronecker product is the Kronecker product of the inverses), so the (n_post n_pre)^2
+matrix is never formed.
 
-Everything here is pure: positions and kernels are float64 CPU tensors, so the inversions are
-accurate and independent of the training device.
+Populations and layers. Population 0 is the input (size m), populations 1..L are the hidden
+layers ("hidden 1".."hidden L", size N) and population L + 1 is the output (size n_out). Layer
+l = 0..L maps population l (pre) to population l + 1 (post), matching `fct.model.MLP`: U is
+layer 0, J_1..J_{L-1} are the hidden to hidden layers, the readout is layer L. Consecutive
+layers share a population object. Orientation: U and J are stored (post, pre), but the readout
+`MLP.V` is stored (N, D_out) = (pre, post), so for layer L the weight in (post, pre)
+orientation is `V.T`; `M_post` acts on its rows and `M_pre` on its columns.
 
-Layer l = 0..L maps population l to population l + 1, where population 0 is the input (size m),
-populations 1..L are the hidden layers (size N) and population L + 1 is the output (size
-n_out). This matches `fct.model.MLP`: U (N, D_in) is layer 0, J_1..J_{L-1} are the hidden to
-hidden layers, and the readout V (N, D_out) is layer L. Consecutive layers share a population
-object, so the post factor of layer l is the very same object as the pre factor of layer l + 1.
+The kernel. A Gaussian of the minimum-image distance is not positive definite on the torus
+once length_scale exceeds roughly box / 5, so the kernel is the wrapped (periodised) Gaussian,
+which is positive semi-definite for every length_scale:
+
+    K_ij = amplitude * prod_axes W(delta_a) / W(0),  delta = x_i - x_j reduced to [-box/2, box/2],
+    W(delta) = sum_k exp(-(delta + k box)^2 / (2 length_scale^2)),  |k| <= n_images.
+
+It factorises over axes, has diagonal exactly `amplitude`, and reduces to the plain Gaussian
+for length_scale << box. The image sum is cut at n_images = ceil(N_IMAGE_SIGMAS * length_scale
+/ box) + 1, so every dropped image lies at least N_IMAGE_SIGMAS * length_scale + 1.5 box from
+the point (the +1 is a margin) and contributes less than exp(-32) ~ 1e-14 of the central term.
+The cut has to be that deep: the eigenvalues on a ring decay like
+exp(-2 pi^2 length_scale^2 j^2 / box^2), so a shallower cut leaves negative eigenvalues.
+
+The penalty. M comes from the symmetric eigendecomposition with eigenvalues floored at
+`min_rel_eig` times the largest. A smooth kernel has many eigenvalues far below that (83%
+of a 100-unit ring at the defaults), so the floor is not just a round-off guard: it caps the
+prior's near-zero-variance directions, and so it defines M on that subspace. `FloorReport`
+gives the floored fraction. A kernel with a clearly negative eigenvalue is an error, not
+something to floor (`build_spaces` raises).
+
+Everything is pure float64 on the CPU, so inversions are accurate and independent of the
+training device.
 """
 
 import math
@@ -26,7 +49,12 @@ from pydantic import Field, model_validator
 from fct.config import PosFloat, PosInt, StrictModel
 
 DTYPE = torch.float64
-NEGATIVE_RTOL = 1e-10  # eigenvalues above -NEGATIVE_RTOL * max count as round-off, not as negative
+# Dropped images lie beyond this many length scales; exp(-N_IMAGE_SIGMAS^2 / 2) = exp(-32) ~ 1e-14.
+N_IMAGE_SIGMAS = 8
+# Relative tolerance on the asymmetry of a kernel handed to penalty_matrix.
+SYMMETRY_RTOL = 1e-10
+# Eigenvalues above -NEGATIVE_RTOL * max count as round-off rather than as negative.
+NEGATIVE_RTOL = 1e-10
 RelEig = Annotated[float, Field(gt=0, lt=1)]
 
 
@@ -36,15 +64,22 @@ RelEig = Annotated[float, Field(gt=0, lt=1)]
 class EmbeddingSpec(StrictModel):
     """How to place a population's units. `grid` is a regular lattice with `shape[k]` points
     along axis k (the product must equal the population size); for d = 1 `shape` may be omitted
-    and the n points are evenly spaced. `random` is uniform in the box, seeded by `seed`."""
+    and the n points are evenly spaced. `random` is uniform in the box, seeded by `seed` plus
+    the population index (input 0, hidden k = k, output L + 1) so populations differ."""
 
     kind: Literal["grid", "random"] = "grid"
     shape: list[PosInt] | None = None
     seed: int = 0
 
+    @model_validator(mode="after")
+    def _shape_only_for_grid(self) -> Self:
+        if self.kind == "random" and self.shape is not None:
+            raise ValueError("a random embedding takes no shape")
+        return self
+
 
 class KernelSpec(StrictModel):
-    length_scale: PosFloat = 0.1  # in units of the box
+    length_scale: PosFloat = 0.1  # same units as `box`
     amplitude: PosFloat = 1.0
 
 
@@ -54,9 +89,9 @@ class PopulationSpec(StrictModel):
 
 
 class SpatialConfig(StrictModel):
-    """Spatial settings. All hidden layers share the `hidden` spec; a random hidden embedding
-    uses seed `hidden.embedding.seed + k` for hidden layer k = 0..L-1 so the layers differ.
-    `min_rel_eig` is the eigenvalue floor (relative to the largest) of the penalty matrices."""
+    """Spatial settings. All hidden populations (hidden 1..L) share the `hidden` spec.
+    `min_rel_eig` is the eigenvalue floor (relative to the largest) of the penalty matrices.
+    A grid embedding needs a `shape` with d entries, except in d = 1 where it may be omitted."""
 
     d: PosInt = 1
     box: PosFloat = 1.0
@@ -68,10 +103,12 @@ class SpatialConfig(StrictModel):
     @model_validator(mode="after")
     def _grid_shapes_match_d(self) -> Self:
         for name in ("input", "hidden", "output"):
-            shape = getattr(self, name).embedding.shape
-            if shape is not None and len(shape) != self.d:
+            emb = getattr(self, name).embedding
+            if emb.kind == "grid" and emb.shape is None and self.d > 1:
+                raise ValueError(f"{name}: a grid embedding in d = {self.d} needs a shape")
+            if emb.shape is not None and len(emb.shape) != self.d:
                 raise ValueError(
-                    f"{name}.embedding.shape has {len(shape)} entries but d = {self.d}"
+                    f"{name}.embedding.shape has {len(emb.shape)} entries but d = {self.d}"
                 )
         return self
 
@@ -93,23 +130,29 @@ def _grid_positions(shape: list[int], box: float) -> torch.Tensor:
     return torch.stack([g.reshape(-1) for g in mesh], dim=1)
 
 
-def make_embedding(
-    spec: EmbeddingSpec, n: int, d: int, box: float, seed_offset: int = 0
-) -> Embedding:
-    """Positions for n units. `seed_offset` is added to `spec.seed` (random kind only)."""
-    if spec.kind == "random":
-        gen = torch.Generator().manual_seed(spec.seed + seed_offset)
-        return Embedding(torch.rand(n, d, generator=gen, dtype=DTYPE) * box, box)
+def _grid_shape(spec: EmbeddingSpec, n: int, d: int) -> list[int]:
+    """The lattice shape for n units in d dimensions, checked against the spec."""
     shape = spec.shape
     if shape is None:
         if d != 1:
             raise ValueError(f"a grid embedding in d = {d} needs an explicit shape")
-        shape = [n]
+        return [n]
     if len(shape) != d:
         raise ValueError(f"grid shape {shape} has {len(shape)} entries but d = {d}")
-    if torch.tensor(shape).prod().item() != n:
+    if math.prod(shape) != n:
         raise ValueError(f"grid shape {shape} must multiply to the population size {n}")
-    return Embedding(_grid_positions(shape, box), box)
+    return shape
+
+
+def make_embedding(
+    spec: EmbeddingSpec, n: int, d: int, box: float, seed_offset: int = 0
+) -> Embedding:
+    """Positions for n units. `seed_offset` is added to `spec.seed` (random kind only); the
+    draw uses a local generator, so the global RNG is untouched."""
+    if spec.kind == "random":
+        gen = torch.Generator().manual_seed(spec.seed + seed_offset)
+        return Embedding(torch.rand(n, d, generator=gen, dtype=DTYPE) * box, box)
+    return Embedding(_grid_positions(_grid_shape(spec, n, d), box), box)
 
 
 # --------------------------------------------------------------------------- kernels
@@ -122,14 +165,8 @@ def torus_distance(x: torch.Tensor, y: torch.Tensor, box: float) -> torch.Tensor
 
 
 def _wrapped_gaussian_1d(delta: torch.Tensor, length_scale: float, box: float) -> torch.Tensor:
-    """sum_k exp(-(delta + k box)^2 / (2 ell^2)) over |k| <= n_images, elementwise in `delta`.
-
-    The dropped images lie at least 8 ell + box / 2 away, so each is below exp(-32) ~ 1e-14 of
-    the central term. The tail has to be this small: the Fourier coefficients of the wrapped
-    Gaussian (the kernel's eigenvalues on a ring) decay like exp(-2 pi^2 ell^2 j^2), so a
-    larger truncation error would show up as negative eigenvalues.
-    """
-    n_images = math.ceil(8 * length_scale / box) + 1
+    """W(delta) of the module docstring, elementwise; `delta` must lie in [0, box/2]."""
+    n_images = math.ceil(N_IMAGE_SIGMAS * length_scale / box) + 1
     shifts = box * torch.arange(-n_images, n_images + 1, dtype=delta.dtype)
     return torch.exp(-((delta[..., None] + shifts) ** 2) / (2 * length_scale**2)).sum(-1)
 
@@ -137,8 +174,11 @@ def _wrapped_gaussian_1d(delta: torch.Tensor, length_scale: float, box: float) -
 def wrapped_gaussian_profile(
     delta: torch.Tensor, length_scale: float, box: float, amplitude: float
 ) -> torch.Tensor:
-    """The kernel along one axis, amplitude * W(delta) / W(0): K itself for d = 1, and K along
-    a coordinate axis for d > 1."""
+    """The kernel along one axis, amplitude * W(delta) / W(0), for any signed `delta`: K itself
+    for d = 1, and K along a coordinate axis for d > 1."""
+    # Reduce to [0, box/2] (W is even): the images are centred, and K_ij and K_ji sum the same
+    # terms in the same order, so K is symmetric to the bit.
+    delta = (delta - box * torch.round(delta / box)).abs()
     zero = _wrapped_gaussian_1d(torch.zeros(1, dtype=delta.dtype), length_scale, box)
     return amplitude * _wrapped_gaussian_1d(delta, length_scale, box) / zero
 
@@ -146,17 +186,8 @@ def wrapped_gaussian_profile(
 def periodic_gaussian_kernel(
     x_post: torch.Tensor, x_pre: torch.Tensor, length_scale: float, box: float, amplitude: float
 ) -> torch.Tensor:
-    """Wrapped (periodised) Gaussian on the torus, shape (n_post, n_pre):
-
-        K_ij = amplitude * prod_axes W(x_i - x_j) / W(0),
-        W(delta) = sum_{k in Z} exp(-(delta + k box)^2 / (2 ell^2)),
-
-    with the image sum truncated as in `_wrapped_gaussian_1d` (relative tail below 1e-14).
-    The diagonal is exactly `amplitude`. Unlike a Gaussian of the minimum-image distance, which
-    is not positive definite on the torus once ell exceeds roughly box / 5, the wrapped sum
-    is positive semi-definite for every ell, and it reduces to the plain Gaussian for
-    ell << box. The sum factorises over axes, so each axis uses its signed difference.
-    """
+    """The wrapped Gaussian kernel of the module docstring, shape (n_post, n_pre). Positions
+    may lie outside [0, box): only differences modulo `box` matter."""
     delta = x_post[:, None, :] - x_pre[None, :, :]  # (n_post, n_pre, d)
     per_axis = wrapped_gaussian_profile(delta, length_scale, box, 1.0)
     return amplitude * per_axis.prod(dim=-1)
@@ -167,27 +198,37 @@ def periodic_gaussian_kernel(
 
 @dataclass(frozen=True)
 class FloorReport:
-    """What the eigenvalue floor did: `n_negative` eigenvalues were below -NEGATIVE_RTOL times the largest (clearly negative, not round-off)
-    (none are expected from the wrapped Gaussian; the floor is a safety net for round-off),
-    `cond_before` is the raw max/min eigenvalue (inf if the smallest is
-    not positive), `cond_after` the same after flooring."""
+    """What the eigenvalue floor did to one kernel (see the module docstring).
+
+    n_floored: eigenvalues raised to the floor (all those below min_rel_eig * the largest).
+    fraction_floored: n_floored over the number of eigenvalues.
+    n_negative: eigenvalues below -NEGATIVE_RTOL * the largest (clearly negative, not round-off).
+    cond_before, cond_after: largest over smallest eigenvalue before and after (inf if <= 0).
+    """
 
     n_floored: int
+    fraction_floored: float
     n_negative: int
     cond_before: float
     cond_after: float
 
 
-def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, FloorReport]:
-    """M ~ K^{-1} from the symmetric eigendecomposition, eigenvalues floored at
-    min_rel_eig * (largest eigenvalue). The floor is the only approximation: a Gaussian
-    kernel is numerically singular, and without it M would amplify round-off."""
-    if not 0 < min_rel_eig < 1:
-        raise ValueError(f"min_rel_eig must lie in (0, 1), got {min_rel_eig}")
+def _check_kernel(K: torch.Tensor) -> None:
+    """Raise unless K is a finite, square, symmetric matrix."""
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
         raise ValueError(f"K must be square, got shape {tuple(K.shape)}")
-    if not torch.allclose(K, K.T, rtol=0, atol=1e-10 * K.abs().max().item()):
+    if not torch.isfinite(K).all():
+        raise ValueError("K must be finite")
+    if not torch.allclose(K, K.T, rtol=0, atol=SYMMETRY_RTOL * K.abs().max().item()):
         raise ValueError("K must be symmetric")
+
+
+def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, FloorReport]:
+    """M ~ K^{-1} from the symmetric eigendecomposition with eigenvalues floored at
+    min_rel_eig * (largest eigenvalue); returns M and the `FloorReport`."""
+    if not 0 < min_rel_eig < 1:
+        raise ValueError(f"min_rel_eig must lie in (0, 1), got {min_rel_eig}")
+    _check_kernel(K)
     eigvals, eigvecs = torch.linalg.eigh(K)
     top, bottom = eigvals[-1].item(), eigvals[0].item()
     if top <= 0:
@@ -195,8 +236,10 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
     floor = min_rel_eig * top
     floored = eigvals.clamp(min=floor)
     M = (eigvecs / floored) @ eigvecs.T
+    n_floored = int((eigvals < floor).sum().item())
     report = FloorReport(
-        n_floored=int((eigvals < floor).sum().item()),
+        n_floored=n_floored,
+        fraction_floored=n_floored / len(eigvals),
         n_negative=int((eigvals < -NEGATIVE_RTOL * top).sum().item()),
         cond_before=top / bottom if bottom > 0 else float("inf"),
         cond_after=top / floored[0].item(),
@@ -221,7 +264,8 @@ class Population:
 
 @dataclass(frozen=True)
 class LayerSpace:
-    """Weight matrix l maps `pre` to `post`; its prior is K^post (x) K^pre."""
+    """Weight matrix l maps `pre` to `post`; its prior is K^post (x) K^pre. The weight must be in
+    (post, pre) orientation: for layer L that is `MLP.V.T`, since V is stored (pre, post)."""
 
     layer: int
     pre: Population
@@ -237,13 +281,16 @@ class LayerSpace:
 
 
 def _make_population(
-    name: str, spec: PopulationSpec, n: int, cfg: SpatialConfig, seed_offset: int = 0
+    name: str, spec: PopulationSpec, n: int, cfg: SpatialConfig, index: int
 ) -> Population:
-    emb = make_embedding(spec.embedding, n, cfg.d, cfg.box, seed_offset)
+    """Population number `index` (0 input, 1..L hidden, L + 1 output), which offsets the seed."""
+    emb = make_embedding(spec.embedding, n, cfg.d, cfg.box, seed_offset=index)
     K = periodic_gaussian_kernel(
         emb.positions, emb.positions, spec.kernel.length_scale, cfg.box, spec.kernel.amplitude
     )
     M, report = penalty_matrix(K, cfg.min_rel_eig)
+    if report.n_negative:
+        raise ValueError(f"kernel of {name} has {report.n_negative} clearly negative eigenvalues")
     return Population(name, emb, spec.kernel, K, M, report)
 
 
@@ -253,9 +300,7 @@ def build_spaces(cfg: SpatialConfig, m: int, N: int, L: int, n_out: int) -> list
     for name, size in {"m": m, "N": N, "L": L, "n_out": n_out}.items():
         if size < 1:
             raise ValueError(f"{name} must be >= 1, got {size}")
-    pops = [_make_population("input", cfg.input, m, cfg)]
-    pops += [
-        _make_population(f"hidden {k + 1}", cfg.hidden, N, cfg, seed_offset=k) for k in range(L)
-    ]
-    pops.append(_make_population("output", cfg.output, n_out, cfg))
+    pops = [_make_population("input", cfg.input, m, cfg, index=0)]
+    pops += [_make_population(f"hidden {k}", cfg.hidden, N, cfg, index=k) for k in range(1, L + 1)]
+    pops.append(_make_population("output", cfg.output, n_out, cfg, index=L + 1))
     return [LayerSpace(layer, pops[layer], pops[layer + 1]) for layer in range(L + 1)]

@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import torch
+from conftest import assert_png as _assert_png
 
 from fct import draw
 from fct.analyse import ExampleOutputs, GridPredictions, LayerPCA
@@ -27,12 +28,6 @@ def _randn(*shape, seed=0):
 
 def _has_artist(ax):
     return bool(ax.images or ax.collections or ax.lines or ax.patches)
-
-
-@pytest.fixture(autouse=True)
-def close_figures():
-    yield
-    plt.close("all")
 
 
 @pytest.fixture
@@ -109,12 +104,6 @@ def _training_history():
         "rate_l2": n.tolist(),
         "loss": (2.0 / n).tolist(),
     }
-
-
-def _assert_png(fig, tmp_path):
-    out = tmp_path / "fig.png"
-    fig.savefig(out)
-    assert out.stat().st_size > 0
 
 
 def _plot_calls(grid, pca, dataset):

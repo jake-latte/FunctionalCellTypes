@@ -25,12 +25,6 @@ CONFIGS = {
 }
 
 
-@pytest.fixture(autouse=True)
-def close_figures():
-    yield
-    plt.close("all")
-
-
 def _loss_history(n=6, **drop):
     rng = np.random.default_rng(0)
     h = {
