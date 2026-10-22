@@ -1,14 +1,14 @@
 ---
 type: data-science
 complexity: complex
-status: awaiting your confirmation
+status: blocked
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
 
 # Train with the spatial weight prior in place of the weight L2 norm
 
-Depends on `spatial-kernels`, `sgld-training`, `remove-rate-penalty-p-scaling`.
+Confirmed by the PI 2026-10-22. Blocked until `spatial-kernels` (kernels and `SpatialConfig`, which this item wires into `Config`), `sgld-training` and `remove-rate-penalty-p-scaling` (same loss code) are merged.
 
 ## Proposed plan
 - Penalty: `P_weight = 1/2 sum_l tr(M^post_l W_l M^pre_l W_l^T)` for the factorised case (equals `1/2 sum W M W` with `M = M^pre (x) M^post`; no Kronecker matrix is formed). With identity kernels it must equal the current `0.5 * weight_l2` up to the documented constant (current `weight_l2` is the plain sum of squares without 1/2; keep one convention and document it). `compute_loss` takes the penalty from a function chosen by config, so the default path is untouched.
