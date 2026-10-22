@@ -426,3 +426,16 @@ def test_same_value_treats_numpy_scalars_like_python_ones():
     assert same_value(np.float64(1e-3), 1e-3) and same_value(np.int64(1), 1)
     assert not same_value(np.True_, 1) and not same_value(1, np.True_)
     assert same_value(np.True_, True)
+
+
+def test_the_validated_path_refuses_a_grid_too_large_for_the_directory_index():
+    huge = {"train.lr": [float(i + 1) for i in range(100)], "net.N": list(range(1, 102))}
+    with pytest.raises(ValidationError, match="at most 10000"):
+        _with_grid(huge)
+
+
+def test_two_spellings_of_one_value_name_the_same_directory(tmp_path):
+    floats = expand(_with_grid({"train.rate_lambda": [1000000]}))
+    other = expand(_with_grid({"train.rate_lambda": [1000000.0]}))
+    assert floats[0].relpath == other[0].relpath
+    assert floats[0].relpath.name == "s0000_rate_lambda1e+06"

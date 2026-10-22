@@ -509,8 +509,9 @@ def setting_dir(root, setting) -> Path                   # ROOT / setting.relpat
 def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep
 def setting_config(sweep, setting) -> Config             # base config for the setting's task (net seed = seeds.net, monitor_* from the sweep) with each axis value written over it
 def setting_status(root, sweep, setting) -> "done" | "partial" | "missing" | "stale"   # done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stale = a final.pt with another hash; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
-def grid_hash(sweep) -> str                               # short hash of the built swept values of every setting in index order (so [0, 1e-3] == [0.0, 1e-3]) plus the base task unless data.task is an axis; stored in setting.json
-def read_setting(directory, sweep) -> {"index", "grid_hash", "axes"}   # a setting directory's setting.json; SweepError naming the directory if it was written under another grid
+def grid_hash(sweep) -> str                               # short hash of the built values of every axis (so [0, 1e-3] == [0.0, 1e-3]) plus the base task unless data.task is an axis; stored in setting.json
+def read_setting(directory, sweep) -> {"index", "grid_hash", "axes"}   # a setting directory's setting.json; SweepError naming the directory if it was written under another grid or has no grid hash
+def built_values(sweep) -> {axis: [values as the built Config holds them]}   # used by grid_hash and the directory labels, so a value has one spelling in both
 def find_setting_dir(root, sweep, values) -> Path         # the one run setting of `sweep` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
                                                           # a subset of the axes is enough if unambiguous); only the sweep's own directories are considered; LookupError if none, several, or an unknown axis
 def has_settings(root) -> bool                            # ROOT already holds a setting directory; `sweep init` refuses to write a new sweep.json there without --force

@@ -426,11 +426,15 @@ def expand(sweep: SweepConfig) -> list[Setting]:
             f"the grid has {n_settings} settings; directory names support at most "
             f"{10**INDEX_WIDTH} (INDEX_WIDTH={INDEX_WIDTH})"
         )
+    built = built_values(sweep)
     settings = []
-    for index, combo in enumerate(itertools.product(*grid.values())):
-        axes = dict(zip(grid, combo, strict=True))
+    for index, combo in enumerate(itertools.product(*(enumerate(v) for v in grid.values()))):
+        axes = {axis: grid[axis][i] for axis, (i, _) in zip(grid, combo, strict=True)}
+        # Names come from the built values, the same ones the grid hash uses, so two spellings
+        # of one value (`1000000`, `1000000.0`) cannot hash alike yet name different directories.
+        named = {axis: built[axis][i] for axis, (i, _) in zip(grid, combo, strict=True)}
         task = axes.get(TASK_AXIS, sweep.task)
-        name = _modularity_name(axes) if sweep.grid is None else _indexed_name(index, axes)
+        name = _modularity_name(named) if sweep.grid is None else _indexed_name(index, named)
         settings.append(Setting(index, axes, task, Path(task) / name))
     return settings
 
@@ -458,18 +462,20 @@ def _dump_at(dump: dict, axis: str) -> Any:
     return node
 
 
+def built_values(sweep: SweepConfig) -> dict[str, list]:
+    """Each axis's values as the built `Config` holds them (`0` becomes `0.0` for a float field),
+    so two spellings of one value become one. This is the sameness `_validate_axis` enforces."""
+    return {
+        axis: [_dump_at(_config_from(sweep, {axis: v}).model_dump(), axis) for v in values]
+        for axis, values in grid_of(sweep).items()
+    }
+
+
 def grid_hash(sweep: SweepConfig) -> str:
-    """Short hash of what the grid sets: the swept Config values of every setting, in index
-    order. It is taken on the built configs (as `_validate_axis` defines sameness), so `[0, 1e-3]`
-    and `[0.0, 1e-3]` agree. The base task counts only when `data.task` is not an axis. The
-    sizes are not in it; config.json checks those."""
-    grid = grid_of(sweep)
-    swept = [
-        [_dump_at(setting_config(sweep, s).model_dump(), axis) for axis in grid]
-        for s in expand(sweep)
-    ]
-    base_task = None if TASK_AXIS in grid else sweep.task
-    canonical = json.dumps({"axes": list(grid), "values": swept, "task": base_task})
+    """Short hash of what the grid sets: the built values of every axis. The base task counts
+    only when `data.task` is not an axis. The sizes are not in it; config.json checks those."""
+    base_task = None if TASK_AXIS in grid_of(sweep) else sweep.task
+    canonical = json.dumps({"axes": built_values(sweep), "task": base_task})
     return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
@@ -551,8 +557,9 @@ def has_settings(root: Path) -> bool:
 
 def same_value(a: Any, b: Any) -> bool:
     """Equality for looking a setting up by its values: numbers (also inside lists, and numpy
-    scalars) agree to a relative `LOOKUP_REL_TOL`; a bool equals only a bool, so `True` never
-    finds `L=1`."""
+    scalars of float64 or integer type) agree to a relative `LOOKUP_REL_TOL`; a bool equals only
+    a bool, so `True` never finds `L=1`. A float32 scalar carries only ~1e-7 precision, so it
+    does not meet `LOOKUP_REL_TOL` against the float64 that was written."""
     if isinstance(a, list | tuple) and isinstance(b, list | tuple):
         return len(a) == len(b) and all(same_value(x, y) for x, y in zip(a, b, strict=True))
     if isinstance(a, bool | np.bool_) or isinstance(b, bool | np.bool_):
