@@ -1,7 +1,7 @@
 # FunctionalCellTypes modularity study: status and how to resume
 
 Written 2026-10-20 by the PM agent. Read this, then `todo.md` (the PI's brief; untracked in the PI's
-tree), `docs/design.md` (the interface contract) and `docs/issues/`.
+tree), `docs/design.md` (the interface contract) and `docs/issues/` (current items; the first program's items are in `docs/issues/archive/`).
 
 ## The task (todo.md, summarised)
 Train feed-forward nets (the `fct` MLP) on three tasks and measure whether hidden neurons become
@@ -46,7 +46,7 @@ settings shown from their latest checkpoint, provisional), learning-rate tuning 
 LOSS CHANGE (PI decisions): the rate penalty is averaged over P (`LOSS_VERSION = 2`), the default
 `weight_lambda` is 1e-4, `rate_lambda` unchanged, lr 1e-3 not re-tuned. Every earlier train, sweep and
 meanfield cache is stale (`sweep status` shows `stale`). With these defaults `what_where` learns; the
-averaged rate penalty at `rate_lambda = 1e-3` is small (see docs/issues/average-rate-penalty.md).
+averaged rate penalty at `rate_lambda = 1e-3` is small (see docs/issues/archive/average-rate-penalty.md).
 Mean-field now needs an explicit `meanfield.rate_tilt` when `rate_lambda != 0` (PI to decide the default:
 `rate_lambda / P_train` or `rate_lambda / n_points`).
 `run-tiny-pipeline` is `in review`: tiny preset 36/36 on CPU, 3 settings on the T1000, notebook executed

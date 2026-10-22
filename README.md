@@ -10,7 +10,7 @@ It has two parts that share one configuration, cache and command-line interface:
    modularity index (MIR) per hidden layer, tracked through training.
 
 The package is `fct/`; `docs/design.md` is the interface contract between its modules, `docs/status.md`
-records the state of the modularity study, and `docs/issues/` holds the written work items.
+records the state of the modularity study, and `docs/issues/` holds the current work items (finished ones are archived in `docs/issues/archive/`).
 
 ## Install
 
