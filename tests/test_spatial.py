@@ -70,12 +70,37 @@ def test_torus_distance_2d_is_euclidean_of_wrapped_axes():
     assert torus_distance(x, y, 1.0).item() == pytest.approx((0.1**2 + 0.4**2) ** 0.5)
 
 
-def test_kernel_symmetric_amplitude_diagonal_psd():
-    x = make_embedding(EmbeddingSpec(kind="random", seed=0), 30, d=2, box=1.0).positions
-    K = periodic_gaussian_kernel(x, x, length_scale=0.05, box=1.0, amplitude=1.5)
+def _point_sets():
+    rand2 = make_embedding(EmbeddingSpec(kind="random", seed=0), 30, d=2, box=1.0).positions
+    return {"ring10": _ring(10), "ring50": _ring(50), "random2d": rand2}
+
+
+@pytest.mark.parametrize("length_scale", [0.05, 0.1, 0.3, 0.5, 1.0])
+@pytest.mark.parametrize("name", ["ring10", "ring50", "random2d"])
+def test_kernel_psd_symmetric_amplitude_diagonal(name, length_scale):
+    x = _point_sets()[name]
+    K = periodic_gaussian_kernel(x, x, length_scale, box=1.0, amplitude=1.5)
     torch.testing.assert_close(K, K.T)
-    torch.testing.assert_close(K.diagonal(), torch.full((30,), 1.5, dtype=DT))
-    assert torch.linalg.eigvalsh(K).min() > -1e-10
+    assert torch.equal(K.diagonal(), torch.full((len(x),), 1.5, dtype=DT))
+    eigs = torch.linalg.eigvalsh(K)
+    assert eigs.min().item() >= -1e-10 * eigs.max().item()
+    _, report = penalty_matrix(K, min_rel_eig=1e-6)
+    assert report.n_negative == 0
+
+
+def test_kernel_reduces_to_plain_gaussian_for_small_length_scale():
+    x = _point_sets()["random2d"]
+    K = periodic_gaussian_kernel(x, x, 0.02, 1.0, 1.0)
+    plain = torch.exp(-torus_distance(x, x, 1.0).square() / (2 * 0.02**2))
+    torch.testing.assert_close(K, plain, atol=1e-12, rtol=0)
+
+
+def test_kernel_wraps_for_wide_length_scale():
+    # Far from the minimum-image Gaussian: with ell = 1 the neighbouring images matter.
+    x = torch.tensor([[0.0], [0.5]], dtype=DT)
+    K = periodic_gaussian_kernel(x, x, 1.0, 1.0, 1.0)
+    plain = torch.exp(torch.tensor(-(0.5**2) / 2, dtype=DT))
+    assert K[0, 1].item() > plain.item()
 
 
 def test_kernel_value_and_rectangular_shape():
@@ -128,11 +153,11 @@ def test_penalty_rejects_bad_input():
         penalty_matrix(torch.zeros(3, 3, dtype=DT), 1e-6)
 
 
-def test_report_counts_negative_eigenvalues_of_wide_minimum_image_kernel():
-    x = _ring(10)
-    K = periodic_gaussian_kernel(x, x, 0.3, 1.0, 1.0)  # wide: not positive definite on the ring
-    _, report = penalty_matrix(K, min_rel_eig=1e-6)
-    assert report.n_negative > 0 and report.n_floored >= report.n_negative
+def test_report_counts_negative_eigenvalues_of_non_psd_matrix():
+    K = torch.tensor([[1.0, 2.0], [2.0, 1.0]], dtype=DT)  # eigenvalues 3 and -1
+    M, report = penalty_matrix(K, min_rel_eig=1e-6)
+    assert report.n_negative == 1 and report.n_floored == 1
+    assert torch.linalg.eigvalsh(M).min().item() > 0  # clamped, so M stays positive definite
 
 
 # ------------------------------------------------------------------ config
