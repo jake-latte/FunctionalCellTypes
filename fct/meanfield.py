@@ -18,7 +18,8 @@ Mapping of the network's (β, λ_w, λ_r) onto the action (overridable in MeanFi
 prior_scale = 1/λ_w, α = λ_w P D_out / β, c = learning_prefactor = ½.  The rate tilt λ_r
 multiplies φᵀφ summed over the P solved points, a per-sample coefficient; `solve` takes it as
 `lambda_r`.  The trained network's rate penalty is summed over its samples, so its per-sample
-coefficient is exactly train.rate_lambda, which `run_meanfield` passes as `lambda_r`;
+coefficient is exactly train.rate_lambda (exact under the same ½ convention as the weight prior:
+prior_scale = 1/λ_w ↔ loss λ_w‖θ‖², density exp(-½ λ_w‖θ‖²)), which `run_meanfield` passes as `lambda_r`;
 `MeanFieldConfig.rate_tilt`, when set, overrides it.
 
 Layers: `solve` is the computation (it touches disk only when given a checkpoint_dir),

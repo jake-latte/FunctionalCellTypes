@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 import torch
 
+import fct.config
 import fct.meanfield as mf
 from fct.cache import StaleCacheError
 from fct.config import Config, DataConfig, MeanFieldConfig, NetConfig, TrainConfig
@@ -385,6 +386,16 @@ def test_load_meanfield_is_stale_when_beta_changes(cached_run):
     _, _, _, cache_dir, _ = cached_run
     with pytest.raises(StaleCacheError):
         load_meanfield(cache_dir, small_config(beta=2e3), "cpu")
+
+
+def test_load_meanfield_rejects_a_result_from_another_loss_version(tmp_path, monkeypatch):
+    cfg = small_config()
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+        run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+    with pytest.raises(StaleCacheError):
+        load_meanfield(tmp_path, cfg, "cpu")
 
 
 def test_load_meanfield_without_result_fails_loudly(tmp_path):

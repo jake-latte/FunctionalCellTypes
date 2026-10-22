@@ -310,6 +310,7 @@ def test_rate_l2_grows_with_the_number_of_samples():
     ds, net = _setup(cfg)
     _, once = compute_loss(net, ds.x, ds.y, 1e-3, 1e-3)
     _, twice = compute_loss(net, ds.x.repeat(2, 1), ds.y.repeat(2, 1), 1e-3, 1e-3)
+    assert once["rate_l2"].item() > 0
     assert twice["rate_l2"].item() == pytest.approx(2 * once["rate_l2"].item())
     assert twice["mse"].item() == pytest.approx(once["mse"].item())
     rate_part = 1e-3 * once["rate_l2"].item()
