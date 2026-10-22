@@ -33,6 +33,7 @@ from fct.analyse import (
 )
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
+from fct.spatial import LayerSpace, Population, torus_distance
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 
 ArrayLike = Tensor | np.ndarray | Sequence[float]
@@ -1134,4 +1135,74 @@ def fig_mir_heatmaps(
         fig.suptitle(title)
     if PROVISIONAL in row_status:
         fig.supxlabel(PROVISIONAL_NOTE)
+    return fig
+
+
+# --------------------------------------------------------------------------- spatial kernels
+
+
+def plot_kernel_vs_distance(space: LayerSpace, ax: Axes | None = None) -> Axes:
+    """Every K_ij of the pre and post factors against its torus distance d_ij (points), with
+    the analytic Gaussian amplitude * exp(-d^2 / (2 ell^2)) as a line for each factor."""
+    ax = _get_ax(ax)
+    for pop in (space.pre, space.post):
+        x = pop.embedding.positions
+        dist = _np(torus_distance(x, x, pop.embedding.box)).ravel()
+        scatter = ax.scatter(dist, _np(pop.K).ravel(), s=6, alpha=0.4, rasterized=True)
+        ell, amp = pop.kernel.length_scale, pop.kernel.amplitude
+        d_line = np.linspace(0, dist.max(), 200)
+        ax.plot(
+            d_line,
+            amp * np.exp(-(d_line**2) / (2 * ell**2)),
+            color=scatter.get_facecolor()[0][:3],
+            label=f"{pop.name}: ell={ell:g}",
+        )
+    ax.set_xlabel("torus distance")
+    ax.set_ylabel("K_ij")
+    ax.legend()
+    return ax
+
+
+def _plot_ring(pop: Population, radius: float, ax: Axes) -> None:
+    angle = 2 * np.pi * _np(pop.embedding.positions)[:, 0] / pop.embedding.box
+    ax.scatter(radius * np.cos(angle), radius * np.sin(angle), s=14, label=pop.name)
+
+
+def plot_embedding(space: LayerSpace, ax: Axes | None = None) -> Axes:
+    """Unit positions of the pre and post populations: on a ring (d = 1, pre outside, post
+    inside) or on the plane (d = 2)."""
+    ax = _get_ax(ax)
+    d = space.pre.embedding.positions.shape[1]
+    if d == 1:
+        _plot_ring(space.pre, 1.0, ax)
+        _plot_ring(space.post, 0.8, ax)
+        ax.set_aspect("equal")
+        ax.set_axis_off()
+    elif d == 2:
+        for pop in (space.pre, space.post):
+            xy = _np(pop.embedding.positions)
+            ax.scatter(xy[:, 0], xy[:, 1], s=14, label=pop.name)
+        ax.set_xlim(0, space.pre.embedding.box)
+        ax.set_ylim(0, space.pre.embedding.box)
+        ax.set_aspect("equal")
+    else:
+        raise ValueError(f"can only draw embeddings for d = 1 or 2, got d = {d}")
+    ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize="small")
+    return ax
+
+
+@_styled
+def fig_kernel(space: LayerSpace) -> Figure:
+    """One layer's spatial prior: K_pre and K_post as matrices, K against torus distance with
+    the analytic curve, and the unit positions."""
+    d = space.pre.embedding.positions.shape[1]
+    if d > 2:
+        raise ValueError(f"can only draw embeddings for d = 1 or 2, got d = {d}")
+    fig, axes = plt.subplots(2, 2, figsize=(FIG_WIDTH * 0.7, 9), layout="constrained")
+    plot_kernel(space.pre.K, ax=axes[0, 0], title=f"K_pre ({space.pre.name})")
+    plot_kernel(space.post.K, ax=axes[0, 1], title=f"K_post ({space.post.name})")
+    plot_kernel_vs_distance(space, ax=axes[1, 0])
+    plot_embedding(space, ax=axes[1, 1])
+    axes[1, 1].set_title("positions")
+    fig.suptitle(f"layer {space.layer}: K = K_post (x) K_pre")
     return fig

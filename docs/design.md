@@ -655,3 +655,35 @@ bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct swe
 `--index` (digits only, read as base 10) applies to `--submit`/`--dry-run` only; a comma in the project or python path is rejected
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
+
+## spatial.py (spatial embeddings and weight kernels)
+
+Every unit of the input, each hidden layer and the output gets a position on the torus `[0, box)^d` (default `d = 1`, a ring).
+The weight prior of layer l is `K^l = K^post (x) K^pre`; the penalty is `M = K^{-1}`, built per factor so the
+`(n_post n_pre)^2` matrix is never formed. Not yet part of `Config`; the penalty is applied in a later item.
+
+```python
+# config (strict pydantic, like fct.config)
+EmbeddingSpec(kind="grid"|"random", shape=None, seed=0)   # grid shape must multiply to n; None -> n points for d = 1
+KernelSpec(length_scale=0.1, amplitude=1.0)               # length scale in box units
+PopulationSpec(embedding, kernel)
+SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6)   # all hidden layers share `hidden`
+
+# pure computation (float64, CPU)
+make_embedding(spec, n, d, box, seed_offset=0) -> Embedding(positions (n, d), box)
+torus_distance(x, y, box) -> (n, m)                       # Euclidean norm of per-axis minimum-image differences
+periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post, n_pre)   # amp * exp(-d^2 / 2 ell^2)
+penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, n_negative, cond_before, cond_after))
+build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
+draw.fig_kernel(space) -> Figure      # K_pre, K_post, K vs torus distance with the analytic curve, positions (d = 1 ring, d = 2 plane)
+```
+
+Populations are indexed 0 (input, m), 1..L (hidden, N), L + 1 (output, n_out); layer l maps population l to l + 1, matching
+`MLP`: U is layer 0, J_1..J_{L-1} the hidden layers, the readout V layer L. The post `Population` of layer l is the same object
+as the pre `Population` of layer l + 1 (embedding, K, M computed once). Random hidden embeddings use seed
+`hidden.embedding.seed + k` for hidden layer k, so layers differ and runs repeat.
+
+`M` comes from the symmetric eigendecomposition with eigenvalues floored at `min_rel_eig` times the largest; the floor is the only
+approximation and `FloorReport` says how many eigenvalues it touched and the condition number before and after. Caveat: the
+minimum-image Gaussian is positive semi-definite only for a length scale small against the box (about ell <= box / 10 in the
+tests); a wider one has negative eigenvalues, which the floor also clamps and `n_negative` counts.
