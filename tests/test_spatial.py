@@ -1,5 +1,7 @@
 """Tests for fct.spatial: torus geometry, Gaussian kernels, the penalty matrix, build_spaces."""
 
+import itertools
+
 import pytest
 import torch
 from pydantic import ValidationError
@@ -70,7 +72,7 @@ def test_torus_distance_2d_is_euclidean_of_wrapped_axes():
 
 def test_kernel_symmetric_amplitude_diagonal_psd():
     x = make_embedding(EmbeddingSpec(kind="random", seed=0), 30, d=2, box=1.0).positions
-    K = periodic_gaussian_kernel(x, x, length_scale=0.2, box=1.0, amplitude=1.5)
+    K = periodic_gaussian_kernel(x, x, length_scale=0.05, box=1.0, amplitude=1.5)
     torch.testing.assert_close(K, K.T)
     torch.testing.assert_close(K.diagonal(), torch.full((30,), 1.5, dtype=DT))
     assert torch.linalg.eigvalsh(K).min() > -1e-10
@@ -96,7 +98,7 @@ def test_grid_kernel_on_ring_is_circulant():
 
 def test_penalty_is_inverse_on_retained_spectrum():
     x = _ring(10)
-    K = periodic_gaussian_kernel(x, x, 0.3, 1.0, 1.0)
+    K = periodic_gaussian_kernel(x, x, 0.08, 1.0, 1.0)
     M, report = penalty_matrix(K, min_rel_eig=1e-12)
     assert report.n_floored == 0
     torch.testing.assert_close(M @ K, torch.eye(10, dtype=DT), atol=1e-6, rtol=0)
@@ -124,6 +126,13 @@ def test_penalty_rejects_bad_input():
         penalty_matrix(torch.eye(3, dtype=DT), 0.0)
     with pytest.raises(ValueError, match="positive"):
         penalty_matrix(torch.zeros(3, 3, dtype=DT), 1e-6)
+
+
+def test_report_counts_negative_eigenvalues_of_wide_minimum_image_kernel():
+    x = _ring(10)
+    K = periodic_gaussian_kernel(x, x, 0.3, 1.0, 1.0)  # wide: not positive definite on the ring
+    _, report = penalty_matrix(K, min_rel_eig=1e-6)
+    assert report.n_negative > 0 and report.n_floored >= report.n_negative
 
 
 # ------------------------------------------------------------------ config
@@ -159,7 +168,7 @@ def test_build_spaces_shapes_and_sharing(L):
         assert sp.post.embedding.positions.shape == (n_post, 1)
         assert sp.pre.K.shape == (n_pre, n_pre) and sp.post.K.shape == (n_post, n_post)
         assert sp.M_pre.shape == (n_pre, n_pre) and sp.M_post.shape == (n_post, n_post)
-    for a, b in zip(spaces[:-1], spaces[1:], strict=True):
+    for a, b in itertools.pairwise(spaces):
         assert a.post is b.pre
         assert a.post.embedding is b.pre.embedding
 
