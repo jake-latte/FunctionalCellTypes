@@ -347,14 +347,16 @@ def layer_mir_report(
     member_mi = _member_information(bins, n_bins, encoded)
     generator = torch.Generator().manual_seed(seed)
     null = torch.zeros_like(member_mi)
-    chance = 0.0
+    chance = []
     for _ in range(n_shuffles):
         shuffled = _shuffled_member_information(bins, n_bins, encoded, generator)
         null += shuffled / n_shuffles
-        chance += _mir_and_dead(shuffled, membership)[0]
+        chance.append(_mir_and_dead(shuffled, membership)[0])
     raw_mir, raw_dead = _mir_and_dead(member_mi, membership)
     corrected_mir, corrected_dead = _mir_and_dead(_subtract_null(member_mi, null), membership)
-    return LayerMIRReport(raw_mir, corrected_mir, chance / n_shuffles, raw_dead, corrected_dead)
+    return LayerMIRReport(
+        raw_mir, corrected_mir, sum(chance) / n_shuffles, raw_dead, corrected_dead
+    )
 
 
 def shuffle_factors(factors: dict[str, Tensor], generator: torch.Generator) -> dict[str, Tensor]:

@@ -52,10 +52,9 @@ def test_monitor_equals_direct_modularity_calls(make_cfg):
     ]
 
     assert set(out) == set(MIR_MONITOR_KEYS)
-    # the MIR is a mean over neurons: the summation order may differ by an ulp between paths
-    assert out["mir"] == pytest.approx([m.mir for m in raw], rel=1e-12)
-    assert out["mir_corrected"] == pytest.approx([m.mir for m in corrected], rel=1e-12)
-    assert out["mir_chance"] == pytest.approx(chance, rel=1e-12)
+    assert out["mir"] == [m.mir for m in raw]
+    assert out["mir_corrected"] == [m.mir for m in corrected]
+    assert out["mir_chance"] == chance
     assert out["n_dead"] == [m.n_dead for m in raw]
     assert out["n_dead_corrected"] == [m.n_dead for m in corrected]
     assert all(len(v) == cfg.net.L for v in out.values())
