@@ -32,7 +32,7 @@ fct/
 notebooks/         # build_modularity.py builds + executes modularity.ipynb (cells are one-line fct.report calls)
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
-docs/issues/*.md   # work items
+docs/issues/*.md   # current work items (finished ones move to docs/issues/archive/)
 pyproject.toml, uv.lock, .gitignore, README.md
 ```
 
