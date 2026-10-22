@@ -655,3 +655,13 @@ bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct swe
 `--index` (digits only, read as base 10) applies to `--submit`/`--dry-run` only; a comma in the project or python path is rejected
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
+
+## tuning.py, grid_report.py and the grid figures
+
+Sweep-independent helpers for the phase-transition notebook; all pure functions on plain inputs.
+
+- `tuning.tuning_curves(rates (P,N), factors (P,K), n_bins) -> TuningCurves(mean, sem, centres, count)`: mean rate per neuron in equal-count bins of each latent (binned by `modularity.rank_bins`, the binning the MIR uses; other latents are marginalised). `mean`/`sem` are `(N,K,n_bins)`, `centres`/`count` `(K,n_bins)`. Tied latent values share a bin, so bins are exactly equal-count only for continuous latents; an empty bin is NaN.
+- `tuning.select_neurons(mir_per_neuron, n, order, seed)`: `order` in `random` (seeded), `mir_ascending`, `mir_descending`; more neurons than exist, unknown order or NaN is an error.
+- `modularity.neuron_mir(r, K)`: per-neuron `(r - 1/K)/(1 - 1/K)` from `LayerMIR.r`; its mean is the layer `mir`.
+- `grid_report.mir_grid(records, lambda_r_values, lambda_w_values) -> (L, n_r, n_w)` from `(lambda_r, lambda_w, layer, mir)` records (0-based layers); NaN where missing; duplicates, off-grid records and empty input raise.
+- `draw.fig_tuning`, `draw.fig_mir_matrix` (one heatmap per layer, shared colour scale, NaN cells in the missing-cell grey), `draw.fig_mir_vs_ratio` (MIR against lambda_r/lambda_w, log x, coloured by layer).

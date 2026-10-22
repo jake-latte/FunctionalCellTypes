@@ -380,3 +380,10 @@ def shuffled_mir(
         for _ in range(n_shuffles)
     ]
     return sum(values) / n_shuffles
+
+
+def neuron_mir(r: Tensor, K: int) -> Tensor:
+    """Per-neuron modularity (r - 1/K) / (1 - 1/K), (N,): its mean over neurons is `mir`."""
+    if K < 2:
+        raise ValueError(f"the modularity index needs K >= 2 factor groups, got K={K}")
+    return (r.double() - 1 / K) / (1 - 1 / K)

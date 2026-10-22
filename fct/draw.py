@@ -8,7 +8,7 @@ machines without a display). A `plot_*` function creates a figure only when it i
 
 import functools
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import NamedTuple
 
 import matplotlib.pyplot as plt
@@ -34,6 +34,7 @@ from fct.analyse import (
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
+from fct.tuning import TuningCurves
 
 ArrayLike = Tensor | np.ndarray | Sequence[float]
 
@@ -1134,4 +1135,135 @@ def fig_mir_heatmaps(
         fig.suptitle(title)
     if PROVISIONAL in row_status:
         fig.supxlabel(PROVISIONAL_NOTE)
+    return fig
+
+
+# --------------------------------------------------------------------------- tuning and grid MIR
+TUNING_N_COLS = 4  # tuning panels per row
+
+
+def fig_tuning(
+    curves: TuningCurves,
+    neuron_indices: Sequence[int],
+    mir_per_neuron: ArrayLike,
+    latent_names: Sequence[str],
+) -> Figure:
+    """One panel per chosen neuron, one curve per latent (mean rate +- standard error against
+    the latent's bin centre), common rate axis. The x axis is a latent's own scale, so it is
+    shared only in the sense of being labelled "latent value"; the title is neuron and MIR."""
+    n_latents = curves.mean.shape[1]
+    if len(latent_names) != n_latents:
+        raise ValueError(f"latent_names has {len(latent_names)} entries for {n_latents} latents")
+    mir = _np(mir_per_neuron)
+    mean, sem, centres = _np(curves.mean), _np(curves.sem), _np(curves.centres)
+    n_cols = min(TUNING_N_COLS, len(neuron_indices))
+    n_rows = math.ceil(len(neuron_indices) / n_cols)
+    with plt.rc_context(STYLE_RC):
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=(FIG_WIDTH, 3.2 * n_rows + 0.8),
+            sharey=True,
+            squeeze=False,
+            layout="constrained",
+        )
+        flat = list(axes.ravel())
+        for ax, neuron in zip(flat, neuron_indices, strict=False):
+            for k, name in enumerate(latent_names):
+                ax.errorbar(
+                    centres[k],
+                    mean[neuron, k],
+                    yerr=sem[neuron, k],
+                    color=_layer_color(k),
+                    marker="o",
+                    capsize=2,
+                    label=name,
+                )
+            ax.set_title(f"neuron {neuron}, MIR {mir[neuron]:.2f}")
+            ax.grid(alpha=0.25, lw=0.5)
+        for ax in flat[len(neuron_indices) :]:
+            ax.set_visible(False)
+        for ax in axes[-1]:
+            ax.set_xlabel("latent value")
+        for ax in axes[:, 0]:
+            ax.set_ylabel("mean rate")
+        flat[0].legend(loc="best", frameon=False)
+    return fig
+
+
+def _log_tick_label(value: float) -> str:
+    exponent = math.log10(value)
+    return (
+        f"$10^{{{round(exponent)}}}$" if math.isclose(exponent, round(exponent)) else f"{value:.3g}"
+    )
+
+
+@_styled
+def fig_mir_matrix(
+    lambda_r_values: ArrayLike, lambda_w_values: ArrayLike, mir_by_layer: ArrayLike
+) -> Figure:
+    """One heat-map per hidden layer of the layer-average MIR: lambda_r down, lambda_w across.
+
+    `mir_by_layer` is (L, n_r, n_w), NaN where a setting is missing (drawn in the missing-cell
+    grey, as in the other MIR heatmaps). All layers share one colour scale and colourbar,
+    [min(0, data), max(1, data)] so round-off outside [0, 1] is shown, not clipped.
+    """
+    lam_r, lam_w, mir = _np(lambda_r_values), _np(lambda_w_values), _np(mir_by_layer)
+    if mir.ndim != 3 or mir.shape[1:] != (len(lam_r), len(lam_w)):
+        raise ValueError(
+            f"mir_by_layer must have shape (L, {len(lam_r)}, {len(lam_w)}), got {mir.shape}"
+        )
+    finite = mir[np.isfinite(mir)]
+    vmin = min(0.0, float(finite.min())) if finite.size else 0.0
+    vmax = max(1.0, float(finite.max())) if finite.size else 1.0
+    fig, axes = plt.subplots(
+        1,
+        len(mir),
+        figsize=(HEATMAP_WIDTH, 0.5 * len(lam_r) + 3.2),
+        sharey=True,
+        squeeze=False,
+        layout="constrained",
+    )
+    axes = list(axes[0])
+    cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)
+    for layer, (ax, values) in enumerate(zip(axes, mir, strict=True)):
+        image = ax.imshow(
+            np.ma.masked_invalid(values), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto"
+        )
+        ax.set_xticks(range(len(lam_w)), [_log_tick_label(v) for v in lam_w])
+        ax.set_yticks(range(len(lam_r)), [_log_tick_label(v) for v in lam_r])
+        ax.tick_params(length=0)
+        ax.set_xlabel(r"$\lambda_w$")
+        ax.set_title(f"layer {layer + 1}")
+        _annotate_cells(ax, values, values, vmin, vmax)
+    axes[0].set_ylabel(r"$\lambda_r$")
+    _add_mir_colorbar(fig, image, axes, shrink=0.6)
+    return fig
+
+
+@_styled
+def fig_mir_vs_ratio(records: Iterable[tuple[float, float, int, float]]) -> Figure:
+    """MIR of every network against lambda_r / lambda_w (log axis), coloured by hidden layer.
+
+    `records` are `(lambda_r, lambda_w, layer, mir)` with 0-based layers; one dot per record.
+    """
+    records = list(records)
+    if not records:
+        raise ValueError("no records")
+    lam_r, lam_w, layer, mir = (np.array(col, dtype=float) for col in zip(*records, strict=True))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH * 0.6, 5), layout="constrained")
+    for each in np.unique(layer).astype(int):
+        keep = layer == each
+        ax.scatter(
+            lam_r[keep] / lam_w[keep],
+            mir[keep],
+            s=MARKER_SIZE**2,
+            alpha=0.8,
+            color=_layer_color(each),
+            label=f"layer {each + 1}",
+        )
+    ax.set_xscale("log")
+    ax.set(xlabel=r"$\lambda_r / \lambda_w$", ylabel="MIR")
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False)
     return fig

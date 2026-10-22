@@ -353,3 +353,53 @@ def test_fig_example_outputs_title_puts_the_legend_below_the_axes(title):
     assert fig.get_suptitle() == title
     assert (legend.y1 <= axes_bottom) if title else (legend.y0 >= axes_top)
     plt.close(fig)
+
+
+# --------------------------------------------------------------------------- tuning and grid plots
+
+
+def _tuning_inputs(n=6, k=3, bins=5):
+    from fct.tuning import tuning_curves
+
+    factors = _rand(200, k, seed=1)
+    rates = _randn(200, n, seed=2) + factors[:, :1]
+    return tuning_curves(rates, factors, bins), np.linspace(0.1, 0.9, n)
+
+
+def test_fig_tuning_one_panel_per_neuron_with_common_axes():
+    curves, mir_per_neuron = _tuning_inputs()
+    fig = draw.fig_tuning(curves, [4, 0, 2], mir_per_neuron, ["a", "b", "c"])
+    panels = fig.axes
+    assert len(panels) == 3
+    assert "4" in panels[0].get_title() and "0.74" in panels[0].get_title()
+    assert all(len(ax.containers) == 3 for ax in panels)  # one curve per latent
+    assert panels[0].get_shared_y_axes().joined(panels[0], panels[2])
+
+
+def test_fig_tuning_rejects_wrong_number_of_names():
+    curves, mir_per_neuron = _tuning_inputs()
+    with pytest.raises(ValueError, match="latent_names"):
+        draw.fig_tuning(curves, [0], mir_per_neuron, ["a"])
+
+
+def test_fig_mir_matrix_one_heatmap_per_layer_with_blank_nan():
+    mir = np.random.default_rng(0).random((2, 3, 4))
+    mir[1, 0, 0] = np.nan
+    fig = draw.fig_mir_matrix([0.1, 1, 10], [0.01, 0.1, 1, 10], mir)
+    heatmaps = [ax for ax in fig.axes if ax.images]
+    assert len(heatmaps) == 2
+    assert heatmaps[1].images[0].get_array().mask[0, 0]
+    assert len({im.get_clim() for ax in heatmaps for im in ax.images}) == 1
+
+
+def test_fig_mir_matrix_rejects_mismatched_axes():
+    with pytest.raises(ValueError, match="mir_by_layer"):
+        draw.fig_mir_matrix([1, 2], [1, 2, 3], np.zeros((1, 3, 2)))
+
+
+def test_fig_mir_vs_ratio_log_axis_one_dot_per_network():
+    records = [(lr, lw, layer, 0.5) for lr in (0.1, 1) for lw in (0.1, 1) for layer in (0, 1)]
+    fig = draw.fig_mir_vs_ratio(records)
+    ax = fig.axes[0]
+    assert ax.get_xscale() == "log"
+    assert sum(len(c.get_offsets()) for c in ax.collections) == len(records)
