@@ -15,10 +15,11 @@ ORDERS = ("random", "mir_ascending", "mir_descending")
 
 
 class TuningCurves(NamedTuple):
-    mean: Tensor  # (N, K, n_bins) mean rate of each neuron in each bin of each latent
-    sem: Tensor  # (N, K, n_bins) standard error of that mean; NaN with fewer than 2 samples
-    centres: Tensor  # (K, n_bins) mean latent value in each bin; NaN for an empty bin
-    count: Tensor  # (K, n_bins) samples per bin
+    # B is the largest bin count over the latents (n_bins for float latents, levels for integer)
+    mean: Tensor  # (N, K, B) mean rate of each neuron in each bin of each latent
+    sem: Tensor  # (N, K, B) standard error of that mean; NaN with fewer than 2 samples
+    centres: Tensor  # (K, B) mean latent value in each bin; NaN for an empty bin
+    count: Tensor  # (K, B) samples per bin
 
 
 def _check_inputs(rates: Tensor, factors: Tensor, n_bins: int) -> None:
@@ -34,8 +35,8 @@ def _check_inputs(rates: Tensor, factors: Tensor, n_bins: int) -> None:
         raise ValueError("rates or factors contain NaN")
 
 
-def _binned(factors: Tensor, n_bins: int) -> tuple[Tensor, int]:
-    """(P, K, B) one-hot bin membership of every latent on the MIR's bins, and B.
+def _binned(factors: Tensor, n_bins: int) -> Tensor:
+    """(P, K, B) one-hot bin membership of every latent on the MIR's bins.
 
     Each column goes through `modularity.factor_labels`: integer latents are categorical (one
     bin per level), floating ones are rank-binned into `n_bins`. B is the largest bin count;
@@ -46,7 +47,7 @@ def _binned(factors: Tensor, n_bins: int) -> tuple[Tensor, int]:
     ]
     width = max(n for _, n in labelled)
     labels = torch.stack([lab for lab, _ in labelled], dim=1)
-    return torch.nn.functional.one_hot(labels, width).double(), width
+    return torch.nn.functional.one_hot(labels, width).double()
 
 
 def tuning_curves(rates: Tensor, factors: Tensor, n_bins: int) -> TuningCurves:
@@ -56,20 +57,25 @@ def tuning_curves(rates: Tensor, factors: Tensor, n_bins: int) -> TuningCurves:
     (`modularity.factor_labels`): a floating latent is split into `n_bins` rank bins, equal-count
     when its values are distinct (tied values share a bin); an integer latent is categorical,
     one bin per level, and its `centres` are the level values. The arrays are as wide as the
-    largest latent's bin count; an empty bin is NaN rather than a made-up value.
+    largest latent's bin count; an empty bin is NaN rather than a made-up value, and a bin with
+    fewer than 2 samples has a NaN standard error. `factors` is one tensor, so a call is all
+    categorical (integer dtype) or all continuous (float): casting integer factors to float makes
+    them rank-binned, with interior empty bins, so pass integer factors as integers.
     """
     _check_inputs(rates, factors, n_bins)
-    onehot, _ = _binned(factors, n_bins)
+    onehot = _binned(factors, n_bins)
     count = onehot.sum(0)
     # Sums of squares are taken about each neuron's global mean: with a large offset the raw
     # sum x^2 - n mean^2 cancels catastrophically and would give SEM 0.
-    centred = rates.double() - rates.double().mean(0)
+    rates = rates.double()
+    offset = rates.mean(0)
+    centred = rates - offset
     mean_shift = torch.einsum("pn,pkb->nkb", centred, onehot) / count
     total_sq = torch.einsum("pn,pkb->nkb", centred**2, onehot)
     # The clamp only absorbs round-off that makes a tiny variance slightly negative.
     variance = ((total_sq - count * mean_shift**2) / (count - 1)).clamp(min=0)
     sem = (variance / count).sqrt()
-    mean = mean_shift + rates.double().mean(0)[:, None, None]
+    mean = mean_shift + offset[:, None, None]
     centres = torch.einsum("pk,pkb->kb", factors.double(), onehot) / count
     return TuningCurves(mean, sem, centres, count)
 

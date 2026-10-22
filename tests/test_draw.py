@@ -449,3 +449,23 @@ def test_fig_mir_vs_ratio_rejects_non_positive_lambdas_and_no_records():
         draw.fig_mir_vs_ratio([MirRecord(0.0, 1.0, 0, 0.5)])
     with pytest.raises(ValueError, match="no records"):
         draw.fig_mir_vs_ratio([])
+
+
+def test_plot_mir_matrix_rejects_a_value_outside_the_colour_scale():
+    with pytest.raises(ValueError, match="outside the colour range"):
+        draw.plot_mir_matrix(np.full((2, 2), 1.5), [1, 10], [1, 10])
+
+
+@pytest.mark.parametrize("neuron", [-1, 6])
+def test_plot_neuron_tuning_rejects_a_neuron_out_of_range(tuning, neuron):
+    with pytest.raises(ValueError, match="outside"):
+        draw.plot_neuron_tuning(tuning[0], neuron, 0.5, ["a", "b", "c"])
+
+
+def test_plot_mir_vs_ratio_validates_records_and_lists_only_layers_present():
+    with pytest.raises(ValueError, match="non-finite"):
+        draw.plot_mir_vs_ratio([MirRecord(1.0, 1.0, 0, float("nan"))])
+    with pytest.raises(TypeError, match="integer"):
+        draw.plot_mir_vs_ratio([MirRecord(1.0, 1.0, 1.0, 0.5)])
+    ax = draw.plot_mir_vs_ratio([MirRecord(1.0, 1.0, 0, 0.5), MirRecord(1.0, 2.0, 2, 0.5)])
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["layer 1", "layer 3"]

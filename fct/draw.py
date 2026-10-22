@@ -33,7 +33,7 @@ from fct.analyse import (
 )
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
-from fct.grid_report import MirRecord
+from fct.grid_report import MirRecord, check_finite_mir, check_layer
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 from fct.tuning import TuningCurves
 
@@ -555,10 +555,16 @@ def _layer_color(layer: int) -> str:
     return LAYER_COLORS[layer % len(LAYER_COLORS)]
 
 
-def _layer_legend(ax: Axes, n_layers: int, extra: list[Line2D] | None = None) -> None:
-    """Legend beside the axis so it never covers the curves."""
+def _layer_legend(
+    ax: Axes,
+    n_layers: int,
+    extra: list[Line2D] | None = None,
+    layers: Sequence[int] | None = None,
+) -> None:
+    """Legend beside the axis so it never covers the curves; lists `layers` (default all)."""
     handles = [
-        Line2D([], [], color=_layer_color(i), label=f"layer {i + 1}") for i in range(n_layers)
+        Line2D([], [], color=_layer_color(i), label=f"layer {i + 1}")
+        for i in (range(n_layers) if layers is None else layers)
     ]
     ax.legend(
         handles=handles + (extra or []),
@@ -1190,6 +1196,8 @@ def plot_neuron_tuning(
     """One neuron's tuning: a mean rate (+- standard error) curve per latent against the
     latent's bin centre; the title is the neuron index and its MIR."""
     mean, sem, centres = _np(curves.mean), _np(curves.sem), _np(curves.centres)
+    if not 0 <= neuron < mean.shape[0]:
+        raise ValueError(f"neuron {neuron} is outside [0, {mean.shape[0]})")
     if len(latent_names) != mean.shape[1]:
         raise ValueError(
             f"latent_names has {len(latent_names)} entries for {mean.shape[1]} latents"
@@ -1278,6 +1286,7 @@ def plot_mir_matrix(
     _check_positive(lam_w, "lambda_w_values")
     if values.shape != (len(lam_r), len(lam_w)):
         raise ValueError(f"values {values.shape} do not match the grid {(len(lam_r), len(lam_w))}")
+    _check_in_range(values, vmin, vmax)
     ax = _get_ax(ax, figsize=(7, 6))
     _draw_mir_cells(
         ax,
@@ -1331,12 +1340,16 @@ def plot_mir_vs_ratio(
     records = list(records)
     if not records:
         raise ValueError("no records")
+    n_layers = max(rec.layer for rec in records) + 1
+    for lr, lw, layer, value in records:
+        check_layer(layer, n_layers)
+        check_finite_mir(value, lr, lw)
     lam_r, lam_w, layer, mir = (np.array(col, dtype=float) for col in zip(*records, strict=True))
     _check_positive(lam_r, "lambda_r")
     _check_positive(lam_w, "lambda_w")
     ax = _get_ax(ax, figsize=(8, 5))
-    n_layers = int(layer.max()) + 1
-    for each in np.unique(layer).astype(int):
+    present = np.unique(layer).astype(int)
+    for each in present:
         keep = layer == each
         ax.scatter(
             lam_r[keep] / lam_w[keep],
@@ -1349,7 +1362,7 @@ def plot_mir_vs_ratio(
     ax.set(xlabel=r"$\lambda_r / \lambda_w$", ylabel="MIR")
     ax.grid(alpha=0.25, lw=0.5)
     if legend:
-        _layer_legend(ax, n_layers)
+        _layer_legend(ax, n_layers, layers=present.tolist())
     return ax
 
 

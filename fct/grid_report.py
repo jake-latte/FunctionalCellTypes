@@ -31,11 +31,16 @@ def _index_of(values: np.ndarray, value: float, what: str) -> int:
     return int(matches[0])
 
 
-def _check_layer(layer: int, n_layers: int) -> None:
+def check_layer(layer: int, n_layers: int) -> None:
     if isinstance(layer, bool) or not isinstance(layer, int | np.integer):
         raise TypeError(f"layer must be an integer, got {layer!r}")
     if not 0 <= layer < n_layers:
         raise ValueError(f"layer {layer} is outside [0, {n_layers})")
+
+
+def check_finite_mir(value: float, lambda_r: float, lambda_w: float) -> None:
+    if not np.isfinite(value):
+        raise ValueError(f"non-finite mir {value} for lambda_r={lambda_r}, lambda_w={lambda_w}")
 
 
 def mir_grid(
@@ -61,9 +66,8 @@ def mir_grid(
     grid = np.full((n_layers, lam_r.size, lam_w.size), np.nan)
     seen = set()
     for lr, lw, layer, value in records:
-        _check_layer(layer, n_layers)
-        if not np.isfinite(value):
-            raise ValueError(f"non-finite mir {value} for lambda_r={lr}, lambda_w={lw}")
+        check_layer(layer, n_layers)
+        check_finite_mir(value, lr, lw)
         cell = (layer, _index_of(lam_r, lr, "lambda_r"), _index_of(lam_w, lw, "lambda_w"))
         if cell in seen:
             raise ValueError(f"duplicate record for lambda_r={lr}, lambda_w={lw}, layer={layer}")

@@ -84,6 +84,14 @@ def test_tuning_curves_pad_a_latent_with_fewer_levels_with_nan():
     assert curves.count[0].tolist() == [6.0, 6.0, 0.0]
 
 
+def test_tuning_curves_standard_error_is_nan_for_a_bin_with_one_sample():
+    factors = torch.tensor([0, 1, 1])[:, None]
+    curves = tuning_curves(torch.tensor([[1.0], [2.0], [4.0]]), factors, n_bins=2)
+    assert curves.sem[0, 0, 0].isnan()  # level 0 has one sample
+    assert curves.sem[0, 0, 1] == pytest.approx(1.0)  # std 1.414 / sqrt(2)
+    assert curves.mean[0, 0, 0] == 1.0
+
+
 def test_tuning_curves_reject_bad_inputs():
     with pytest.raises(ValueError, match="samples"):
         tuning_curves(torch.zeros(10, 2), torch.zeros(9, 1), n_bins=2)
