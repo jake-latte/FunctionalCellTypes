@@ -319,11 +319,12 @@ def find_result(
 ) -> SettingResult:
     """The result of the named setting; ValueError if there is none, so a notebook cell never
     silently shows another setting than the one it names."""
-    wanted = Setting(task, L, phi, rate_lambda)
+    wanted = (task, L, phi, rate_lambda)
     for result in results:
-        if result.setting == wanted:
+        s = result.setting
+        if (s.task, s.L, s.phi, s.rate_lambda) == wanted:
             return result
-    raise ValueError(f"no result for setting {tuple(wanted)}")
+    raise ValueError(f"no result for setting {wanted}")
 
 
 # ---------------------------------------------------------------------------- analysis

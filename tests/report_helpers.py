@@ -7,6 +7,12 @@ from fct.report import SettingResult
 from fct.sweep import Setting, expand, preset
 
 
+def modularity_setting(task: str, L: int, phi: str, rate_lambda: float) -> Setting:
+    """The setting of the fixed modularity grid with these swept values."""
+    wanted = (task, L, phi, rate_lambda)
+    return next(s for s in expand(preset("tiny")) if (s.task, s.L, s.phi, s.rate_lambda) == wanted)
+
+
 def known(setting: Setting, layer: int, kind: str) -> float:
     """Final MIR of `layer` (0-based) of `setting`: unique per (setting, layer, kind) and exact
     in binary, so the table can be compared with ==."""

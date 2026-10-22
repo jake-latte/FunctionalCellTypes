@@ -46,6 +46,7 @@ from fct.meanfield import RateTiltError, load_meanfield, net_kernels, run_meanfi
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
+    PRESET_NAMES,
     SweepConfig,
     SweepError,
     expand,
@@ -317,14 +318,30 @@ def _load_sweep(root: Path) -> SweepConfig:
         raise CliError(f"{path} is not a valid sweep config: {err}") from err
 
 
+def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
+    """Replace (or add) grid axes in a dumped sweep tree: each item is `config.path=[v1,v2]`."""
+    if axes and tree["grid"] is None:
+        raise CliError(
+            f"preset {preset_name!r} has the fixed legacy grid; --axis needs a preset with an "
+            "explicit grid (phase_transition)"
+        )
+    for item in axes:
+        key, sep, text = item.partition("=")
+        values = _parse_value(text)
+        if not key or not sep or not isinstance(values, list):
+            raise CliError(f"--axis expects config.path=[value, ...], got {item!r}")
+        tree["grid"][key] = values
+
+
 def cmd_sweep_init(args: argparse.Namespace) -> int:
     path = sweep_path(args.root)
     if path.exists() and not args.force:
         raise CliError(f"{path} already exists; pass --force to overwrite it")
     try:
-        tree = _override_tree(preset(args.preset).model_dump(), args.set)
+        tree = _override_tree(preset(args.preset, args.n_lambda).model_dump(), args.set)
+        _override_axes(tree, args.axis, args.preset)
         sweep = SweepConfig.model_validate(tree)
-    except ValidationError as err:
+    except (ValidationError, ValueError) as err:  # bad preset arguments or an invalid sweep
         raise CliError(str(err)) from err
     save_sweep(sweep, args.root)
     print(f"wrote {path}")
@@ -399,7 +416,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> int:
 
 
 def _add_sweep_parser(sub) -> None:
-    p_sweep = sub.add_parser("sweep", help="the 36-setting grid", description="the 36-setting grid")
+    p_sweep = sub.add_parser("sweep", help="a grid of runs", description="a grid of runs")
     actions = p_sweep.add_subparsers(dest="action", required=True)
 
     def add(name: str, func, help_: str) -> argparse.ArgumentParser:
@@ -409,7 +426,15 @@ def _add_sweep_parser(sub) -> None:
         return p
 
     p_init = add("init", cmd_sweep_init, "write ROOT/sweep.json from a preset")
-    p_init.add_argument("--preset", choices=["tiny", "full"], default="tiny")
+    p_init.add_argument("--preset", choices=PRESET_NAMES, default="tiny")
+    p_init.add_argument(
+        "--n-lambda", type=int, default=None, metavar="N_LAMBDA",
+        help="points per log-spaced lambda axis (phase_transition only)",
+    )  # fmt: skip
+    p_init.add_argument(
+        "--axis", action="append", default=[], metavar="PATH=[V,...]",
+        help="replace or add a grid axis, e.g. --axis net.L=[1,2,3] (repeatable)",
+    )  # fmt: skip
     p_init.add_argument(
         "--set", action="append", default=[], metavar="KEY=VALUE",
         help="override a sweep entry by dotted key, e.g. --set n_epochs=100 (repeatable)",

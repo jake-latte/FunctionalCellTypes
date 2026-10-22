@@ -28,14 +28,13 @@ from fct.report import (
 )
 from fct.sweep import (
     LAYERS,
-    Setting,
     expand,
     preset,
     run_setting,
     save_sweep,
     setting_dir,
 )
-from tests.report_helpers import known, synthetic_history, synthetic_results
+from tests.report_helpers import known, modularity_setting, synthetic_history, synthetic_results
 
 QUIET = {"log": lambda s: None}
 TASKS = ("linear_teacher", "object_action", "what_where")
@@ -185,8 +184,10 @@ def test_hand_set_modular_net_scores_high_through_the_real_monitor_to_the_summar
     monitor = make_mir_monitor(dataset, cfg)
     generator = torch.Generator().manual_seed(0)
     nets = {
-        Setting("what_where", L, "tanh", 0.0): _modular_hidden(dataset, L, N),
-        Setting("what_where", L, "tanh", 1e-3): torch.randn(P, L, N, generator=generator).double(),
+        modularity_setting("what_where", L, "tanh", 0.0): _modular_hidden(dataset, L, N),
+        modularity_setting("what_where", L, "tanh", 1e-3): torch.randn(
+            P, L, N, generator=generator
+        ).double(),
     }
 
     def result(setting, hidden):
@@ -215,7 +216,7 @@ def test_sweep_root_from_env(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- a real tiny sweep, partly run
 def _index(task: str, L: int, phi: str, rate: float) -> int:
-    return expand(preset("tiny")).index((task, L, phi, rate))
+    return modularity_setting(task, L, phi, rate).index
 
 
 @pytest.fixture(scope="module")
@@ -331,7 +332,7 @@ def test_setting_text_names_a_missing_history_key():
 def test_find_result_returns_the_named_setting_and_rejects_unknown_ones():
     results = synthetic_results()
     wanted = results[7].setting
-    assert find_result(results, *wanted) is results[7]
+    assert find_result(results, wanted.task, wanted.L, wanted.phi, wanted.rate_lambda) is results[7]
     with pytest.raises(ValueError, match="no result"):
         find_result(results, "linear_teacher", 2, "tanh", 0.0)
 
