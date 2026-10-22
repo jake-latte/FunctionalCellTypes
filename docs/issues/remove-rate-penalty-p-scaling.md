@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: simple
-status: todo
+status: in review
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
@@ -25,3 +25,6 @@ PI brief (todo.md, "Housekeeping"): the rate penalty goes back to being summed o
 
 ## Notes for the PI (decision made here, easy to revert)
 Defaulting the tilt to `rate_lambda` is a consequence of the summed penalty (the open question in `average-rate-penalty.md` disappears), not something the brief states. `docs/lr_tuning.md` was measured under the averaged penalty and is now historical.
+
+## Open
+- `docs/lr_tuning.md` was measured under the averaged penalty (LOSS_VERSION 2) and is historical; the learning rate is not re-tuned for the summed penalty.

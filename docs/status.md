@@ -43,12 +43,12 @@ submitted), results notebook (`fct/report.py`, `notebooks/build_modularity.py`, 
 plot feedback (larger figures, MIR explanation in `fct/explanations.py`), partial results (running
 settings shown from their latest checkpoint, provisional), learning-rate tuning (`fct/lrtune.py`,
 `docs/lr_tuning.md`: lr = 1e-3 accepted by the PI, provisional), and the loss change.
-LOSS CHANGE (PI decisions): the rate penalty is averaged over P (`LOSS_VERSION = 2`), the default
+LOSS CHANGE (PI decisions): the rate penalty was averaged over P (`LOSS_VERSION = 2`) and is summed over P again
+(`LOSS_VERSION = 3`, issue `remove-rate-penalty-p-scaling`), the default
 `weight_lambda` is 1e-4, `rate_lambda` unchanged, lr 1e-3 not re-tuned. Every earlier train, sweep and
 meanfield cache is stale (`sweep status` shows `stale`). With these defaults `what_where` learns; the
-averaged rate penalty at `rate_lambda = 1e-3` is small (see docs/issues/average-rate-penalty.md).
-Mean-field now needs an explicit `meanfield.rate_tilt` when `rate_lambda != 0` (PI to decide the default:
-`rate_lambda / P_train` or `rate_lambda / n_points`).
+averaged rate penalty at `rate_lambda = 1e-3` was small (see docs/issues/average-rate-penalty.md).
+Mean-field's rate tilt defaults to `rate_lambda` (explicit `meanfield.rate_tilt` still overrides).
 `run-tiny-pipeline` is `in review`: tiny preset 36/36 on CPU, 3 settings on the T1000, notebook executed
 into git-ignored `tmp/modularity.ipynb`. Nothing was submitted.
 Next (PI): review; decide the `rate_lambda` values for the sweep (deferred) and the mean-field tilt; set the
