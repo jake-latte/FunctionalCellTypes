@@ -247,15 +247,24 @@ def preference(group_mi: Tensor, tol: float = DEAD_TOL) -> tuple[Tensor, Tensor]
     return torch.where(dead, torch.full_like(ratio, 1 / K), ratio), dead
 
 
+def neuron_mir(r: Tensor, K: int) -> Tensor:
+    """Per-neuron modularity (r - 1/K) / (1 - 1/K), (N,); its mean over neurons is `mir`.
+
+    K is the number of factor groups, e.g. `K = len(layer_mir(...).group_names)` for the
+    `LayerMIR.r` it is applied to. A dead neuron (r = 1/K) scores 0.
+    """
+    if K < 2:
+        raise ValueError(f"the modularity index needs K >= 2 factor groups, got K={K}")
+    return (r.double() - 1 / K) / (1 - 1 / K)
+
+
 def mir(r: Tensor, K: int) -> float:
-    """Modularity index (mean r - 1/K) / (1 - 1/K) of preferences `r` (N,): 1 fully modular.
+    """Modularity index, the mean of `neuron_mir(r, K)` over preferences `r` (N,): 1 fully modular.
 
     0 is chance only for dead or perfectly evenly spread neurons: at finite P the raw index of
     unrelated neurons sits above 0 (see the module docstring).
     """
-    if K < 2:
-        raise ValueError(f"the modularity index needs K >= 2 factor groups, got K={K}")
-    return float((r.double().mean() - 1 / K) / (1 - 1 / K))
+    return float(neuron_mir(r, K).mean())
 
 
 def layer_mir(
@@ -380,10 +389,3 @@ def shuffled_mir(
         for _ in range(n_shuffles)
     ]
     return sum(values) / n_shuffles
-
-
-def neuron_mir(r: Tensor, K: int) -> Tensor:
-    """Per-neuron modularity (r - 1/K) / (1 - 1/K), (N,): its mean over neurons is `mir`."""
-    if K < 2:
-        raise ValueError(f"the modularity index needs K >= 2 factor groups, got K={K}")
-    return (r.double() - 1 / K) / (1 - 1 / K)

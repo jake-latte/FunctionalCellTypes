@@ -387,7 +387,9 @@ factor_labels(factor (P,), n_bins) -> (labels, C)     # int factors relabelled 0
 mutual_information(bins, n_bins, labels, n_labels) -> (N,)   # one flat bincount for all neurons
 neuron_factor_information(rates (P,N), factors, groups=None, n_bins=10) -> FactorInformation(member_mi (N,M), group_mi (N,K), group_names)
 preference(group_mi, tol=1e-12) -> (r, dead)
-mir(r, K) -> float;  layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
+neuron_mir(r, K) -> (N,)   # per-neuron (r - 1/K)/(1 - 1/K); K = len(layer_mir(...).group_names); dead neuron -> 0
+mir(r, K) -> float         # = neuron_mir(r, K).mean()
+layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
 network_mir(rates (P,L,N), ...) -> list[LayerMIR]     # rates are phi(H); the caller applies phi
 layer_mir_report(rates (P,N), factors, groups=None, n_bins=10, n_shuffles=5, seed=0) -> LayerMIRReport(mir, mir_corrected, mir_chance, n_dead, n_dead_corrected)
                                                       # exactly the numbers of layer_mir (none / shuffle) and shuffled_mir, in one pass: one binning, one shuffle loop
