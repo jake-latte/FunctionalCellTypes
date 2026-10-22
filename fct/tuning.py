@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from fct.modularity import rank_bins
+from fct.modularity import factor_labels
 
 ORDERS = ("random", "mir_ascending", "mir_descending")
 
@@ -34,27 +34,50 @@ def _check_inputs(rates: Tensor, factors: Tensor, n_bins: int) -> None:
         raise ValueError("rates or factors contain NaN")
 
 
-def tuning_curves(rates: Tensor, factors: Tensor, n_bins: int) -> TuningCurves:
-    """Mean rate of every neuron in `n_bins` equal-count bins of every latent.
+def _binned(factors: Tensor, n_bins: int) -> tuple[Tensor, int]:
+    """(P, K, B) one-hot bin membership of every latent on the MIR's bins, and B.
 
-    `rates` is (P, N), `factors` (P, K). Each latent is binned on its own by rank (the same
-    `rank_bins` the MIR uses), so the other latents are marginalised over. Tied latent values
-    share a bin, so bins are only exactly equal-count for continuous latents; an empty bin
-    gives NaN rather than a made-up value.
+    Each column goes through `modularity.factor_labels`: integer latents are categorical (one
+    bin per level), floating ones are rank-binned into `n_bins`. B is the largest bin count;
+    a latent with fewer bins has empty (NaN) trailing ones.
+    """
+    labelled = [
+        factor_labels(factors[:, k], n_bins, f"latent {k}") for k in range(factors.shape[1])
+    ]
+    width = max(n for _, n in labelled)
+    labels = torch.stack([lab for lab, _ in labelled], dim=1)
+    return torch.nn.functional.one_hot(labels, width).double(), width
+
+
+def tuning_curves(rates: Tensor, factors: Tensor, n_bins: int) -> TuningCurves:
+    """Mean rate of every neuron in the bins of every latent, other latents marginalised.
+
+    `rates` is (P, N), `factors` (P, K). The bins are those the MIR uses
+    (`modularity.factor_labels`): a floating latent is split into `n_bins` rank bins, equal-count
+    when its values are distinct (tied values share a bin); an integer latent is categorical,
+    one bin per level, and its `centres` are the level values. The arrays are as wide as the
+    largest latent's bin count; an empty bin is NaN rather than a made-up value.
     """
     _check_inputs(rates, factors, n_bins)
-    rates, factors = rates.double(), factors.double()
-    # (P, K, B) one-hot membership of each sample in each latent's bins
-    onehot = torch.nn.functional.one_hot(rank_bins(factors, n_bins), n_bins).double()
+    onehot, _ = _binned(factors, n_bins)
     count = onehot.sum(0)
-    total = torch.einsum("pn,pkb->nkb", rates, onehot)
-    total_sq = torch.einsum("pn,pkb->nkb", rates**2, onehot)
-    mean = total / count
-    # sample variance via sums of squares: (sum x^2 - n mean^2) / (n - 1); clamp round-off
-    variance = ((total_sq - count * mean**2) / (count - 1)).clamp(min=0)
+    # Sums of squares are taken about each neuron's global mean: with a large offset the raw
+    # sum x^2 - n mean^2 cancels catastrophically and would give SEM 0.
+    centred = rates.double() - rates.double().mean(0)
+    mean_shift = torch.einsum("pn,pkb->nkb", centred, onehot) / count
+    total_sq = torch.einsum("pn,pkb->nkb", centred**2, onehot)
+    # The clamp only absorbs round-off that makes a tiny variance slightly negative.
+    variance = ((total_sq - count * mean_shift**2) / (count - 1)).clamp(min=0)
     sem = (variance / count).sqrt()
-    centres = torch.einsum("pk,pkb->kb", factors, onehot) / count
+    mean = mean_shift + rates.double().mean(0)[:, None, None]
+    centres = torch.einsum("pk,pkb->kb", factors.double(), onehot) / count
     return TuningCurves(mean, sem, centres, count)
+
+
+def _to_numpy(x: np.ndarray | Tensor) -> np.ndarray:
+    if isinstance(x, Tensor):
+        x = x.detach().cpu().numpy()
+    return np.asarray(x, dtype=float)
 
 
 def select_neurons(
@@ -63,11 +86,11 @@ def select_neurons(
     """Indices of `n` neurons: random (seeded), or the lowest/highest per-neuron MIR first."""
     if order not in ORDERS:
         raise ValueError(f"order must be one of {ORDERS}, got {order!r}")
-    mir = np.asarray(mir_per_neuron, dtype=float)
+    mir = _to_numpy(mir_per_neuron)
     if mir.ndim != 1:
         raise ValueError(f"mir_per_neuron must be 1-D, got shape {mir.shape}")
-    if n > len(mir):
-        raise ValueError(f"asked for {n} neurons but there are only {len(mir)} neurons")
+    if not 1 <= n <= len(mir):
+        raise ValueError(f"n must be between 1 and the {len(mir)} neurons available, got {n}")
     if np.isnan(mir).any():
         raise ValueError("mir_per_neuron contains NaN")
     if order == "random":
