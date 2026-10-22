@@ -6,11 +6,17 @@ from pathlib import Path
 from fct.report import SettingResult
 from fct.sweep import Setting, expand, preset
 
+QUIET = {"log": lambda s: None}  # keyword arguments for run_setting: no progress output
+
 
 def modularity_setting(task: str, L: int, phi: str, rate_lambda: float) -> Setting:
     """The setting of the fixed modularity grid with these swept values."""
     wanted = (task, L, phi, rate_lambda)
-    return next(s for s in expand(preset("tiny")) if (s.task, s.L, s.phi, s.rate_lambda) == wanted)
+    return next(
+        s
+        for s in expand(preset("tiny"))
+        if (s.task, s.axes["net.L"], s.axes["net.phi"], s.axes["train.rate_lambda"]) == wanted
+    )
 
 
 def known(setting: Setting, layer: int, kind: str) -> float:
@@ -25,8 +31,8 @@ def synthetic_history(setting: Setting) -> dict:
     """A history whose FIRST monitor call has different values, so only the last is final."""
 
     def column(kind: str) -> list[list[float]]:
-        first = [-1.0] * setting.L
-        last = [known(setting, layer, kind) for layer in range(setting.L)]
+        first = [-1.0] * setting.axes["net.L"]
+        last = [known(setting, layer, kind) for layer in range(setting.axes["net.L"])]
         return [first, last]
 
     return {
@@ -34,8 +40,8 @@ def synthetic_history(setting: Setting) -> dict:
         "monitor_mir": column("raw"),
         "monitor_mir_corrected": column("corrected"),
         "monitor_mir_chance": column("chance"),
-        "monitor_n_dead": [[0] * setting.L, [1] * setting.L],
-        "monitor_n_dead_corrected": [[0] * setting.L, [2] * setting.L],
+        "monitor_n_dead": [[0] * setting.axes["net.L"], [1] * setting.axes["net.L"]],
+        "monitor_n_dead_corrected": [[0] * setting.axes["net.L"], [2] * setting.axes["net.L"]],
     }
 
 

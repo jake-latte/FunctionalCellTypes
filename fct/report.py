@@ -14,6 +14,10 @@ Three layers, as in the rest of the package:
 - Plotting: the figures come from `fct.draw`; `setting_items` and `task_items` assemble them.
   `show` is the only function that touches IPython.
 
+The report supports the modularity grid (settings varying task, net.L, net.phi and
+train.rate_lambda; other grids may add axes, as long as these exist): `load_results` raises on a
+sweep without them, and `final_mir` and the figures assume a layer count of at most `max(LAYERS)`.
+
 Loading is read-only: nothing is generated, cached or written under ROOT, which a running job
 may be writing to. Settings are loaded on the CPU whatever device they were trained on, and are
 validated against the config rebuilt from sweep.json (a stale final.pt raises, it is not shown;
@@ -23,10 +27,11 @@ a stale or unreadable checkpoint of a running setting is reported in its note).
 import dataclasses
 import os
 import pickle
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -47,11 +52,15 @@ from fct.draw import (
 from fct.model import MLP
 from fct.sweep import (
     LAYERS,
+    MODULARITY_AXES,
+    TASK_AXIS,
     Setting,
     Status,
     SweepConfig,
     expand,
+    grid_of,
     load_sweep,
+    same_value,
     setting_config,
     setting_dir,
     setting_status,
@@ -187,8 +196,23 @@ def _origin(mir_epoch: int | None, epoch: int, n_epochs: int, short: bool = Fals
     return f"{measured}; checkpoint at epoch {epoch} of {n_epochs}"
 
 
+# How the modularity axes read in a label: `L3 relu r=0.001`.
+_LABEL_FORMATS = {"net.L": "L{}", "net.phi": "{}", "train.rate_lambda": "r={}"}
+
+
+def _label_value(value) -> str:
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
 def setting_label(setting: Setting) -> str:
-    return f"L{setting.L} {setting.phi} r={setting.rate_lambda:g}"
+    """Every axis except the task, in grid order, so two settings of a grid never share a label."""
+    parts = []
+    for axis, value in setting.axes.items():
+        if axis == TASK_AXIS:
+            continue
+        template = _LABEL_FORMATS.get(axis, axis.rsplit(".", 1)[-1] + "={}")
+        parts.append(template.format(_label_value(value)))
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------- I/O
@@ -308,23 +332,38 @@ def load_setting_result(root: Path, sweep: SweepConfig, setting: Setting) -> Set
 
 def load_results(root: Path | str) -> list[SettingResult]:
     """All settings of the sweep at `root`, in grid order. FileNotFoundError if `root` has no
-    sweep.json: with no sweep there is nothing to report."""
+    sweep.json: with no sweep there is nothing to report. ValueError if the sweep's grid lacks
+    the axes net.L, net.phi and train.rate_lambda (the report supports the modularity grid)."""
     root = Path(root)
     sweep = load_sweep(root)
+    missing = [a for a in MODULARITY_AXES if a not in grid_of(sweep)]
+    if missing:
+        raise ValueError(
+            f"{root}: the report supports the modularity grid, whose axes include {missing}; "
+            f"this sweep's axes are {list(grid_of(sweep))}"
+        )
     return list(map(partial(load_setting_result, root, sweep), expand(sweep)))
 
 
-def find_result(
-    results: list[SettingResult], task: str, L: int, phi: str, rate_lambda: float
-) -> SettingResult:
-    """The result of the named setting; ValueError if there is none, so a notebook cell never
-    silently shows another setting than the one it names."""
-    wanted = (task, L, phi, rate_lambda)
-    for result in results:
-        s = result.setting
-        if (s.task, s.L, s.phi, s.rate_lambda) == wanted:
-            return result
-    raise ValueError(f"no result for setting {wanted}")
+def _varying_axes(setting: Setting) -> dict:
+    """The setting's axes other than the task."""
+    return {a: v for a, v in setting.axes.items() if a != TASK_AXIS}
+
+
+def find_result(results: list[SettingResult], task: str, axes: Mapping[str, Any]) -> SettingResult:
+    """The one result of `task` whose axes equal `axes` (a dict of dotted path -> value, every
+    axis that varies besides the task). LookupError if none or several match, so a notebook cell
+    never silently shows another setting than the one it names."""
+    matches = [
+        r
+        for r in results
+        if r.setting.task == task
+        and _varying_axes(r.setting).keys() == axes.keys()
+        and all(same_value(_varying_axes(r.setting)[a], v) for a, v in axes.items())
+    ]
+    if len(matches) != 1:
+        raise LookupError(f"{len(matches)} results for task {task!r} with axes {dict(axes)}")
+    return matches[0]
 
 
 # ---------------------------------------------------------------------------- analysis

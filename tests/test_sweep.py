@@ -38,7 +38,11 @@ def tiny() -> SweepConfig:
 def _index_of(sweep, task, L=1, phi="tanh", rate=1e-3) -> int:
     wanted = (task, L, phi, rate)
     settings = expand(sweep)
-    return next(i for i, s in enumerate(settings) if (s.task, s.L, s.phi, s.rate_lambda) == wanted)
+    return next(
+        i
+        for i, s in enumerate(settings)
+        if (s.task, s.axes["net.L"], s.axes["net.phi"], s.axes["train.rate_lambda"]) == wanted
+    )
 
 
 def _monitor_epochs(sweep) -> list[int]:
@@ -63,8 +67,18 @@ def test_expand_gives_36_distinct_settings_and_dirs(tiny, tmp_path):
 def test_expand_order_is_fixed_and_independent_of_the_preset(tiny):
     assert expand(tiny) == expand(preset("full")) == expand(tiny)
     first, last = expand(tiny)[0], expand(tiny)[-1]
-    assert (first.task, first.L, first.phi, first.rate_lambda) == (SWEEP_TASKS[0], 1, "tanh", 0.0)
-    assert (last.task, last.L, last.phi, last.rate_lambda) == (SWEEP_TASKS[-1], 5, "relu", 1e-3)
+    assert (
+        first.task,
+        first.axes["net.L"],
+        first.axes["net.phi"],
+        first.axes["train.rate_lambda"],
+    ) == (SWEEP_TASKS[0], 1, "tanh", 0.0)
+    assert (
+        last.task,
+        last.axes["net.L"],
+        last.axes["net.phi"],
+        last.axes["train.rate_lambda"],
+    ) == (SWEEP_TASKS[-1], 5, "relu", 1e-3)
 
 
 def test_setting_dir_layout(tiny, tmp_path):

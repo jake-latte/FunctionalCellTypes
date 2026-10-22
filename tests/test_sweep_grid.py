@@ -12,6 +12,7 @@ from fct.cli import main
 from fct.config import load_config
 from fct.sweep import (
     SweepConfig,
+    SweepError,
     expand,
     find_setting_dir,
     get_setting,
@@ -20,24 +21,24 @@ from fct.sweep import (
     preset,
     read_setting,
     run_setting,
+    same_value,
     save_sweep,
     setting_config,
     setting_dir,
     setting_status,
+    with_grid,
 )
-
-QUIET = {"log": lambda s: None}
+from tests.report_helpers import QUIET
 
 
 def _with_grid(grid: dict, **updates) -> SweepConfig:
-    """The tiny preset's sizes with an explicit grid."""
-    tree = {**preset("tiny").model_dump(), "grid": grid, **updates}
-    return SweepConfig.model_validate(tree)
+    """The tiny preset's sizes (with `updates`) over `grid`."""
+    return with_grid(preset("tiny").model_copy(update=updates), grid)
 
 
 @pytest.fixture
 def small() -> SweepConfig:
-    return _with_grid({"net.L": [1, 2], "net.phi": ["tanh", "relu"]}, n_epochs=4)
+    return _with_grid({"net.L": [1, 2], "net.phi": ["tanh", "relu"]})
 
 
 # ---------------------------------------------------------------------------- expansion
@@ -48,7 +49,7 @@ def test_expand_is_the_cartesian_product_with_the_first_axis_slowest():
     settings = expand(sweep)
     assert len(settings) == 2 * 3 * 2
     assert [s.index for s in settings] == list(range(12))
-    values = [(s["net.L"], s["train.rate_lambda"], s["net.phi"]) for s in settings]
+    values = [(s.axes["net.L"], s.axes["train.rate_lambda"], s.axes["net.phi"]) for s in settings]
     assert len(set(values)) == 12
     assert values[:3] == [(1, 0.1, "tanh"), (1, 0.1, "relu"), (1, 0.2, "tanh")]
     assert values[-1] == (2, 0.3, "relu")
@@ -94,6 +95,12 @@ def test_directories_are_index_prefixed_labelled_and_distinct(small, tmp_path):
     assert [d.parent for d in dirs] == [tmp_path / "linear_teacher"] * 4
     assert [d.name.split("_")[0] for d in dirs] == ["s0000", "s0001", "s0002", "s0003"]
     assert dirs[1].name == "s0001_L1_phirelu"
+
+
+def test_labels_keep_the_underscores_of_axis_names(tmp_path):
+    sweep = phase_transition(3)
+    name = setting_dir(tmp_path, expand(sweep)[1]).name
+    assert name == "s0001_L1_phitanh_rate_lambda1e-06_weight_lambda0.001"
 
 
 def test_near_equal_floats_never_share_a_directory(tmp_path):
@@ -149,11 +156,29 @@ def test_presets_that_need_n_lambda_say_so():
         ({"data.task": ["linear_teacher", "nope"]}, "data.task"),
         ({"net.L": []}, "net.L"),
         ({"net.L": [1, 1]}, "net.L"),
+        ({"train.rate_lambda": [0, 0.0]}, "train.rate_lambda"),  # the same value, twice
     ],
 )
 def test_bad_axes_and_values_fail_at_load_naming_the_axis(grid, axis):
     with pytest.raises(ValidationError, match=axis.replace(".", r"\.")):
         _with_grid(grid)
+
+
+@pytest.mark.parametrize(
+    "axis",
+    ["data.P", "data.D_in", "data.seed", "net.seed", "train.seed", "train.monitor_int",
+     "train.monitor_bins", "train.monitor_shuffles", "train.log_int", "train.save_int"],
+)  # fmt: skip
+def test_axes_the_sweep_owns_are_rejected_with_a_pointer_to_its_field(axis):
+    with pytest.raises(ValidationError, match=rf"{axis}.* set by the sweep's own"):
+        _with_grid({axis: [4, 6]})
+
+
+def test_other_fields_may_be_axes_and_win_over_the_shared_value():
+    sweep = _with_grid({"train.lr": [0.5, 0.25], "train.n_epochs": [3]})
+    configs = [setting_config(sweep, s) for s in expand(sweep)]
+    assert [c.train.lr for c in configs] == [0.5, 0.25]
+    assert {c.train.n_epochs for c in configs} == {3}
 
 
 def test_a_bad_combination_of_axes_fails_at_load():
@@ -171,32 +196,98 @@ def test_an_invalid_grid_in_sweep_json_fails_at_load(tmp_path):
 
 
 # ---------------------------------------------------------------------------- setting.json
+def _run_all(sweep, root):
+    for i in range(len(expand(sweep))):
+        run_setting(sweep, i, root, **QUIET)
+
+
 def test_run_setting_records_the_axis_values_and_they_find_the_setting(small, tmp_path):
-    for i in range(4):
-        run_setting(small, i, tmp_path, **QUIET)
-    target = expand(small)[2]  # L=2, tanh
-    directory = find_setting_dir(tmp_path, {"net.L": 2, "net.phi": "tanh"})
-    assert directory == setting_dir(tmp_path, target)
-    assert read_setting(directory) == {"index": 2, "axes": {"net.L": 2, "net.phi": "tanh"}}
+    _run_all(small, tmp_path)
+    directory = find_setting_dir(tmp_path, small, {"net.L": 2, "net.phi": "tanh"})
+    assert directory == setting_dir(tmp_path, expand(small)[2])
+    record = read_setting(directory, small)
+    assert record["index"] == 2 and record["axes"] == {"net.L": 2, "net.phi": "tanh"}
     # a subset of the axes is enough when it is unambiguous
-    assert find_setting_dir(tmp_path, {"net.L": 1, "net.phi": "relu"}).name.startswith("s0001_")
+    one = find_setting_dir(tmp_path, small, {"net.L": 1, "net.phi": "relu"})
+    assert one.name.startswith("s0001_")
 
 
 def test_find_setting_dir_is_loud_about_no_match_and_ambiguity(small, tmp_path):
-    for i in range(4):
-        run_setting(small, i, tmp_path, **QUIET)
+    _run_all(small, tmp_path)
     with pytest.raises(LookupError, match="no setting"):
-        find_setting_dir(tmp_path, {"net.L": 3})
+        find_setting_dir(tmp_path, small, {"net.L": 3})
     with pytest.raises(LookupError, match="4 settings"):
-        find_setting_dir(tmp_path, {})
+        find_setting_dir(tmp_path, small, {})
     with pytest.raises(LookupError, match="net.typo"):
-        find_setting_dir(tmp_path, {"net.typo": 1})
+        find_setting_dir(tmp_path, small, {"net.typo": 1})
+    with pytest.raises(LookupError, match="no setting of this sweep"):
+        find_setting_dir(tmp_path / "empty", small, {})
 
 
 def test_find_setting_dir_matches_floats_by_value(tmp_path):
     sweep = _with_grid({"train.rate_lambda": np.logspace(-6, 0, 3).tolist()}, n_epochs=2)
     run_setting(sweep, 1, tmp_path, **QUIET)
-    assert find_setting_dir(tmp_path, {"train.rate_lambda": 1e-3}).name.startswith("s0001_")
+    found = find_setting_dir(tmp_path, sweep, {"train.rate_lambda": 1e-3})
+    assert found.name.startswith("s0001_")
+
+
+def test_find_setting_dir_ignores_directories_the_sweep_does_not_own(small, tmp_path):
+    _run_all(small, tmp_path)
+    stray = tmp_path / "linear_teacher" / "s0009_L2_phitanh"
+    stray.mkdir()
+    (stray / "setting.json").write_text(
+        json.dumps({"index": 9, "grid_hash": "x", "axes": {"net.L": 2, "net.phi": "tanh"}})
+    )
+    found = find_setting_dir(tmp_path, small, {"net.L": 2, "net.phi": "tanh"})
+    assert found == setting_dir(tmp_path, expand(small)[2])
+
+
+def test_values_match_by_tolerance_but_a_bool_is_not_an_int():
+    assert same_value(1e-3, 1e-3 * (1 + 1e-12)) and not same_value(1e-3, 1.1e-3)
+    assert same_value([1, [2.0, 3]], (1, (2.0, 3 + 1e-12)))
+    assert not same_value(True, 1) and not same_value(1, True) and same_value(True, True)
+    assert not same_value([True], [1]) and not same_value([1, 2], [1])
+
+
+GRID_A = {"train.rate_lambda": [1e-4, 1e-2]}
+GRID_B = {"train.rate_lambda": [1e-2, 1e-4]}
+
+
+def test_a_reordered_grid_finds_its_own_directories_not_the_old_ones(tmp_path):
+    first = _with_grid(GRID_A, n_epochs=2)
+    second = _with_grid(GRID_B, n_epochs=2)
+    _run_all(first, tmp_path)
+    _run_all(second, tmp_path)  # the labels differ, so these are new directories beside the old
+    for sweep in (first, second):
+        found = find_setting_dir(tmp_path, sweep, {"train.rate_lambda": 1e-4})
+        assert found == setting_dir(
+            tmp_path, expand(sweep)[sweep.grid["train.rate_lambda"].index(1e-4)]
+        )
+    old_dir = setting_dir(tmp_path, expand(first)[0])
+    with pytest.raises(SweepError, match=str(old_dir)):
+        read_setting(old_dir, second)
+
+
+def test_a_grid_that_moves_a_value_under_the_same_label_is_refused(tmp_path):
+    # `:g` gives both 1e-07, so index 0 has the same directory name under either grid.
+    first = _with_grid({"train.rate_lambda": [1.00000001e-7, 1.0]}, n_epochs=2)
+    second = _with_grid({"train.rate_lambda": [1.00000002e-7, 1.0]}, n_epochs=2)
+    run_setting(first, 0, tmp_path, **QUIET)
+    with pytest.raises(SweepError, match="differs"):
+        run_setting(second, 0, tmp_path, **QUIET)
+    directory = setting_dir(tmp_path, expand(first)[0])
+    with pytest.raises(SweepError, match="another grid"):
+        find_setting_dir(tmp_path, second, {})
+    assert read_setting(directory, _with_grid(first.grid, n_epochs=3))["index"] == 0
+
+
+def test_cli_init_refuses_a_root_that_already_has_settings(tmp_path, capsys):
+    run_setting(_with_grid(GRID_A, n_epochs=2), 0, tmp_path, **QUIET)
+    args = ["init", tmp_path, "--preset", "tiny"]
+    code, _, err = _cli(capsys, *args)
+    assert code == 1 and "setting directories" in err and "--force" in err
+    assert not (tmp_path / "sweep.json").exists()
+    assert _cli(capsys, *args, "--force")[0] == 0
 
 
 # ---------------------------------------------------------------------------- end to end
@@ -240,7 +331,7 @@ def test_cli_2x2_grid_count_list_status_run_agree(tmp_path, capsys):
     assert cfg.train.rate_lambda == pytest.approx(1.0)
 
 
-def test_rerun_and_resume_behave_as_before_on_a_grid(small, tmp_path):
+def test_a_done_setting_is_skipped_on_a_grid(small, tmp_path):
     run_setting(small, 0, tmp_path, **QUIET)
     final = cache_paths(setting_dir(tmp_path, expand(small)[0])).train / "final.pt"
     before = (final.read_bytes(), final.stat().st_mtime_ns)
@@ -248,7 +339,30 @@ def test_rerun_and_resume_behave_as_before_on_a_grid(small, tmp_path):
     run_setting(small, 0, tmp_path, log=lines.append)
     assert (final.read_bytes(), final.stat().st_mtime_ns) == before
     assert any("already done" in line for line in lines)
-    assert setting_status(tmp_path, small, expand(small)[0]) == "done"
+
+
+class Interrupt(Exception):
+    pass
+
+
+def test_an_interrupted_grid_setting_resumes_from_its_checkpoint(small, tmp_path):
+    def stop_at_epoch_4(line: str) -> None:
+        if line.startswith("[00004/"):
+            raise Interrupt
+
+    with pytest.raises(Interrupt):
+        run_setting(small, 1, tmp_path, log=stop_at_epoch_4)
+    assert setting_status(tmp_path, small, expand(small)[1]) == "partial"
+    run_setting(small, 1, tmp_path, **QUIET)
+    assert setting_status(tmp_path, small, expand(small)[1]) == "done"
+
+
+def test_cli_set_cannot_edit_the_grid(tmp_path, capsys):
+    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "phase_transition", "--n-lambda", 2,
+                        "--set", "grid.net.L=[1]")  # fmt: skip
+    assert code == 1 and "--axis" in err
+    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny", "--set", "grid=null")
+    assert code == 1 and "--axis" in err
 
 
 def test_cli_init_axis_errors_are_one_line(tmp_path, capsys):
@@ -258,5 +372,5 @@ def test_cli_init_axis_errors_are_one_line(tmp_path, capsys):
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "phase_transition")
     assert code == 1 and "n_lambda" in err
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny", "--axis", "net.L=[1]")
-    assert code == 1 and "legacy" in err
+    assert code == 1 and "modularity" in err
     assert not (tmp_path / "sweep.json").exists()

@@ -473,27 +473,32 @@ sweep `ROOT`:
 
 ```
 ROOT/sweep.json                          # SweepConfig, written by `sweep init`
-ROOT/<task>/s{index:04d}_<label>/        # grid sweeps: one normal fct cache dir per setting, e.g. linear_teacher/s0007_L2_phitanh_rate_lambda1e-06_weight_lambda0.001
-ROOT/<task>/s.../setting.json            # {"index": 7, "axes": {"net.L": 2, ...}}, written by run_setting beside config.json
+ROOT/<task>/s{index:04d}_<label>/        # grid sweeps: one normal fct cache dir per setting, e.g. linear_teacher/s0001_L1_phitanh_rate_lambda1e-06_weight_lambda0.001
+ROOT/<task>/s.../setting.json            # {"index": 7, "grid_hash": "...", "axes": {"net.L": 2, ...}}, written by run_setting beside config.json
 ROOT/<task>/L{L}_{phi}_r{rate}/          # sweep.json without `grid` (the modularity grid): the original names, e.g. what_where/L3_relu_r0.001
 ```
 
-The index makes a directory name unique (`:g` would print two close floats alike); the label is for people. `setting.json` lets a
+The index makes a directory name unique (`:g` would print two close floats alike); the label (the last part of each axis path
+and its value, characters outside letters, digits and `._+-` replaced by `-`) is for people. The index is zero-padded to
+`INDEX_WIDTH = 4` digits so names sort in index order; `expand` refuses a grid of more than 10**4 settings. `setting.json` lets a
 notebook find a setting from its axis values (`find_setting_dir`) without recomputing the grid.
 
 ```python
 SWEEP_TASKS = ("linear_teacher", "object_action", "what_where"); LAYERS = (1, 3, 5); PHIS = ("tanh", "relu"); RATE_LAMBDAS = (0.0, 1e-3)
 MODULARITY_GRID = {"data.task": SWEEP_TASKS, "net.L": LAYERS, "net.phi": PHIS, "train.rate_lambda": RATE_LAMBDAS}   # used when sweep.json has no grid
-@dataclass(frozen=True) class Setting: index: int; axes: tuple[(axis, value), ...]; task: str; relpath: Path
-    # as_dict(), setting[axis]; the properties L, phi, rate_lambda read the modularity axes (KeyError on a grid without them)
+@dataclass(frozen=True) class Setting: index: int; axes: dict[axis, value] (grid order); task: str; relpath: Path
+    # consumers read axes explicitly, e.g. setting.axes["net.L"]
+MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda"); SWEEP_OWNED_AXES: dict[axis, the sweep field to change instead]
 class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), grid: dict[str, list] | None = None
     # grid: axis = dotted Config path (net.L, net.phi, train.rate_lambda, train.weight_lambda, data.task, ...), values = explicit lists; an axis
-    # overrides the base value. At load every axis is checked alone (a Config field, not a section; non-empty; no repeated value; each value
-    # valid), then every combination is built into a Config, so a bad axis name or value fails naming the axis. data.task picks that task's
-    # parameters and D_in; weight_lambda is the TrainConfig default (1e-4) unless it is an axis
+    # overrides the base value (net.N over N, train.lr over lr, ...), except the fields the sweep owns, which are rejected: data.P, data.D_in,
+    # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles (change the
+    # sweep field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
+    # build the same Config, so [0, 0.0] is a repeat), then every combination is built into a Config, so a bad axis name or value fails
+    # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the TrainConfig default (1e-4) unless it is an axis
 def preset(name: str, n_lambda: int | None = None) -> SweepConfig   # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full" and "modularity": N=256, P=4096, 15000 epochs (placeholders to tune), the modularity grid;
                                                                     # "phase_transition": the sizes of "full" + phase_transition(n_lambda); n_lambda is required there and rejected elsewhere; ValueError otherwise
 def phase_transition(n_lambda) -> SweepConfig             # linear teacher; grid net.L [1,2], net.phi [tanh, relu], train.rate_lambda and train.weight_lambda both np.logspace(-6, 0, n_lambda): 4 * n_lambda**2 settings
@@ -504,8 +509,11 @@ def setting_dir(root, setting) -> Path                   # ROOT / setting.relpat
 def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep
 def setting_config(sweep, setting) -> Config             # base config for the setting's task (net seed = seeds.net, monitor_* from the sweep) with each axis value written over it
 def setting_status(root, sweep, setting) -> "done" | "partial" | "missing" | "stale"   # done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stale = a final.pt with another hash; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
-def read_setting(directory) -> {"index", "axes"}          # a setting directory's setting.json
-def find_setting_dir(root, values) -> Path                # the one run setting whose axes equal `values` (numbers to 1e-9 relative; a subset of the axes is enough if unambiguous); LookupError if none, several, or an unknown axis name
+def grid_hash(sweep) -> str                               # short hash of the grid and base task, stored in setting.json
+def read_setting(directory, sweep) -> {"index", "grid_hash", "axes"}   # a setting directory's setting.json; SweepError naming the directory if it was written under another grid
+def find_setting_dir(root, sweep, values) -> Path         # the one run setting of `sweep` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
+                                                          # a subset of the axes is enough if unambiguous); only the sweep's own directories are considered; LookupError if none, several, or an unknown axis
+def has_settings(root) -> bool                            # ROOT already holds a setting directory; `sweep init` refuses to write a new sweep.json there without --force
 def run_setting(sweep, index, root, log=print) -> None
     # first validates/writes config.json and setting.json (SweepError if an existing one differs: the sweep changed under existing artefacts; this
     # check comes BEFORE the done check, so a changed sweep raises even for a done setting), then returns at once if done,
@@ -513,10 +521,9 @@ def run_setting(sweep, index, root, log=print) -> None
 ```
 
 CLI: `python -m fct sweep init ROOT --preset phase_transition --n-lambda 8 [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`.
-`--set` overrides a shared entry by dotted key; `--axis PATH=[values]` replaces or adds a grid axis (JSON list; presets with the fixed
-modularity grid reject it). `sweep count|list|status|run --index i` all read the same `expand`, and `jobs/fct_sweep.sh` takes the array size
-from `sweep count`. `report.py`, `lrtune.py` and `notebooks/build_modularity.py` are written for the modularity grid (they read
-`setting.L`, `.phi`, `.rate_lambda`) and are not used on other grids.
+`--set` overrides a shared entry by dotted key; `--axis PATH=[values]` replaces or adds a grid axis (JSON list; the modularity presets have no editable axes and reject it); `--set grid...` is rejected (use `--axis`). `sweep count|list|status|run --index i` all read the same `expand`, and `jobs/fct_sweep.sh` takes the array size
+from `sweep count`. `lrtune.py` and `notebooks/build_modularity.py` are written for the modularity grid (they read
+`setting.axes["net.L"]`, `["net.phi"]`, `["train.rate_lambda"]`); `report.py` needs those three axes too (see below).
 
 All settings share the seeds, so they differ only in the swept axes. The history of a finished setting has the `monitor_*` keys of
 monitor.py. The monitor runs at epochs 0, k*monitor_int for every k with k*monitor_int < n_epochs, and n_epochs, so
@@ -540,7 +547,7 @@ the rates, rank bins, plug-in MI, preference, MIR, dead neurons, the raw MIR and
 baseline and the corrected MIR, and how to read the plots and tables; it restates `fct/modularity.py`, and a test checks its
 numbers that have a source in the code (dead threshold `modularity.DEAD_TOL`, noise factor `modularity.NOISE_FACTOR`, the
 `TrainConfig` monitor defaults) are filled in from it, and tests recompute the quoted floor examples and check the `$`/`$$` equations are balanced), a summary cell per task, then a cell per setting, each selecting its setting by name with
-`find_result(RESULTS, task, L, phi, rate)`, so a reordered grid fails loudly instead of mislabelling), and
+`find_result(RESULTS, task, {"net.L": L, "net.phi": phi, "train.rate_lambda": rate})`, so a reordered grid fails loudly instead of mislabelling), and
 `execute_notebook(nb, root)` runs a deep copy in a fresh kernel (no timing metadata, so equal runs give equal notebooks) after
 `with_root` has put `ROOT = '<root>'` into the tagged parameter cell; the source `nb` stays output-free. In the source the cell
 is `ROOT = None`, which falls back to `$FCT_SWEEP_ROOT`. `python notebooks/build_modularity.py ROOT` writes the executed
@@ -559,7 +566,8 @@ which carries all logic and tests. Only the source notebook (`--no-execute`, no 
     # to provisional rows (the MIR's epoch m is not the checkpoint's); row_status() gives draw.py's "provisional"
 
 def sweep_root_from_env() -> Path               # $FCT_SWEEP_ROOT; RuntimeError if unset
-def load_results(root) -> list[SettingResult]   # 36 entries in grid order; FileNotFoundError if no sweep.json
+def load_results(root) -> list[SettingResult]   # one entry per setting in grid order (36 for the modularity grid); FileNotFoundError if no sweep.json; ValueError if the grid lacks net.L, net.phi or train.rate_lambda
+    # (the report supports the modularity grid; a grid with those axes plus others, like phase_transition, loads, and `setting_label` shows every axis so labels stay distinct)
     # read-only: nothing is generated, cached or written under ROOT (a running job may be writing to it); settings are read on the CPU,
     # validated against the config rebuilt from sweep.json. done: from final.pt (StaleCacheError if written under another config).
     # partial: from the latest checkpoint via train.load_latest_checkpoint -> the same data as a done setting (history exactly as
@@ -569,7 +577,7 @@ def load_results(root) -> list[SettingResult]   # 36 entries in grid order; File
     # dataset file gives a note "dataset not readable". Exceptions that are not about a bad file (a bug in the model code) propagate.
     # A dataset file that is missing (done or partial) also gives "partial" with a note, no data. No checkpoint: "missing".
     # A checkpoint at epoch 0 or without a monitor entry loads (no loss curve / MIR yet; the prose says so).
-def find_result(results, task, L, phi, rate_lambda) -> SettingResult    # ValueError if absent
+def find_result(results, task, axes) -> SettingResult    # axes = {dotted path: value} of every axis but the task; LookupError if none or several match
 def final_mir(results, task) -> FinalMIR        # last monitor call; ValueError for a done setting without monitor history
 def mir_table_markdown(fm) / summary_text(fm) / overview_text(results) / setting_text(result)   # prose generated from the numbers
     # summary_text: "N of M settings finished, K provisional (still running)"; extremes of the corrected MIR over layer-cells with ties

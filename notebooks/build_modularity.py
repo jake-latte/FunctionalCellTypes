@@ -23,7 +23,7 @@ from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 from fct.explanations import MIR_EXPLANATION
 from fct.report import ROOT_ENV
-from fct.sweep import SWEEP_TASKS, expand, preset
+from fct.sweep import MODULARITY_AXES, SWEEP_TASKS, expand, preset
 
 SOURCE_OUT = Path(__file__).with_name("modularity.ipynb")
 EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "modularity.ipynb"
@@ -94,11 +94,13 @@ def build_notebook() -> NotebookNode:
         for setting in settings:
             if setting.task != task:
                 continue
-            title = f"### L{setting.L}, {setting.phi}, rate_lambda {setting.rate_lambda:g}"
+            L, phi, rate = (setting.axes[a] for a in MODULARITY_AXES)
+            title = f"### L{L}, {phi}, rate_lambda {rate:g}"
             nb.cells.append(new_markdown_cell(title, id=ids.next()))
             # Selected by name, not position: a reordered grid fails here instead of
             # silently showing another setting under this heading.
-            select = f'find_result(RESULTS, "{task}", {setting.L}, "{setting.phi}", {setting.rate_lambda!r})'
+            axes = dict(zip(MODULARITY_AXES, (L, phi, rate), strict=True))
+            select = f'find_result(RESULTS, "{task}", {axes!r})'
             nb.cells.append(new_code_cell(f"show(setting_items({select}))", id=ids.next()))
     return nb
 

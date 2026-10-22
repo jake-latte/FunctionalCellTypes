@@ -8,7 +8,7 @@ and a local check name the same setting. Each setting is a normal fct cache dire
 `run_setting` fills by the same path as `python -m fct train`: config.json, dataset, training
 with the MIR monitor.
 
-A sweep.json without `grid` is the fixed 36-setting modularity grid (task x layers x phi x
+A sweep.json without `grid` is the 36-setting modularity grid (task x layers x phi x
 rate_lambda), kept with its original directory names ROOT/<task>/L{L}_{phi}_r{rate}/. A sweep
 with a `grid` uses ROOT/<task>/s{index:04d}_<label>/ and records the axis values in
 setting.json beside config.json.
@@ -17,6 +17,7 @@ This module is the I/O edge of the sweep: `expand`, `setting_config` and the con
 pure; `run_setting`, `setting_status`, `find_setting_dir` and the sweep.json functions touch disk.
 """
 
+import hashlib
 import itertools
 import json
 import math
@@ -49,6 +50,14 @@ from fct.train import train_from_config
 SWEEP_FILE = "sweep.json"
 SETTING_FILE = "setting.json"
 TASK_AXIS = "data.task"
+# Setting directories are ROOT/<task>/<name>: `expand` builds `relpath` that way, and the lookups
+# below find them with this glob.
+SETTING_DIRS_GLOB = "*/*"
+# Index prefix of a grid directory name; zero-padded so names sort in index order, which holds up
+# to 10**INDEX_WIDTH settings (`expand` refuses more).
+INDEX_WIDTH = 4
+# A float typed in a notebook finds the one that went through a JSON round trip.
+LOOKUP_REL_TOL = 1e-9
 # The modularity grid, used when sweep.json has no `grid`. Axis order is the order of `expand`
 # (task slowest, rate_lambda fastest): changing it or a value list would move existing indices.
 SWEEP_TASKS = ("linear_teacher", "object_action", "what_where")
@@ -60,6 +69,20 @@ MODULARITY_GRID: dict[str, list] = {
     "net.L": list(LAYERS),
     "net.phi": list(PHIS),
     "train.rate_lambda": list(RATE_LAMBDAS),
+}
+MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda")
+# Config fields the sweep sets from its own fields; the sweep field to change instead.
+SWEEP_OWNED_AXES = {
+    "data.P": "P",
+    "data.D_in": "the task parameters",
+    "data.seed": "seeds.data",
+    "net.seed": "seeds.net",
+    "train.seed": "seeds.train",
+    "train.log_int": "log_int",
+    "train.save_int": "save_int",
+    "train.monitor_int": "monitor_int",
+    "train.monitor_bins": "monitor_bins",
+    "train.monitor_shuffles": "monitor_shuffles",
 }
 
 Status = Literal["done", "partial", "missing", "stale"]
@@ -73,42 +96,19 @@ class SweepError(ValueError):
 class Setting:
     """One point of the grid: its position, the value of every axis, and its directory.
 
-    `axes` keeps the grid's axis order. `task` is the data task the setting trains on: the
-    `data.task` axis if there is one, else the sweep's base task. `relpath` is the setting's
-    directory relative to the sweep ROOT. `L`, `phi` and `rate_lambda` read the matching axes
-    of a grid that has them (all of the modularity grid).
+    `axes` maps each grid axis to this setting's value, in the grid's axis order. `task` is the
+    data task the setting trains on: the `data.task` axis if there is one, else the sweep's base
+    task. `relpath` is the setting's directory relative to the sweep ROOT.
     """
 
     index: int
-    axes: tuple[tuple[str, Any], ...]
+    axes: dict[str, Any]
     task: str
     relpath: Path
 
-    def __hash__(
-        self,
-    ) -> int:  # axis values may be unhashable (lists); index identifies a grid point
+    # Axis values may be unhashable (lists); the index identifies a point of one grid.
+    def __hash__(self) -> int:
         return hash((self.index, self.relpath))
-
-    def as_dict(self) -> dict[str, Any]:
-        return dict(self.axes)
-
-    def __getitem__(self, axis: str) -> Any:
-        values = self.as_dict()
-        if axis not in values:
-            raise KeyError(f"setting {self.index} has no axis {axis!r}; axes: {list(values)}")
-        return values[axis]
-
-    @property
-    def L(self) -> int:
-        return self["net.L"]
-
-    @property
-    def phi(self) -> str:
-        return self["net.phi"]
-
-    @property
-    def rate_lambda(self) -> float:
-        return self["train.rate_lambda"]
 
 
 # ---------------------------------------------------------------------------- config
@@ -138,11 +138,13 @@ class SweepConfig(StrictModel):
 
     The same data, net and training seeds are used for every setting, so settings differ only
     in the grid axes. Everything else is the base `Config` a setting starts from (`weight_lambda`
-    is the library default unless it is an axis); an axis overrides the base value. `grid` maps
-    a dotted `Config` path to the list of values that axis takes; None means the fixed
-    modularity grid. Task parameters and the whole grid are validated at load time by building
-    every setting's `Config`, so a bad axis name, value or combination fails when sweep.json is
-    read, naming the axis.
+    is the library default unless it is an axis). `grid` maps a dotted `Config` path to the list
+    of values that axis takes; None means the modularity grid. Any Config field may be an axis
+    and then wins over the sweep's shared field (`net.N` over `N`, `train.lr` over `lr`), except
+    the fields the sweep owns (`SWEEP_OWNED_AXES`: sizes of the data, seeds, log/save/monitor
+    schedules), which are rejected. Task parameters and the whole grid are validated at load time
+    by building every setting's `Config`, so a bad axis name, value or combination fails when
+    sweep.json is read, naming the axis.
     """
 
     N: PosInt
@@ -160,9 +162,8 @@ class SweepConfig(StrictModel):
     seeds: Seeds = Seeds()
     dtype: Literal["float32", "float64"] = "float32"
     device: Literal["auto", "cpu", "cuda"] = "auto"
-    task: Literal["linear_teacher", "object_action", "what_where"] = (
-        "linear_teacher"  # unless `data.task` is an axis
-    )
+    # The base task, used unless `data.task` is a grid axis.
+    task: Literal["linear_teacher", "object_action", "what_where"] = "linear_teacher"
     grid: dict[str, list[Any]] | None = None
 
     @model_validator(mode="after")
@@ -233,7 +234,6 @@ _SIZE_PRESETS: dict[str, SweepConfig] = {
         what_where=WhatWhereParams(n_motifs=8),
     ),
 }
-PRESET_NAMES = ("tiny", "full", "modularity", "phase_transition")
 
 
 def with_grid(sweep: SweepConfig, grid: dict[str, list]) -> SweepConfig:
@@ -257,15 +257,20 @@ def phase_transition(n_lambda: int) -> SweepConfig:
     return with_grid(_SIZE_PRESETS["full"], grid)
 
 
+# Presets with an explicit grid, by name; each takes n_lambda, the points per lambda axis.
+GRID_PRESETS: dict[str, Callable[[int], SweepConfig]] = {"phase_transition": phase_transition}
+PRESET_NAMES = ("tiny", "full", "modularity", *GRID_PRESETS)
+
+
 def preset(name: str, n_lambda: int | None = None) -> SweepConfig:
     """A ready-made sweep. `tiny` and `full` are two sizes of the modularity grid (`modularity`
-    is `full`); `phase_transition` needs `n_lambda`, the others reject it."""
+    is `full`); the grid presets need `n_lambda`, the others reject it."""
     if name not in PRESET_NAMES:
         raise ValueError(f"unknown preset {name!r}; valid: {sorted(PRESET_NAMES)}")
-    if name == "phase_transition":
+    if name in GRID_PRESETS:
         if n_lambda is None:
-            raise ValueError("preset 'phase_transition' needs n_lambda (points per lambda axis)")
-        return phase_transition(n_lambda)
+            raise ValueError(f"preset {name!r} needs n_lambda (points per lambda axis)")
+        return GRID_PRESETS[name](n_lambda)
     if n_lambda is not None:
         raise ValueError(f"preset {name!r} has no lambda axes, so n_lambda does not apply")
     return _SIZE_PRESETS["tiny" if name == "tiny" else "full"]
@@ -290,7 +295,8 @@ def load_sweep(root: Path) -> SweepConfig:
 
 
 # ---------------------------------------------------------------------------- the grid
-def _grid(sweep: SweepConfig) -> dict[str, list]:
+def grid_of(sweep: SweepConfig) -> dict[str, list]:
+    """The sweep's axes: its `grid`, or the modularity grid when it has none."""
     return MODULARITY_GRID if sweep.grid is None else sweep.grid
 
 
@@ -299,13 +305,16 @@ def _set_leaf(tree: dict, axis: str, value: Any) -> None:
     *parents, last = axis.split(".")
     node = tree
     for part in parents:
-        if not isinstance(node.get(part), dict):
-            raise ValueError(f"grid axis {axis!r}: {part!r} is not a config section")  # noqa: TRY004 - a bad axis name is a bad value
-        node = node[part]
+        section = node.get(part)
+        is_section = isinstance(section, dict)
+        if not is_section:
+            raise ValueError(f"grid axis {axis!r}: {part!r} is not a config section")
+        node = section
     if last not in node:
         raise ValueError(f"grid axis {axis!r}: no config field {last!r}")
-    if isinstance(node[last], dict):
-        raise ValueError(f"grid axis {axis!r} is a config section; name one of its fields")  # noqa: TRY004
+    is_section = isinstance(node[last], dict)
+    if is_section:
+        raise ValueError(f"grid axis {axis!r} is a config section; name one of its fields")
     node[last] = value
 
 
@@ -341,42 +350,66 @@ def _config_from(sweep: SweepConfig, axes: Mapping[str, Any]) -> Config:
     return Config.model_validate(tree)
 
 
-def _build(sweep: SweepConfig, axes: Mapping[str, Any], what: str) -> Config:
+def _config_or_value_error(sweep: SweepConfig, axes: Mapping[str, Any], context: str) -> Config:
+    """`_config_from`, with a pydantic ValidationError turned into a ValueError that starts
+    with `context` (which axis or setting was being built)."""
     try:
         return _config_from(sweep, axes)
     except ValidationError as err:
-        raise ValueError(f"{what}: {err}") from err
+        raise ValueError(f"{context}: {err}") from err
+
+
+def _validate_axis(sweep: SweepConfig, axis: str, values: list) -> None:
+    """One axis alone: sweep-owned fields are rejected, the values are non-empty, each builds
+    a valid Config, and no two build the same one (so `[0, 0.0]` counts as a repeat)."""
+    if axis in SWEEP_OWNED_AXES:
+        raise ValueError(
+            f"grid axis {axis!r} is set by the sweep's own {SWEEP_OWNED_AXES[axis]}; "
+            "change that instead of sweeping it"
+        )
+    if not values:
+        raise ValueError(f"grid axis {axis!r} has no values")
+    configs = [
+        _config_or_value_error(sweep, {axis: v}, f"grid axis {axis!r} value {v!r}") for v in values
+    ]
+    encoded = [cfg.model_dump_json() for cfg in configs]
+    if len(set(encoded)) != len(encoded):
+        raise ValueError(f"grid axis {axis!r} repeats a value: {values}")
+
+
+def _validate_combinations(sweep: SweepConfig) -> None:
+    """Every setting of the product builds a valid Config (axes can be fine alone and wrong
+    together, e.g. more objects than grid cells)."""
+    for setting in expand(sweep):
+        context = f"grid setting {setting.index} {setting.axes}"
+        _config_or_value_error(sweep, setting.axes, context)
 
 
 def _validate_grid(sweep: SweepConfig, grid: dict[str, list]) -> None:
-    """Every axis is a Config field, takes distinct valid values, and every combination builds
-    a valid Config. Each axis is checked alone first so the error names the culprit."""
+    """Axes first, one at a time, so an error names the culprit; then the combinations."""
     for axis, values in grid.items():
-        if not values:
-            raise ValueError(f"grid axis {axis!r} has no values")
-        encoded = [json.dumps(v, sort_keys=True) for v in values]
-        if len(set(encoded)) != len(encoded):
-            raise ValueError(f"grid axis {axis!r} repeats a value: {values}")
-        for value in values:
-            _build(sweep, {axis: value}, f"grid axis {axis!r} value {value!r}")
-    for setting in expand(sweep):
-        _build(sweep, setting.as_dict(), f"grid setting {setting.index} {setting.as_dict()}")
+        _validate_axis(sweep, axis, values)
+    _validate_combinations(sweep)
 
 
 def _label_part(axis: str, value: Any) -> str:
+    """`<last part of the axis path><value>` for a directory name, e.g. `rate_lambda1e-06`.
+    Characters outside letters, digits and `._+-` become `-` so the name is a safe path
+    component. The label is for people; uniqueness comes from the index prefix."""
     text = f"{value:g}" if isinstance(value, float) else str(value)
-    return re.sub(r"[^A-Za-z0-9.+-]", "-", axis.rsplit(".", 1)[-1] + text)
+    return re.sub(r"[^A-Za-z0-9._+-]", "-", axis.rsplit(".", 1)[-1] + text)
 
 
-def _indexed_name(index: int, axes: tuple[tuple[str, Any], ...]) -> str:
+def _indexed_name(index: int, axes: Mapping[str, Any]) -> str:
     """`s0007_L2_phitanh_...`: the index makes the name unique (`:g` would merge close floats),
     the label (the task is already the parent directory) is for people."""
-    label = "_".join(_label_part(a, v) for a, v in axes if a != TASK_AXIS)
-    return f"s{index:04d}_{label}" if label else f"s{index:04d}"
+    label = "_".join(_label_part(a, v) for a, v in axes.items() if a != TASK_AXIS)
+    prefix = f"s{index:0{INDEX_WIDTH}d}"
+    return f"{prefix}_{label}" if label else prefix
 
 
 def _modularity_name(values: Mapping[str, Any]) -> str:
-    """`:g` gives `r0` and `r0.001`, distinct per value of the fixed grid."""
+    """`:g` gives `r0` and `r0.001`, distinct per value of the modularity grid."""
     return f"L{values['net.L']}_{values['net.phi']}_r{values['train.rate_lambda']:g}"
 
 
@@ -384,12 +417,18 @@ def expand(sweep: SweepConfig) -> list[Setting]:
     """All settings: the Cartesian product of the grid axes in the order they are written, the
     first axis slowest. The order depends only on the grid, not on the sweep's sizes, so
     index i names the same setting for every size of the same grid."""
-    grid = _grid(sweep)
+    grid = grid_of(sweep)
+    n_settings = math.prod(len(values) for values in grid.values())
+    if sweep.grid is not None and n_settings > 10**INDEX_WIDTH:
+        raise SweepError(
+            f"the grid has {n_settings} settings; directory names support at most "
+            f"{10**INDEX_WIDTH} (INDEX_WIDTH={INDEX_WIDTH})"
+        )
     settings = []
     for index, combo in enumerate(itertools.product(*grid.values())):
-        axes = tuple(zip(grid, combo, strict=True))
-        task = dict(axes).get(TASK_AXIS, sweep.task)
-        name = _modularity_name(dict(axes)) if sweep.grid is None else _indexed_name(index, axes)
+        axes = dict(zip(grid, combo, strict=True))
+        task = axes.get(TASK_AXIS, sweep.task)
+        name = _modularity_name(axes) if sweep.grid is None else _indexed_name(index, axes)
         settings.append(Setting(index, axes, task, Path(task) / name))
     return settings
 
@@ -407,7 +446,14 @@ def setting_dir(root: Path, setting: Setting) -> Path:
 
 def setting_config(sweep: SweepConfig, setting: Setting) -> Config:
     """The full fct `Config` of one setting."""
-    return _config_from(sweep, setting.as_dict())
+    return _config_from(sweep, setting.axes)
+
+
+def grid_hash(sweep: SweepConfig) -> str:
+    """Short hash of the grid and base task: two sweeps with the same hash put the same values
+    at the same indices (the sizes may differ; those are checked by config.json)."""
+    canonical = json.dumps({"task": sweep.task, "grid": grid_of(sweep)}, sort_keys=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
 # ---------------------------------------------------------------------------- disk
@@ -444,58 +490,74 @@ def _write_config_once(cfg: Config, directory: Path) -> None:
         )
 
 
-def _setting_record(setting: Setting) -> dict:
-    return {"index": setting.index, "axes": setting.as_dict()}
+def _setting_record(sweep: SweepConfig, setting: Setting) -> dict:
+    return {"index": setting.index, "grid_hash": grid_hash(sweep), "axes": setting.axes}
 
 
-def _write_setting_once(setting: Setting, directory: Path) -> None:
-    """Record the setting's axis values in setting.json; fail if an existing record differs,
-    because the grid then no longer puts this setting at this index."""
+def _write_setting_once(sweep: SweepConfig, setting: Setting, directory: Path) -> None:
+    """Record the setting's index, axis values and grid hash in setting.json; fail if an
+    existing record differs, because the grid then no longer puts this setting here."""
     path = directory / SETTING_FILE
-    record = _setting_record(setting)
+    record = _setting_record(sweep, setting)
     if not path.exists():
         directory.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(record, indent=2) + "\n")
     elif json.loads(path.read_text()) != json.loads(json.dumps(record)):
         raise SweepError(
-            f"{path} differs from the axis values sweep.json gives this setting; "
-            "use a fresh ROOT or delete the setting directory"
+            f"{path} differs from what sweep.json gives this setting (another grid, or other "
+            "axis values at this index); use a fresh ROOT or delete the setting directory"
         )
 
 
-def read_setting(directory: Path) -> dict:
-    """The `{"index", "axes"}` record that `run_setting` wrote in a setting directory."""
-    return json.loads((Path(directory) / SETTING_FILE).read_text())
+def read_setting(directory: Path, sweep: SweepConfig) -> dict:
+    """The `{"index", "grid_hash", "axes"}` record `run_setting` wrote in a setting directory.
+    SweepError, naming the directory, if it was written under another grid than `sweep`'s."""
+    record = json.loads((Path(directory) / SETTING_FILE).read_text())
+    if record["grid_hash"] != grid_hash(sweep):
+        raise SweepError(
+            f"{directory} was written under another grid than this sweep.json's; "
+            "use a fresh ROOT or delete the directory"
+        )
+    return record
 
 
-def _same_value(a: Any, b: Any) -> bool:
-    """Equality, with numbers compared to a relative 1e-9 so a float typed in a notebook finds
-    the one that was written to JSON."""
-    if _is_number(a) and _is_number(b):
-        return math.isclose(a, b, rel_tol=1e-9)
+def has_settings(root: Path) -> bool:
+    """Whether ROOT already holds a setting directory (anything with a config.json)."""
+    dirs = (d for d in Path(root).glob(SETTING_DIRS_GLOB) if d.is_dir())
+    return any(cache_paths(d).config.exists() for d in dirs)
+
+
+def same_value(a: Any, b: Any) -> bool:
+    """Equality for looking a setting up by its values: numbers (also inside lists) agree to
+    a relative `LOOKUP_REL_TOL`; a bool equals only a bool, so `True` never finds `L=1`."""
+    if isinstance(a, list | tuple) and isinstance(b, list | tuple):
+        return len(a) == len(b) and all(same_value(x, y) for x, y in zip(a, b, strict=True))
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, int | float) and isinstance(b, int | float):
+        return math.isclose(a, b, rel_tol=LOOKUP_REL_TOL)
     return a == b
 
 
-def _is_number(x: Any) -> bool:
-    return isinstance(x, int | float) and not isinstance(x, bool)
-
-
-def find_setting_dir(root: Path, values: Mapping[str, Any]) -> Path:
-    """The directory of the one setting (already run) whose axes equal `values`; a subset of
-    the axes is enough when it is unambiguous. LookupError if none or several match, or if an
-    axis name is not one the settings record."""
-    records = [
-        (p.parent, read_setting(p.parent)) for p in sorted(Path(root).glob(f"*/*/{SETTING_FILE}"))
+def find_setting_dir(root: Path, sweep: SweepConfig, values: Mapping[str, Any]) -> Path:
+    """The directory of the one already-run setting of `sweep` whose axes equal `values`; a
+    subset of the axes is enough when it is unambiguous. LookupError if none or several match,
+    or an axis is not one of the sweep's; SweepError if a directory was written under another
+    grid. Only the sweep's own directories are considered, so strays in ROOT cannot match."""
+    if unknown := sorted(set(values) - set(grid_of(sweep))):
+        raise LookupError(f"unknown axis {unknown}; the grid has axes {list(grid_of(sweep))}")
+    run = [
+        setting_dir(root, s)
+        for s in expand(sweep)
+        if (setting_dir(root, s) / SETTING_FILE).exists()
     ]
-    if not records:
-        raise LookupError(f"no {SETTING_FILE} under {root}; no setting has been run there")
-    known = {axis for _, record in records for axis in record["axes"]}
-    if unknown := sorted(set(values) - known):
-        raise LookupError(f"unknown axis {unknown}; the settings have axes {sorted(known)}")
+    if not run:
+        raise LookupError(f"no setting of this sweep has been run under {root}")
+    records = [(directory, read_setting(directory, sweep)["axes"]) for directory in run]
     matches = [
         directory
-        for directory, record in records
-        if all(_same_value(record["axes"].get(a), v) for a, v in values.items())
+        for directory, axes in records
+        if all(same_value(axes[a], v) for a, v in values.items())
     ]
     if not matches:
         raise LookupError(f"no setting under {root} has axes {dict(values)}")
@@ -515,13 +577,13 @@ def run_setting(
     directory = setting_dir(root, setting)
     cfg = setting_config(sweep, setting)
     _write_config_once(cfg, directory)
-    _write_setting_once(setting, directory)
+    _write_setting_once(sweep, setting, directory)
     status = setting_status(root, sweep, setting)
     if status == "stale":
         raise StaleCacheError(
             f"setting {index}: {directory}/train/final.pt was written under a different config "
-            "or loss definition than the current one, or is unreadable, so its results are not those of this "
-            "sweep. To rerun it, delete the sweep ROOT or use a fresh one."
+            "or loss definition than the current one, or is unreadable, so its results are not "
+            "those of this sweep. To rerun it, delete the sweep ROOT or use a fresh one."
         )
     if status == "done":
         log(f"setting {index} ({directory}) already done")

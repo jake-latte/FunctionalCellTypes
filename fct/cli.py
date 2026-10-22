@@ -46,10 +46,12 @@ from fct.meanfield import RateTiltError, load_meanfield, net_kernels, run_meanfi
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
+    GRID_PRESETS,
     PRESET_NAMES,
     SweepConfig,
     SweepError,
     expand,
+    has_settings,
     load_sweep,
     preset,
     run_setting,
@@ -322,8 +324,8 @@ def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
     """Replace (or add) grid axes in a dumped sweep tree: each item is `config.path=[v1,v2]`."""
     if axes and tree["grid"] is None:
         raise CliError(
-            f"preset {preset_name!r} has the fixed legacy grid; --axis needs a preset with an "
-            "explicit grid (phase_transition)"
+            f"preset {preset_name!r} is the modularity grid, which has no editable axes; "
+            f"--axis needs one of {list(GRID_PRESETS)}"
         )
     for item in axes:
         key, sep, text = item.partition("=")
@@ -333,15 +335,32 @@ def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
         tree["grid"][key] = values
 
 
+def _reject_grid_overrides(overrides: Sequence[str]) -> None:
+    for item in overrides:
+        key = item.partition("=")[0]
+        if key == "grid" or key.startswith("grid."):
+            raise CliError(f"--set {key}: the grid is edited with --axis PATH=[values]")
+
+
 def cmd_sweep_init(args: argparse.Namespace) -> int:
     path = sweep_path(args.root)
     if path.exists() and not args.force:
         raise CliError(f"{path} already exists; pass --force to overwrite it")
+    if has_settings(args.root) and not args.force:
+        raise CliError(
+            f"{args.root} already holds setting directories, which belong to the old sweep.json; "
+            "use a fresh ROOT, or pass --force to write a new sweep.json beside them"
+        )
+    _reject_grid_overrides(args.set)
     try:
-        tree = _override_tree(preset(args.preset, args.n_lambda).model_dump(), args.set)
+        base = preset(args.preset, args.n_lambda)
+    except ValueError as err:  # a missing or unwanted --n-lambda
+        raise CliError(str(err)) from err
+    try:
+        tree = _override_tree(base.model_dump(), args.set)
         _override_axes(tree, args.axis, args.preset)
         sweep = SweepConfig.model_validate(tree)
-    except (ValidationError, ValueError) as err:  # bad preset arguments or an invalid sweep
+    except ValidationError as err:
         raise CliError(str(err)) from err
     save_sweep(sweep, args.root)
     print(f"wrote {path}")
