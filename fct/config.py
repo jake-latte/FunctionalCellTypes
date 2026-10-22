@@ -27,8 +27,8 @@ NonNegFloat = Annotated[float, Field(ge=0)]
 # train section but is code, not a config field, so it is hashed separately: artefacts made
 # under another definition are rejected as stale instead of mixed with new ones. Increase it
 # whenever the loss changes in a way the TrainConfig fields do not express. History: 1 summed
-# the rate penalty over the samples, 2 averages it.
-LOSS_VERSION = 2
+# the rate penalty over the samples, 2 averaged it over them, 3 sums it again.
+LOSS_VERSION = 3
 
 
 class StrictModel(BaseModel):

@@ -37,9 +37,8 @@ def compute_loss(
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2, plus its parts.
 
-    `rate_l2` is the squared rates phi(h) summed over neurons and layers and averaged over
-    the P samples, so it does not grow with the dataset size and rate_lambda keeps its meaning
-    when P changes. `weight_l2` is the plain sum of squares of every parameter.
+    `rate_l2` is the squared rates phi(h) summed over samples, neurons and layers, so it grows
+    with the number of samples P. `weight_l2` is the plain sum of squares of every parameter.
 
     The parts are detached 0-d tensors: calling `.item()` here would force a host-device
     sync every epoch, so the caller converts only when it logs.
@@ -47,7 +46,7 @@ def compute_loss(
     h, z = net(x)
     mse = (y - z).square().mean()
     weight_l2 = net.weight_l2()
-    rate_l2 = net.phi(h).square().sum() / h.shape[0]
+    rate_l2 = net.phi(h).square().sum()
     loss = 0.5 * net.N * mse + weight_lambda * weight_l2 + rate_lambda * rate_l2
     parts = {"mse": mse, "weight_l2": weight_l2, "rate_l2": rate_l2, "loss": loss}
     return loss, {k: v.detach() for k, v in parts.items()}
