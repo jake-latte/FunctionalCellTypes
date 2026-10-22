@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.colors import LogNorm
@@ -33,7 +34,7 @@ from fct.analyse import (
 )
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
-from fct.spatial import LayerSpace, Population, torus_distance
+from fct.spatial import LayerSpace, Population, torus_distance, wrapped_gaussian_profile
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 
 ArrayLike = Tensor | np.ndarray | Sequence[float]
@@ -1143,17 +1144,18 @@ def fig_mir_heatmaps(
 
 def plot_kernel_vs_distance(space: LayerSpace, ax: Axes | None = None) -> Axes:
     """Every K_ij of the pre and post factors against its torus distance d_ij (points), with
-    the analytic Gaussian amplitude * exp(-d^2 / (2 ell^2)) as a line for each factor."""
+    the analytic wrapped Gaussian along one axis as a line for each factor (exactly K for d = 1;
+    for d = 2 the points scatter around it because K depends on both axis differences)."""
     ax = _get_ax(ax)
     for pop in (space.pre, space.post):
         x = pop.embedding.positions
-        dist = _np(torus_distance(x, x, pop.embedding.box)).ravel()
-        scatter = ax.scatter(dist, _np(pop.K).ravel(), s=6, alpha=0.4, rasterized=True)
+        dist = torus_distance(x, x, pop.embedding.box).ravel()
+        scatter = ax.scatter(_np(dist), _np(pop.K).ravel(), s=6, alpha=0.4, rasterized=True)
         ell, amp = pop.kernel.length_scale, pop.kernel.amplitude
-        d_line = np.linspace(0, dist.max(), 200)
+        d_line = torch.linspace(0, dist.max(), 200, dtype=x.dtype)
         ax.plot(
-            d_line,
-            amp * np.exp(-(d_line**2) / (2 * ell**2)),
+            _np(d_line),
+            _np(wrapped_gaussian_profile(d_line, ell, pop.embedding.box, amp)),
             color=scatter.get_facecolor()[0][:3],
             label=f"{pop.name}: ell={ell:g}",
         )

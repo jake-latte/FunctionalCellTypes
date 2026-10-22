@@ -16,6 +16,7 @@ hidden layers, and the readout V (N, D_out) is layer L. Consecutive layers share
 object, so the post factor of layer l is the very same object as the pre factor of layer l + 1.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Annotated, Literal, Self
 
@@ -25,6 +26,7 @@ from pydantic import Field, model_validator
 from fct.config import PosFloat, PosInt, StrictModel
 
 DTYPE = torch.float64
+NEGATIVE_RTOL = 1e-10  # eigenvalues above -NEGATIVE_RTOL * max count as round-off, not as negative
 RelEig = Annotated[float, Field(gt=0, lt=1)]
 
 
@@ -119,12 +121,45 @@ def torus_distance(x: torch.Tensor, y: torch.Tensor, box: float) -> torch.Tensor
     return torch.minimum(delta, box - delta).norm(dim=-1)
 
 
+def _wrapped_gaussian_1d(delta: torch.Tensor, length_scale: float, box: float) -> torch.Tensor:
+    """sum_k exp(-(delta + k box)^2 / (2 ell^2)) over |k| <= n_images, elementwise in `delta`.
+
+    The dropped images lie at least 8 ell + box / 2 away, so each is below exp(-32) ~ 1e-14 of
+    the central term. The tail has to be this small: the Fourier coefficients of the wrapped
+    Gaussian (the kernel's eigenvalues on a ring) decay like exp(-2 pi^2 ell^2 j^2), so a
+    larger truncation error would show up as negative eigenvalues.
+    """
+    n_images = math.ceil(8 * length_scale / box) + 1
+    shifts = box * torch.arange(-n_images, n_images + 1, dtype=delta.dtype)
+    return torch.exp(-((delta[..., None] + shifts) ** 2) / (2 * length_scale**2)).sum(-1)
+
+
+def wrapped_gaussian_profile(
+    delta: torch.Tensor, length_scale: float, box: float, amplitude: float
+) -> torch.Tensor:
+    """The kernel along one axis, amplitude * W(delta) / W(0): K itself for d = 1, and K along
+    a coordinate axis for d > 1."""
+    zero = _wrapped_gaussian_1d(torch.zeros(1, dtype=delta.dtype), length_scale, box)
+    return amplitude * _wrapped_gaussian_1d(delta, length_scale, box) / zero
+
+
 def periodic_gaussian_kernel(
     x_post: torch.Tensor, x_pre: torch.Tensor, length_scale: float, box: float, amplitude: float
 ) -> torch.Tensor:
-    """K_ij = amplitude * exp(-d_torus(x_i, x_j)^2 / (2 length_scale^2)), shape (n_post, n_pre)."""
-    dist = torus_distance(x_post, x_pre, box)
-    return amplitude * torch.exp(-dist.square() / (2 * length_scale**2))
+    """Wrapped (periodised) Gaussian on the torus, shape (n_post, n_pre):
+
+        K_ij = amplitude * prod_axes W(x_i - x_j) / W(0),
+        W(delta) = sum_{k in Z} exp(-(delta + k box)^2 / (2 ell^2)),
+
+    with the image sum truncated as in `_wrapped_gaussian_1d` (relative tail below 1e-14).
+    The diagonal is exactly `amplitude`. Unlike a Gaussian of the minimum-image distance, which
+    is not positive definite on the torus once ell exceeds roughly box / 5, the wrapped sum
+    is positive semi-definite for every ell, and it reduces to the plain Gaussian for
+    ell << box. The sum factorises over axes, so each axis uses its signed difference.
+    """
+    delta = x_post[:, None, :] - x_pre[None, :, :]  # (n_post, n_pre, d)
+    per_axis = wrapped_gaussian_profile(delta, length_scale, box, 1.0)
+    return amplitude * per_axis.prod(dim=-1)
 
 
 # --------------------------------------------------------------------------- penalty
@@ -132,9 +167,9 @@ def periodic_gaussian_kernel(
 
 @dataclass(frozen=True)
 class FloorReport:
-    """What the eigenvalue floor did: `n_negative` of the floored eigenvalues were below zero
-    (the minimum-image Gaussian is not positive definite when the length scale is a sizeable
-    fraction of the box), `cond_before` is the raw max/min eigenvalue (inf if the smallest is
+    """What the eigenvalue floor did: `n_negative` eigenvalues were below -NEGATIVE_RTOL times the largest (clearly negative, not round-off)
+    (none are expected from the wrapped Gaussian; the floor is a safety net for round-off),
+    `cond_before` is the raw max/min eigenvalue (inf if the smallest is
     not positive), `cond_after` the same after flooring."""
 
     n_floored: int
@@ -162,7 +197,7 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
     M = (eigvecs / floored) @ eigvecs.T
     report = FloorReport(
         n_floored=int((eigvals < floor).sum().item()),
-        n_negative=int((eigvals < 0).sum().item()),
+        n_negative=int((eigvals < -NEGATIVE_RTOL * top).sum().item()),
         cond_before=top / bottom if bottom > 0 else float("inf"),
         cond_after=top / floored[0].item(),
     )

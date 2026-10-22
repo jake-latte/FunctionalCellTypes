@@ -671,8 +671,9 @@ SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6)   # all hid
 
 # pure computation (float64, CPU)
 make_embedding(spec, n, d, box, seed_offset=0) -> Embedding(positions (n, d), box)
-torus_distance(x, y, box) -> (n, m)                       # Euclidean norm of per-axis minimum-image differences
-periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post, n_pre)   # amp * exp(-d^2 / 2 ell^2)
+torus_distance(x, y, box) -> (n, m)                       # Euclidean norm of per-axis minimum-image differences (for the figure; not the kernel argument)
+periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post, n_pre)   # wrapped Gaussian, diagonal = amplitude
+wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (analytic curve in the figure)
 penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, n_negative, cond_before, cond_after))
 build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
 draw.fig_kernel(space) -> Figure      # K_pre, K_post, K vs torus distance with the analytic curve, positions (d = 1 ring, d = 2 plane)
@@ -683,7 +684,14 @@ Populations are indexed 0 (input, m), 1..L (hidden, N), L + 1 (output, n_out); l
 as the pre `Population` of layer l + 1 (embedding, K, M computed once). Random hidden embeddings use seed
 `hidden.embedding.seed + k` for hidden layer k, so layers differ and runs repeat.
 
-`M` comes from the symmetric eigendecomposition with eigenvalues floored at `min_rel_eig` times the largest; the floor is the only
-approximation and `FloorReport` says how many eigenvalues it touched and the condition number before and after. Caveat: the
-minimum-image Gaussian is positive semi-definite only for a length scale small against the box (about ell <= box / 10 in the
-tests); a wider one has negative eigenvalues, which the floor also clamps and `n_negative` counts.
+The kernel is the wrapped (periodised) Gaussian, `K_ij = amplitude * prod_axes W(delta_a) / W(0)` with
+`W(delta) = sum_k exp(-(delta + k box)^2 / (2 ell^2))` over the signed per-axis difference, images truncated at
+`|k| <= ceil(8 ell / box) + 1` (relative tail below 1e-14). It is positive semi-definite for every length scale and reduces to the
+plain Gaussian for ell << box. A Gaussian of the minimum-image distance is not positive definite on the torus once
+ell exceeds roughly box / 5, which is why it is not used. The truncation must be that deep: the eigenvalues on a ring
+decay like exp(-2 pi^2 ell^2 j^2), so a shallower cut (4 ell was tried) leaves negative eigenvalues near -1e-7 of the largest.
+
+`M` comes from the symmetric eigendecomposition with eigenvalues floored at `min_rel_eig` times the largest. The floor is a safety
+net for round-off (a smooth kernel is numerically singular), not an expected correction for negative eigenvalues; `FloorReport`
+gives how many eigenvalues it touched, the condition number before and after, and `n_negative`, the number below
+`-1e-10` times the largest (clearly negative rather than round-off; zero for the wrapped Gaussian).
