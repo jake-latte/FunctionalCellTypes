@@ -46,17 +46,19 @@ settings shown from their latest checkpoint, provisional), learning-rate tuning 
 LOSS CHANGE (PI decisions): the rate penalty was averaged over P (`LOSS_VERSION = 2`) and is summed over P again
 (`LOSS_VERSION = 3`, issue `remove-rate-penalty-p-scaling`), the default
 `weight_lambda` is 1e-4, `rate_lambda` unchanged, lr 1e-3 not re-tuned. Every earlier train, sweep and
-meanfield cache is stale (`sweep status` shows `stale`). With these defaults `what_where` learns; the
-averaged rate penalty at `rate_lambda = 1e-3` was small (see docs/issues/average-rate-penalty.md).
-Mean-field's rate tilt defaults to `rate_lambda` (explicit `meanfield.rate_tilt` still overrides).
+meanfield cache is stale (`sweep status` shows `stale`). Under version 2 `what_where` learned and the
+averaged penalty at `rate_lambda = 1e-3` was small (see docs/issues/average-rate-penalty.md); those
+results, and the tiny-pipeline results below, were measured under version 2 and are stale by construction.
 `run-tiny-pipeline` is `in review`: tiny preset 36/36 on CPU, 3 settings on the T1000, notebook executed
 into git-ignored `tmp/modularity.ipynb`. Nothing was submitted.
-Next (PI): review; decide the `rate_lambda` values for the sweep (deferred) and the mean-field tilt; set the
+Next (PI): review; decide the `rate_lambda` values for the sweep (deferred); set the
 `full` preset sizes in `fct/sweep.py` (N=256, P=4096, 15000 epochs are placeholders); tune the SBATCH
 cpus/mem/time in `jobs/fct_sweep.sh`; `--dry-run`; submit. Build the notebook on the real ROOT with
 `python notebooks/build_modularity.py ROOT` (it can run while jobs are still running).
 
 ## Decisions to flag to the PI at review (assumptions I made; easy to change)
+- Mean-field rate tilt defaults to `rate_lambda` (exact for the summed penalty); `meanfield.rate_tilt` overrides.
+This was decided in `remove-rate-penalty-p-scaling`, not by the PI.
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};
   a group's MI is the SUM of its members' MIs; what-where = {where, what}; linear teacher = one group
   per latent. Reason: the plug-in estimator cannot resolve MI with the joint object configuration.

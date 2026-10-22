@@ -28,6 +28,8 @@ samples. `weight_l2`, the data term and lr are unchanged.
 
 ## Open
 
+Superseded by `remove-rate-penalty-p-scaling` (2026-10-22): the penalty is summed again and the tilt defaults to rate_lambda.
+
 - The PI decides the mean-field rate tilt: `rate_lambda / P_train` (exact for `n_points == P_train`)
   or `rate_lambda / n_points` (solved points treated as the whole training set).
 - `playground.ipynb` sums the penalty (default rate_lambda=0): the library departs from it by design.
