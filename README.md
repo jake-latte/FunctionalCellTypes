@@ -36,8 +36,9 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `grid_view.py` | from a sweep ROOT to the phase-transition figures: snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
+| `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
-| `notebooks/` | `build_modularity.py` and `build_phase_transition.py` build the results notebooks; the `.ipynb` files are their sources (no outputs) |
+| `notebooks/` | `build_modularity.py`, `build_phase_transition.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
 | `jobs/fct_sweep.sh` | SLURM array script for the sweep |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
 
@@ -120,6 +121,22 @@ nearest endpoint, signalled only by the printed "snapped to" line. Logic is in `
 ```sh
 uv run python notebooks/build_phase_transition.py ROOT           # execute on ROOT -> tmp/phase_transition.ipynb
 uv run python notebooks/build_phase_transition.py --no-execute   # rebuild the committed source notebook
+```
+
+**Exemplar notebook.** One linear-teacher run end to end: every task and network setting in one cell, SGLD
+training (or Adam) through the `fct` cache with loss curves, outputs and the net's empirical kernels, then the
+mean-field solve with live figures refreshed every `PLOT_EVERY` outer steps: the kernels Phi_l and Phi_hat_l,
+solver health (residuals, step sizes, backtracking, theory-vs-net train MSE) and sampler health (HMC acceptance,
+step size, divergences, ESS, or the importance ESS and maximum weight), and a final cell with the solved kernels
+next to the empirical ones. `SAMPLER` picks `"hmc"` or `"importance"`. The default sizes are tiny
+(about 30 s per sampler on a CPU) and chosen so the importance sampler, a small-P / mild-tilt tool, does not raise
+`InadequateSamplerError`. The live view is `solve(..., on_outer=callback)`, an observer that cannot change the
+result. Logic is in `fct/exemplar.py` and `fct/draw.py`; only the source notebook is committed.
+
+```sh
+uv run python notebooks/build_exemplar.py CACHE_ROOT                     # execute -> tmp/exemplar.ipynb
+uv run python notebooks/build_exemplar.py CACHE_ROOT --set "SAMPLER='importance'" --set N_OUTER=10
+uv run python notebooks/build_exemplar.py --no-execute                   # rebuild the committed source notebook
 ```
 
 ## Python library: single runs and the mean-field solver

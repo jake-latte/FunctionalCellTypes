@@ -34,9 +34,10 @@ fct/
   sweep.py         # a grid of Config fields: SweepConfig, expand, run_setting, status, presets
   explanations.py  # MIR_EXPLANATION: the notebook's markdown/LaTeX definition of raw, corrected and chance-baseline MIR
   report.py        # what the results notebook shows: read-only load of a sweep ROOT, final-MIR table, prose from numbers
+  exemplar.py      # the exemplar notebook's logic: config from flat settings, cache layout, cached train / solve, live refresh
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
   __main__.py      # `python -m fct ...` -> cli.main()
-notebooks/         # build_modularity.py builds + executes modularity.ipynb (cells are one-line fct.report calls)
+notebooks/         # build_modularity.py builds + executes modularity.ipynb (cells are one-line fct.report calls); build_exemplar.py: exemplar.ipynb
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
 docs/issues/*.md   # current work items (finished ones move to docs/issues/archive/)
@@ -397,8 +398,16 @@ a relu, L=2, beta=1e3 problem, layer 1: 0.08 at P=8, 0.03 at P=16, 0.0085 at P=4
 def empirical_kernels(net, X, readout) -> tuple[Tensor, Tensor]     # notebook
 @dataclass
 class SolveResult: Phi: Tensor; Phi_hat: Tensor; history: dict[str, list]; samplers: list[SingleSiteHMC | ImportanceSampler]
+class OuterSnapshot(NamedTuple): outer: int; history: dict[str, list]; Phi: Tensor; Phi_hat: Tensor
 def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, log=print,
-          checkpoint_dir: Path | None = None, config_hash: str = "") -> SolveResult
+          checkpoint_dir: Path | None = None, config_hash: str = "",
+          on_outer: Callable[[OuterSnapshot], Any] | None = None) -> SolveResult
+    # on_outer (default None: nothing changes): called after every outer step run in this call with an OuterSnapshot
+    # (the step index, the history so far, Phi, Phi_hat), for live plots. The kernels and the history's lists are copies
+    # (the history's numpy entries are shared, read-only); it draws nothing from the generator and runs after the
+    # history entry and before the checkpoint, so results are bit-for-bit those without it (tests/test_meanfield_callback.py,
+    # with the pins of tests/test_meanfield_pins.py). Not called for steps restored from a checkpoint, nor for a loaded
+    # final.pt (no steps run). An exception it raises stops the solve.
     # Algorithm 1 exactly as the notebook, settings from cfg.solver; single-site expectations from one sampler per
     # layer, SingleSiteHMC (solver.sampler="hmc", bit-for-bit the pre-split solver) or ImportanceSampler ("importance").
     # A sampler run validates the step before it (backtracking): HMC on divergences / resets / step-size collapse,
@@ -411,7 +420,7 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # resume from its latest ckpt_*.pt (ValueError if it was written with a net and `net` is None, or vice
     # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then
     # replaces the checkpoints; every checkpoint stores cfg.model_dump() as "meanfield_config" for provenance
-def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> SolveResult
+def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print, on_outer=None) -> SolveResult
     # rate tilt: the solver's tilt is a per-sample coefficient of phi^T phi summed over the n_points solved points, and the
     # trained loss sums the penalty over samples, so its per-sample coefficient is exactly rate_lambda: rate_tilt=None
     # defaults to train.rate_lambda, and an explicit meanfield.rate_tilt overrides it.
@@ -529,6 +538,10 @@ fig_solver_history(history) -> Figure                 # the notebook's plot_hist
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
 plot_kernel_vs_distance(space, ax=None); plot_embedding(space, ax=None)   # spatial prior of one LayerSpace: K_ij vs torus distance with the wrapped analytic curve; unit positions (ring d = 1, plane d = 2, legend outside the axis)
 fig_kernel(space: LayerSpace) -> Figure               # 2 x 2: K_pre, K_post, K vs distance, positions; ValueError for d > 2
+fig_solver_health(history); fig_sampler_health(history)   # the live view's two groups of solver_history panels (SOLVER_HEALTH_KEYS: residuals, outer step size,
+                                                      # fixed-point residual, train MSE theory vs net, step sizes, backtracking, alignment; SAMPLER_HEALTH_KEYS: HMC acceptance /
+                                                      # eps / divergences, ESS, importance max weight, MC error); panels the sampler does not record are omitted; ValueError if none are
+fig_layer_kernels({name: (L,P,P) stack}, title="")    # one row per name (e.g. Φ, Φ̂), one column per layer, each panel its own colour scale
 plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_scale=True) -> Figure   # theory vs net kernels per layer; shared_scale=False gives each panel its own colour scale
 
 # Result figures. `history` is the train.py history extended by the monitor with the keys below.
@@ -881,3 +894,16 @@ Sweep-independent helpers for the phase-transition notebook; all pure functions 
 Notebook cells, in order: parameter cell (`ROOT`), setup (loads `RESULTS`), selector (`L`, `PHI`, `LAMBDA_R`, `LAMBDA_W`, `MIR_KIND`), the one-setting plot suite (`report.setting_items`: loss curves, example outputs, MIR over training), tuning (`N_PLOT_NEURONS`, `PLOT_LAYER` counted from 1, `NEURON_ORDER`, `NEURON_SEED`), the matrix and the scatter (`GLOBAL_L`, `GLOBAL_PHI`, by default the chosen setting's). Tuning curves use the rates phi(H), not H.
 
 Limits: the viewer needs positive lambdas. A grid containing lambda = 0 cannot be snapped on a log scale (`snap_to_grid` raises) and the figures use log axes. A request outside the grid snaps to the nearest endpoint, and the only signal is the "snapped to" line of `snap_text`. The global prose counts settings with no MIR yet apart from stale (other config) or unreadable ones, which it names with their lambdas and reason, and lists the provisional cells by their lambdas. `GridSelection.unusable` holds the latter.
+
+## exemplar.py and the exemplar notebook
+
+`notebooks/build_exemplar.py` builds `exemplar.ipynb` (source only; executed copies go to the ignored `tmp/`): one linear-teacher run, trained with SGLD (or Adam), then the mean-field solve of the same problem with live diagnostics. `fct/exemplar.py` holds all the logic; the cells set variables and call it and `fct.draw`.
+
+- `exemplar_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed, log_int, save_int) -> Config`: `linear_teacher` data (D_in = m, n_latents = k), CPU, float64; `beta` is both `train.beta` and `meanfield.beta` (all P points are solved); `with_solver(cfg, **solver_fields)` sets `SolverConfig` fields (unknown ones raise).
+- Cache layout under CACHE_ROOT: `exemplar-<section_hash(data, net, train)>/{data, train, config.json}` and, inside it, `solve-<section_hash(data, net, train, meanfield)>/meanfield/` (`exemplar_dirs`). A solver setting therefore re-solves without retraining. `train_exemplar(cfg, cache_root, log) -> (dataset, net, history, directory)` and `solve_exemplar(cfg, dataset, net, cache_root, plot_every, show, log) -> SolveResult` go through `train_from_config` / `run_meanfield`, so both resume from checkpoints and reload finished work.
+- Live view: `live_figures(snapshot)` is `[fig_layer_kernels({Φ, Φ̂}), fig_solver_health, fig_sampler_health]`; `live_plotter(every, show)` is an `on_outer` callback that calls `show(figures)` at outer steps 0, every, 2 every, ...; `solve_exemplar` calls `show` once more with the finished solve's figures (a loaded final.pt runs no steps). `LiveView(tail)` is the notebook edge: `show` does `clear_output(wait=True)`, displays and closes the figures, then reprints its last `tail` log lines (`log` collects them), because clearing empties the whole cell output. IPython is imported lazily; the clear / display / print functions are injectable.
+- `kernel_comparison` (solved Φ_l beside the net's, `draw.fig_kernels`), `empirical_kernel_figure`, `example_outputs_of`, `solve_summary(history, sampler)` (markdown: steps, final theory and net train MSE, alignment, smallest ESS fraction), `cache_root_from_env` ($FCT_CACHE_ROOT).
+
+Notebook cells, in order: intro (says why the sizes are small), task and net (the `parameters` cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `DATA_SEED`, `N`, `L`, `PHI`, `G`, `NET_SEED`, `WEIGHT_LAMBDA`, `RATE_LAMBDA`), training settings (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`, `TRAIN_LOG_INT`), setup, train, loss / outputs / empirical kernels, solver settings (`SAMPLER`, `N_OUTER`, `PLOT_EVERY`, `SOLVER_SEED`, `SOLVE_LOG_INT`, `N_CHAINS`, `WARMUP_TRANS`, `N_IMPORTANCE_SAMPLES`), the live solve, the kernel comparison. `build_exemplar.py CACHE_ROOT --set NAME=VALUE ...` rewrites one-line `NAME = value` assignments (`set_parameters`: a name not assigned exactly once is an error) before executing, which is how the tests run it tiny with each sampler.
+
+Default sizes (P = 24, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD epochs, 40 outer steps) execute in about 30 s per sampler on a CPU. They are chosen for the importance sampler, which draws from the prior and is a small-P, mild-tilt tool: in trials it raised `InadequateSamplerError` for L = 2 at P = 12 to 24, and for L = 1 at P = 16 or P = 24 with beta = 3, so the working region is narrow and instance dependent (L = 1, P = 24, beta = 10 with seed 0 passes). The net is hot (beta = 10), so its train MSE is far above the theory's.
