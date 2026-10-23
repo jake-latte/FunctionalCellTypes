@@ -1,14 +1,14 @@
 ---
 type: infrastructure
 complexity: complex
-status: blocked
+status: in progress
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
 
 # Train or solve any initialised grid, locally or on the cluster
 
-PI brief (Mean Field 2): given an initialised grid search (trained or not), one can either train the networks or solve the corresponding saddle points; cluster compatible. Confirmed by the PI 2026-10-22. Blocked until `generic-grid-sweep` (setting/stage layout) and `importance-weighted-sampler` (the solver config it stores in sweep.json) are merged.
+PI brief (Mean Field 2): given an initialised grid search (trained or not), one can either train the networks or solve the corresponding saddle points; cluster compatible. Confirmed by the PI 2026-10-22.
 
 ## Proposed plan
 - `fct/sweep.py`: `run_setting(..., stage="train" | "solve")`. Solve for index i loads (or builds) the dataset, loads the trained net if a final one exists (otherwise runs with `net=None`: `solve` already accepts that; the net-comparison history keys stay absent), and calls `run_meanfield` into `ROOT/<setting>/meanfield/`. It resumes from a solver checkpoint and skips a finished one.
