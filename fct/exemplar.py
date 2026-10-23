@@ -49,7 +49,8 @@ Show = Callable[[Sequence[Figure]], None]
 def sgld_theory_constants(
     beta: float, weight_lambda: float, rate_lambda: float, n_points: int, d_out: int
 ) -> dict[str, float]:
-    """The `MeanFieldConfig` constants (prior_scale, alpha, rate_tilt) under which the theory
+    """The `MeanFieldConfig` constants (prior_scale, alpha, rate_tilt, learning_prefactor) under
+    which the theory
     describes the stationary law exp(-beta L) of SGLD on the repo loss L (see `fct.sgld`).
 
     The loss puts weight_lambda ||theta||^2 on standard-normal-parametrised weights, so under
@@ -58,13 +59,17 @@ def sgld_theory_constants(
     beta N / (P d_out) on the outputs, which makes the ridge
     alpha = P d_out / (beta prior_scale) = 2 weight_lambda P d_out. The rate penalty
     beta rate_lambda sum(phi^2) is the tilt exp(-rate_tilt phi^T phi / 2), so
-    rate_tilt = 2 beta rate_lambda.
+    rate_tilt = 2 beta rate_lambda. The solver's kernels are unscaled (Sigma = prior_scale Phi0),
+    so the data-term prefactor of the action, which is 1/2 for prior_scale = 1, is
+    learning_prefactor = 1 / (2 prior_scale) = beta weight_lambda.
     The library's own defaults (prior_scale = 1 / weight_lambda, alpha = weight_lambda P d_out
-    / beta, rate_tilt = rate_lambda) agree with this only at beta = 1/2."""
+    / beta, rate_tilt = rate_lambda, learning_prefactor = 1/2) agree with this only at
+    beta = 1/2, and the prefactor only at prior_scale = 1."""
     return {
         "prior_scale": 1.0 / (2.0 * beta * weight_lambda),
         "alpha": 2.0 * weight_lambda * n_points * d_out,
         "rate_tilt": 2.0 * beta * rate_lambda,
+        "learning_prefactor": beta * weight_lambda,
     }
 
 
@@ -250,9 +255,10 @@ def solve_summary(
         ),
     ]
     ess = np.asarray(history["hmc_ess_frac"], dtype=float)
-    step, layer = np.unravel_index(np.argmin(ess), ess.shape)
+    step, layer = np.unravel_index(np.nanargmin(ess), ess.shape)
     parts.append(
-        f"Smallest sampler ESS fraction {ess[step, layer]:.3g} (outer step {step}, layer "
+        f"Smallest sampler ESS fraction {ess[step, layer]:.3g} (outer step "
+        f"{history['outer_step'][step]}, layer "
         f"{layer + 1}); at the last step {_per_layer(ess[-1])}."
     )
     if Phi is not None:

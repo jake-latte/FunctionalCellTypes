@@ -12,7 +12,8 @@ from notebooks.build_spatial import execute_notebook, set_parameters
 
 TINY = {
     "N_EPOCHS": 300,
-    "N_OUTER": 6,
+    "N_OUTER_HMC": 6,
+    "N_OUTER_IMPORTANCE": 6,
     "PLOT_EVERY": 2,
     "N_CHAINS": 32,
     "WARMUP_TRANS": 10,
@@ -66,7 +67,7 @@ def test_every_task_and_net_setting_is_in_one_cell_and_each_stage_has_its_parame
     ):  # fmt: skip
         assert name in task
     code = _code(nb)
-    for name in ("OPTIMIZER =", "BETA =", "LR =", "N_EPOCHS =", "SAMPLER =", "N_OUTER =",
+    for name in ("OPTIMIZER =", "BETA =", "LR =", "N_EPOCHS =", "SAMPLER =", "N_OUTER_HMC =", "INIT =",
                  "N_CHAINS =", "N_IMPORTANCE_SAMPLES =", "PLOT_EVERY ="):  # fmt: skip
         assert code.count(name) == 1, name
 
@@ -79,9 +80,9 @@ def test_the_text_says_why_the_sizes_are_small_and_what_importance_sampling_need
 
 def test_set_parameters_rewrites_one_assignment_and_keeps_its_comment():
     nb = build_notebook()
-    out = set_parameters(nb, {"SAMPLER": "importance", "N_OUTER": 3})
+    out = set_parameters(nb, {"SAMPLER": "importance", "N_OUTER_HMC": 3})
     code = _code(out)
-    assert "SAMPLER = 'importance'  # " in code and "N_OUTER = 3  # " in code
+    assert "SAMPLER = 'importance'  # " in code and "N_OUTER_HMC = 3  # " in code
     assert 'SAMPLER = "hmc"' in _code(nb)  # the source is untouched
 
 
@@ -96,7 +97,15 @@ def test_set_parameters_rejects_unknown_and_ambiguous_names():
 
 @pytest.mark.parametrize("sampler", ["hmc", "importance"])
 def test_executes_end_to_end_with_each_sampler(sampler, tmp_path):
-    nb = execute_notebook(build_notebook(), tmp_path / "runs", {**TINY, "SAMPLER": sampler})
+    # A 300-epoch net is far from equilibrium and its kernels are far from the prior, which the
+    # prior-proposal sampler cannot represent at the initial point; the default INIT = "net" is
+    # for a trained net, so importance sampling starts from the lazy kernels here.
+    overrides = {
+        **TINY,
+        "SAMPLER": sampler,
+        **({"INIT": "lazy"} if sampler == "importance" else {}),
+    }
+    nb = execute_notebook(build_notebook(), tmp_path / "runs", overrides)
     text = _text(nb)
     assert "ERROR" not in text
     assert f"with the {sampler} sampler" in text
@@ -104,7 +113,7 @@ def test_executes_end_to_end_with_each_sampler(sampler, tmp_path):
     # the live view keeps the last log lines under the final frame
     assert "[0005]" in text
     # a second execution reloads the cached training and solve and shows the same frames
-    again = execute_notebook(build_notebook(), tmp_path / "runs", {**TINY, "SAMPLER": sampler})
+    again = execute_notebook(build_notebook(), tmp_path / "runs", overrides)
     text_again = _text(again)
     assert "ERROR" not in text_again and _n_figures(again) == EXPECTED_FIGURES
     assert "loaded finished solve" in text_again

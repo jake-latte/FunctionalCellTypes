@@ -8,7 +8,7 @@ health, with HMC or with importance sampling (`SAMPLER`). All logic is in `fct.e
 `fct.draw`; each cell only calls it. Run
 
     python notebooks/build_exemplar.py CACHE_ROOT                  # execute, write tmp/exemplar.ipynb
-    python notebooks/build_exemplar.py CACHE_ROOT --set "SAMPLER='importance'" --set N_OUTER=10
+    python notebooks/build_exemplar.py CACHE_ROOT --set "SAMPLER='importance'" --set N_OUTER_IMPORTANCE=10
     python notebooks/build_exemplar.py --no-execute                # source only: notebooks/exemplar.ipynb
 
 CACHE_ROOT holds the cached runs (`$FCT_CACHE_ROOT` works in the notebook too). `--set NAME=VALUE`
@@ -44,24 +44,31 @@ interrupted one, and changing a solver setting re-solves without retraining.
 
 **What the theory is compared with.** The loss puts `WEIGHT_LAMBDA` on the squared weights, so at
 equilibrium each weight has variance $1 / (2 \\beta\\,\\texttt{WEIGHT\\_LAMBDA})$; the readout acts
-as a Gaussian likelihood whose ridge is $\\alpha = 2\\,\\texttt{WEIGHT\\_LAMBDA}\\,P\\,m$, and the rate
-penalty is a tilt $2\\beta\\,\\texttt{RATE\\_LAMBDA}$. The notebook gives the solver exactly these
-constants (`fct.exemplar.sgld_theory_constants`), so the solved kernels describe the net's
-distribution and should have the net's scale. The library's defaults for these constants agree
-with this only at $\\beta = 1/2$. The solve is judged by the numbers printed under the final
-figures, not by the figures alone: the residual of the $\\hat\\Phi$ fixed point, the sampler's
-effective sample size, and the kernel scales of the theory and the net. The train MSE of the
-theory is that of the mean predictor, which is below that of one sampled net, whose weights
-fluctuate at temperature $1/\\beta$.
+as a Gaussian likelihood whose ridge is $\\alpha = 2\\,\\texttt{WEIGHT\\_LAMBDA}\\,P\\,m$, the rate
+penalty is a tilt $2\\beta\\,\\texttt{RATE\\_LAMBDA}$, and the data term of the action has prefactor
+$\\beta\\,\\texttt{WEIGHT\\_LAMBDA}$ (one half only for unit prior scale). The notebook gives the
+solver exactly these four constants (`fct.exemplar.sgld_theory_constants`), so the theory is
+that of the distribution the net was sampled from. The library's defaults for them agree with
+this only at $\\beta = 1/2$.
+
+**Is the solve converged?** Judge it by the numbers printed under the final figures, not by the
+figures alone: the residual of the $\\hat\\Phi$ fixed point (it should fall towards its Monte
+Carlo floor, which it has not reached at the default length: it is of order 0.1 to 0.5, not
+0.01), the sampler's effective sample size, and the kernel scales of the theory and the net. The
+default `INIT = "net"` starts the iteration at the net's own kernels, so the agreement of scale
+at the end is partly inherited from the start; with `INIT = "lazy"` the same 40 steps end with
+the theory's kernels about a quarter smaller than the net's and a residual still near 0.76. The
+train MSE of the theory is that of the mean predictor, which is below that of one sampled net,
+whose weights fluctuate at temperature $1/\\beta$.
 
 **Sizes.** The defaults are tiny, so that training and a solve each take seconds on a CPU: $P = 20$
 points, 6 features, 2 latents, one hidden layer of 128 units, $\\beta = 10$. The importance
 sampler (`SAMPLER = "importance"`) draws from the prior, which makes it a small-$P$, mild-tilt
 tool: its effective sample size falls as the solve moves the kernels away from the prior, and
 the solver raises `InadequateSamplerError` when it drops below its floor instead of continuing on
-a degenerate estimate. With these settings it stays above the floor for 40 outer steps at
-$P = 20$; at $P = 24$ it does not. HMC (`SAMPLER = "hmc"`) has no such limit and is the sampler
-for larger problems."""
+a degenerate estimate. With these settings it stays above the floor for the 40 outer steps of its
+default; it is not run longer (it raised at step 45 of an 80-step run), and at $P = 24$ it does
+not complete. HMC (`SAMPLER = "hmc"`) does not draw from the prior and has no such floor."""
 
 TASK_AND_NET = """CACHE_ROOT = None  # directory for the cached runs; None reads $FCT_CACHE_ROOT
 # task: a linear teacher with m features and k latents
@@ -137,7 +144,9 @@ TRAIN_PLOTS = """show(
 )"""
 
 SOLVER = """SAMPLER = "hmc"  # "hmc" (persistent chains) or "importance" (draws from the prior)
-N_OUTER = 40  # outer descent steps on the kernels
+INIT = "net"  # initial kernels: "net" (the trained net's), "lazy" or "gaussian"
+N_OUTER_HMC = 80  # outer descent steps on the kernels
+N_OUTER_IMPORTANCE = 40  # it raised InadequateSamplerError at step 45 of an 80-step run
 PLOT_EVERY = 5  # refresh the live figures every this many outer steps
 SOLVER_SEED = 0
 SOLVE_LOG_INT = 1  # outer steps between log lines
@@ -151,17 +160,18 @@ N_IMPORTANCE_SAMPLES = 4096  # draws per transition"""
 
 SOLVE = """SAMPLER_SETTINGS = {
     "hmc": {
+        "n_outer": N_OUTER_HMC,
         "n_chains": N_CHAINS,
         "warmup_trans": WARMUP_TRANS,
         "n_trans": N_TRANS,
         "n_trans_outer": N_TRANS_OUTER,
     },
-    "importance": {"n_importance_samples": N_IMPORTANCE_SAMPLES},
+    "importance": {"n_outer": N_OUTER_IMPORTANCE, "n_importance_samples": N_IMPORTANCE_SAMPLES},
 }
 SOLVE_CFG = with_solver(
     CFG,
     sampler=SAMPLER,
-    n_outer=N_OUTER,
+    init=INIT,
     seed=SOLVER_SEED,
     log_int=SOLVE_LOG_INT,
     sample_dtype="float64",

@@ -48,14 +48,31 @@ def test_sgld_theory_constants_follow_the_stationary_law_of_the_loss():
     assert c["prior_scale"] == pytest.approx(10.0)
     assert c["alpha"] == pytest.approx(0.64)
     assert c["rate_tilt"] == pytest.approx(1e-2)
+    assert c["learning_prefactor"] == pytest.approx(0.05)  # beta weight_lambda = 1 / (2 s)
+    assert c["learning_prefactor"] == pytest.approx(1 / (2 * c["prior_scale"]))
     assert c["alpha"] == pytest.approx(8 * 4 / (5.0 * c["prior_scale"]))  # P d_out / (beta s)
 
 
 def test_the_config_sets_those_constants_for_sgld_and_leaves_adam_at_the_defaults():
     sgld = config().meanfield
     assert (sgld.prior_scale, sgld.alpha, sgld.rate_tilt) == pytest.approx((10.0, 0.64, 1e-2))
+    assert sgld.learning_prefactor == pytest.approx(0.05)
     adam = config(optimizer="adam").meanfield
     assert (adam.prior_scale, adam.alpha, adam.rate_tilt) == (None, None, None)
+    assert adam.learning_prefactor == 0.5
+
+
+def test_sgld_weights_in_data_free_directions_have_the_variance_prior_scale(tmp_path):
+    """The law the constants claim: x spans only k of the m features, so U v for v orthogonal to
+    the data feels neither the data term nor the rate penalty, and under SGLD at beta its
+    entries are N(0, 1 / (2 beta weight_lambda)) = N(0, prior_scale). 64 units x 2 directions
+    give about 12% sampling error; the tolerance is 30%."""
+    cfg = config(N=64, P=12, m=4, k=2, beta=5.0, lr=0.05, n_epochs=6000)
+    run = exemplar.train_exemplar(cfg, tmp_path, **QUIET)
+    _, _, directions = torch.linalg.svd(run.dataset.x.double())
+    free = directions[cfg.data.n_latents :]  # right singular vectors outside the data's span
+    variance = (run.net.U.detach().double() @ free.T).var(unbiased=False).item()
+    assert variance == pytest.approx(cfg.meanfield.prior_scale, rel=0.3)
 
 
 def test_an_impossible_setting_fails_at_config_time():
@@ -261,3 +278,11 @@ def test_the_solve_summary_without_a_net_omits_the_net_numbers():
     history = synthetic_history("hmc", n_steps=2, with_net=False)
     text = exemplar.solve_summary(history, "hmc")
     assert "net" not in text and "alignment" not in text and "kernels" not in text
+
+
+def test_the_summary_ignores_nan_ess_entries_and_reports_the_step_number_not_the_index():
+    history = summary_history()
+    history["hmc_ess_frac"][0] = [float("nan"), 0.4]
+    history["outer_step"] = [10, 11, 12]  # a resumed run need not start at 0
+    text = exemplar.solve_summary(history, "hmc")
+    assert "ESS fraction 0.3 (outer step 11, layer 1)" in text

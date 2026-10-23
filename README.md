@@ -130,7 +130,7 @@ mean-field solve with live figures refreshed every `PLOT_EVERY` outer steps: the
 solver health (residuals, step sizes, backtracking, PD clamping, theory-vs-net train MSE) and sampler health (HMC acceptance,
 step size, divergences, ESS, or the importance ESS and maximum weight), and a final cell with the solved kernels
 next to the empirical ones. `SAMPLER` picks `"hmc"` or `"importance"`. The default sizes are tiny
-(about 30 s per sampler on a CPU) and chosen so the importance sampler, a small-P / mild-tilt tool, does not raise
+(20 to 45 s per sampler on a CPU) and chosen so the importance sampler, a small-P / mild-tilt tool, does not raise
 `InadequateSamplerError`. The theory is given the mean-field constants of the SGLD stationary law, which
 differ from the library defaults unless beta = 1/2 (see `docs/design.md`), and a printed summary reports the
 solve's residual trend, ESS and kernel scales. The live view is `solve(..., on_outer=callback)`, an observer that cannot change the
@@ -138,7 +138,7 @@ result. Logic is in `fct/exemplar.py` and `fct/draw.py`; only the source noteboo
 
 ```sh
 uv run python notebooks/build_exemplar.py CACHE_ROOT                     # execute -> tmp/exemplar.ipynb
-uv run python notebooks/build_exemplar.py CACHE_ROOT --set "SAMPLER='importance'" --set N_OUTER=10
+uv run python notebooks/build_exemplar.py CACHE_ROOT --set "SAMPLER='importance'" --set N_OUTER_IMPORTANCE=10
 uv run python notebooks/build_exemplar.py --no-execute                   # rebuild the committed source notebook
 ```
 
