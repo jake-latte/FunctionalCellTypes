@@ -247,15 +247,24 @@ def preference(group_mi: Tensor, tol: float = DEAD_TOL) -> tuple[Tensor, Tensor]
     return torch.where(dead, torch.full_like(ratio, 1 / K), ratio), dead
 
 
+def neuron_mir(r: Tensor, K: int) -> Tensor:
+    """Per-neuron modularity (r - 1/K) / (1 - 1/K), (N,); its mean over neurons is `mir`.
+
+    K is the number of factor groups, e.g. `K = len(layer_mir(...).group_names)` for the
+    `LayerMIR.r` it is applied to. A dead neuron (r = 1/K) scores 0.
+    """
+    if K < 2:
+        raise ValueError(f"the modularity index needs K >= 2 factor groups, got K={K}")
+    return (r.double() - 1 / K) / (1 - 1 / K)
+
+
 def mir(r: Tensor, K: int) -> float:
-    """Modularity index (mean r - 1/K) / (1 - 1/K) of preferences `r` (N,): 1 fully modular.
+    """Modularity index, the mean of `neuron_mir(r, K)` over preferences `r` (N,): 1 fully modular.
 
     0 is chance only for dead or perfectly evenly spread neurons: at finite P the raw index of
     unrelated neurons sits above 0 (see the module docstring).
     """
-    if K < 2:
-        raise ValueError(f"the modularity index needs K >= 2 factor groups, got K={K}")
-    return float((r.double().mean() - 1 / K) / (1 - 1 / K))
+    return float(neuron_mir(r, K).mean())
 
 
 def layer_mir(
@@ -338,14 +347,16 @@ def layer_mir_report(
     member_mi = _member_information(bins, n_bins, encoded)
     generator = torch.Generator().manual_seed(seed)
     null = torch.zeros_like(member_mi)
-    chance = 0.0
+    chance = []
     for _ in range(n_shuffles):
         shuffled = _shuffled_member_information(bins, n_bins, encoded, generator)
         null += shuffled / n_shuffles
-        chance += _mir_and_dead(shuffled, membership)[0]
+        chance.append(_mir_and_dead(shuffled, membership)[0])
     raw_mir, raw_dead = _mir_and_dead(member_mi, membership)
     corrected_mir, corrected_dead = _mir_and_dead(_subtract_null(member_mi, null), membership)
-    return LayerMIRReport(raw_mir, corrected_mir, chance / n_shuffles, raw_dead, corrected_dead)
+    return LayerMIRReport(
+        raw_mir, corrected_mir, sum(chance) / n_shuffles, raw_dead, corrected_dead
+    )
 
 
 def shuffle_factors(factors: dict[str, Tensor], generator: torch.Generator) -> dict[str, Tensor]:

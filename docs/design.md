@@ -22,6 +22,8 @@ fct/
   meanfield.py     # saddle-point solver (Algorithm 1) with checkpoint / resume
   analyse.py       # pure analysis functions + cached wrappers
   modularity.py    # neuron-factor mutual information, preference, MIR (pure)
+  tuning.py        # tuning_curves (MIR's bins) and select_neurons: pure helpers for the grid notebook
+  grid_report.py   # MirRecord and mir_grid: sweep records -> (layer, lambda_r, lambda_w) MIR array
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1} (pure)
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
@@ -385,7 +387,9 @@ factor_labels(factor (P,), n_bins) -> (labels, C)     # int factors relabelled 0
 mutual_information(bins, n_bins, labels, n_labels) -> (N,)   # one flat bincount for all neurons
 neuron_factor_information(rates (P,N), factors, groups=None, n_bins=10) -> FactorInformation(member_mi (N,M), group_mi (N,K), group_names)
 preference(group_mi, tol=1e-12) -> (r, dead)
-mir(r, K) -> float;  layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
+neuron_mir(r, K) -> (N,)   # per-neuron (r - 1/K)/(1 - 1/K); K = len(layer_mir(...).group_names); dead neuron -> 0
+mir(r, K) -> float         # = neuron_mir(r, K).mean()
+layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
 network_mir(rates (P,L,N), ...) -> list[LayerMIR]     # rates are phi(H); the caller applies phi
 layer_mir_report(rates (P,N), factors, groups=None, n_bins=10, n_shuffles=5, seed=0) -> LayerMIRReport(mir, mir_corrected, mir_chance, n_dead, n_dead_corrected)
                                                       # exactly the numbers of layer_mir (none / shuffle) and shuffled_mir, in one pass: one binning, one shuffle loop
@@ -418,7 +422,7 @@ lengths, bad dtypes, K < 2).
 
 Every `plot_*` takes `ax: Axes | None = None`, creates its own figure only if
 none is given, returns the `ax`. `fig_*` functions build multi-panel figures
-from `plot_*` and return the `Figure`. Nothing calls `plt.show()`.
+from `plot_*` (a figure that is one plot, like `fig_mir_vs_ratio`, just wraps its `plot_*`) and return the `Figure`. Nothing calls `plt.show()`.
 
 ```python
 plot_test_error(test_error, half_width, ax=None)      # notebook cell 13 left (LogNorm, jet)
@@ -444,6 +448,11 @@ plot_mir_history(history, ax=None, which="raw", legend=True)   # one solid line 
                                                       # which="raw": monitor_mir plus monitor_mir_chance dotted in the layer colour, y fixed to [-0.05, 1.05];
                                                       # "corrected": monitor_mir_corrected, same range (the corrected MIR is >= 0 up to round-off; the lower limit extends only if a value goes below -0.05)
 plot_dead_neurons(history, ax=None, legend=True)      # monitor_n_dead_corrected per layer vs monitor_epoch
+plot_neuron_tuning(curves, neuron, mir, latent_names, ax=None); fig_tuning(curves, neuron_indices, mir_per_neuron, latent_names) -> Figure
+                                                       # one panel per neuron, one curve per latent (LATENT_COLORS, not the layer colours), common rate axis
+plot_mir_matrix(values (n_r,n_w), lambda_r_values, lambda_w_values, title, ax, vmin, vmax)   # phase diagram: origin="lower", log tick labels, NaN grey
+fig_mir_matrix(lambda_r_values, lambda_w_values, mir_by_layer (L,n_r,n_w)) -> Figure         # one per layer, shared _mir_colour_range + colourbar
+plot_mir_vs_ratio(records: Iterable[MirRecord], ax=None, legend=True); fig_mir_vs_ratio(records) -> Figure   # MIR vs lambda_r/lambda_w, log x, colour by layer
 fig_mir_history(history, title="") -> Figure          # three panels sharing epoch: raw (+ baseline, legend), corrected, dead neurons
 plot_prediction_scatter(y_true, y_pred, ax=None, r2=None)   # all entries, identity line; r2 (computed by the caller) shown in a legend below the axis as "R² on these examples"
 plot_paired_bars(y_true, y_pred, labels, ax=None, threshold=None)   # true / predicted value per output; artists labelled, the caller makes the (figure-level) legend
@@ -721,4 +730,14 @@ The floor. `M` is the inverse of `K` with eigenvalues floored at `min_rel_eig` t
 eigenvalues below that: at the defaults (`length_scale = 0.1`, `min_rel_eig = 1e-6`) 83% of a 100-unit ring's eigenvalues are
 floored. So the floor is where the prior's near-zero-variance directions are capped, and it defines `M` on that subspace;
 `FloorReport` gives the floored fraction and `n_negative` (eigenvalues below `-1e-10` times the largest, which is an error:
-`build_spaces` raises). Whether to replace the floor by a nugget, `M = (K + sigma^2 I)^{-1}`, is pending a PI decision.
+`penalty_matrix` raises). Whether to replace the floor by a nugget, `M = (K + sigma^2 I)^{-1}`, is pending a PI decision.
+
+## tuning.py, grid_report.py and the grid figures
+
+Sweep-independent helpers for the phase-transition notebook; all pure functions on plain inputs.
+
+- `tuning.tuning_curves(rates (P,N), factors (P,K), n_bins) -> TuningCurves(mean, sem, centres, count)`: mean rate per neuron in the bins of each latent, other latents marginalised. The bins are exactly the MIR's (`modularity.factor_labels` per latent): a floating latent is rank-binned into `n_bins` (equal-count when its values are distinct; ties share a bin), an integer latent is categorical with one bin per level and its `centres` are the level values. Arrays are as wide as the largest latent's bin count; an empty or padded bin is NaN, as is the SEM of a bin with fewer than 2 samples. `factors` is one tensor, so a call is all-categorical (integer dtype) or all-float; integer factors cast to float are rank-binned with interior empty bins, so pass them as integers. `mean`/`sem` are `(N,K,B)`, `centres`/`count` `(K,B)`. The SEM uses sums of squares about each neuron's global mean so a large rate offset does not cancel it to 0.
+- `tuning.select_neurons(mir_per_neuron, n, order, seed)`: `order` in `random` (seeded), `mir_ascending`, `mir_descending`; `n` outside `1..N`, unknown order or NaN is an error.
+- `modularity.neuron_mir(r, K)`: per-neuron `(r - 1/K)/(1 - 1/K)` from `LayerMIR.r`; `mir` is its mean.
+- `grid_report.mir_grid(records: Iterable[MirRecord], lambda_r_values, lambda_w_values, n_layers) -> (n_layers, n_r, n_w)`, `MirRecord(lambda_r, lambda_w, layer, mir)` with 0-based integer layers; NaN where missing (a layer without records is a NaN plane). Duplicate cells, off-grid lambdas (matched to rtol 1e-9), layers outside `[0, n_layers)`, non-finite MIR, near-duplicate grid values and empty input raise.
+- `draw` figures: see the draw.py block above. The lambda axes of `fig_mir_matrix` and `fig_mir_vs_ratio` must be positive (log scale).

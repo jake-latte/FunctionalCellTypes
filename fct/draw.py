@@ -8,7 +8,7 @@ machines without a display). A `plot_*` function creates a figure only when it i
 
 import functools
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import NamedTuple
 
 import matplotlib.pyplot as plt
@@ -18,6 +18,7 @@ from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
+from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Rectangle
 from matplotlib.ticker import MaxNLocator
@@ -34,8 +35,10 @@ from fct.analyse import (
 )
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
+from fct.grid_report import MirRecord, check_finite_mir, check_layer
 from fct.spatial import LayerSpace, Population, torus_distance, wrapped_gaussian_profile
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
+from fct.tuning import TuningCurves
 
 ArrayLike = Tensor | np.ndarray | Sequence[float]
 
@@ -560,10 +563,16 @@ def _layer_color(layer: int) -> str:
     return LAYER_COLORS[layer % len(LAYER_COLORS)]
 
 
-def _layer_legend(ax: Axes, n_layers: int, extra: list[Line2D] | None = None) -> None:
-    """Legend beside the axis so it never covers the curves."""
+def _layer_legend(
+    ax: Axes,
+    n_layers: int,
+    extra: list[Line2D] | None = None,
+    layers: Sequence[int] | None = None,
+) -> None:
+    """Legend beside the axis so it never covers the curves; lists `layers` (default all)."""
     handles = [
-        Line2D([], [], color=_layer_color(i), label=f"layer {i + 1}") for i in range(n_layers)
+        Line2D([], [], color=_layer_color(i), label=f"layer {i + 1}")
+        for i in (range(n_layers) if layers is None else layers)
     ]
     ax.legend(
         handles=handles + (extra or []),
@@ -1061,6 +1070,38 @@ def _hatch_provisional_rows(ax: Axes, row_status: Sequence[str], n_cols: int) ->
             )
 
 
+def _draw_mir_cells(
+    ax: Axes,
+    values: np.ndarray,
+    shades: np.ndarray,
+    x_labels: Sequence[str],
+    y_labels: Sequence[str],
+    vmin: float,
+    vmax: float,
+    origin: str = "upper",
+) -> AxesImage:
+    """Cells of a MIR heatmap: `shades` coloured on [vmin, vmax] (NaN in the missing-cell grey),
+    labelled ticks, each finite value written in its cell. Returns the image for a colourbar."""
+    cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)
+    image = ax.imshow(
+        np.ma.masked_invalid(shades), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto", origin=origin
+    )
+    ax.set_xticks(range(len(x_labels)), list(x_labels))
+    ax.set_yticks(range(len(y_labels)), list(y_labels))
+    ax.tick_params(length=0)
+    _annotate_cells(ax, values, shades, vmin, vmax)
+    return image
+
+
+def _mir_colour_range(arrays: Iterable[np.ndarray]) -> tuple[float, float]:
+    """Shared MIR colour scale [min(0, data), max(1, data)] over the finite entries, so a value
+    outside [0, 1] (round-off) is shown, not clipped."""
+    finite = np.concatenate([a[np.isfinite(a)] for a in arrays])
+    if not finite.size:
+        return 0.0, 1.0
+    return min(0.0, float(finite.min())), max(1.0, float(finite.max()))
+
+
 def _check_in_range(values: np.ndarray, vmin: float, vmax: float) -> None:
     finite = values[np.isfinite(values)]
     if finite.size and (finite.min() < vmin or finite.max() > vmax):
@@ -1097,12 +1138,8 @@ def plot_mir_heatmap(
     _check_in_range(values[~provisional], vmin, vmax)
     shades = np.where(provisional[:, None], np.clip(values, vmin, vmax), values)
     ax = _get_ax(ax, figsize=(7, 6))
-    cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)
-    image = ax.imshow(np.ma.masked_invalid(shades), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
-    ax.set_xticks(range(values.shape[1]), [f"layer {i + 1}" for i in range(values.shape[1])])
-    ax.set_yticks(range(len(row_labels)), list(row_labels))
-    ax.tick_params(length=0)
-    _annotate_cells(ax, values, shades, vmin, vmax)
+    layer_labels = [f"layer {i + 1}" for i in range(values.shape[1])]
+    image = _draw_mir_cells(ax, values, shades, layer_labels, row_labels, vmin, vmax)
     _label_unfinished_rows(ax, row_status, values.shape[1])
     _hatch_provisional_rows(ax, row_status, values.shape[1])
     ax.set_title(title)
@@ -1123,9 +1160,7 @@ def fig_mir_heatmaps(
     [0, 1] (round-off) is shown, not clipped; provisional rows do not enter the scale."""
     arrays = {name: _np(a) for name, a in panels.items()}
     finished = np.array([s != PROVISIONAL for s in row_status], dtype=bool)
-    finite = np.concatenate([a[finished][np.isfinite(a[finished])] for a in arrays.values()])
-    vmin = min(0.0, float(finite.min())) if finite.size else 0.0
-    vmax = max(1.0, float(finite.max())) if finite.size else 1.0
+    vmin, vmax = _mir_colour_range([a[finished] for a in arrays.values()])
     fig, axes = plt.subplots(
         1,
         len(arrays),
@@ -1235,6 +1270,53 @@ def plot_embedding(space: LayerSpace, ax: Axes | None = None) -> Axes:
     return ax
 
 
+# --------------------------------------------------------------------------- tuning and grid MIR
+TUNING_N_COLS = 4  # tuning panels per row
+# One colour per latent, none of them in LAYER_COLORS: a page can show layer k and latent k.
+LATENT_COLORS = ["#7b3294", "#8c510a", "#00a6b5", "#5c5c5c", "#b8a800", "#000000"]
+
+
+def _latent_color(latent: int) -> str:
+    return LATENT_COLORS[latent % len(LATENT_COLORS)]
+
+
+def _check_positive(values: np.ndarray, what: str) -> None:
+    if not (np.isfinite(values) & (values > 0)).all():
+        raise ValueError(f"{what} must all be positive and finite for a log axis, got {values}")
+
+
+def plot_neuron_tuning(
+    curves: TuningCurves,
+    neuron: int,
+    mir: float,
+    latent_names: Sequence[str],
+    ax: Axes | None = None,
+) -> Axes:
+    """One neuron's tuning: a mean rate (+- standard error) curve per latent against the
+    latent's bin centre; the title is the neuron index and its MIR."""
+    mean, sem, centres = _np(curves.mean), _np(curves.sem), _np(curves.centres)
+    if not 0 <= neuron < mean.shape[0]:
+        raise ValueError(f"neuron {neuron} is outside [0, {mean.shape[0]})")
+    if len(latent_names) != mean.shape[1]:
+        raise ValueError(
+            f"latent_names has {len(latent_names)} entries for {mean.shape[1]} latents"
+        )
+    ax = _get_ax(ax)
+    for k, name in enumerate(latent_names):
+        ax.errorbar(
+            centres[k],
+            mean[neuron, k],
+            yerr=sem[neuron, k],
+            color=_latent_color(k),
+            marker="o",
+            capsize=2,
+            label=name,
+        )
+    ax.set_title(f"neuron {neuron}, MIR {mir:.2f}")
+    ax.grid(alpha=0.25, lw=0.5)
+    return ax
+
+
 @_styled
 def fig_kernel(space: LayerSpace) -> Figure:
     """One layer's spatial prior: K_pre and K_post as matrices, K against torus distance with
@@ -1247,4 +1329,160 @@ def fig_kernel(space: LayerSpace) -> Figure:
     plot_embedding(space, ax=axes[1, 1])
     axes[1, 1].set_title("positions")
     fig.suptitle(f"layer {space.layer}: K = K_post (x) K_pre")
+    return fig
+
+
+@_styled
+def fig_tuning(
+    curves: TuningCurves,
+    neuron_indices: Sequence[int],
+    mir_per_neuron: ArrayLike,
+    latent_names: Sequence[str],
+) -> Figure:
+    """One panel per chosen neuron, one curve per latent, a common rate axis. Latents have
+    their own scales, so the x axis is each curve's own bin centres ("latent value")."""
+    mir = _np(mir_per_neuron)
+    n_neurons = curves.mean.shape[0]
+    if len(neuron_indices) == 0:
+        raise ValueError("neuron_indices is empty")
+    if len(mir) != n_neurons:
+        raise ValueError(f"mir_per_neuron has {len(mir)} entries for {n_neurons} neurons")
+    if not all(0 <= i < n_neurons for i in neuron_indices):
+        raise ValueError(f"neuron_indices must lie in [0, {n_neurons}), got {list(neuron_indices)}")
+    n_cols = min(TUNING_N_COLS, len(neuron_indices))
+    n_rows = math.ceil(len(neuron_indices) / n_cols)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(FIG_WIDTH, 3.2 * n_rows + 0.8),
+        sharey=True,
+        squeeze=False,
+        layout="constrained",
+    )
+    flat = list(axes.ravel())
+    for ax, neuron in zip(flat, neuron_indices, strict=False):
+        plot_neuron_tuning(curves, neuron, mir[neuron], latent_names, ax)
+    for ax in flat[len(neuron_indices) :]:
+        ax.set_visible(False)
+    for ax in axes[-1]:
+        ax.set_xlabel("latent value")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("mean rate")
+    flat[0].legend(loc="best", frameon=False)
+    return fig
+
+
+def _log_tick_label(value: float) -> str:
+    """10^k for a power of ten, else three significant figures."""
+    exponent = math.log10(value)
+    if math.isclose(exponent, round(exponent)):
+        return f"$10^{{{round(exponent)}}}$"
+    return f"{value:.3g}"
+
+
+def plot_mir_matrix(
+    values: ArrayLike,
+    lambda_r_values: ArrayLike,
+    lambda_w_values: ArrayLike,
+    title: str = "",
+    ax: Axes | None = None,
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+) -> Axes:
+    """One layer's MIR over the (lambda_r, lambda_w) grid; `values` is (n_r, n_w), NaN cells grey.
+
+    It is a phase diagram: both lambdas increase from the bottom-left (`origin="lower"`),
+    lambda_w along x and lambda_r up y, ticks labelled in powers of ten. The image is on
+    `ax.images[0]` for a colourbar.
+    """
+    values, lam_r, lam_w = _np(values), _np(lambda_r_values), _np(lambda_w_values)
+    _check_positive(lam_r, "lambda_r_values")
+    _check_positive(lam_w, "lambda_w_values")
+    if values.shape != (len(lam_r), len(lam_w)):
+        raise ValueError(f"values {values.shape} do not match the grid {(len(lam_r), len(lam_w))}")
+    _check_in_range(values, vmin, vmax)
+    ax = _get_ax(ax, figsize=(7, 6))
+    _draw_mir_cells(
+        ax,
+        values,
+        values,
+        [_log_tick_label(v) for v in lam_w],
+        [_log_tick_label(v) for v in lam_r],
+        vmin,
+        vmax,
+        origin="lower",
+    )
+    ax.set(xlabel=r"$\lambda_w$", ylabel=r"$\lambda_r$", title=title)
+    return ax
+
+
+@_styled
+def fig_mir_matrix(
+    lambda_r_values: ArrayLike, lambda_w_values: ArrayLike, mir_by_layer: ArrayLike
+) -> Figure:
+    """One `plot_mir_matrix` per hidden layer, `mir_by_layer` (L, n_r, n_w), on one shared
+    colour scale (`_mir_colour_range`) and colourbar."""
+    mir = _np(mir_by_layer)
+    n_r, n_w = len(_np(lambda_r_values)), len(_np(lambda_w_values))
+    if mir.ndim != 3 or mir.shape[1:] != (n_r, n_w):
+        raise ValueError(f"mir_by_layer must have shape (L, {n_r}, {n_w}), got {mir.shape}")
+    vmin, vmax = _mir_colour_range([mir])
+    fig, axes = plt.subplots(
+        1,
+        len(mir),
+        figsize=(HEATMAP_WIDTH, 0.5 * n_r + 3.2),
+        sharey=True,
+        squeeze=False,
+        layout="constrained",
+    )
+    axes = list(axes[0])
+    for layer, (ax, values) in enumerate(zip(axes, mir, strict=True)):
+        plot_mir_matrix(
+            values, lambda_r_values, lambda_w_values, f"layer {layer + 1}", ax, vmin, vmax
+        )
+        if layer:
+            ax.set_ylabel("")
+    _add_mir_colorbar(fig, axes[-1].images[0], axes, shrink=0.6)
+    return fig
+
+
+def plot_mir_vs_ratio(
+    records: Iterable[MirRecord], ax: Axes | None = None, legend: bool = True
+) -> Axes:
+    """MIR of every network (one dot per record) against lambda_r / lambda_w on a log axis,
+    coloured by hidden layer."""
+    records = list(records)
+    if not records:
+        raise ValueError("no records")
+    n_layers = max(rec.layer for rec in records) + 1
+    for lr, lw, layer, value in records:
+        check_layer(layer, n_layers)
+        check_finite_mir(value, lr, lw)
+    lam_r, lam_w, layer, mir = (np.array(col, dtype=float) for col in zip(*records, strict=True))
+    _check_positive(lam_r, "lambda_r")
+    _check_positive(lam_w, "lambda_w")
+    ax = _get_ax(ax, figsize=(8, 5))
+    present = np.unique(layer).astype(int)
+    for each in present:
+        keep = layer == each
+        ax.scatter(
+            lam_r[keep] / lam_w[keep],
+            mir[keep],
+            s=MARKER_SIZE**2,
+            alpha=0.8,
+            color=_layer_color(each),
+        )
+    ax.set_xscale("log")
+    ax.set(xlabel=r"$\lambda_r / \lambda_w$", ylabel="MIR")
+    ax.grid(alpha=0.25, lw=0.5)
+    if legend:
+        _layer_legend(ax, n_layers, layers=present.tolist())
+    return ax
+
+
+@_styled
+def fig_mir_vs_ratio(records: Iterable[MirRecord]) -> Figure:
+    """`plot_mir_vs_ratio` on its own figure."""
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH * 0.6, 5), layout="constrained")
+    plot_mir_vs_ratio(records, ax)
     return fig

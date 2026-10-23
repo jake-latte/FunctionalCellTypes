@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: simple
-status: in progress
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
@@ -28,7 +28,7 @@ to the sweep later.
     scale, NaN cells blank.
   - `fig_mir_vs_ratio(records)`: `records` is a list of `(lambda_r, lambda_w, layer, mir)`; x =
     lambda_r / lambda_w on a log axis, y = MIR, one dot per network, colour by hidden layer.
-- `fct/report.py` or a new `fct/grid_report.py`: `mir_grid(records, lambda_r_values, lambda_w_values)
+- `fct/report.py` or a new `fct/grid_report.py`: `mir_grid(records, lambda_r_values, lambda_w_values, n_layers)
   -> (L, n_r, n_w)` array assembling the matrix from records, NaN where a setting is missing.
 - Per-neuron MIR: use what `fct/modularity.py` already exposes (check `modularity.py` for the per-neuron
   quantity the layer-average MIR is a mean of; expose it if it is only internal).

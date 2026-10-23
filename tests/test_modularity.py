@@ -11,6 +11,7 @@ from fct.modularity import (
     mutual_information,
     network_mir,
     neuron_factor_information,
+    neuron_mir,
     preference,
     rank_bins,
     shuffle_factors,
@@ -486,3 +487,22 @@ def test_nan_inputs_are_rejected_by_name():
     bad_factor[0] = float("nan")
     with pytest.raises(ValueError, match="'u' contains NaN"):
         layer_mir(rates, {"u": bad_factor, "v": torch.rand(50)})
+
+
+@pytest.mark.parametrize("bias_correction", ["none", "shuffle"])
+def test_neuron_mir_mean_is_the_layer_mir_with_a_dead_neuron(bias_correction):
+    g = _gen(3)
+    factors = {"a": torch.randint(0, 3, (500,), generator=g), "b": torch.rand(500, generator=g)}
+    rates = torch.randn(500, 4, generator=g)
+    rates[:, 0] += factors["a"]
+    rates[:, 3] = 1.0  # constant: dead
+    out = layer_mir(rates, factors, bias_correction=bias_correction)
+    per_neuron = neuron_mir(out.r, len(out.group_names))
+    assert per_neuron.shape == (4,)
+    assert per_neuron.mean().item() == pytest.approx(out.mir)
+    assert per_neuron[3].item() == pytest.approx(0.0)
+
+
+def test_neuron_mir_needs_at_least_two_groups():
+    with pytest.raises(ValueError, match="K >= 2"):
+        neuron_mir(torch.tensor([1.0]), 1)
