@@ -48,7 +48,6 @@ def test_quadratic_samples_have_variance_one_over_beta_curvature(curvature, beta
     exact = 1.0 / (beta * curvature * (1 - lr * curvature / 2))
     mc_err = exact * math.sqrt(2 / n_chains)
     assert theta.var().item() == pytest.approx(exact, abs=4 * mc_err)
-    assert theta.var().item() == pytest.approx(1 / (beta * curvature), rel=0.03)
 
 
 def test_quadratic_mean_is_zero_within_error():

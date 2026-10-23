@@ -175,7 +175,7 @@ def _check_monitor_matches_config(cfg: Config, monitor: Monitor | None) -> None:
         raise ValueError("a monitor was passed but train.monitor_int=0 disables monitoring")
 
 
-def _new_history(monitored: bool, optimizer: str = "adam") -> History:
+def _new_history(monitored: bool, optimizer: str) -> History:
     history: History = {key: [] for key in _history_keys(optimizer)}
     if monitored:
         history[MONITOR_EPOCH] = []
