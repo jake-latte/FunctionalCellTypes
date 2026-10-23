@@ -11,7 +11,8 @@ must reproduce its maths exactly (same formulas, same defaults), only the
 ```
 fct/
   __init__.py
-  config.py        # pydantic Config (data/net/train/meanfield/analysis/device), JSON I/O, section hashes
+  schema.py        # StrictModel and the constrained field types shared by every config model
+  config.py        # pydantic Config (data/net/train/meanfield/analysis/spatial/device), JSON I/O, section hashes
   activations.py   # PHI registry (name -> callable), get_phi, phi_prime
   cache.py         # cache-directory layout + load_or_compute helpers (I/O layer)
   data.py          # task / data generation (Dataset, fourier_embedding, embed, grid_targets, task_dims)
@@ -26,7 +27,7 @@ fct/
   tuning.py        # tuning_curves (MIR's bins) and select_neurons: pure helpers for the grid notebook
   grid_report.py   # MirRecord and mir_grid: sweep records -> (layer, lambda_r, lambda_w) MIR array
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
-  spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1} (pure)
+  spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1}, the factorised weight quadratic form (pure)
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   sweep.py         # a grid of Config fields: SweepConfig, expand, run_setting, status, presets
   explanations.py  # MIR_EXPLANATION: the notebook's markdown/LaTeX definition of raw, corrected and chance-baseline MIR
@@ -153,9 +154,11 @@ class AnalysisConfig(BaseModel):
 class Config(BaseModel):
     data: DataConfig = DataConfig(); net: NetConfig = NetConfig(); train: TrainConfig = TrainConfig()
     meanfield: MeanFieldConfig = MeanFieldConfig(); analysis: AnalysisConfig = AnalysisConfig()
+    spatial: SpatialConfig | None = None   # the spatial weight prior (fct.spatial); None -> weight L2 norm
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
     def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `LOSS_VERSION` when `train` is a section), first 12 hex chars; >=1 section required
+        # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -263,9 +266,14 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # we
 ## train.py
 
 ```python
-def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[str, Tensor]]
+def compute_loss(net, x, y, weight_lambda, rate_lambda, weight_penalty=MLP.weight_l2) -> tuple[Tensor, dict[str, Tensor]]
     # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2
-    # weight_l2 = sum of squares of every parameter, rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
+    # weight_l2 = weight_penalty(net): the sum of squares of every parameter by default, the spatial prior
+    #   sum_l tr(M_post W_l M_pre W_l^T) from make_weight_penalty when cfg.spatial is set (see "Spatial weight prior in training")
+    # rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
+WeightPenalty = Callable[[MLP], Tensor]
+def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None, else the spatial prior for net's sizes, dtype and device
+def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
 History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus grad_norm, param_msd for SGLD; plus the monitor_* keys below when monitored
 def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
@@ -289,7 +297,7 @@ effective temperature that tends to `1/beta` when the noise dominates the drift)
 
 Mapping to `Latex/sections/01_setup.tex`. The Latex trains `d(theta) = -grad L_tex dt + sqrt(2/beta) eta` with
 `L_tex = N/(2Pn) sum (f - y)^2 + (1/beta) P_weight + (1/beta) P_rates`, i.e. `p ~ exp(-beta L_tex)`. The repo loss is
-`L = 0.5 N mse + weight_lambda weight_l2 + rate_lambda rate_l2` and `mse` is the mean over the P*n entries, so the data
+`L = 0.5 N mse + weight_lambda weight_l2 + rate_lambda rate_l2` (`weight_l2` is the spatial prior when one is set) and `mse` is the mean over the P*n entries, so the data
 terms agree and `beta L_tex = beta (0.5 N mse) + P_weight + P_rates`. SGLD on `L` at inverse temperature `beta` samples
 `exp(-beta L) = exp(-beta 0.5 N mse - beta weight_lambda weight_l2 - beta rate_lambda rate_l2)`. The Latex regulariser
 strengths are therefore `lambda_tex = beta * lambda_repo` (`P_weight = lambda_tex weight_l2`, likewise for the rates), and
@@ -721,8 +729,8 @@ because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolve
 ## spatial.py (spatial embeddings and weight kernels)
 
 Every unit of the input, each hidden layer and the output gets a position on the torus `[0, box)^d` (default `d = 1`, a ring).
-The weight prior of layer l is `K^l = K^post (x) K^pre` and the penalty is `M = K^{-1}`, built per factor. Not yet part of
-`Config`; the penalty is applied in a later item. The maths (wrapped Gaussian, truncation, floor, orientation of the readout)
+The weight prior of layer l is `K^l = K^post (x) K^pre` and the penalty is `M = K^{-1}`, built per factor. `Config.spatial`
+turns it on in training (see "Spatial weight prior in training" below). The maths (wrapped Gaussian, truncation, floor, orientation of the readout)
 is stated once, in the module docstring of `fct/spatial.py`.
 
 ```python
@@ -739,6 +747,8 @@ periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post
 wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
 penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, fraction_floored, n_negative, cond_before, cond_after))
 build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
+weight_quadratic_form(W, M_rows, M_cols) -> Tensor        # tr(M_rows W M_cols W^T), any dtype/device; identity factors give W.square().sum() exactly
+parameter_factors(spaces) -> {"U" | "J.k" | "V": (M_rows, M_cols)}   # factors of each MLP weight in its STORED orientation (V: (M_pre, M_post))
 ```
 
 Populations are indexed 0 (input, m), 1..L (hidden 1..hidden L, N), L + 1 (output, n_out); layer l maps population l to l + 1,
@@ -753,6 +763,37 @@ eigenvalues below that: at the defaults (`length_scale = 0.1`, `min_rel_eig = 1e
 floored. So the floor is where the prior's near-zero-variance directions are capped, and it defines `M` on that subspace;
 `FloorReport` gives the floored fraction and `n_negative` (eigenvalues below `-1e-10` times the largest, which is an error:
 `penalty_matrix` raises). Whether to replace the floor by a nugget, `M = (K + sigma^2 I)^{-1}`, is pending a PI decision.
+
+## Spatial weight prior in training
+
+`Config.spatial = SpatialConfig(...)` replaces the weight L2 norm of the training loss by the spatial prior; `None` (the
+default, and what every `config.json` written before the field existed loads as) keeps the L2 norm, bit for bit.
+
+- The penalty. `weight_l2 = sum_l tr(M^post_l W_l M^pre_l W_l^T)` over the L + 1 weights with `W_l` in (post, pre)
+  orientation (`U`, `J_k`, `V.T`), which is `sum_l w_l^T (M^post (x) M^pre) w_l` with `w_l` the row-major `vec(W_l)`
+  (equivalently `M^pre (x) M^post` with the column-major vec); the Kronecker matrix is never formed. The populations are
+  those of `build_spaces(cfg.spatial, m=D_in, N, L, n_out=D_out)`: the first layer's pre is the input embedding, the
+  readout's post the output embedding. `MLP` has no biases; `make_weight_penalty` raises if the net has a parameter the
+  prior does not cover, so a parameter added later cannot silently drop out of the loss.
+- Convention: the penalty carries NO factor 1/2, so identity factors give exactly the plain sum of squares, and
+  `weight_lambda` multiplies it as it multiplies the L2 norm. The history and log key stays `weight_l2` (it holds the
+  prior's value) so plots and logs keep one schema. Mapping to the Latex `P_weight = 1/2 sum_l W M^l_tex W` under SGLD at
+  inverse temperature `beta` (see the SGLD mapping above): `beta * weight_lambda * tr(...) = P_weight` gives
+  `M^l_tex = 2 beta weight_lambda (M^post (x) M^pre)`, so the prior covariance is
+  `K^l_tex = (K^post (x) K^pre) / (2 beta weight_lambda)`. For identity kernels this is the L2 case,
+  `lambda_tex = beta weight_lambda` with `P_weight = lambda_tex weight_l2`.
+- The rate penalty is unchanged (`rate_lambda * sum phi^2`, identity `G`).
+- The matrices `M` are built once per `train` call (float64 on the CPU, then cast to the net's dtype and device). They are
+  not parameters and not checkpointed: a resumed run rebuilds them from the config, so resume is exact.
+- Hash: the `spatial` section enters `section_hash` with `train` only when it is set, so the caches of runs without it keep
+  their hashes (pinned in `tests/test_spatial_prior.py`), and a run trained without the prior is stale for a config with it.
+- SGLD stability. The prior's stiffest curvature is `2 weight_lambda lambda_max(M^post) lambda_max(M^pre)`, which a wide
+  kernel makes large (up to `1 / (min_rel_eig * lambda_max(K))` per factor). An Euler step diverges once
+  `lr * weight_lambda * lambda_max(M^post) lambda_max(M^pre) >= 1`, so `make_weight_penalty` raises for SGLD before the
+  first step. The check is necessary, not sufficient (the data and rate terms add curvature). Adam rescales its steps and
+  is not checked.
+- Not covered: the initial weights are still iid `N(0, 1)` rather than drawn from the prior, so the prior term starts
+  large for a wide kernel; the mean-field solver still assumes the L2 prior.
 
 ## tuning.py, grid_report.py and the grid figures
 
