@@ -12,16 +12,12 @@ from pathlib import Path
 from typing import Annotated, Literal, Self
 
 import torch
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
+# The constrained types and StrictModel are re-exported: other modules import them from here.
+from fct.schema import NonNegFloat, NonNegInt, PosFloat, PosInt, StrictModel
+from fct.spatial import SpatialConfig
 from fct.tasks import TASK_SPECS
-
-# Constrained types: the config is the boundary, so impossible values fail at load time.
-PosInt = Annotated[int, Field(ge=1)]
-NonNegInt = Annotated[int, Field(ge=0)]
-PosFloat = Annotated[float, Field(gt=0)]
-NonNegFloat = Annotated[float, Field(ge=0)]
-
 
 # Version of the training-loss definition (`fct.train.compute_loss`). The loss belongs to the
 # train section but is code, not a config field, so it is hashed separately: artefacts made
@@ -29,10 +25,6 @@ NonNegFloat = Annotated[float, Field(ge=0)]
 # whenever the loss changes in a way the TrainConfig fields do not express. History: 1 summed
 # the rate penalty over the samples, 2 averaged it over them, 3 sums it again.
 LOSS_VERSION = 3
-
-
-class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class DataConfig(StrictModel):
@@ -171,6 +163,9 @@ class Config(StrictModel):
     train: TrainConfig = TrainConfig()
     meanfield: MeanFieldConfig = MeanFieldConfig()
     analysis: AnalysisConfig = AnalysisConfig()
+    # The spatial weight prior (fct.spatial); None trains with the plain weight L2 norm. It
+    # changes the training loss, so `section_hash` folds it in with the train section.
+    spatial: SpatialConfig | None = None
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
 
@@ -179,7 +174,9 @@ class Config(StrictModel):
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
         belongs to no section. So is `LOSS_VERSION` when "train" is among the sections, and
-        `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser.
+        `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser. The
+        `spatial` section enters with "train" only when it is set, so runs without a spatial
+        prior keep the hashes they had before the section existed.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
@@ -192,6 +189,8 @@ class Config(StrictModel):
             hashed["loss_version"] = LOSS_VERSION
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes
                 del hashed["train"]["optimizer"], hashed["train"]["beta"]
+            if self.spatial is not None:  # the weight prior is part of the training loss
+                hashed["spatial"] = self.spatial.model_dump()
         canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 

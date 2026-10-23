@@ -7,6 +7,7 @@ validating loader (`_load_payload`) and write the net with `load_state_dict`.
 
 import pickle
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import torch
@@ -24,9 +25,11 @@ from fct.config import Config, TrainConfig, resolve_device, resolve_dtype
 from fct.data import Dataset
 from fct.model import MLP, make_net
 from fct.sgld import SGLD
+from fct.spatial import build_spaces, parameter_factors, weight_quadratic_form
 
 History = dict[str, list]  # monitor entries are lists over layers, the rest numbers
 Monitor = Callable[[MLP], dict[str, list]]
+WeightPenalty = Callable[[MLP], Tensor]  # the weight term of the loss, before weight_lambda
 MONITOR_PREFIX = "monitor_"  # history keys of monitor results: monitor_epoch, monitor_<key>
 MONITOR_EPOCH = f"{MONITOR_PREFIX}epoch"
 _HISTORY_KEYS = ("epoch", "mse", "weight_l2", "rate_l2", "loss")
@@ -37,23 +40,60 @@ _REQUIRED_KEYS = ("epoch", "net_state_dict", "optim_state_dict", "history", "rng
 
 
 def compute_loss(
-    net: MLP, x: Tensor, y: Tensor, weight_lambda: float, rate_lambda: float
+    net: MLP,
+    x: Tensor,
+    y: Tensor,
+    weight_lambda: float,
+    rate_lambda: float,
+    weight_penalty: WeightPenalty = MLP.weight_l2,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2, plus its parts.
 
     `rate_l2` is the squared rates phi(h) summed over samples, neurons and layers, so it grows
-    with the number of samples P. `weight_l2` is the plain sum of squares of every parameter.
+    with the number of samples P. `weight_l2` is `weight_penalty(net)`: by default the plain
+    sum of squares of every parameter, with a spatial prior the sum over layers of
+    tr(M_post W M_pre W^T) (`make_weight_penalty` picks the one the config asks for).
 
     The parts are detached 0-d tensors: calling `.item()` here would force a host-device
     sync every epoch, so the caller converts only when it logs.
     """
     h, z = net(x)
     mse = (y - z).square().mean()
-    weight_l2 = net.weight_l2()
+    weight_l2 = weight_penalty(net)
     rate_l2 = net.phi(h).square().sum()
     loss = 0.5 * net.N * mse + weight_lambda * weight_l2 + rate_lambda * rate_l2
     parts = {"mse": mse, "weight_l2": weight_l2, "rate_l2": rate_l2, "loss": loss}
     return loss, {k: v.detach() for k, v in parts.items()}
+
+
+def spatial_weight_penalty(net: MLP, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor:
+    """Sum over the parameters of tr(M_rows P M_cols P^T), `factors[name] = (M_rows, M_cols)`
+    in each parameter's stored orientation (`fct.spatial.parameter_factors`). Summed in
+    parameter order like `MLP.weight_l2`, so identity factors reproduce it bit for bit."""
+    terms = [weight_quadratic_form(p, *factors[name]) for name, p in net.named_parameters()]
+    return torch.stack(terms).sum()
+
+
+def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty:
+    """The weight term `cfg` asks for: `MLP.weight_l2` without a spatial prior, else the
+    spatial prior with the penalty matrices built for `net`'s sizes (float64 on the CPU) and
+    then cast to its dtype and device. They are built here, once per run, and are not
+    parameters: a resumed run rebuilds the same matrices from the config.
+    """
+    if cfg.spatial is None:
+        return MLP.weight_l2
+    spaces = build_spaces(cfg.spatial, m=net.D_in, N=net.N, L=net.L, n_out=net.D_out)
+    factors = {
+        name: (rows.to(net.device, net.dtype), cols.to(net.device, net.dtype))
+        for name, (rows, cols) in parameter_factors(spaces).items()
+    }
+    names = {name for name, _ in net.named_parameters()}
+    if names != set(factors):
+        # A parameter without a factor (a bias, say) would otherwise silently drop out.
+        raise ValueError(
+            f"the spatial prior covers {sorted(factors)} but the net has parameters {sorted(names)}"
+        )
+    return partial(spatial_weight_penalty, factors=factors)
 
 
 def _rng_state(device: torch.device) -> dict[str, Tensor]:
@@ -153,12 +193,18 @@ def _grad_norm(net: MLP) -> Tensor:
 
 
 def _step(
-    net: MLP, optim: torch.optim.Optimizer, dataset: Dataset, tc: TrainConfig
+    net: MLP,
+    optim: torch.optim.Optimizer,
+    dataset: Dataset,
+    tc: TrainConfig,
+    weight_penalty: WeightPenalty,
 ) -> dict[str, Tensor]:
     """One full-batch optimiser step; returns the loss parts from before the step (for SGLD
     also the gradient norm and the step's mean squared displacement)."""
     optim.zero_grad()
-    loss, parts = compute_loss(net, dataset.x, dataset.y, tc.weight_lambda, tc.rate_lambda)
+    loss, parts = compute_loss(
+        net, dataset.x, dataset.y, tc.weight_lambda, tc.rate_lambda, weight_penalty
+    )
     loss.backward()
     if isinstance(optim, SGLD):
         parts["grad_norm"] = _grad_norm(net).detach()
@@ -223,8 +269,8 @@ def train(
     log: Callable[[str], None] = print,
     monitor: Monitor | None = None,
 ) -> tuple[MLP, History]:
-    """Train `net` in place on the full dataset (Adam or SGLD, `train.optimizer`); resume from
-    the latest checkpoint if any.
+    """Train `net` in place on the full dataset (Adam or SGLD, `train.optimizer`) with the
+    weight penalty of `make_weight_penalty`; resume from the latest checkpoint if any.
 
     If `final.pt` exists the net is loaded from it and nothing else happens (no optimiser,
     no RNG change). A checkpoint with `epoch=s` is written before the step of epoch s; the
@@ -250,6 +296,7 @@ def train(
         return net, payload["history"]
 
     optim = _make_optimiser(net, tc)
+    weight_penalty = make_weight_penalty(cfg, net)
     ckpt = latest_checkpoint(train_dir)
     if ckpt is None:
         # Adam draws nothing from the global RNG; SGLD draws its step noise from it, which is
@@ -268,7 +315,7 @@ def train(
             )
         if monitor is not None and _monitor_due(epoch, tc):
             _record_monitor(history, epoch, _call_monitor(monitor, net))
-        parts = _step(net, optim, dataset, tc)
+        parts = _step(net, optim, dataset, tc, weight_penalty)
         if epoch % tc.log_int == 0:
             values = {k: v.item() for k, v in parts.items()}
             _record(history, epoch, values)
