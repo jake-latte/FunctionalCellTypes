@@ -1,0 +1,10 @@
+{
+  "default": {
+    "meanfield": "65c740c7a4cf",
+    "result": "08c8fb804269"
+  },
+  "legacy": {
+    "meanfield": "6ac621a073a3",
+    "result": "4d3fe0cdc758"
+  }
+}
