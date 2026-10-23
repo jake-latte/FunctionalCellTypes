@@ -42,12 +42,14 @@ from fct.draw import (
     fig_solver_history,
     plot_training_history,
 )
-from fct.meanfield import load_meanfield, net_kernels, run_meanfield
+from fct.meanfield import InadequateSamplerError, load_meanfield, net_kernels, run_meanfield
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
     GRID_PRESETS,
     PRESET_NAMES,
+    STAGES,
+    Stage,
     SweepConfig,
     SweepError,
     expand,
@@ -380,7 +382,7 @@ def cmd_sweep_list(args: argparse.Namespace) -> int:
 def cmd_sweep_status(args: argparse.Namespace) -> int:
     sweep = _load_sweep(args.root)
     states = [
-        (i, setting_status(args.root, sweep, s), _setting_name(args.root, s))
+        (i, setting_status(args.root, sweep, s, args.stage), _setting_name(args.root, s))
         for i, s in enumerate(expand(sweep))
     ]
     for i, state, name in states:
@@ -393,7 +395,7 @@ def cmd_sweep_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_all(sweep: SweepConfig, root: Path) -> None:
+def _run_all(sweep: SweepConfig, root: Path, stage: Stage) -> None:
     """Run every setting, continuing past failures; raise CliError listing the failed indices.
 
     A failure is printed with its index, exception type and message (plus the traceback for
@@ -402,7 +404,7 @@ def _run_all(sweep: SweepConfig, root: Path) -> None:
     failed = []
     for i in range(len(expand(sweep))):
         try:
-            run_setting(sweep, i, root, log=print)
+            run_setting(sweep, i, root, log=print, stage=stage)
         except Exception as err:  # noqa: BLE001 - reported with type, message and traceback
             failed.append(i)
             print(f"error: setting {i} failed: {type(err).__name__}: {err}", file=sys.stderr)
@@ -415,16 +417,16 @@ def _run_all(sweep: SweepConfig, root: Path) -> None:
 def cmd_sweep_run(args: argparse.Namespace) -> int:
     """One setting with --index (a SLURM array task), else every setting in order.
 
-    Only sweep errors (bad index, config mismatch) become CliError; anything raised by
-    training keeps its traceback.
+    Only sweep errors (bad index, config mismatch) and an inadequate sampler (change the solver
+    config) become CliError; anything else raised by training or solving keeps its traceback.
     """
     sweep = _load_sweep(args.root)
     if args.index is None:
-        _run_all(sweep, args.root)
+        _run_all(sweep, args.root, args.stage)
         return 0
     try:
-        run_setting(sweep, args.index, args.root, log=print)
-    except SweepError as err:
+        run_setting(sweep, args.index, args.root, log=print, stage=args.stage)
+    except (SweepError, InadequateSamplerError) as err:  # fixable by the user, no traceback
         raise CliError(str(err)) from err
     return 0
 
@@ -459,8 +461,17 @@ def _add_sweep_parser(sub) -> None:
     )  # fmt: skip
     add("list", cmd_sweep_list, "print `index directory` for every setting")
     add("count", cmd_sweep_count, "print the number of settings")
-    add("status", cmd_sweep_status, "print done / partial / missing / stale for every setting")
-    p_run = add("run", cmd_sweep_run, "train one setting (--index) or all of them in order")
+    p_status = add(
+        "status", cmd_sweep_status, "print done / partial / missing / stale for every setting"
+    )
+    p_run = add(
+        "run", cmd_sweep_run, "train or solve one setting (--index) or all of them in order"
+    )
+    for p in (p_status, p_run):
+        p.add_argument(
+            "--stage", choices=STAGES, default="train",
+            help="train the nets, or solve the mean-field saddle points (default: train)",
+        )  # fmt: skip
     p_run.add_argument("--index", type=int, default=None, help="setting index (see `sweep list`)")
 
 
