@@ -20,7 +20,7 @@ import fct.meanfield as mf
 from fct.cache import StaleCacheError
 from fct.config import Config, DataConfig, MeanFieldConfig, NetConfig, TrainConfig
 from fct.data import Dataset
-from fct.hmc import relative_fro
+from fct.hmc import SingleSiteHMC, relative_fro
 from fct.importance import ImportanceSampler
 from fct.meanfield import (
     HISTORY_KEYS,
@@ -486,6 +486,7 @@ def test_importance_solve_recovers_analytic_saddle(linear_problem):
     dist = relative_fro(result.Phi[0], Phi_star)
     print(f"\nL=1 linear, importance: |Phi-Phi*|/|Phi*|={dist:.3e}")
     assert all(r[0] < 0.1 for r in h["phihat_fp_resid_stein"][-5:])
+    assert all(h["inner_converged"][-5:])
     assert dist < 0.2 * relative_fro(Sigma, Phi_star)
     assert dist < 0.04
     assert all(np.isnan(v).all() for k in HMC_ONLY_KEYS for v in h[k])
@@ -539,26 +540,91 @@ def test_an_hmc_checkpoint_does_not_load_into_importance_samplers(tmp_path, monk
         solve_relu(X, Y, importance_cfg(), checkpoint_dir=tmp_path, config_hash="h0")
 
 
-def test_collapsed_weights_count_as_an_unhealthy_run():
+def test_an_ess_drop_relative_to_the_point_before_is_unhealthy():
+    """The gate is step-relative, like max_h2_growth: the ESS of the prior proposal depends on
+    the point, so only a fall relative to the accepted point before the step blames the step."""
     cfg = importance_cfg().solver
-    healthy = {"h2_mean": 1.0, "ess_frac": 0.5, "psi_psi_rel_mc_err": 0.01}
-    assert mf._healthy(healthy, 1.0, cfg.n_trans, float("nan"), cfg)
-    collapsed = {**healthy, "ess_frac": 0.5 * cfg.min_ess_frac}
-    assert not mf._healthy(collapsed, 1.0, cfg.n_trans, float("nan"), cfg)
+    nan = float("nan")
+
+    def healthy(ess_after, ess_before):
+        diag = {"h2_mean": 1.0, "ess_frac": ess_after, "psi_psi_rel_mc_err": 0.01}
+        return mf._healthy(diag, 1.0, ess_before, cfg.n_trans, nan, cfg)
+
+    assert healthy(0.5, 0.5)
+    assert healthy(1.01 * cfg.min_ess_drop * 0.5, 0.5)
+    assert not healthy(0.99 * cfg.min_ess_drop * 0.5, 0.5)
+    assert healthy(1e-4, 1e-4)  # low but not lower than before: the floor's job, not the gate's
 
 
-def test_extreme_tilt_step_is_backtracked_under_importance_sampling():
-    """A huge inner step size drives the tilt where the prior proposal's weights collapse; the
-    solver must see it (ESS below min_ess_frac), revert and halve the step."""
-    X, Y = relu_problem(8, 8, seed=54)
+def extreme_tilt_cfg(**overrides):
     # gaussian init and a tolerance never met: the lazy init would make Phi_hat = 0 the inner
     # solution, and the loop would stop before validating any step.
-    cfg = importance_cfg(
-        init="gaussian", eta_phihat=1e4, eta_max=1e4, inner_tol=1e-12, inner_tol_mc=1e-12,
-        n_inner_max=5, n_outer=1, max_backtrack=50,
-    )  # fmt: skip
-    result = solve_relu(X, Y, cfg)
+    base = {
+        "init": "gaussian", "eta_phihat": 1e4, "eta_max": 1e4, "inner_tol": 1e-12,
+        "inner_tol_mc": 1e-12, "n_inner_max": 5, "n_outer": 1, "max_backtrack": 50,
+    }  # fmt: skip
+    return importance_cfg(**{**base, **overrides})
+
+
+def test_a_step_that_collapses_the_weights_is_reverted():
+    """A huge inner step size drives the tilt where the prior proposal's weights collapse
+    (ESS falls by far more than min_ess_drop); the solver reverts and halves the step.  The
+    absolute floor is switched off so the step-relative gate is tested on its own."""
+    X, Y = relu_problem(8, 8, seed=54)
+    result = solve_relu(X, Y, extreme_tilt_cfg(min_ess_frac=0.0))
     assert result.history["n_backtrack_inner"][0].sum() > 0
+
+
+def test_an_accepted_point_below_the_ess_floor_fails_loudly_even_with_one_inner_step(tmp_path):
+    """One inner step: its run is at the accepted starting point and the step it takes is never
+    validated by the inner loop; the outer-gradient run at the collapsed tilt must raise rather
+    than let the solve finish."""
+    X, Y = relu_problem(8, 8, seed=54)
+    cfg = extreme_tilt_cfg(n_inner_max=1)
+    with pytest.raises(mf.InadequateSamplerError, match="outer step 0"):
+        solve_relu(X, Y, cfg, checkpoint_dir=tmp_path, config_hash="h0")
+    assert not (tmp_path / "final.pt").exists()
+
+
+@pytest.mark.parametrize("n_points", [48, 100])
+def test_importance_sampling_at_realistic_size_fails_loudly_instead_of_freezing(tmp_path, n_points):
+    """The reviewer's case: default solver settings, relu, L=2, beta=1e3.  The prior proposal's
+    ESS fraction at layer 1 is ~0.01 at P=48 and ~1e-3 at P=100 already at the initial point;
+    the solve must say the sampler is inadequate, not write a frozen final.pt."""
+    cfg = small_config()
+    cfg = cfg.model_copy(
+        update={
+            "data": cfg.data.model_copy(update={"P": n_points}),
+            "meanfield": MeanFieldConfig(n_points=n_points, beta=1e3, sampler="importance"),
+        }
+    )
+    dataset = small_dataset(cfg)
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
+    with pytest.raises(mf.InadequateSamplerError, match="inadequate.*sampler='hmc'"):
+        run_meanfield(cfg, dataset, net, tmp_path, log=silent)
+    assert not (tmp_path / "meanfield" / "final.pt").exists()
+
+
+def test_init_from_net_matches_the_tilt_gradient_of_an_hmc_sampler():
+    """init='net' evaluates the tilt gradient directly; the reference is the gradient of a
+    SingleSiteHMC holding the same density."""
+    X, Y = relu_problem(8, 8, seed=55)
+    net = small_net(8, L=3)
+    cfg = MeanFieldConfig(beta=1e3, init="net", n_chains=8)
+    prob = mf._make_problem(X, Y, 3, 1e-3, 1e-2, torch.relu, 1.0, cfg)
+    net_Phi, net_H = empirical_kernels(net, prob.X, "h")
+    L, P = 3, prob.P
+    Phi, Phi_hat = torch.zeros(L, P, P, **F64), torch.zeros(L, P, P, **F64)
+    mf._init_from_net(prob, Phi, Phi_hat, net_Phi, net_H)
+    for l in range(L - 1):
+        ref = SingleSiteHMC(
+            mf._prior_cov(prob, l + 1, Phi), Phi_hat[l + 1], prob.rate_tilt, torch.relu,
+            prob.psi_is_phi[l + 1], n_chains=1, sample_dtype=torch.float64, generator=seeded(0),
+        )  # fmt: skip
+        h = net_H[:, l + 1].T
+        _, u = ref.tilt_and_grad(h)
+        expected = mf.sym(torch.linalg.solve(Phi[l], h.T @ u / h.shape[0]))
+        assert torch.equal(Phi_hat[l], expected)
 
 
 def test_run_meanfield_records_the_full_meanfield_config(cached_run):

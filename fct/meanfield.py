@@ -41,7 +41,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from fct.activations import Activation, get_phi
+from fct.activations import Activation, get_phi, phi_prime
 from fct.cache import (
     cache_paths,
     latest_checkpoint,
@@ -51,7 +51,14 @@ from fct.cache import (
 )
 from fct.config import Config, MeanFieldConfig, SolverConfig, resolve_dtype
 from fct.data import Dataset
-from fct.hmc import SingleSiteHMC, kernel_alignment, project_pd, relative_fro, sym
+from fct.hmc import (
+    SingleSiteHMC,
+    kernel_alignment,
+    project_pd,
+    relative_fro,
+    sym,
+    tilt_and_grad,
+)
 from fct.importance import ImportanceSampler
 from fct.model import MLP
 
@@ -86,6 +93,10 @@ _ARRAY_KEYS = frozenset(HISTORY_KEYS) - {
 History = dict[str, list]
 Log = Callable[[str], Any]
 Sampler = SingleSiteHMC | ImportanceSampler
+
+
+class InadequateSamplerError(RuntimeError):
+    """Importance sampling from the prior cannot represent the density at an accepted point."""
 
 
 # ----------------------------------------------------------------------------- public results
@@ -202,6 +213,12 @@ def _draws_per_transition(c: SolverConfig) -> int:
     return c.n_importance_samples if c.sampler == "importance" else c.n_chains
 
 
+def _warmup_trans(c: SolverConfig) -> int:
+    """Warm-up transitions: HMC chains must equilibrate; independent importance draws need no
+    warm-up, so one transition just measures the starting point."""
+    return 1 if c.sampler == "importance" else c.warmup_trans
+
+
 def _new_sampler(
     prob: _Problem, l: int, Sigma: torch.Tensor, M: torch.Tensor, generator: torch.Generator
 ) -> Sampler:
@@ -266,7 +283,7 @@ def _init_lazy(prob: _Problem, Phi, Phi_hat, gen, log: Log) -> None:
     c = prob.solver
     for l in range(prob.L):
         tmp = _new_sampler(prob, l, _prior_cov(prob, l, Phi), Phi_hat[l], gen)
-        tmp.run(c.warmup_trans, collect=False)
+        tmp.run(_warmup_trans(c), collect=False)
         mom, d = tmp.run(max(c.n_init_samples // _draws_per_transition(c), 1))
         Phi[l] = mom["psi_psi"]
         log(
@@ -284,29 +301,17 @@ def _init_from_net(prob: _Problem, Phi, Phi_hat, net_Phi, net_H) -> None:
     Phi[:] = net_Phi
     A = torch.linalg.solve(prob.alpha * prob.eye + Phi[-1], prob.eye)
     Phi_hat[-1] = -2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A
-    # The helper sampler only evaluates the tilt gradient; its own random chain draw is
-    # discarded, so it gets a throwaway generator instead of consuming the solver's stream.
-    scratch = torch.Generator(device=prob.dev).manual_seed(0)
+    dphi = phi_prime(prob.phi)
     for l in range(prob.L - 2, -1, -1):
-        tmp = SingleSiteHMC(
-            _prior_cov(prob, l + 1, Phi),
-            Phi_hat[l + 1],
-            prob.rate_tilt,
-            prob.phi,
-            prob.psi_is_phi[l + 1],
-            n_chains=1,
-            sample_dtype=F64,
-            jitter_rel=prob.solver.jitter_rel,
-            generator=scratch,
-        )
         h = net_H[:, l + 1].T  # (N, P)
-        _, u = tmp.tilt_and_grad(h)
+        M = sym(Phi_hat[l + 1].to(F64))
+        _, u = tilt_and_grad(h, M, float(prob.rate_tilt), prob.phi, dphi, prob.psi_is_phi[l + 1])
         h_u = h.T @ u / h.shape[0]
         Phi_hat[l] = sym(torch.linalg.solve(Phi[l], h_u))
 
 
 def _init_kernels(prob: _Problem, gen, net_Phi, net_H, log: Log):
-    """Initial (Φ, Φ̂), (L, P, P) float64 each, by cfg.init in {gaussian, lazy, net}."""
+    """Initial (Φ, Φ̂), (L, P, P) float64 each, by cfg.solver.init in {gaussian, lazy, net}."""
     L, P, init = prob.L, prob.P, prob.solver.init
     Phi = torch.zeros(L, P, P, device=prob.dev, dtype=F64)
     Phi_hat = torch.zeros(L, P, P, device=prob.dev, dtype=F64)
@@ -337,6 +342,7 @@ class _SolverState:
     eta_hat: np.ndarray  # per-layer inner step sizes
     h2_last: list[float]  # last healthy sample scale ||h||²/P per layer (for `_healthy`)
     eps_ref: list[float]  # warm-up HMC step size per layer (collapse test; NaN for importance)
+    ess_ref: list[float]  # ESS fraction of the last accepted point per layer (NaN for HMC)
     history: History
     mse_net: float | None
     net_Phi: torch.Tensor | None
@@ -360,7 +366,7 @@ def _fresh_state(prob: _Problem, net: MLP | None, gen, log: Log) -> _SolverState
             mse_net = ((prob.Y - Z.to(F64)) ** 2).mean().item()
     Phi, Phi_hat = _init_kernels(prob, gen, net_Phi, net_H, log)
     samplers = _make_samplers(prob, Phi, Phi_hat, gen)
-    warm_diag = [s.run(prob.solver.warmup_trans, collect=False)[1] for s in samplers]
+    warm_diag = [s.run(_warmup_trans(prob.solver), collect=False)[1] for s in samplers]
     if prob.solver.sampler == "importance":
         summary = [f"l={l} {_quality(d, 'importance')}" for l, d in enumerate(warm_diag)]
     else:
@@ -370,7 +376,7 @@ def _fresh_state(prob: _Problem, net: MLP | None, gen, log: Log) -> _SolverState
             for l, d in enumerate(warm_diag)
         ]
     log("warm-up: " + " | ".join(summary))
-    return _SolverState(
+    st = _SolverState(
         outer=0,
         Phi=Phi,
         Phi_hat=Phi_hat,
@@ -380,11 +386,15 @@ def _fresh_state(prob: _Problem, net: MLP | None, gen, log: Log) -> _SolverState
         eta_hat=np.full(prob.L, float(prob.solver.eta_phihat)),
         h2_last=[d["h2_mean"] for d in warm_diag],
         eps_ref=[d["eps"] for d in warm_diag],
+        ess_ref=[float("nan")] * prob.L,
         history=_empty_history(net is not None),
         mse_net=mse_net,
         net_Phi=net_Phi,
         elapsed=0.0,
     )
+    for l, d in enumerate(warm_diag):
+        _accept_point(prob, st, l, d, "the initial point")
+    return st
 
 
 # ----------------------------------------------------------------------------- small pieces
@@ -410,15 +420,48 @@ def _quality(d: dict, sampler: str) -> str:
     return f"acc={d['accept']:.2f} rho1={d['rho1']:.2f}"
 
 
-def _healthy(diag: dict, h2_before: float, n_tr: int, eps_ref_l: float, cfg: SolverConfig) -> bool:
+def _accept_point(prob: _Problem, st: _SolverState, l: int, diag: dict, where: str) -> None:
+    """Record the run `diag` as layer l's accepted point: its sample scale ||h||²/P and, under
+    importance sampling, its ESS fraction, the references the next step is judged against.
+
+    An accepted point whose ESS fraction is below min_ess_frac raises InadequateSamplerError:
+    the ESS of the prior proposal is a property of the point (it falls with P and with the
+    tilt), not of the step, so backtracking cannot cure it, and carrying on would only freeze
+    the iteration at a point the sampler cannot represent."""
+    st.h2_last[l] = diag["h2_mean"]
+    c = prob.solver
+    if c.sampler != "importance":
+        return
+    ess = diag["ess_frac"]
+    if ess < c.min_ess_frac:
+        raise InadequateSamplerError(
+            f"importance sampling from the prior is inadequate for this problem: at {where}, "
+            f"layer {l} has ESS fraction {ess:.2g} < min_ess_frac={c.min_ess_frac:g} (P={prob.P}; "
+            "the prior proposal only suits small P and mild tilts). Use solver.sampler='hmc', "
+            "reduce meanfield.n_points, raise solver.importance_proposal_scale, or raise "
+            "solver.n_importance_samples together with lowering solver.min_ess_frac "
+            "(ESS = ess_frac x draws)"
+        )
+    st.ess_ref[l] = ess
+
+
+def _healthy(
+    diag: dict,
+    h2_before: float,
+    ess_before: float,
+    n_tr: int,
+    eps_ref_l: float,
+    cfg: SolverConfig,
+) -> bool:
     """A sampler run is healthy if the sample scale ||h||²/P has not blown up and (if moments
     were collected) the MC error is bounded; and, for HMC, it has few divergences, no resets
-    and no step-size collapse; for importance sampling, the weights have not collapsed (ESS
-    fraction >= min_ess_frac; the MC error cannot see that collapse, see fct.importance)."""
+    and no step-size collapse; for importance sampling, the ESS fraction has not dropped below
+    min_ess_drop times that of the accepted point before the step (the MC error cannot see
+    a weight collapse, see fct.importance)."""
     growth = diag["h2_mean"] / max(h2_before, 1e-300)
     common = (growth <= cfg.max_h2_growth) and diag.get("psi_psi_rel_mc_err", 0.0) <= cfg.max_mc_err
     if cfg.sampler == "importance":
-        return common and diag["ess_frac"] >= cfg.min_ess_frac
+        return common and diag["ess_frac"] >= cfg.min_ess_drop * ess_before
     div_frac = diag["n_divergent"] / (cfg.n_chains * n_tr)
     return (
         common
@@ -464,7 +507,7 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
     cfg, s = prob.solver, st.samplers[l]
     moments, diag = s.run(cfg.n_trans)
     if pending[l] is not None and not _healthy(
-        diag, st.h2_last[l], cfg.n_trans, st.eps_ref[l], cfg
+        diag, st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg
     ):
         state0, hat0, grad0 = pending[l]
         res.n_backtrack[l] += 1
@@ -477,7 +520,7 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
                 f"layer {l}: inner step keeps breaking the sampler (eta_phihat={st.eta_hat[l]:.2e})"
             )
         return diag
-    st.h2_last[l] = diag["h2_mean"]
+    _accept_point(prob, st, l, diag, f"outer step {st.outer}, inner step {inner}")
     if pending[l] is not None:
         st.eta_hat[l] = min(st.eta_hat[l] * cfg.eta_grow, cfg.eta_max)
     grad_hat = 0.5 * (moments["psi_psi"] - st.Phi[l])
@@ -534,7 +577,7 @@ def _outer_gradients(prob: _Problem, st: _SolverState) -> _OuterGradients:
     moments, hmc_diag = [], []
     for l, s in enumerate(st.samplers):
         m, d = s.run(cfg.n_trans_outer)
-        st.h2_last[l] = d["h2_mean"]
+        _accept_point(prob, st, l, d, f"outer step {st.outer} (outer-gradient run)")
         moments.append(m)
         hmc_diag.append(d)
     A, _, learning, mse_theory = _learning_pieces(prob, st.Phi[-1])
@@ -592,7 +635,9 @@ def _probe_samplers(prob, st: _SolverState) -> bool:
     for l in range(1, prob.L):
         st.samplers[l].set_prior(_prior_cov(prob, l, st.Phi))
         _, d = st.samplers[l].run(prob.solver.n_trans, collect=False)
-        ok = ok and _healthy(d, st.h2_last[l], prob.solver.n_trans, st.eps_ref[l], prob.solver)
+        ok = ok and _healthy(
+            d, st.h2_last[l], st.ess_ref[l], prob.solver.n_trans, st.eps_ref[l], prob.solver
+        )
     return ok
 
 
@@ -768,6 +813,7 @@ def _to_payload(st: _SolverState, cfg: MeanFieldConfig) -> dict:
         "eta_hat": st.eta_hat.tolist(),
         "h2_last": list(st.h2_last),
         "eps_ref": list(st.eps_ref),
+        "ess_ref": list(st.ess_ref),
         "samplers": [s.state_dict() for s in st.samplers],
         "generator": st.gen.get_state(),
         "mse_net": st.mse_net,
@@ -810,6 +856,9 @@ def _restore_state(
         eta_hat=np.array(payload["eta_hat"], dtype=float),
         h2_last=list(payload["h2_last"]),
         eps_ref=list(payload["eps_ref"]),
+        # HMC checkpoints written before the importance sampler existed have no ess_ref, and
+        # HMC never reads it.
+        ess_ref=list(payload.get("ess_ref", [float("nan")] * prob.L)),
         history=_history_from_lists(payload["history"]),
         mse_net=payload["mse_net"],
         net_Phi=payload["net_Phi"],
@@ -851,10 +900,13 @@ def solve(
         Φ_l  -= eta_phi      · ∂S/∂Φ_l  · c_l²     (clipped to ||ΔΦ_l|| ≤ max_rel_step ||Φ_l||)
     and are adapted: every sampler run also validates the step taken before it.  If the
     HMC chains show divergences (> max_div_frac of transitions) or resets, the importance
-    weights collapse (ESS fraction < min_ess_frac), or the sample scale ||h||²/P jumps by
+    ESS fraction drops below min_ess_drop times that of the point before, or the sample scale ||h||²/P jumps by
     more than max_h2_growth, the step is reverted (kernel and chain state) and its step size
     halved; otherwise the step size grows by eta_grow up to eta_max.  This keeps the
     iteration on the normalisable side of the tilt.  The settings are cfg.solver's.
+    Under importance sampling every accepted point (the initial one, each validated inner
+    step, each outer-gradient run) must have ESS fraction >= min_ess_frac, else
+    InadequateSamplerError: the prior proposal does not suit the problem.
     The inner loop stops when every layer's residual ||⟨ψψᵀ⟩-Φ||/||Φ|| is below
     max(inner_tol, inner_tol_mc × its own Monte Carlo error): below that it is noise.
 
@@ -863,7 +915,8 @@ def solve(
 
     With checkpoint_dir (requires config_hash): return its final.pt if present, else resume
     from its latest ckpt_*.pt if present; write ckpt_<outer:05d>.pt every cfg.save_int
-    outer steps, and final.pt at the end (which then replaces the checkpoints); each holds
+    outer steps (cfg.solver.save_int), and final.pt at the end (which then replaces the
+    checkpoints); each holds
     cfg in full for provenance.  A saved state
     must have been written with a net iff `net` is given.  Without checkpoint_dir, nothing
     touches disk.

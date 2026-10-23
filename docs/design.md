@@ -162,7 +162,8 @@ class SolverConfig(BaseModel):        # how it is solved
     # importance sampling (read only when sampler="importance")
     n_importance_samples: int = 4096    # fresh draws per transition (n_trans / n_trans_outer transitions per run)
     importance_proposal_scale: float = 1.0   # s > 0: proposal N(0, s^2 Sigma)
-    min_ess_frac: float = 0.01          # in [0, 1]: a run with ESS / draws below it counts as a broken step (backtrack)
+    min_ess_drop: float = 0.1           # in (0, 1]: a step after which ESS / draws < min_ess_drop x that of the point before is reverted
+    min_ess_frac: float = 0.01          # in [0, 1]: ESS / draws every accepted point must reach, else InadequateSamplerError
     init: Literal["lazy", "gaussian", "net"] = "lazy"; n_init_samples: int = 20_000
     log_int: int = 5; save_int: int = 10; seed: int = 0
 class AnalysisConfig(BaseModel):
@@ -367,12 +368,18 @@ class ImportanceSampler(Sigma, M, lambda_r, phi, psi_is_phi, n_samples=4096, pro
 Each transition draws `n_samples` fresh, independent h = s L z from the proposal N(0, s² Σ) (s = `proposal_scale`,
 s = 1 is the prior) and weights them by log w = ½(1 - s²)|z|² - U(h), U the tilt; a run self-normalises all its
 transitions' weights together (log-sum-exp per batch, combined across batches) and accumulates the moments in float64.
-A non-finite log weight raises `FloatingPointError`. `run(..., collect=False)` draws one batch (there is no chain to warm
-up or advance). Diagnostics: `ess_frac` (Kish ESS (Σw)²/Σw² over the draws), `ess`, `max_weight` (largest normalised
+A non-finite log weight raises `FloatingPointError`. `run(n_trans, collect)` always draws `n_trans` batches, as
+`SingleSiteHMC.run` makes `n_trans` transitions; the solver warms an importance sampler up with one transition, since
+independent draws have nothing to equilibrate. Diagnostics: `ess_frac` (Kish ESS (Σw)²/Σw² over the draws), `ess`, `max_weight` (largest normalised
 weight), `h2_mean` (weighted), `prior_h2`, and with collect `psi_psi_rel_mc_err` (n_eff = ESS) and `stein_mismatch`;
 the HMC-only keys (`accept`, `eps`, `n_divergent`, `n_reset`, `max_abs_dH`, `mean_abs_dH`, `rho1`, `h2_max`) are NaN.
 When one draw dominates, the variance-based MC error reads ~0 (one point has no spread): weight collapse is detected by
-`ess_frac` / `max_weight`, which is why the solver gates on `min_ess_frac`.
+`ess_frac` / `max_weight`, which is why the solver gates on the ESS (see meanfield.py).
+
+**Limitation: the prior proposal is for small P and mild tilts.** Its ESS fraction is a property of the point being
+sampled, not of the solver's step, and it falls roughly exponentially with P and with the tilt. Measured at the start of
+a relu, L=2, beta=1e3 problem, layer 1: 0.08 at P=8, 0.03 at P=16, 0.0085 at P=48, 2e-4 to 2e-3 at P=100 (the default
+`n_points`). More draws do not raise the fraction. At realistic P use `sampler="hmc"`.
 
 ## meanfield.py
 
@@ -386,7 +393,11 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # Algorithm 1 exactly as the notebook, settings from cfg.solver; single-site expectations from one sampler per
     # layer, SingleSiteHMC (solver.sampler="hmc", bit-for-bit the pre-split solver) or ImportanceSampler ("importance").
     # A sampler run validates the step before it (backtracking): HMC on divergences / resets / step-size collapse,
-    # importance on ess_frac < min_ess_frac, both on ||h||^2/P blow-up and MC error > max_mc_err.
+    # importance on an ESS drop (ess_frac < min_ess_drop x the ess_frac of the accepted point before the step), both on
+    # ||h||^2/P blow-up and MC error > max_mc_err. Under importance sampling every accepted point (the initial point after
+    # warm-up, each validated inner step, each outer-gradient run) must have ess_frac >= min_ess_frac, else
+    # InadequateSamplerError (a RuntimeError) is raised before any final.pt is written: the ESS is a property of the
+    # point, so backtracking cannot cure it, and carrying on would freeze the iteration at its start.
     # If checkpoint_dir is given, return its final.pt if present, else
     # resume from its latest ckpt_*.pt (ValueError if it was written with a net and `net` is None, or vice
     # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then

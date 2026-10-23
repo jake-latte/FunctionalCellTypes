@@ -50,6 +50,7 @@ _POSITIVE_FLOAT = {
         "eps0", "target_accept", "adapt_rate", "eta_phi", "eta_phihat", "eta_max", "eta_grow",
         "inner_tol", "inner_tol_mc", "max_rel_step", "pd_floor_rel", "inv_floor_rel",
         "jitter_rel", "max_h2_growth", "max_mc_err", "importance_proposal_scale",
+        "min_ess_drop",
     ],
 }  # fmt: skip
 _NONNEGATIVE_INT = {
@@ -80,6 +81,7 @@ BAD = (
         (SolverConfig, "target_accept", 1.5),
         (SolverConfig, "tilt_floor", 1.0),
         (SolverConfig, "min_ess_frac", 1.5),
+        (SolverConfig, "min_ess_drop", 1.5),
     ]
 )
 
@@ -103,6 +105,7 @@ def test_offending_value_raises_naming_the_field(cls, field, value):
         (SolverConfig, "tilt_floor", 0.0),
         (SolverConfig, "min_ess_frac", 0.0),
         (SolverConfig, "min_ess_frac", 1.0),
+        (SolverConfig, "min_ess_drop", 1.0),
         (MeanFieldConfig, "rate_tilt", 0.0),
         (MeanFieldConfig, "rate_tilt", None),
         (MeanFieldConfig, "alpha", None),

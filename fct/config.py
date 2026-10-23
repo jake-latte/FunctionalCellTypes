@@ -156,11 +156,14 @@ class SolverConfig(StrictModel):
     jitter_rel: PosFloat = 1e-6
     precondition: bool = True
     # Importance sampling: draws per transition (n_trans / n_trans_outer transitions per run,
-    # as for HMC), the proposal N(0, s^2 Sigma) with s = importance_proposal_scale, and the
-    # smallest ESS / draws a run may have before the solver treats the step that caused it as
-    # breaking the sampler (and backtracks).
+    # as for HMC) and the proposal N(0, s^2 Sigma) with s = importance_proposal_scale.
+    # min_ess_drop: a step after which the ESS fraction falls below min_ess_drop times that of
+    # the accepted point before it broke the sampler (reverted, step size halved), like
+    # max_h2_growth. min_ess_frac: the ESS fraction every accepted point must reach; below it
+    # the prior proposal is inadequate for the problem and `solve` raises.
     n_importance_samples: PosInt = 4096
     importance_proposal_scale: PosFloat = 1.0
+    min_ess_drop: Annotated[float, Field(gt=0, le=1)] = 0.1
     min_ess_frac: Annotated[float, Field(ge=0, le=1)] = 0.01
     # Initial guess, logging, checkpoints, randomness
     init: Literal["lazy", "gaussian", "net"] = "lazy"
@@ -185,7 +188,8 @@ LEGACY_SOLVER_FIELDS = (
 # Fields that enter the result hash only when sampler == "importance": with "hmc" they change
 # nothing, and leaving them out keeps the hash of an HMC solve what it always was.
 IMPORTANCE_FIELDS = (
-    "sampler", "n_importance_samples", "importance_proposal_scale", "min_ess_frac",
+    "sampler", "n_importance_samples", "importance_proposal_scale", "min_ess_drop",
+    "min_ess_frac",
 )  # fmt: skip
 
 
