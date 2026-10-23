@@ -132,8 +132,8 @@ def _log_line(epoch: int, n_epochs: int, parts: dict[str, float]) -> str:
     )
 
 
-def _history_keys(tc: TrainConfig) -> tuple[str, ...]:
-    return _HISTORY_KEYS + (_SGLD_KEYS if tc.optimizer == "sgld" else ())
+def _history_keys(optimizer: str) -> tuple[str, ...]:
+    return _HISTORY_KEYS + (_SGLD_KEYS if optimizer == "sgld" else ())
 
 
 def _record(history: History, epoch: int, parts: dict[str, float]) -> None:
@@ -175,8 +175,8 @@ def _check_monitor_matches_config(cfg: Config, monitor: Monitor | None) -> None:
         raise ValueError("a monitor was passed but train.monitor_int=0 disables monitoring")
 
 
-def _new_history(tc: TrainConfig, monitored: bool) -> History:
-    history: History = {key: [] for key in _history_keys(tc)}
+def _new_history(monitored: bool, optimizer: str = "adam") -> History:
+    history: History = {key: [] for key in _history_keys(optimizer)}
     if monitored:
         history[MONITOR_EPOCH] = []
     return history
@@ -255,7 +255,7 @@ def train(
         # Adam draws nothing from the global RNG; SGLD draws its step noise from it, which is
         # why the RNG state is checkpointed.
         torch.manual_seed(tc.seed)
-        start, history = 0, _new_history(tc, monitor is not None)
+        start, history = 0, _new_history(monitor is not None, tc.optimizer)
     else:
         start, history, note = _restore(ckpt, cfg, net, optim)
         log(f"resumed from {ckpt} at epoch {start}" + (f" ({note})" if note else ""))
