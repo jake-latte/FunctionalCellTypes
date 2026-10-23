@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
@@ -55,5 +55,5 @@ PI brief (Mean Field 1): in addition to HMC, offer simple importance-weighted sa
   one inner step). Below it, `solve` raises `InadequateSamplerError` saying the prior proposal does not suit the problem,
   and nothing is written as final.
 - Limitation, documented in design.md: prior-proposal importance sampling is for small P and mild tilts. Measured
-  layer-1 ESS fraction at the start of relu, L=2, beta=1e3: 0.08 (P=8), 0.03 (P=16), 0.0085 (P=48), 2e-4 to 2e-3 (P=100).
+  layer-1 ESS fraction at the start of relu, L=2, beta=1e3: 0.08 (P=8), 0.03 (P=16), 0.0085 (P=48; seed-dependent: 0.013 at seed 0), 2e-4 to 2e-3 (P=100).
   At the default `n_points=100`, `sampler="importance"` now fails loudly at the initial point; use HMC there.

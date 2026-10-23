@@ -378,7 +378,7 @@ When one draw dominates, the variance-based MC error reads ~0 (one point has no 
 
 **Limitation: the prior proposal is for small P and mild tilts.** Its ESS fraction is a property of the point being
 sampled, not of the solver's step, and it falls roughly exponentially with P and with the tilt. Measured at the start of
-a relu, L=2, beta=1e3 problem, layer 1: 0.08 at P=8, 0.03 at P=16, 0.0085 at P=48, 2e-4 to 2e-3 at P=100 (the default
+a relu, L=2, beta=1e3 problem, layer 1: 0.08 at P=8, 0.03 at P=16, 0.0085 at P=48 (seed-dependent: 0.013 at seed 0), 2e-4 to 2e-3 at P=100 (the default
 `n_points`). More draws do not raise the fraction. At realistic P use `sampler="hmc"`.
 
 ## meanfield.py

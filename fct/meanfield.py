@@ -438,9 +438,9 @@ def _accept_point(prob: _Problem, st: _SolverState, l: int, diag: dict, where: s
             f"importance sampling from the prior is inadequate for this problem: at {where}, "
             f"layer {l} has ESS fraction {ess:.2g} < min_ess_frac={c.min_ess_frac:g} (P={prob.P}; "
             "the prior proposal only suits small P and mild tilts). Use solver.sampler='hmc', "
-            "reduce meanfield.n_points, raise solver.importance_proposal_scale, or raise "
-            "solver.n_importance_samples together with lowering solver.min_ess_frac "
-            "(ESS = ess_frac x draws)"
+            "reduce meanfield.n_points, or raise solver.n_importance_samples together with "
+            "lowering solver.min_ess_frac (ESS = ess_frac x draws; a proposal scale other "
+            "than 1 lowered the ESS fraction in every case measured)"
         )
     st.ess_ref[l] = ess
 
@@ -900,8 +900,9 @@ def solve(
         Φ_l  -= eta_phi      · ∂S/∂Φ_l  · c_l²     (clipped to ||ΔΦ_l|| ≤ max_rel_step ||Φ_l||)
     and are adapted: every sampler run also validates the step taken before it.  If the
     HMC chains show divergences (> max_div_frac of transitions) or resets, the importance
-    ESS fraction drops below min_ess_drop times that of the point before, or the sample scale ||h||²/P jumps by
-    more than max_h2_growth, the step is reverted (kernel and chain state) and its step size
+    ESS fraction drops below min_ess_drop times that of the point before, or the sample scale
+    ||h||²/P jumps by more than max_h2_growth, the step is reverted (kernel and chain state)
+    and its step size
     halved; otherwise the step size grows by eta_grow up to eta_max.  This keeps the
     iteration on the normalisable side of the tilt.  The settings are cfg.solver's.
     Under importance sampling every accepted point (the initial one, each validated inner
@@ -914,12 +915,10 @@ def solve(
     randomness comes from one torch.Generator seeded with cfg.solver.seed on X's device.
 
     With checkpoint_dir (requires config_hash): return its final.pt if present, else resume
-    from its latest ckpt_*.pt if present; write ckpt_<outer:05d>.pt every cfg.save_int
-    outer steps (cfg.solver.save_int), and final.pt at the end (which then replaces the
-    checkpoints); each holds
-    cfg in full for provenance.  A saved state
-    must have been written with a net iff `net` is given.  Without checkpoint_dir, nothing
-    touches disk.
+    from its latest ckpt_*.pt if present; write ckpt_<outer:05d>.pt every cfg.solver.save_int
+    outer steps, and final.pt at the end (which then replaces the checkpoints); each holds
+    cfg in full for provenance.  A saved state must have been written with a net iff `net`
+    is given.  Without checkpoint_dir, nothing touches disk.
     """
     if checkpoint_dir is not None and not config_hash:
         raise ValueError("checkpoint_dir needs a non-empty config_hash to guard against reuse")

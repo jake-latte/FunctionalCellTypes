@@ -157,10 +157,12 @@ class SolverConfig(StrictModel):
     precondition: bool = True
     # Importance sampling: draws per transition (n_trans / n_trans_outer transitions per run,
     # as for HMC) and the proposal N(0, s^2 Sigma) with s = importance_proposal_scale.
-    # min_ess_drop: a step after which the ESS fraction falls below min_ess_drop times that of
-    # the accepted point before it broke the sampler (reverted, step size halved), like
-    # max_h2_growth. min_ess_frac: the ESS fraction every accepted point must reach; below it
-    # the prior proposal is inadequate for the problem and `solve` raises.
+    # min_ess_drop: a step is reverted (and its step size halved, as with max_h2_growth) when
+    # the ESS fraction after it is below min_ess_drop times that of the accepted point before it.
+    # min_ess_frac: the ESS fraction every accepted point must reach; below it the prior
+    # proposal is inadequate for the problem and `solve` raises. Both enter the importance
+    # hash (conservative: lowering the floor after a raise starts a fresh cache directory
+    # rather than resuming the raised run's checkpoints).
     n_importance_samples: PosInt = 4096
     importance_proposal_scale: PosFloat = 1.0
     min_ess_drop: Annotated[float, Field(gt=0, le=1)] = 0.1

@@ -588,9 +588,11 @@ def test_an_accepted_point_below_the_ess_floor_fails_loudly_even_with_one_inner_
 
 @pytest.mark.parametrize("n_points", [48, 100])
 def test_importance_sampling_at_realistic_size_fails_loudly_instead_of_freezing(tmp_path, n_points):
-    """The reviewer's case: default solver settings, relu, L=2, beta=1e3.  The prior proposal's
-    ESS fraction at layer 1 is ~0.01 at P=48 and ~1e-3 at P=100 already at the initial point;
-    the solve must say the sampler is inadequate, not write a frozen final.pt."""
+    """The reviewer's case: default solver settings, relu, L=2, beta=1e3 (seed 0).  At P=100 the
+    ESS fraction is below the floor already at the initial point (layer 0, ~5e-3); at P=48 the
+    initial point passes (layer 1, ~0.013) and the floor is hit at the first outer-gradient run
+    (layer 1, ~1e-3): one case per accept site.  Either way the solve must say the sampler is
+    inadequate, not write a frozen final.pt."""
     cfg = small_config()
     cfg = cfg.model_copy(
         update={
