@@ -160,7 +160,7 @@ def test_checkpoint_at_epoch_zero_without_monitor_entry_loads(root):
     cfg = cpu_config(root)
     dataset = get_dataset(setting_dir(root, FIRST), cfg)
     net = make_net(cfg.net, dataset.x.shape[1], dataset.y.shape[1], CPU, torch.float32)
-    payload = _payload(net, torch.optim.Adam(net.parameters()), _new_history(True), 0)
+    payload = _payload(net, torch.optim.Adam(net.parameters()), _new_history(True, "adam"), 0)
     write_checkpoint(
         _train_dir(root), "ckpt_", 0, payload, cfg.section_hash("data", "net", "train")
     )

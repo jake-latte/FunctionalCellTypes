@@ -17,7 +17,8 @@ fct/
   data.py          # task / data generation (Dataset, fourier_embedding, embed, grid_targets, task_dims)
   tasks.py         # pure generators of the linear-teacher, object-action and what-where tasks
   model.py         # MLP architecture, make_net
-  train.py         # training loop with checkpoint / resume
+  train.py         # training loop with checkpoint / resume (Adam or SGLD)
+  sgld.py          # SGLD torch optimiser
   hmc.py           # SingleSiteHMC sampler + linear-algebra helpers
   meanfield.py     # saddle-point solver (Algorithm 1) with checkpoint / resume
   analyse.py       # pure analysis functions + cached wrappers
@@ -83,7 +84,8 @@ samples (version 1 summed it, version 2 averaged it): every train cache (`train/
 change is rejected with `StaleCacheError` the next time it is loaded; data caches are unaffected. A sweep ROOT whose
 settings were finished before the change is not silently reused: `sweep status` lists them as `stale`, `run_setting` raises
 `StaleCacheError` instead of calling them done, and the results notebook shows them with a note and no results. Use fresh cache directories or
-delete the old ones. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
+delete the old ones. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
+hashed train section, so every pre-existing Adam hash and cache is unchanged. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
 enters the hash by value.
 
 ## Saved files
@@ -121,6 +123,8 @@ class TrainConfig(BaseModel):
     monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
     monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
     monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1)
+    optimizer: Literal["adam", "sgld"] = "adam"
+    beta: float = 1.0                   # SGLD inverse temperature (> 0); ignored, and not hashed, for adam
 class MeanFieldConfig(BaseModel):
     n_points: int = 100                 # solve on the first n_points training points (X=x[:n_points])
     beta: float = 1e6
@@ -263,7 +267,7 @@ def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[st
     # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2
     # weight_l2 = sum of squares of every parameter, rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
-History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus the monitor_* keys below when monitored
+History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus grad_norm, param_msd for SGLD; plus the monitor_* keys below when monitored
 def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
           monitor: Callable[[MLP], dict[str, list]] | None = None) -> tuple[MLP, History]
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
@@ -273,6 +277,24 @@ def train_from_config(cfg: Config, dataset: Dataset, cache_dir: Path, log=print,
     # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the sweep
 def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[MLP, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
 ```
+
+SGLD (`train.optimizer = "sgld"`, `fct/sgld.py`). The `SGLD(params, lr, beta)` optimiser takes the full-batch
+Euler-Maruyama step `theta <- theta - lr * grad L + sqrt(2 * lr / beta) * N(0, I)` with `dt = lr`, where `L` is the
+unchanged `compute_loss`. Its stationary law is `p(theta) ~ exp(-beta L)` as `lr -> 0`; at finite `lr` the stationary
+variance on a quadratic of curvature `c` is `1 / (beta c (1 - lr c / 2))`. The noise is drawn from the global torch
+generator, whose state is checkpointed, so a resumed SGLD run equals an uninterrupted one exactly. `optimizer="adam"`
+(default) is unchanged. SGLD histories carry two extra per-logged-epoch keys: `grad_norm` (L2 norm of the full gradient of
+the step) and `param_msd` (squared displacement of the step, averaged over parameters; `param_msd / (2 lr)` is an
+effective temperature that tends to `1/beta` when the noise dominates the drift).
+
+Mapping to `Latex/sections/01_setup.tex`. The Latex trains `d(theta) = -grad L_tex dt + sqrt(2/beta) eta` with
+`L_tex = N/(2Pn) sum (f - y)^2 + (1/beta) P_weight + (1/beta) P_rates`, i.e. `p ~ exp(-beta L_tex)`. The repo loss is
+`L = 0.5 N mse + weight_lambda weight_l2 + rate_lambda rate_l2` and `mse` is the mean over the P*n entries, so the data
+terms agree and `beta L_tex = beta (0.5 N mse) + P_weight + P_rates`. SGLD on `L` at inverse temperature `beta` samples
+`exp(-beta L) = exp(-beta 0.5 N mse - beta weight_lambda weight_l2 - beta rate_lambda rate_l2)`. The Latex regulariser
+strengths are therefore `lambda_tex = beta * lambda_repo` (`P_weight = lambda_tex weight_l2`, likewise for the rates), and
+`weight_lambda` / `rate_lambda` stay the repo's own quantities. `beta` sets only the noise, never the loss; `lr` is the step
+size `dt`. (The mean-field code uses the same mapping, `alpha = lambda_w P D_out / beta`.)
 
 Monitor hook: `monitor(net)` is called under `torch.no_grad()` with the global RNG state restored afterwards,
 at the START of every epoch e with `e % monitor_int == 0` (after e's periodic checkpoint, before its step; so e = 0

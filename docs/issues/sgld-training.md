@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: todo
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->

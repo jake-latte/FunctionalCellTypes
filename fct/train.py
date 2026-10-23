@@ -23,12 +23,16 @@ from fct.cache import (
 from fct.config import Config, TrainConfig, resolve_device, resolve_dtype
 from fct.data import Dataset
 from fct.model import MLP, make_net
+from fct.sgld import SGLD
 
 History = dict[str, list]  # monitor entries are lists over layers, the rest numbers
 Monitor = Callable[[MLP], dict[str, list]]
 MONITOR_PREFIX = "monitor_"  # history keys of monitor results: monitor_epoch, monitor_<key>
 MONITOR_EPOCH = f"{MONITOR_PREFIX}epoch"
 _HISTORY_KEYS = ("epoch", "mse", "weight_l2", "rate_l2", "loss")
+# Extra history keys of SGLD runs: the gradient norm and the mean squared parameter
+# displacement per step (see `SGLD.last_msd`), both of the step taken at the logged epoch.
+_SGLD_KEYS = ("grad_norm", "param_msd")
 _REQUIRED_KEYS = ("epoch", "net_state_dict", "optim_state_dict", "history", "rng_state")
 
 
@@ -128,20 +132,39 @@ def _log_line(epoch: int, n_epochs: int, parts: dict[str, float]) -> str:
     )
 
 
+def _history_keys(optimizer: str) -> tuple[str, ...]:
+    return _HISTORY_KEYS + (_SGLD_KEYS if optimizer == "sgld" else ())
+
+
 def _record(history: History, epoch: int, parts: dict[str, float]) -> None:
     history["epoch"].append(epoch)
-    for key in _HISTORY_KEYS[1:]:
-        history[key].append(parts[key])
+    for key, value in parts.items():
+        history[key].append(value)
+
+
+def _make_optimiser(net: MLP, tc: TrainConfig) -> torch.optim.Optimizer:
+    if tc.optimizer == "sgld":
+        return SGLD(net.parameters(), lr=tc.lr, beta=tc.beta)
+    return torch.optim.Adam(net.parameters(), lr=tc.lr)
+
+
+def _grad_norm(net: MLP) -> Tensor:
+    return torch.sqrt(sum(p.grad.square().sum() for p in net.parameters()))
 
 
 def _step(
     net: MLP, optim: torch.optim.Optimizer, dataset: Dataset, tc: TrainConfig
 ) -> dict[str, Tensor]:
-    """One full-batch Adam step; returns the loss parts from before the step."""
+    """One full-batch optimiser step; returns the loss parts from before the step (for SGLD
+    also the gradient norm and the step's mean squared displacement)."""
     optim.zero_grad()
     loss, parts = compute_loss(net, dataset.x, dataset.y, tc.weight_lambda, tc.rate_lambda)
     loss.backward()
+    if isinstance(optim, SGLD):
+        parts["grad_norm"] = _grad_norm(net).detach()
     optim.step()
+    if isinstance(optim, SGLD):
+        parts["param_msd"] = optim.last_msd
     return parts
 
 
@@ -152,8 +175,8 @@ def _check_monitor_matches_config(cfg: Config, monitor: Monitor | None) -> None:
         raise ValueError("a monitor was passed but train.monitor_int=0 disables monitoring")
 
 
-def _new_history(monitored: bool) -> History:
-    history: History = {key: [] for key in _HISTORY_KEYS}
+def _new_history(monitored: bool, optimizer: str) -> History:
+    history: History = {key: [] for key in _history_keys(optimizer)}
     if monitored:
         history[MONITOR_EPOCH] = []
     return history
@@ -200,7 +223,8 @@ def train(
     log: Callable[[str], None] = print,
     monitor: Monitor | None = None,
 ) -> tuple[MLP, History]:
-    """Train `net` in place on the full dataset; resume from the latest checkpoint if any.
+    """Train `net` in place on the full dataset (Adam or SGLD, `train.optimizer`); resume from
+    the latest checkpoint if any.
 
     If `final.pt` exists the net is loaded from it and nothing else happens (no optimiser,
     no RNG change). A checkpoint with `epoch=s` is written before the step of epoch s; the
@@ -225,13 +249,13 @@ def train(
         net.load_state_dict(payload["net_state_dict"])
         return net, payload["history"]
 
-    optim = torch.optim.Adam(net.parameters(), lr=tc.lr)
+    optim = _make_optimiser(net, tc)
     ckpt = latest_checkpoint(train_dir)
     if ckpt is None:
-        # Nothing in the full-batch loop draws from the global RNG today; the state is kept
-        # for future stochastic steps and for downstream code.
+        # Adam draws nothing from the global RNG; SGLD draws its step noise from it, which is
+        # why the RNG state is checkpointed.
         torch.manual_seed(tc.seed)
-        start, history = 0, _new_history(monitor is not None)
+        start, history = 0, _new_history(monitor is not None, tc.optimizer)
     else:
         start, history, note = _restore(ckpt, cfg, net, optim)
         log(f"resumed from {ckpt} at epoch {start}" + (f" ({note})" if note else ""))
