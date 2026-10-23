@@ -33,10 +33,11 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `monitor.py` | `make_mir_monitor`: the training hook that records per-layer MIR during training |
 | `sweep.py` | a grid of runs over any `Config` fields: `SweepConfig`, `expand`, `run_setting`, `setting_status`, presets |
 | `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
+| `grid_view.py` | from a sweep ROOT to the phase-transition figures: snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `meanfield.py` | HMC sampler and the mean-field saddle-point solver |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
-| `notebooks/` | `build_modularity.py` builds the results notebook; `modularity.ipynb` is its source (no outputs) |
+| `notebooks/` | `build_modularity.py` and `build_phase_transition.py` build the results notebooks; the `.ipynb` files are their sources (no outputs) |
 | `jobs/fct_sweep.sh` | SLURM array script for the sweep |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
 
@@ -105,6 +106,20 @@ committed. Build and execute it on a sweep (the output goes to the git-ignored `
 ```sh
 uv run python notebooks/build_modularity.py ROOT                 # execute on ROOT -> tmp/modularity.ipynb
 uv run python notebooks/build_modularity.py --no-execute         # rebuild the committed source notebook
+```
+
+**Phase-transition notebook.** For a sweep made with `--preset phase_transition`: pick a setting by
+`L`, `PHI`, `LAMBDA_R`, `LAMBDA_W` (snapped to the nearest grid value, which is printed) to see its loss
+curves, example outputs, MIR over training and the tuning curves of its neurons; then the MIR of every
+network of one depth and activation, as a (lambda_r, lambda_w) matrix per hidden layer and against
+lambda_r / lambda_w. A setting still running is shown from its latest checkpoint and labelled
+provisional; a missing one gets a message. The default MIR is the shuffle-bias-corrected one (`MIR_KIND`
+switches to raw). The lambdas must be positive (log axes), and a request outside the grid snaps to its
+nearest endpoint, signalled only by the printed "snapped to" line. Logic is in `fct/grid_view.py`; only the source notebook is committed.
+
+```sh
+uv run python notebooks/build_phase_transition.py ROOT           # execute on ROOT -> tmp/phase_transition.ipynb
+uv run python notebooks/build_phase_transition.py --no-execute   # rebuild the committed source notebook
 ```
 
 ## Python library: single runs and the mean-field solver

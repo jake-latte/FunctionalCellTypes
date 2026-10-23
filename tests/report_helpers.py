@@ -4,7 +4,7 @@
 from pathlib import Path
 
 from fct.report import SettingResult
-from fct.sweep import Setting, expand, preset
+from fct.sweep import Setting, SweepConfig, expand, phase_transition, preset
 
 QUIET = {"log": lambda s: None}  # keyword arguments for run_setting: no progress output
 
@@ -53,3 +53,10 @@ def synthetic_results(missing=()) -> list[SettingResult]:
         else:
             out.append(SettingResult(s, "done", Path("here"), history=synthetic_history(s)))
     return out
+
+
+def tiny_phase_sweep() -> SweepConfig:
+    """The phase_transition grid with 2 points per lambda, at the sizes of the `tiny` preset."""
+    tree = preset("tiny").model_dump()
+    tree["grid"] = phase_transition(2).grid
+    return SweepConfig.model_validate(tree)
