@@ -17,6 +17,7 @@ from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
+from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Rectangle
 from matplotlib.ticker import MaxNLocator
@@ -1071,7 +1072,7 @@ def _draw_mir_cells(
     vmin: float,
     vmax: float,
     origin: str = "upper",
-):
+) -> AxesImage:
     """Cells of a MIR heatmap: `shades` coloured on [vmin, vmax] (NaN in the missing-cell grey),
     labelled ticks, each finite value written in its cell. Returns the image for a colourbar."""
     cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)

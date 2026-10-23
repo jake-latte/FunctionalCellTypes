@@ -18,7 +18,8 @@ Source notebook built by a script (as `notebooks/build_modularity.py`; executed 
 4. **Global matrix plot.** Select depth and activation; for each hidden layer one heat-map with lambda_r on one axis, lambda_w on the other, colour = average MIR of that layer (final or latest checkpoint; missing cells blank). Shared colour scale.
 5. **Global scatter plot.** Same selection; x = lambda_r / lambda_w (log axis), y = layer-average MIR, one dot per network, colour = hidden layer.
 
-Choices to confirm: "average MIR" = the existing per-layer mean MIR with the shuffle-bias-corrected variant as default and a toggle for raw; tuning curves use phi (firing rate), not h; lambda ratio uses grid values as is.
+Note (2026-10-23): the helper's signature is `mir_grid(records, lambda_r_values, lambda_w_values, n_layers)`;
+`n_layers` is required so a layer with no records is a NaN plane, not silently dropped. Choices to confirm: "average MIR" = the existing per-layer mean MIR with the shuffle-bias-corrected variant as default and a toggle for raw; tuning curves use phi (firing rate), not h; lambda ratio uses grid values as is.
 
 ## Acceptance criteria
 - Pure data-preparation functions (tuning curves, MIR-order selection, grid-to-matrix assembly, ratio table) live in `fct/` with tests on synthetic data with known tuning (e.g. a neuron that is a known function of latent 2 gives a curve with that shape on latent 2 and flat on the others; ordering by MIR is correct; a grid with holes gives NaN cells).
