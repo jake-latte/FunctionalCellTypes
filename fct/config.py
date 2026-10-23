@@ -9,7 +9,7 @@ Fields are range-constrained too, so impossible values fail at load time naming 
 import hashlib
 import json
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 import torch
 from pydantic import Field, model_validator
@@ -103,10 +103,18 @@ class TrainConfig(StrictModel):
     beta: PosFloat = 1.0
 
 
-class MeanFieldConfig(StrictModel):
-    n_points: PosInt = 100  # solve on the first n_points training points
-    beta: PosFloat = 1e6
-    readout: Literal["h", "phi"] = "h"
+class SolverConfig(StrictModel):
+    """How the saddle point is found: Algorithm 1, the single-site sampler, the initial guess,
+    logging and checkpoints. `MeanFieldConfig` holds the equations being solved.
+
+    `sampler` picks the single-site expectations: persistent HMC chains ("hmc") or
+    self-normalised importance sampling from the Gaussian prior ("importance", see
+    `fct.importance`). Only HMC reads n_chains, n_leap, eps0, target_accept, adapt_rate,
+    precondition, max_div_frac and eps_collapse; only importance sampling reads the importance
+    block; both read everything else (a run is n_trans / n_trans_outer transitions of either).
+    """
+
+    sampler: Literal["hmc", "importance"] = "hmc"
     # Algorithm 1
     n_outer: PosInt = 300
     n_inner_max: PosInt = 30
@@ -127,11 +135,7 @@ class MeanFieldConfig(StrictModel):
     max_rel_step: PosFloat = 0.1
     pd_floor_rel: PosFloat = 1e-8
     inv_floor_rel: PosFloat = 1e-4
-    prior_scale: PosFloat | None = None
-    alpha: PosFloat | None = None
-    learning_prefactor: PosFloat = 0.5
-    rate_tilt: NonNegFloat | None = None
-    # HMC
+    # Sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition)
     n_chains: PosInt = 2048
     n_trans: PosInt = 2
     n_trans_outer: PosInt = 5
@@ -143,11 +147,97 @@ class MeanFieldConfig(StrictModel):
     sample_dtype: Literal["float32", "float64"] = "float32"
     jitter_rel: PosFloat = 1e-6
     precondition: bool = True
+    # Importance sampling: draws per transition (n_trans / n_trans_outer transitions per run,
+    # as for HMC) and the proposal N(0, s^2 Sigma) with s = importance_proposal_scale.
+    # min_ess_drop: a step is reverted (and its step size halved, as with max_h2_growth) when
+    # the ESS fraction after it is below min_ess_drop times that of the accepted point before it.
+    # min_ess_frac: the ESS fraction every accepted point must reach; below it the prior
+    # proposal is inadequate for the problem and `solve` raises. Both enter the importance
+    # hash (conservative: lowering the floor after a raise starts a fresh cache directory
+    # rather than resuming the raised run's checkpoints).
+    n_importance_samples: PosInt = 4096
+    importance_proposal_scale: PosFloat = 1.0
+    min_ess_drop: Annotated[float, Field(gt=0, le=1)] = 0.1
+    min_ess_frac: Annotated[float, Field(ge=0, le=1)] = 0.01
+    # Initial guess, logging, checkpoints, randomness
     init: Literal["lazy", "gaussian", "net"] = "lazy"
     n_init_samples: PosInt = 20_000
     log_int: PosInt = 5
     save_int: PosInt = 10
     seed: int = 0
+
+
+# The solver fields that existed before the sampler choice. They enter the mean-field result
+# hash exactly as they did then (flat, next to the problem fields), so results solved before
+# the sampler choice existed stay valid. log_int and save_int change no number but are among
+# them: dropping them would change every existing hash.
+LEGACY_SOLVER_FIELDS = (
+    "n_outer", "n_inner_max", "inner_tol", "inner_tol_mc", "eta_phi", "eta_phihat", "eta_max",
+    "eta_grow", "max_backtrack", "eta_min_rel", "max_div_frac", "max_h2_growth", "max_mc_err",
+    "eps_collapse", "project_tilt", "tilt_floor", "max_rel_step", "pd_floor_rel",
+    "inv_floor_rel", "n_chains", "n_trans", "n_trans_outer", "n_leap", "eps0", "target_accept",
+    "adapt_rate", "warmup_trans", "sample_dtype", "jitter_rel", "precondition", "init",
+    "n_init_samples", "log_int", "save_int", "seed",
+)  # fmt: skip
+# Fields that enter the result hash only when sampler == "importance": with "hmc" they change
+# nothing, and leaving them out keeps the hash of an HMC solve what it always was.
+IMPORTANCE_FIELDS = (
+    "sampler", "n_importance_samples", "importance_proposal_scale", "min_ess_drop",
+    "min_ess_frac",
+)  # fmt: skip
+
+
+class MeanFieldConfig(StrictModel):
+    """The mean-field problem: which points, and the constants of the action (`beta`, the
+    prior scale, `alpha`, the learning prefactor, the rate tilt; None means "derived from the
+    train section", see `fct.meanfield`). How it is solved is `solver`.
+
+    A flat section in the layout used before the split (solver fields next to the problem
+    fields) still loads: the solver keys are moved into `solver`. A key given both flat and in
+    `solver` is an error.
+    """
+
+    n_points: PosInt = 100  # solve on the first n_points training points
+    beta: PosFloat = 1e6
+    readout: Literal["h", "phi"] = "h"
+    prior_scale: PosFloat | None = None
+    alpha: PosFloat | None = None
+    learning_prefactor: PosFloat = 0.5
+    rate_tilt: NonNegFloat | None = None
+    solver: SolverConfig = SolverConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _flat_solver_keys_into_the_group(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        flat = {k: v for k, v in data.items() if k in SolverConfig.model_fields}
+        if not flat:
+            return data
+        group = data.get("solver", {})
+        if isinstance(group, SolverConfig):
+            group = group.model_dump(exclude_unset=True)
+        if not isinstance(group, dict):
+            return data  # let field validation report the bad `solver` value
+        twice = sorted(flat.keys() & group.keys())
+        if twice:
+            raise ValueError(
+                f"{twice} given both in meanfield and in meanfield.solver; "
+                "set solver fields only in meanfield.solver"
+            )
+        rest = {k: v for k, v in data.items() if k not in flat}
+        return {**rest, "solver": {**group, **flat}}
+
+    def hash_payload(self) -> dict[str, Any]:
+        """The section as it enters a cache hash: the problem fields and LEGACY_SOLVER_FIELDS
+        in one flat dict (the pre-split layout), plus IMPORTANCE_FIELDS when the sampler is
+        "importance"."""
+        solver = self.solver.model_dump()
+        payload = self.model_dump(exclude={"solver"})
+        payload.update({k: solver[k] for k in LEGACY_SOLVER_FIELDS})
+        if self.solver.sampler != "hmc":
+            payload.update({k: solver[k] for k in IMPORTANCE_FIELDS})
+        return payload
 
 
 class AnalysisConfig(StrictModel):
@@ -176,7 +266,8 @@ class Config(StrictModel):
         belongs to no section. So is `LOSS_VERSION` when "train" is among the sections, and
         `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser. The
         `spatial` section enters with "train" only when it is set, so runs without a spatial
-        prior keep the hashes they had before the section existed.
+        prior keep the hashes they had before the section existed. The meanfield section
+        enters as `MeanFieldConfig.hash_payload()`, not as its dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
@@ -185,6 +276,8 @@ class Config(StrictModel):
         if unknown:
             raise ValueError(f"unknown config sections {sorted(unknown)}")
         hashed = self.model_dump(include={*sections, "dtype"})
+        if "meanfield" in sections:
+            hashed["meanfield"] = self.meanfield.hash_payload()
         if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes

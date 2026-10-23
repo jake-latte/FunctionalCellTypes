@@ -20,7 +20,8 @@ fct/
   model.py         # MLP architecture, make_net
   train.py         # training loop with checkpoint / resume (Adam or SGLD)
   sgld.py          # SGLD torch optimiser
-  hmc.py           # SingleSiteHMC sampler + linear-algebra helpers
+  hmc.py           # SingleSiteHMC sampler, the pure single-site density pieces, linear-algebra helpers
+  importance.py    # ImportanceSampler: self-normalised IS of the single-site density from the prior
   meanfield.py     # saddle-point solver (Algorithm 1) with checkpoint / resume
   analyse.py       # pure analysis functions + cached wrappers
   modularity.py    # neuron-factor mutual information, preference, MIR (pure)
@@ -76,7 +77,7 @@ a fresh cache directory or delete the stale artefact (principle 9).
 |------------|--------------------------------------------|
 | data       | data                                       |
 | train      | data, net, train                           |
-| meanfield  | data, net, train, meanfield                |
+| meanfield  | data, net, train, meanfield (problem + hashed solver fields) |
 | analysis   | data, net, train, analysis                 |
 
 Every artefact additionally depends on `dtype`; `section_hash` always includes it. The hash of any set of sections that
@@ -89,6 +90,15 @@ settings were finished before the change is not silently reused: `sweep status` 
 delete the old ones. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
 hashed train section, so every pre-existing Adam hash and cache is unchanged. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
 enters the hash by value.
+
+The meanfield section enters every hash as `MeanFieldConfig.hash_payload()`, not as its nested dump: the problem fields
+and the solver fields that existed before the sampler choice (`config.LEGACY_SOLVER_FIELDS`, `log_int` and `save_int`
+included) in one flat dict, which is exactly how the section was hashed before it was split, so every existing meanfield
+result keeps its hash. `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
+`sampler="importance"`: switching sampler makes a result stale, importance settings never touch an HMC result. Every
+solver field is in exactly one of the two lists (a test enforces it), so a new field has to be given a hash rule
+explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
+cache stale.
 
 ## Saved files
 
@@ -127,10 +137,18 @@ class TrainConfig(BaseModel):
     monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1)
     optimizer: Literal["adam", "sgld"] = "adam"
     beta: float = 1.0                   # SGLD inverse temperature (> 0); ignored, and not hashed, for adam
-class MeanFieldConfig(BaseModel):
+class MeanFieldConfig(BaseModel):      # the problem: the equations being solved
     n_points: int = 100                 # solve on the first n_points training points (X=x[:n_points])
     beta: float = 1e6
     readout: Literal["h", "phi"] = "h"
+    prior_scale: float | None = None; alpha: float | None = None   # None: derived from train (see meanfield.py)
+    learning_prefactor: float = 0.5; rate_tilt: float | None = None
+    solver: SolverConfig = SolverConfig()
+    def hash_payload(self) -> dict      # what enters section hashes (see the cache section above)
+    # before-validator: a flat section in the pre-split layout (solver keys next to the problem keys) loads, its solver
+    # keys moved into `solver`; a key given both flat and in `solver` is a ValidationError naming it
+class SolverConfig(BaseModel):        # how it is solved
+    sampler: Literal["hmc", "importance"] = "hmc"
     # Algorithm 1 (defaults = notebook cell 25 / solve() signature)
     n_outer: int = 300; n_inner_max: int = 30; inner_tol: float = 1e-2; inner_tol_mc: float = 2.0
     eta_phi: float = 0.05; eta_phihat: float = 0.05; eta_max: float = 1.0; eta_grow: float = 1.1
@@ -138,13 +156,16 @@ class MeanFieldConfig(BaseModel):
     max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
     pd_floor_rel: float = 1e-8; inv_floor_rel: float = 1e-4
-    prior_scale: float | None = None; alpha: float | None = None
-    learning_prefactor: float = 0.5; rate_tilt: float | None = None
-    # HMC
+    # sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition; also max_div_frac, eps_collapse)
     n_chains: int = 2048; n_trans: int = 2; n_trans_outer: int = 5; n_leap: int = 10
     eps0: float = 0.05; target_accept: float = 0.75; adapt_rate: float = 0.05
     warmup_trans: int = 200; sample_dtype: Literal["float32", "float64"] = "float32"
     jitter_rel: float = 1e-6; precondition: bool = True
+    # importance sampling (read only when sampler="importance")
+    n_importance_samples: int = 4096    # fresh draws per transition (n_trans / n_trans_outer transitions per run)
+    importance_proposal_scale: float = 1.0   # s > 0: proposal N(0, s^2 Sigma)
+    min_ess_drop: float = 0.1           # in (0, 1]: a step after which ESS / draws < min_ess_drop x that of the point before is reverted
+    min_ess_frac: float = 0.01          # in [0, 1]: ESS / draws every accepted point must reach, else InadequateSamplerError
     init: Literal["lazy", "gaussian", "net"] = "lazy"; n_init_samples: int = 20_000
     log_int: int = 5; save_int: int = 10; seed: int = 0
 class AnalysisConfig(BaseModel):
@@ -337,7 +358,37 @@ def sym(A), project_pd(A, floor_rel), relative_fro(A, B), kernel_alignment(A, B)
 class SingleSiteHMC      # verbatim port; plus
     def state_dict(self) -> dict      # h-coordinates chain state (float64), log_eps, prev_summary, counters -> all tensors / scalars
     def load_state_dict(self, d) -> None
+# pure pieces of the single-site density, shared with importance.py (SingleSiteHMC's methods call them):
+def jittered_prior(Sigma, jitter_rel) -> (Sigma_j, chol, inv); def tilt_and_grad(h, M, lambda_r, phi, phi_prime, psi_is_phi) -> (U, u)
+def psi_psi_rel_mc_err(psi_psi, psi2_psi2, n_eff); def stein_mismatch(h_h, h_u, Sigma)
+def project_tilt(M, delta, lambda_r, psi_is_phi, Sigma_chol); def normalisability_margin(M64, Sigma_inv, lambda_r, psi_is_phi)
 ```
+
+## importance.py
+
+```python
+class ImportanceSampler(Sigma, M, lambda_r, phi, psi_is_phi, n_samples=4096, proposal_scale=1.0, jitter_rel=1e-6,
+                        sample_dtype=float32, generator=None)
+    # the solver-facing interface of SingleSiteHMC: run(n_trans, collect) -> (moments, diag), set_prior, set_tilt,
+    # get_state / set_state (no state: None), state_dict / load_state_dict ({"sampler": "importance", counter};
+    # an HMC state is a ValueError), tilt_and_grad, project_tilt, normalisability_margin
+```
+
+Each transition draws `n_samples` fresh, independent h = s L z from the proposal N(0, s² Σ) (s = `proposal_scale`,
+s = 1 is the prior) and weights them by log w = ½(1 - s²)|z|² - U(h), U the tilt; a run self-normalises all its
+transitions' weights together (log-sum-exp per batch, combined across batches) and accumulates the moments in float64.
+A non-finite log weight raises `FloatingPointError`. `run(n_trans, collect)` always draws `n_trans` batches, as
+`SingleSiteHMC.run` makes `n_trans` transitions; the solver warms an importance sampler up with one transition, since
+independent draws have nothing to equilibrate. Diagnostics: `ess_frac` (Kish ESS (Σw)²/Σw² over the draws), `ess`, `max_weight` (largest normalised
+weight), `h2_mean` (weighted), `prior_h2`, and with collect `psi_psi_rel_mc_err` (n_eff = ESS) and `stein_mismatch`;
+the HMC-only keys (`accept`, `eps`, `n_divergent`, `n_reset`, `max_abs_dH`, `mean_abs_dH`, `rho1`, `h2_max`) are NaN.
+When one draw dominates, the variance-based MC error reads ~0 (one point has no spread): weight collapse is detected by
+`ess_frac` / `max_weight`, which is why the solver gates on the ESS (see meanfield.py).
+
+**Limitation: the prior proposal is for small P and mild tilts.** Its ESS fraction is a property of the point being
+sampled, not of the solver's step, and it falls roughly exponentially with P and with the tilt. Measured at the start of
+a relu, L=2, beta=1e3 problem, layer 1: 0.08 at P=8, 0.03 at P=16, 0.0085 at P=48 (seed-dependent: 0.013 at seed 0), 2e-4 to 2e-3 at P=100 (the default
+`n_points`). More draws do not raise the fraction. At realistic P use `sampler="hmc"`.
 
 ## meanfield.py
 
@@ -345,19 +396,27 @@ class SingleSiteHMC      # verbatim port; plus
 @torch.no_grad()
 def empirical_kernels(net, X, readout) -> tuple[Tensor, Tensor]     # notebook
 @dataclass
-class SolveResult: Phi: Tensor; Phi_hat: Tensor; history: dict[str, list]; samplers: list[SingleSiteHMC]
+class SolveResult: Phi: Tensor; Phi_hat: Tensor; history: dict[str, list]; samplers: list[SingleSiteHMC | ImportanceSampler]
 def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, log=print,
           checkpoint_dir: Path | None = None, config_hash: str = "") -> SolveResult
-    # Algorithm 1 exactly as the notebook; if checkpoint_dir is given, return its final.pt if present, else
+    # Algorithm 1 exactly as the notebook, settings from cfg.solver; single-site expectations from one sampler per
+    # layer, SingleSiteHMC (solver.sampler="hmc", bit-for-bit the pre-split solver) or ImportanceSampler ("importance").
+    # A sampler run validates the step before it (backtracking): HMC on divergences / resets / step-size collapse,
+    # importance on an ESS drop (ess_frac < min_ess_drop x the ess_frac of the accepted point before the step), both on
+    # ||h||^2/P blow-up and MC error > max_mc_err. Under importance sampling every accepted point (the initial point after
+    # warm-up, each validated inner step, each outer-gradient run) must have ess_frac >= min_ess_frac, else
+    # InadequateSamplerError (a RuntimeError) is raised before any final.pt is written: the ESS is a property of the
+    # point, so backtracking cannot cure it, and carrying on would freeze the iteration at its start.
+    # If checkpoint_dir is given, return its final.pt if present, else
     # resume from its latest ckpt_*.pt (ValueError if it was written with a net and `net` is None, or vice
     # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then
-    # replaces the checkpoints
+    # replaces the checkpoints; every checkpoint stores cfg.model_dump() as "meanfield_config" for provenance
 def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> SolveResult
     # rate tilt: the solver's tilt is a per-sample coefficient of phi^T phi summed over the n_points solved points, and the
     # trained loss sums the penalty over samples, so its per-sample coefficient is exactly rate_lambda: rate_tilt=None
     # defaults to train.rate_lambda, and an explicit meanfield.rate_tilt overrides it.
     # X = dataset.x[:n_points], Y = dataset.y[:n_points]; lambda_w/lambda_r from cfg.train; phi/g/L from cfg.net
-    # hash = section_hash("data","net","train","meanfield"); returns final.pt if present
+    # hash = section_hash("data","net","train","meanfield") (meanfield as hash_payload); returns final.pt if present
 def net_kernels(net: MLP, dataset: Dataset, cfg: Config) -> Tensor   # (L, P, P) float64
     # the trained net's empirical_kernels on exactly the solver's inputs (same slicing code as run_meanfield)
     # and cfg.meanfield.readout, the net evaluated in its own dtype; for the theory-vs-net kernels figure
@@ -366,9 +425,11 @@ def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor
 ```
 
 History values are stored per outer step; arrays become lists for saving. The
-history keys are exactly those of the notebook's `keys` list (`meanfield.HISTORY_KEYS`),
+history keys are those of the notebook's `keys` list plus `is_max_weight` (`meanfield.HISTORY_KEYS`),
 except that `align_net` / `dist_net` are omitted when `solve` is given no net (instead of
-lists of `None`).
+lists of `None`). Both samplers fill every key: under importance sampling `hmc_ess_frac` is the Kish ESS fraction,
+`hmc_mc_err`, `hmc_stein_mismatch`, `hmc_h2_ratio` keep their meaning, and `hmc_accept`, `hmc_eps`, `hmc_div`,
+`hmc_reset`, `hmc_max_abs_dH`, `hmc_rho1` are NaN; under HMC `is_max_weight` (largest importance weight share) is NaN.
 
 ## analyse.py
 
@@ -463,7 +524,8 @@ plot_pca_variance(explained_variance_l, ax=None); plot_pca_similarity(sim_ij, vm
 fig_representation(pca: LayerPCA) -> Figure           # notebook cell 15 layout
 plot_neuron_map(map2d, half_width, ax=None); fig_neuron_maps(maps, half_width, n_cols, title) -> Figure   # cell 16
 plot_training_history(history, ax=None)               # mse / loss vs epoch, log y
-fig_solver_history(history) -> Figure                 # the notebook's plot_history dashboard
+fig_solver_history(history) -> Figure                 # the notebook's plot_history dashboard, plus ESS / weight-share panels;
+                                                      # absent, all-None and all-NaN columns (the other sampler's diagnostics) get no panel
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
 plot_kernel_vs_distance(space, ax=None); plot_embedding(space, ax=None)   # spatial prior of one LayerSpace: K_ij vs torus distance with the wrapped analytic curve; unit positions (ring d = 1, plane d = 2, legend outside the axis)
 fig_kernel(space: LayerSpace) -> Figure               # 2 x 2: K_pre, K_post, K vs distance, positions; ValueError for d > 2

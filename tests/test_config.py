@@ -5,7 +5,11 @@ import torch
 from pydantic import ValidationError
 
 from fct.config import (
+    IMPORTANCE_FIELDS,
+    LEGACY_SOLVER_FIELDS,
     Config,
+    MeanFieldConfig,
+    SolverConfig,
     default_config,
     load_config,
     resolve_device,
@@ -150,3 +154,68 @@ def test_loss_definition_enters_the_train_hash_only(monkeypatch):
     assert after["train"] != before["train"]
     assert all(after[s] == before[s] for s in ("data", "net", "meanfield"))
     assert cfg.section_hash("data", "net", "train", "meanfield") != combined
+
+
+# ----------------------------------------------------------------------------- meanfield split
+PROBLEM_FIELDS = {
+    "n_points", "beta", "readout", "prior_scale", "alpha", "learning_prefactor", "rate_tilt",
+}  # fmt: skip
+RESULT_SECTIONS = ("data", "net", "train", "meanfield")
+
+
+def _with_solver(cfg: Config, **solver) -> Config:
+    mf = cfg.meanfield.model_copy(update={"solver": cfg.meanfield.solver.model_copy(update=solver)})
+    return cfg.model_copy(update={"meanfield": mf})
+
+
+def test_meanfield_holds_the_problem_and_a_solver_group():
+    assert set(MeanFieldConfig.model_fields) == PROBLEM_FIELDS | {"solver"}
+    assert not PROBLEM_FIELDS & set(SolverConfig.model_fields)
+
+
+def test_flat_solver_keys_move_into_the_solver_group():
+    mf = MeanFieldConfig(beta=1e3, n_chains=64, sampler="importance")
+    assert mf.beta == 1e3
+    assert mf.solver.n_chains == 64 and mf.solver.sampler == "importance"
+    assert mf == MeanFieldConfig(beta=1e3, solver=SolverConfig(n_chains=64, sampler="importance"))
+
+
+def test_saved_config_nests_the_solver_fields(tmp_path):
+    _, raw = _saved_json(tmp_path)
+    assert set(raw["meanfield"]) == PROBLEM_FIELDS | {"solver"}
+    assert raw["meanfield"]["solver"]["sampler"] == "hmc"
+
+
+def test_a_solver_key_given_twice_is_rejected():
+    with pytest.raises(ValidationError, match="n_chains"):
+        MeanFieldConfig(n_chains=64, solver={"n_chains": 128})
+
+
+def test_unknown_meanfield_key_still_raises():
+    with pytest.raises(ValidationError):
+        MeanFieldConfig(not_a_field=1)
+
+
+def test_every_solver_field_has_a_hash_rule():
+    assert set(SolverConfig.model_fields) == set(LEGACY_SOLVER_FIELDS) | set(IMPORTANCE_FIELDS)
+    assert not set(LEGACY_SOLVER_FIELDS) & set(IMPORTANCE_FIELDS)
+
+
+def test_hmc_hash_ignores_the_importance_settings():
+    cfg = default_config()
+    other = _with_solver(cfg, n_importance_samples=17, importance_proposal_scale=2.0)
+    assert other.section_hash(*RESULT_SECTIONS) == cfg.section_hash(*RESULT_SECTIONS)
+
+
+def test_changing_the_sampler_makes_the_result_stale():
+    cfg = default_config()
+    importance = _with_solver(cfg, sampler="importance")
+    assert importance.section_hash(*RESULT_SECTIONS) != cfg.section_hash(*RESULT_SECTIONS)
+    wider = _with_solver(importance, importance_proposal_scale=2.0)
+    assert wider.section_hash(*RESULT_SECTIONS) != importance.section_hash(*RESULT_SECTIONS)
+
+
+def test_solver_settings_never_touch_the_training_hash():
+    cfg = default_config()
+    other = _with_solver(cfg, sampler="importance", n_chains=3, seed=9)
+    assert other.section_hash("data", "net", "train") == cfg.section_hash("data", "net", "train")

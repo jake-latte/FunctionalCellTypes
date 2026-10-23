@@ -1,5 +1,6 @@
-"""Mean-field saddle-point solver: Algorithm 1 of arXiv:2502.07998 with persistent-HMC
-single-site expectations, plus checkpoint / resume of the outer loop.
+"""Mean-field saddle-point solver: Algorithm 1 of arXiv:2502.07998 with single-site
+expectations from persistent HMC or from importance sampling, plus checkpoint / resume of the
+outer loop.
 
 The solver finds  min_Φ max_Φ̂ S(Φ, Φ̂)  for the action
 
@@ -8,7 +9,8 @@ The solver finds  min_Φ max_Φ̂ S(Φ, Φ̂)  for the action
 where Z_l normalises the single-site density of layer l (see `fct.hmc`): prior
 N(0, Σ_l), Σ_l = prior_scale · g² Φ_{l-1} (Σ_0 = prior_scale · Φ0, Φ0 = XXᵀ/D_in), tilted by
 exp(-½ ψᵀΦ̂_l ψ - ½ λ_r φᵀφ).  ln Z is never estimated: every derivative of S is an
-expectation under that density, which the per-layer `SingleSiteHMC` chains provide:
+expectation under that density, which a per-layer sampler provides: `SingleSiteHMC` chains
+(solver.sampler="hmc") or an `ImportanceSampler` drawing from the prior ("importance"):
 
     ∂S/∂Φ̂_l = ½(⟨ψψᵀ⟩_l - Φ_l)
     ∂S/∂Φ_l = -½ Φ̂_l + ½ sym(⟨u hᵀ⟩_{l+1} Φ_l⁻¹)        (Stein form of Eq. 31b)
@@ -26,6 +28,8 @@ Layers: `solve` is the computation (it touches disk only when given a checkpoint
 `run_meanfield` / `load_meanfield` are the cache-directory I/O.  The outer loop mutates one
 `_SolverState`; everything needed to continue it bit-for-bit (up to the float round trip of
 the chain state) is in that object, which is what makes checkpoint / resume straightforward.
+The problem constants come from `MeanFieldConfig`, everything about how it is solved from its
+`solver` group (`SolverConfig`).
 """
 
 import time
@@ -37,7 +41,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from fct.activations import Activation, get_phi
+from fct.activations import Activation, get_phi, phi_prime
 from fct.cache import (
     cache_paths,
     latest_checkpoint,
@@ -45,9 +49,17 @@ from fct.cache import (
     save_artefact,
     write_checkpoint,
 )
-from fct.config import Config, MeanFieldConfig, resolve_dtype
+from fct.config import Config, MeanFieldConfig, SolverConfig, resolve_dtype
 from fct.data import Dataset
-from fct.hmc import SingleSiteHMC, kernel_alignment, project_pd, relative_fro, sym
+from fct.hmc import (
+    SingleSiteHMC,
+    kernel_alignment,
+    project_pd,
+    relative_fro,
+    sym,
+    tilt_and_grad,
+)
+from fct.importance import ImportanceSampler
 from fct.model import MLP
 
 F64 = torch.float64
@@ -57,7 +69,10 @@ CKPT_PREFIX, CKPT_WIDTH, FINAL_NAME = "ckpt_", 5, "final.pt"
 # only when `solve` is given a net: their entries are per-layer arrays, and a list of None
 # in their place would break code that stacks them.  `train_mse_net` is a scalar per step and
 # stays a per-step None without a net (None is weights_only-loadable, and
-# `draw.fig_solver_history` treats an all-None column as absent).
+# `draw.fig_solver_history` treats an all-None column as absent).  The hmc_* keys are filled
+# by both samplers where they mean something (ess_frac, mc_err, stein_mismatch, h2_ratio) and
+# are NaN under importance sampling where they do not (accept, eps, div, reset, max_abs_dH,
+# rho1); the is_* keys are NaN under HMC.
 HISTORY_KEYS = (
     "outer_step", "time", "inner_steps", "inner_residual", "inner_grad_rel", "inner_converged",
     "step_clipped", "eta_phi", "eta_phihat", "n_backtrack_inner", "n_backtrack_outer",
@@ -65,7 +80,7 @@ HISTORY_KEYS = (
     "trace_term", "learning_term", "train_mse_theory", "train_mse_net",
     "phi_lambda_min", "n_pd_clamped", "norm_margin",
     "hmc_accept", "hmc_eps", "hmc_div", "hmc_reset", "hmc_max_abs_dH", "hmc_rho1", "hmc_ess_frac",
-    "hmc_mc_err", "hmc_stein_mismatch", "hmc_h2_ratio",
+    "hmc_mc_err", "hmc_stein_mismatch", "hmc_h2_ratio", "is_max_weight",
     "align_net", "dist_net", "phi_change_rel", "phihat_change_rel",
 )  # fmt: skip
 NET_KEYS = ("align_net", "dist_net")
@@ -77,6 +92,11 @@ _ARRAY_KEYS = frozenset(HISTORY_KEYS) - {
 
 History = dict[str, list]
 Log = Callable[[str], Any]
+Sampler = SingleSiteHMC | ImportanceSampler
+
+
+class InadequateSamplerError(RuntimeError):
+    """Importance sampling from the prior cannot represent the density at an accepted point."""
 
 
 # ----------------------------------------------------------------------------- public results
@@ -112,7 +132,7 @@ class SolveResult:
     Phi: torch.Tensor  # (L, P, P)
     Phi_hat: torch.Tensor  # (L, P, P)
     history: History  # HISTORY_KEYS -> one entry per outer step
-    samplers: list[SingleSiteHMC]  # live chains at the end of the run, for inspection
+    samplers: list[Sampler]  # live samplers at the end of the run, for inspection
 
 
 # ----------------------------------------------------------------------------- problem constants
@@ -138,6 +158,10 @@ class _Problem:
     @property
     def P(self) -> int:
         return self.X.shape[0]
+
+    @property
+    def solver(self) -> SolverConfig:
+        return self.cfg.solver
 
     @property
     def dev(self) -> torch.device:
@@ -175,7 +199,7 @@ def _make_problem(
         rate_tilt=lambda_r if cfg.rate_tilt is None else cfg.rate_tilt,
         lp=cfg.learning_prefactor,
         psi_is_phi=(True,) * (L - 1) + (cfg.readout == "phi",),
-        sample_dtype=resolve_dtype(cfg.sample_dtype),
+        sample_dtype=resolve_dtype(cfg.solver.sample_dtype),
     )
 
 
@@ -184,11 +208,35 @@ def _prior_cov(prob: _Problem, l: int, Phi: torch.Tensor) -> torch.Tensor:
     return prob.prior_scale * (prob.Phi0 if l == 0 else (prob.g**2) * Phi[l - 1])
 
 
+def _draws_per_transition(c: SolverConfig) -> int:
+    """Samples one transition adds: HMC chains, or fresh importance draws."""
+    return c.n_importance_samples if c.sampler == "importance" else c.n_chains
+
+
+def _warmup_trans(c: SolverConfig) -> int:
+    """Warm-up transitions: HMC chains must equilibrate; independent importance draws need no
+    warm-up, so one transition just measures the starting point."""
+    return 1 if c.sampler == "importance" else c.warmup_trans
+
+
 def _new_sampler(
     prob: _Problem, l: int, Sigma: torch.Tensor, M: torch.Tensor, generator: torch.Generator
-) -> SingleSiteHMC:
-    """Sampler for layer l with prior Σ, tilt M and the HMC settings of cfg."""
-    c = prob.cfg
+) -> Sampler:
+    """Sampler for layer l with prior Σ and tilt M, of the kind and settings of the solver."""
+    c = prob.solver
+    if c.sampler == "importance":
+        return ImportanceSampler(
+            Sigma,
+            M,
+            prob.rate_tilt,
+            prob.phi,
+            prob.psi_is_phi[l],
+            n_samples=c.n_importance_samples,
+            proposal_scale=c.importance_proposal_scale,
+            jitter_rel=c.jitter_rel,
+            sample_dtype=prob.sample_dtype,
+            generator=generator,
+        )
     return SingleSiteHMC(
         Sigma,
         M,
@@ -207,8 +255,8 @@ def _new_sampler(
     )
 
 
-def _make_samplers(prob: _Problem, Phi, Phi_hat, gen) -> list[SingleSiteHMC]:
-    """One persistent sampler per layer, prior Σ_l(Φ) and tilt Φ̂_l (chains drawn from gen)."""
+def _make_samplers(prob: _Problem, Phi, Phi_hat, gen) -> list[Sampler]:
+    """One persistent sampler per layer, prior Σ_l(Φ) and tilt Φ̂_l (draws from gen)."""
     return [_new_sampler(prob, l, _prior_cov(prob, l, Phi), Phi_hat[l], gen) for l in range(prob.L)]
 
 
@@ -217,11 +265,11 @@ def _init_gaussian(prob: _Problem, Phi: torch.Tensor, gen) -> None:
     """The paper's lazy guess (Sec. G.2): Φ_l = ⟨ψψᵀ⟩ under the untilted Gaussian N(0, Σ_l),
     layer by layer, from exact samples.  Ignores the rate tilt, so Φ̂ = 0 is not the inner
     solution at step 0."""
-    n = prob.cfg.n_init_samples
+    n = prob.solver.n_init_samples
     for l in range(prob.L):
         Sigma = _prior_cov(prob, l, Phi)
         Lc = torch.linalg.cholesky(
-            sym(Sigma) + prob.cfg.jitter_rel * Sigma.diagonal().mean() * prob.eye
+            sym(Sigma) + prob.solver.jitter_rel * Sigma.diagonal().mean() * prob.eye
         )
         h = torch.randn(n, prob.P, device=prob.dev, dtype=F64, generator=gen) @ Lc.T
         psi = prob.phi(h) if prob.psi_is_phi[l] else h
@@ -230,18 +278,19 @@ def _init_gaussian(prob: _Problem, Phi: torch.Tensor, gen) -> None:
 
 def _init_lazy(prob: _Problem, Phi, Phi_hat, gen, log: Log) -> None:
     """Lazy guess consistent with the rate tilt: Φ_l = ⟨ψψᵀ⟩ under the Φ̂ = 0 density of each
-    layer (sampled with HMC), layer by layer.  Then Φ̂ = 0 is exactly the inner solution at
-    step 0 and the outer loop starts from a self-consistent point."""
-    c = prob.cfg
+    layer (sampled with the solver's sampler), layer by layer.  Then Φ̂ = 0 is exactly the
+    inner solution at step 0 and the outer loop starts from a self-consistent point."""
+    c = prob.solver
     for l in range(prob.L):
         tmp = _new_sampler(prob, l, _prior_cov(prob, l, Phi), Phi_hat[l], gen)
-        tmp.run(c.warmup_trans, collect=False)
-        mom, d = tmp.run(max(c.n_init_samples // c.n_chains, 1))
+        tmp.run(_warmup_trans(c), collect=False)
+        mom, d = tmp.run(max(c.n_init_samples // _draws_per_transition(c), 1))
         Phi[l] = mom["psi_psi"]
         log(
             f"init layer {l}: tr/P={Phi[l].diagonal().mean().item():.3e} "
             f"(untilted prior tr/P={_prior_cov(prob, l, Phi).diagonal().mean().item():.3e}) "
-            f"acc={d['accept']:.2f} rho1={d['rho1']:.2f} mc_err={d['psi_psi_rel_mc_err']:.1e}"
+            + _quality(d, c.sampler)
+            + f" mc_err={d['psi_psi_rel_mc_err']:.1e}"
         )
 
 
@@ -252,42 +301,30 @@ def _init_from_net(prob: _Problem, Phi, Phi_hat, net_Phi, net_H) -> None:
     Phi[:] = net_Phi
     A = torch.linalg.solve(prob.alpha * prob.eye + Phi[-1], prob.eye)
     Phi_hat[-1] = -2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A
-    # The helper sampler only evaluates the tilt gradient; its own random chain draw is
-    # discarded, so it gets a throwaway generator instead of consuming the solver's stream.
-    scratch = torch.Generator(device=prob.dev).manual_seed(0)
+    dphi = phi_prime(prob.phi)
     for l in range(prob.L - 2, -1, -1):
-        tmp = SingleSiteHMC(
-            _prior_cov(prob, l + 1, Phi),
-            Phi_hat[l + 1],
-            prob.rate_tilt,
-            prob.phi,
-            prob.psi_is_phi[l + 1],
-            n_chains=1,
-            sample_dtype=F64,
-            jitter_rel=prob.cfg.jitter_rel,
-            generator=scratch,
-        )
         h = net_H[:, l + 1].T  # (N, P)
-        _, u = tmp.tilt_and_grad(h)
+        M = sym(Phi_hat[l + 1].to(F64))
+        _, u = tilt_and_grad(h, M, float(prob.rate_tilt), prob.phi, dphi, prob.psi_is_phi[l + 1])
         h_u = h.T @ u / h.shape[0]
         Phi_hat[l] = sym(torch.linalg.solve(Phi[l], h_u))
 
 
 def _init_kernels(prob: _Problem, gen, net_Phi, net_H, log: Log):
-    """Initial (Φ, Φ̂), (L, P, P) float64 each, by cfg.init in {gaussian, lazy, net}."""
-    L, P = prob.L, prob.P
+    """Initial (Φ, Φ̂), (L, P, P) float64 each, by cfg.solver.init in {gaussian, lazy, net}."""
+    L, P, init = prob.L, prob.P, prob.solver.init
     Phi = torch.zeros(L, P, P, device=prob.dev, dtype=F64)
     Phi_hat = torch.zeros(L, P, P, device=prob.dev, dtype=F64)
-    if prob.cfg.init == "gaussian":
+    if init == "gaussian":
         _init_gaussian(prob, Phi, gen)
-    elif prob.cfg.init == "lazy":
+    elif init == "lazy":
         _init_lazy(prob, Phi, Phi_hat, gen, log)
-    elif prob.cfg.init == "net":
+    elif init == "net":
         if net_Phi is None:
             raise ValueError("init='net' needs the trained network (pass net=...)")
         _init_from_net(prob, Phi, Phi_hat, net_Phi, net_H)
     else:
-        raise ValueError(f"unknown init {prob.cfg.init!r}")
+        raise ValueError(f"unknown init {init!r}")
     return Phi, Phi_hat
 
 
@@ -299,12 +336,13 @@ class _SolverState:
     outer: int  # next outer step to run
     Phi: torch.Tensor
     Phi_hat: torch.Tensor
-    samplers: list[SingleSiteHMC]
+    samplers: list[Sampler]
     gen: torch.Generator
     eta: float  # outer step size (dimensionless)
     eta_hat: np.ndarray  # per-layer inner step sizes
-    h2_last: list[float]  # last healthy chain scale ||h||²/P per layer (for `_healthy`)
-    eps_ref: list[float]  # warm-up step size per layer (for the collapse test in `_healthy`)
+    h2_last: list[float]  # last healthy sample scale ||h||²/P per layer (for `_healthy`)
+    eps_ref: list[float]  # warm-up HMC step size per layer (collapse test; NaN for importance)
+    ess_ref: list[float]  # ESS fraction of the last accepted point per layer (NaN for HMC)
     history: History
     mse_net: float | None
     net_Phi: torch.Tensor | None
@@ -328,30 +366,35 @@ def _fresh_state(prob: _Problem, net: MLP | None, gen, log: Log) -> _SolverState
             mse_net = ((prob.Y - Z.to(F64)) ** 2).mean().item()
     Phi, Phi_hat = _init_kernels(prob, gen, net_Phi, net_H, log)
     samplers = _make_samplers(prob, Phi, Phi_hat, gen)
-    warm_diag = [s.run(prob.cfg.warmup_trans, collect=False)[1] for s in samplers]
-    log(
-        "warm-up: "
-        + " | ".join(
+    warm_diag = [s.run(_warmup_trans(prob.solver), collect=False)[1] for s in samplers]
+    if prob.solver.sampler == "importance":
+        summary = [f"l={l} {_quality(d, 'importance')}" for l, d in enumerate(warm_diag)]
+    else:
+        summary = [
             f"l={l} acc={d['accept']:.2f} eps={d['eps']:.3g} div={d['n_divergent']} "
             f"rho1={d['rho1']:.2f}"
             for l, d in enumerate(warm_diag)
-        )
-    )
-    return _SolverState(
+        ]
+    log("warm-up: " + " | ".join(summary))
+    st = _SolverState(
         outer=0,
         Phi=Phi,
         Phi_hat=Phi_hat,
         samplers=samplers,
         gen=gen,
-        eta=float(prob.cfg.eta_phi),
-        eta_hat=np.full(prob.L, float(prob.cfg.eta_phihat)),
+        eta=float(prob.solver.eta_phi),
+        eta_hat=np.full(prob.L, float(prob.solver.eta_phihat)),
         h2_last=[d["h2_mean"] for d in warm_diag],
         eps_ref=[d["eps"] for d in warm_diag],
+        ess_ref=[float("nan")] * prob.L,
         history=_empty_history(net is not None),
         mse_net=mse_net,
         net_Phi=net_Phi,
         elapsed=0.0,
     )
+    for l, d in enumerate(warm_diag):
+        _accept_point(prob, st, l, d, "the initial point")
+    return st
 
 
 # ----------------------------------------------------------------------------- small pieces
@@ -369,24 +412,70 @@ def _reg_inv(A: torch.Tensor, inv_floor_rel: float) -> torch.Tensor:
     return (V / w) @ V.T
 
 
-def _healthy(diag: dict, h2_before: float, n_tr: int, eps_ref_l: float, cfg) -> bool:
-    """A sampler run is healthy if it has few divergences, no resets, no blow-up of the chain
-    scale, no step-size collapse and (if moments were collected) a bounded MC error."""
-    div_frac = diag["n_divergent"] / (cfg.n_chains * n_tr)
+def _quality(d: dict, sampler: str) -> str:
+    """The sampler's own quality figures for a log line: HMC acceptance and autocorrelation, or
+    the importance weights' ESS fraction and largest share."""
+    if sampler == "importance":
+        return f"ess={d['ess_frac']:.2f} max_w={d['max_weight']:.1e}"
+    return f"acc={d['accept']:.2f} rho1={d['rho1']:.2f}"
+
+
+def _accept_point(prob: _Problem, st: _SolverState, l: int, diag: dict, where: str) -> None:
+    """Record the run `diag` as layer l's accepted point: its sample scale ||h||²/P and, under
+    importance sampling, its ESS fraction, the references the next step is judged against.
+
+    An accepted point whose ESS fraction is below min_ess_frac raises InadequateSamplerError:
+    the ESS of the prior proposal is a property of the point (it falls with P and with the
+    tilt), not of the step, so backtracking cannot cure it, and carrying on would only freeze
+    the iteration at a point the sampler cannot represent."""
+    st.h2_last[l] = diag["h2_mean"]
+    c = prob.solver
+    if c.sampler != "importance":
+        return
+    ess = diag["ess_frac"]
+    if ess < c.min_ess_frac:
+        raise InadequateSamplerError(
+            f"importance sampling from the prior is inadequate for this problem: at {where}, "
+            f"layer {l} has ESS fraction {ess:.2g} < min_ess_frac={c.min_ess_frac:g} (P={prob.P}; "
+            "the prior proposal only suits small P and mild tilts). Use solver.sampler='hmc', "
+            "reduce meanfield.n_points, or raise solver.n_importance_samples together with "
+            "lowering solver.min_ess_frac (ESS = ess_frac x draws; a proposal scale other "
+            "than 1 lowered the ESS fraction in every case measured)"
+        )
+    st.ess_ref[l] = ess
+
+
+def _healthy(
+    diag: dict,
+    h2_before: float,
+    ess_before: float,
+    n_tr: int,
+    eps_ref_l: float,
+    cfg: SolverConfig,
+) -> bool:
+    """A sampler run is healthy if the sample scale ||h||²/P has not blown up and (if moments
+    were collected) the MC error is bounded; and, for HMC, it has few divergences, no resets
+    and no step-size collapse; for importance sampling, the ESS fraction has not dropped below
+    min_ess_drop times that of the accepted point before the step (the MC error cannot see
+    a weight collapse, see fct.importance)."""
     growth = diag["h2_mean"] / max(h2_before, 1e-300)
+    common = (growth <= cfg.max_h2_growth) and diag.get("psi_psi_rel_mc_err", 0.0) <= cfg.max_mc_err
+    if cfg.sampler == "importance":
+        return common and diag["ess_frac"] >= cfg.min_ess_drop * ess_before
+    div_frac = diag["n_divergent"] / (cfg.n_chains * n_tr)
     return (
-        (div_frac <= cfg.max_div_frac)
-        and (growth <= cfg.max_h2_growth)
+        common
+        and (div_frac <= cfg.max_div_frac)
         and diag["n_reset"] == 0
         and diag["eps"] >= cfg.eps_collapse * eps_ref_l
-        and diag.get("psi_psi_rel_mc_err", 0.0) <= cfg.max_mc_err
     )
 
 
 def _tilt_step(prob: _Problem, st: _SolverState, l, hat0, grad0, eta_l) -> torch.Tensor:
     """Φ̂_l ← Π(Φ̂_l + η̂_l ∂S/∂Φ̂_l / c_l²), Π the projection onto normalisable tilts."""
     new = sym(hat0 + eta_l * grad0 / _c2(st.Phi[l]))
-    return st.samplers[l].project_tilt(new, prob.cfg.tilt_floor) if prob.cfg.project_tilt else new
+    c = prob.solver
+    return st.samplers[l].project_tilt(new, c.tilt_floor) if c.project_tilt else new
 
 
 def _learning_pieces(prob: _Problem, Phi_last: torch.Tensor):
@@ -411,14 +500,14 @@ class _InnerResult:
 
 
 def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResult) -> dict:
-    """One ascent step on Φ̂_l.  The HMC run at its top also validates the previous step
+    """One ascent step on Φ̂_l.  The sampler run at its top also validates the previous step
     (retrospective backtracking): if that step broke the sampler it is reverted and retried
     with half the step size.  Updates `pending[l]` and `res` in place; returns the run's
     diagnostics."""
-    cfg, s = prob.cfg, st.samplers[l]
+    cfg, s = prob.solver, st.samplers[l]
     moments, diag = s.run(cfg.n_trans)
     if pending[l] is not None and not _healthy(
-        diag, st.h2_last[l], cfg.n_trans, st.eps_ref[l], cfg
+        diag, st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg
     ):
         state0, hat0, grad0 = pending[l]
         res.n_backtrack[l] += 1
@@ -431,7 +520,7 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
                 f"layer {l}: inner step keeps breaking the sampler (eta_phihat={st.eta_hat[l]:.2e})"
             )
         return diag
-    st.h2_last[l] = diag["h2_mean"]
+    _accept_point(prob, st, l, diag, f"outer step {st.outer}, inner step {inner}")
     if pending[l] is not None:
         st.eta_hat[l] = min(st.eta_hat[l] * cfg.eta_grow, cfg.eta_max)
     grad_hat = 0.5 * (moments["psi_psi"] - st.Phi[l])
@@ -446,7 +535,7 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
 def _inner_ascent(prob: _Problem, st: _SolverState) -> _InnerResult:
     """Gradient ascent on Φ̂ at fixed Φ, ∂S/∂Φ̂_l = ½(⟨ψψᵀ⟩_l - Φ_l), until every layer's
     residual is below max(inner_tol, inner_tol_mc × its own MC error) or n_inner_max steps."""
-    cfg, L = prob.cfg, prob.L
+    cfg, L = prob.solver, prob.L
     res = _InnerResult(
         residual=np.full(L, np.nan),
         grad_rel=np.full(L, np.nan),
@@ -476,7 +565,7 @@ class _OuterGradients:
     stein_vs_direct: list[float]  # disagreement of the two forms (equilibration check)
     learning: float
     mse_theory: float
-    hmc_diag: list[dict]  # diagnostics of the fresh n_trans_outer run
+    hmc_diag: list[dict]  # sampler diagnostics of the fresh n_trans_outer run
 
 
 def _outer_gradients(prob: _Problem, st: _SolverState) -> _OuterGradients:
@@ -484,11 +573,11 @@ def _outer_gradients(prob: _Problem, st: _SolverState) -> _OuterGradients:
     l < L: -½Φ̂_l + ½ sym(⟨u hᵀ⟩_{l+1} Φ_l⁻¹)  (Eq. 31b, Stein form);
            the direct form s(Σ⁻¹ - Σ⁻¹⟨hhᵀ⟩_{l+1}Σ⁻¹), s = prior_scale g², is a diagnostic;
     l = L: -½Φ̂_L - c A Y Yᵀ A                 (Eq. 31c)."""
-    cfg, L = prob.cfg, prob.L
+    cfg, L = prob.solver, prob.L
     moments, hmc_diag = [], []
     for l, s in enumerate(st.samplers):
         m, d = s.run(cfg.n_trans_outer)
-        st.h2_last[l] = d["h2_mean"]
+        _accept_point(prob, st, l, d, f"outer step {st.outer} (outer-gradient run)")
         moments.append(m)
         hmc_diag.append(d)
     A, _, learning, mse_theory = _learning_pieces(prob, st.Phi[-1])
@@ -524,7 +613,7 @@ def _trust_region_step(
 ) -> tuple[list[int], list[float], list[bool]]:
     """Φ_l ← Π_PD(Φ_l^prev - η ∂S/∂Φ_l c_l²), the step clipped to max_rel_step ||Φ_l^prev||.
     c_l is read from the current Φ_l, i.e. the last attempted step when backtracking."""
-    cfg = prob.cfg
+    cfg = prob.solver
     n_clamped, lam_min, clipped = [], [], []
     for l in range(prob.L):
         step = st.eta * grads[l] * _c2(st.Phi[l])
@@ -545,8 +634,10 @@ def _probe_samplers(prob, st: _SolverState) -> bool:
     ok = True
     for l in range(1, prob.L):
         st.samplers[l].set_prior(_prior_cov(prob, l, st.Phi))
-        _, d = st.samplers[l].run(prob.cfg.n_trans, collect=False)
-        ok = ok and _healthy(d, st.h2_last[l], prob.cfg.n_trans, st.eps_ref[l], prob.cfg)
+        _, d = st.samplers[l].run(prob.solver.n_trans, collect=False)
+        ok = ok and _healthy(
+            d, st.h2_last[l], st.ess_ref[l], prob.solver.n_trans, st.eps_ref[l], prob.solver
+        )
     return ok
 
 
@@ -554,7 +645,7 @@ def _outer_descent(prob, st: _SolverState, grads, Phi_prev, outer, log: Log) -> 
     """One trust-region descent step on Φ.  If it breaks a sampler, revert (priors and chain
     states) and halve η, up to max_backtrack times or until η = eta_min_rel · eta_phi; an
     accepted first try grows η by eta_grow up to eta_max."""
-    cfg = prob.cfg
+    cfg = prob.solver
     states0 = [s.get_state() for s in st.samplers]
     n_bt = 0
     while True:
@@ -632,6 +723,7 @@ def _record(
         "hmc_mc_err": per_layer("psi_psi_rel_mc_err"),
         "hmc_stein_mismatch": per_layer("stein_mismatch"),
         "hmc_h2_ratio": np.array([d["h2_mean"] / d["prior_h2"] for d in diags]),
+        "is_max_weight": np.array([d.get("max_weight", np.nan) for d in diags]),
         "phi_change_rel": np.array([relative_fro(Phi[l], Phi_prev[l]) for l in range(L)]),
         "phihat_change_rel": np.array(
             [relative_fro(Phi_hat[l], Phi_hat_prev[l]) for l in range(L)]
@@ -643,7 +735,9 @@ def _record(
     return rec
 
 
-def _format_step(rec: dict, inner: _InnerResult, step: _OuterStep, st: _SolverState) -> str:
+def _format_step(
+    rec: dict, inner: _InnerResult, step: _OuterStep, st: _SolverState, sampler: str
+) -> str:
     def fmt(a):
         return "[" + " ".join(f"{v:.2e}" for v in a) + "]"
 
@@ -656,8 +750,13 @@ def _format_step(rec: dict, inner: _InnerResult, step: _OuterStep, st: _SolverSt
         f"mse={rec['train_mse_theory']:.3e}"
         + (f" (net {mse_net:.3e})" if mse_net is not None else "")
         + f" | eta={st.eta:.1e}/{fmt(st.eta_hat)} bt={inner.n_backtrack.tolist()}/{step.n_backtrack}"
-        + f" | HMC acc={fmt(rec['hmc_accept'])} eps={fmt(rec['hmc_eps'])} "
-        f"div={rec['hmc_div']} rho1={fmt(rec['hmc_rho1'])} mcerr={fmt(rec['hmc_mc_err'])} "
+        + (
+            f" | IS ess={fmt(rec['hmc_ess_frac'])} max_w={fmt(rec['is_max_weight'])} "
+            if sampler == "importance"
+            else f" | HMC acc={fmt(rec['hmc_accept'])} eps={fmt(rec['hmc_eps'])} "
+            f"div={rec['hmc_div']} rho1={fmt(rec['hmc_rho1'])} "
+        )
+        + f"mcerr={fmt(rec['hmc_mc_err'])} "
         f"stein={fmt(rec['hmc_stein_mismatch'])} h2/prior={fmt(rec['hmc_h2_ratio'])} "
         f"margin={fmt(rec['norm_margin'])}"
     )
@@ -681,8 +780,8 @@ def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> N
     rec = _record(prob, st, outer, time.time() - t_start, inner, og, step, Phi_prev, Phi_hat_prev)
     for k in st.history:
         st.history[k].append(rec[k])
-    if outer % prob.cfg.log_int == 0:
-        log(_format_step(rec, inner, step, st))
+    if outer % prob.solver.log_int == 0:
+        log(_format_step(rec, inner, step, st, prob.solver.sampler))
     st.outer = outer + 1
 
 
@@ -701,8 +800,11 @@ def _history_from_lists(history: History) -> History:
     }
 
 
-def _to_payload(st: _SolverState) -> dict:
+def _to_payload(st: _SolverState, cfg: MeanFieldConfig) -> dict:
+    """The checkpoint of `st`.  `meanfield_config` records the full section (every solver
+    field, also those the cache hash leaves out) for provenance; nothing reads it back."""
     return {
+        "meanfield_config": cfg.model_dump(),
         "outer": st.outer,
         "Phi": st.Phi,
         "Phi_hat": st.Phi_hat,
@@ -711,6 +813,7 @@ def _to_payload(st: _SolverState) -> dict:
         "eta_hat": st.eta_hat.tolist(),
         "h2_last": list(st.h2_last),
         "eps_ref": list(st.eps_ref),
+        "ess_ref": list(st.ess_ref),
         "samplers": [s.state_dict() for s in st.samplers],
         "generator": st.gen.get_state(),
         "mse_net": st.mse_net,
@@ -722,8 +825,8 @@ def _to_payload(st: _SolverState) -> dict:
 def _restore_state(
     prob: _Problem, payload: dict, gen: torch.Generator, path: Path, with_net: bool
 ) -> _SolverState:
-    """Rebuild the samplers at the saved (Φ, Φ̂), load their chains and the generator state.
-    No warm-up: the saved chains are already equilibrated."""
+    """Rebuild the samplers at the saved (Φ, Φ̂), load their states and the generator state.
+    No warm-up: saved HMC chains are already equilibrated (importance draws need none)."""
     Phi, Phi_hat = payload["Phi"].to(F64), payload["Phi_hat"].to(F64)
     expected = (prob.L, prob.P, prob.P)
     if tuple(Phi.shape) != expected or tuple(Phi_hat.shape) != expected:
@@ -753,6 +856,9 @@ def _restore_state(
         eta_hat=np.array(payload["eta_hat"], dtype=float),
         h2_last=list(payload["h2_last"]),
         eps_ref=list(payload["eps_ref"]),
+        # HMC checkpoints written before the importance sampler existed have no ess_ref, and
+        # HMC never reads it.
+        ess_ref=list(payload.get("ess_ref", [float("nan")] * prob.L)),
         history=_history_from_lists(payload["history"]),
         mse_net=payload["mse_net"],
         net_Phi=payload["net_Phi"],
@@ -786,33 +892,39 @@ def solve(
     config_hash: str = "",
 ) -> SolveResult:
     """Solve  min_Φ max_Φ̂ S(Φ, Φ̂)  by Algorithm 1 of arXiv:2502.07998 with the
-    single-site expectations estimated by persistent HMC.
+    single-site expectations estimated by persistent HMC (cfg.solver.sampler="hmc") or by
+    importance sampling from the prior ("importance").
 
     Step sizes are dimensionless: with c_l = tr(Φ_l)/P,
         Φ̂_l += eta_phihat_l · ∂S/∂Φ̂_l / c_l²      (Φ̂ has units of 1/Φ)
         Φ_l  -= eta_phi      · ∂S/∂Φ_l  · c_l²     (clipped to ||ΔΦ_l|| ≤ max_rel_step ||Φ_l||)
-    and are adapted: every HMC run also validates the step taken before it.  If the
-    chains show divergences (> max_div_frac of transitions), resets, or their scale
-    ||h||²/P jumps by more than max_h2_growth, the step is reverted (kernel and chain
-    state) and its step size halved; otherwise the step size grows by eta_grow up to
-    eta_max.  This keeps the iteration on the normalisable side of the tilt.
+    and are adapted: every sampler run also validates the step taken before it.  If the
+    HMC chains show divergences (> max_div_frac of transitions) or resets, the importance
+    ESS fraction drops below min_ess_drop times that of the point before, or the sample scale
+    ||h||²/P jumps by more than max_h2_growth, the step is reverted (kernel and chain state)
+    and its step size
+    halved; otherwise the step size grows by eta_grow up to eta_max.  This keeps the
+    iteration on the normalisable side of the tilt.  The settings are cfg.solver's.
+    Under importance sampling every accepted point (the initial one, each validated inner
+    step, each outer-gradient run) must have ESS fraction >= min_ess_frac, else
+    InadequateSamplerError: the prior proposal does not suit the problem.
     The inner loop stops when every layer's residual ||⟨ψψᵀ⟩-Φ||/||Φ|| is below
     max(inner_tol, inner_tol_mc × its own Monte Carlo error): below that it is noise.
 
     phi is a callable (any elementwise activation, not only the registered ones).  All
-    randomness comes from one torch.Generator seeded with cfg.seed on X's device.
+    randomness comes from one torch.Generator seeded with cfg.solver.seed on X's device.
 
     With checkpoint_dir (requires config_hash): return its final.pt if present, else resume
-    from its latest ckpt_*.pt if present; write ckpt_<outer:05d>.pt every cfg.save_int
-    outer steps, and final.pt at the end (which then replaces the checkpoints).  A saved state
-    must have been written with a net iff `net` is given.  Without checkpoint_dir, nothing
-    touches disk.
+    from its latest ckpt_*.pt if present; write ckpt_<outer:05d>.pt every cfg.solver.save_int
+    outer steps, and final.pt at the end (which then replaces the checkpoints); each holds
+    cfg in full for provenance.  A saved state must have been written with a net iff `net`
+    is given.  Without checkpoint_dir, nothing touches disk.
     """
     if checkpoint_dir is not None and not config_hash:
         raise ValueError("checkpoint_dir needs a non-empty config_hash to guard against reuse")
     t_call = time.time()
     prob = _make_problem(X, Y, L, lambda_w, lambda_r, phi, g, cfg)
-    gen = torch.Generator(device=prob.dev).manual_seed(cfg.seed)
+    gen = torch.Generator(device=prob.dev).manual_seed(cfg.solver.seed)
 
     saved = _saved_state_path(checkpoint_dir)
     if saved is None:
@@ -826,15 +938,15 @@ def solve(
         log(f"resumed from {saved} at outer step {st.outer}")
 
     t_start = t_call - st.elapsed
-    while st.outer < cfg.n_outer:
+    while st.outer < cfg.solver.n_outer:
         _outer_step(prob, st, t_start, log)
         st.elapsed = time.time() - t_start
-        if checkpoint_dir is not None and st.outer % cfg.save_int == 0:
+        if checkpoint_dir is not None and st.outer % cfg.solver.save_int == 0:
             write_checkpoint(
-                checkpoint_dir, CKPT_PREFIX, st.outer, _to_payload(st), config_hash, CKPT_WIDTH
+                checkpoint_dir, CKPT_PREFIX, st.outer, _to_payload(st, cfg), config_hash, CKPT_WIDTH
             )
     if checkpoint_dir is not None:
-        _save_final(Path(checkpoint_dir), _to_payload(st), config_hash)
+        _save_final(Path(checkpoint_dir), _to_payload(st, cfg), config_hash)
     return SolveResult(st.Phi, st.Phi_hat, st.history, st.samplers)
 
 

@@ -13,6 +13,7 @@ from fct.config import (
     DataConfig,
     MeanFieldConfig,
     NetConfig,
+    SolverConfig,
     TrainConfig,
     default_config,
 )
@@ -32,9 +33,11 @@ _POSITIVE_INT = {
     DataConfig: ["P", "D_in", "d", "n_latents", "grid_size", "n_motifs"],
     NetConfig: ["N", "L"],
     TrainConfig: ["log_int", "save_int", "monitor_shuffles"],
-    MeanFieldConfig: [
-        "n_points", "n_outer", "n_inner_max", "n_chains", "n_trans", "n_trans_outer",
-        "n_leap", "warmup_trans", "n_init_samples", "log_int", "save_int", "max_backtrack",
+    MeanFieldConfig: ["n_points"],
+    SolverConfig: [
+        "n_outer", "n_inner_max", "n_chains", "n_trans", "n_trans_outer", "n_leap",
+        "warmup_trans", "n_init_samples", "log_int", "save_int", "max_backtrack",
+        "n_importance_samples",
     ],
     AnalysisConfig: ["n_grid", "n_components", "n_cols"],
 }  # fmt: skip
@@ -42,11 +45,12 @@ _POSITIVE_FLOAT = {
     DataConfig: ["var", "latent_range"],
     NetConfig: ["g"],
     TrainConfig: ["lr"],
-    MeanFieldConfig: [
-        "beta", "eps0", "target_accept", "adapt_rate", "eta_phi", "eta_phihat", "eta_max",
-        "eta_grow", "inner_tol", "inner_tol_mc", "max_rel_step", "pd_floor_rel",
-        "inv_floor_rel", "jitter_rel", "learning_prefactor", "prior_scale", "alpha",
-        "max_h2_growth", "max_mc_err",
+    MeanFieldConfig: ["beta", "learning_prefactor", "prior_scale", "alpha"],
+    SolverConfig: [
+        "eps0", "target_accept", "adapt_rate", "eta_phi", "eta_phihat", "eta_max", "eta_grow",
+        "inner_tol", "inner_tol_mc", "max_rel_step", "pd_floor_rel", "inv_floor_rel",
+        "jitter_rel", "max_h2_growth", "max_mc_err", "importance_proposal_scale",
+        "min_ess_drop",
     ],
 }  # fmt: skip
 _NONNEGATIVE_INT = {
@@ -56,7 +60,8 @@ _NONNEGATIVE_INT = {
 }
 _NONNEGATIVE_FLOAT = {
     TrainConfig: ["weight_lambda", "rate_lambda"],
-    MeanFieldConfig: ["max_div_frac", "eps_collapse", "eta_min_rel", "tilt_floor", "rate_tilt"],
+    MeanFieldConfig: ["rate_tilt"],
+    SolverConfig: ["max_div_frac", "eps_collapse", "eta_min_rel", "tilt_floor", "min_ess_frac"],
 }
 
 
@@ -72,9 +77,11 @@ BAD = (
     + [
         (TrainConfig, "monitor_bins", 1),
         (TrainConfig, "monitor_bins", 0),
-        (MeanFieldConfig, "target_accept", 1.0),
-        (MeanFieldConfig, "target_accept", 1.5),
-        (MeanFieldConfig, "tilt_floor", 1.0),
+        (SolverConfig, "target_accept", 1.0),
+        (SolverConfig, "target_accept", 1.5),
+        (SolverConfig, "tilt_floor", 1.0),
+        (SolverConfig, "min_ess_frac", 1.5),
+        (SolverConfig, "min_ess_drop", 1.5),
     ]
 )
 
@@ -85,7 +92,7 @@ def test_offending_value_raises_naming_the_field(cls, field, value):
         cls(**{field: value})
     err = exc.value.errors()[0]
     assert err["loc"] == (field,)
-    assert err["type"] in {"greater_than", "greater_than_equal", "less_than"}
+    assert err["type"] in {"greater_than", "greater_than_equal", "less_than", "less_than_equal"}
 
 
 @pytest.mark.parametrize(
@@ -95,7 +102,10 @@ def test_offending_value_raises_naming_the_field(cls, field, value):
         (TrainConfig, "weight_lambda", 0.0),
         (TrainConfig, "monitor_bins", 2),
         (AnalysisConfig, "plot_layer", 0),
-        (MeanFieldConfig, "tilt_floor", 0.0),
+        (SolverConfig, "tilt_floor", 0.0),
+        (SolverConfig, "min_ess_frac", 0.0),
+        (SolverConfig, "min_ess_frac", 1.0),
+        (SolverConfig, "min_ess_drop", 1.0),
         (MeanFieldConfig, "rate_tilt", 0.0),
         (MeanFieldConfig, "rate_tilt", None),
         (MeanFieldConfig, "alpha", None),
@@ -125,6 +135,8 @@ def test_train_section_hashes_hold_the_loss_version(sections):
     cfg = default_config()
     payload = {**cfg.model_dump(include={*sections, "dtype"}), "loss_version": LOSS_VERSION}
     del payload["train"]["optimizer"], payload["train"]["beta"]  # adam: SGLD fields not hashed
+    if "meanfield" in sections:  # hashed in its flat pre-split layout, see hash_payload
+        payload["meanfield"] = cfg.meanfield.hash_payload()
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
     assert cfg.section_hash(*sections) == expected
 

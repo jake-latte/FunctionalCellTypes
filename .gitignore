@@ -34,3 +34,6 @@ __pycache__/
 
 # Local scratch directory
 tmp/
+
+# Pinned regression fixtures are small and must be tracked
+!tests/fixtures/*.pt

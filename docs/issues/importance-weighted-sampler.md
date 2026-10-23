@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: todo
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
@@ -26,3 +26,34 @@ PI brief (Mean Field 1): in addition to HMC, offer simple importance-weighted sa
 - A tiny end-to-end solve with `sampler="importance"` runs, checkpoints and resumes.
 - Old `config.json` with only the old keys loads; its meanfield hash is unchanged.
 - Tests CPU only, ruff clean, `docs/design.md` updated.
+
+## Notes for the PI (decisions made here, easy to revert)
+- `log_int` and `save_int` still enter the mean-field result hash. They change no number, but they were in the hash before
+  the split, and leaving them out would change the hash of every existing result (every cached solve would go stale once).
+  The rule "diagnostics-only fields do not invalidate" holds for every field added from now on: `config.LEGACY_SOLVER_FIELDS`
+  is frozen, and a test makes every new solver field pick a hash rule.
+- Added ESS checks to the solver (see "Decisions made in review" for their final form). They are needed because the
+  variance-based MC error reads ~0 when one draw carries all the weight, so on its own it cannot see a collapse.
+- Under `sampler="importance"` the HMC-only fields (`n_chains`, `n_leap`, ...) still enter the hash. That is harmless:
+  changing one makes an importance result stale when it need not.
+- `--set meanfield.n_chains=...` is now an error that says to use `meanfield.solver.n_chains`. Flat `config.json` files
+  load. Mixing both on the command line would be ambiguous, because `--set` edits the dumped (nested) config.
+- New history column `is_max_weight`. The solver dashboard gains ESS / weight-share panels and leaves out all-NaN columns.
+- The pinned fixtures (`tests/fixtures/`, written by d1d3091) are bit-for-bit on this host. A different BLAS or thread
+  count could reorder float reductions and fail them; regenerate only on purpose (`tests/pinned_runs.py`).
+- Merge with the SGLD item: the result-hash pins include the train section. Main (with SGLD) is merged in; adam keeps
+  `optimizer` / `beta` out of the train hash, so the pins hold.
+
+## Decisions made in review (PM, 2026-10-23; the PI can overturn them)
+- The first version gated on an absolute ESS fraction: a step whose run fell below `min_ess_frac` was reverted. But the
+  ESS of the prior proposal belongs to the point, not the step, and it falls with P. At P >= 48 with defaults, every step
+  was reverted, the step sizes collapsed to their floors, no error was raised, and `run_meanfield` wrote the frozen
+  initial guess as `final.pt`.
+- Now: (i) the gate is step-relative, like `max_h2_growth`. A step is reverted when the ESS fraction after it is below
+  `min_ess_drop` (new field, default 0.1) times that of the accepted point before it. (ii) `min_ess_frac` is an absolute
+  floor on accepted points (the initial point, each validated inner step, each outer-gradient run, so it also applies with
+  one inner step). Below it, `solve` raises `InadequateSamplerError` saying the prior proposal does not suit the problem,
+  and nothing is written as final.
+- Limitation, documented in design.md: prior-proposal importance sampling is for small P and mild tilts. Measured
+  layer-1 ESS fraction at the start of relu, L=2, beta=1e3: 0.08 (P=8), 0.03 (P=16), 0.0085 (P=48; seed-dependent: 0.013 at seed 0), 2e-4 to 2e-3 (P=100).
+  At the default `n_points=100`, `sampler="importance"` now fails loudly at the initial point; use HMC there.

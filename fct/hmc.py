@@ -57,6 +57,96 @@ def kernel_alignment(A: torch.Tensor, B: torch.Tensor) -> float:
     return (A * B).sum().item() / max(A.norm().item() * B.norm().item(), 1e-300)
 
 
+# ----------------------------------------------------------------------------- single-site density
+# Pure pieces of the single-site density shared by every sampler of it (`SingleSiteHMC` here,
+# `fct.importance.ImportanceSampler`), so the samplers cannot disagree on what they sample.
+def jittered_prior(
+    Sigma: torch.Tensor, jitter_rel: float
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """(Σ + jitter I, its Cholesky factor, its inverse), float64; the jitter is jitter_rel times
+    the mean diagonal, so a rank-deficient Σ (Φ0 with D_in < P) still factorises."""
+    Sigma = sym(Sigma.to(torch.float64))
+    jitter = jitter_rel * (Sigma.diagonal().mean().item() + 1e-300)
+    eye = torch.eye(Sigma.shape[0], device=Sigma.device, dtype=Sigma.dtype)
+    Sigma = Sigma + jitter * eye
+    chol = torch.linalg.cholesky(Sigma)
+    return Sigma, chol, torch.cholesky_inverse(chol)
+
+
+def tilt_and_grad(
+    h: torch.Tensor,
+    M: torch.Tensor,
+    lambda_r: float,
+    phi: Activation,
+    phi_prime_fn: Activation,
+    psi_is_phi: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Tilt exponent U(h) = ½ ψᵀMψ + ½ λ_r φᵀφ per row of h (n, P), and u = ∇_h U (n, P)."""
+    ph = phi(h)
+    if psi_is_phi:
+        psi, psi_p = ph, phi_prime_fn(h)
+    else:
+        psi, psi_p = h, None
+    Mpsi = psi @ M
+    U = 0.5 * (psi * Mpsi).sum(-1)
+    u = Mpsi if psi_p is None else psi_p * Mpsi
+    if lambda_r != 0.0:
+        U = U + 0.5 * lambda_r * (ph * ph).sum(-1)
+        u = u + lambda_r * phi_prime_fn(h) * ph
+    return U, u
+
+
+def psi_psi_rel_mc_err(psi_psi: torch.Tensor, psi2_psi2: torch.Tensor, n_eff: float) -> float:
+    """||MC standard error of psi_psi||_F / ||psi_psi||_F from the elementwise variance."""
+    var = (psi2_psi2 - psi_psi**2).clamp_min(0.0) / max(n_eff, 1.0)
+    return (var.sqrt().norm() / psi_psi.norm().clamp_min(1e-300)).item()
+
+
+def stein_mismatch(h_h: torch.Tensor, h_u: torch.Tensor, Sigma: torch.Tensor) -> float:
+    """Relative Frobenius gap between ⟨hhᵀ⟩ and its Stein-identity value Σ - Σ⟨u hᵀ⟩.
+    The identity holds only in equilibrium: a mismatch means the samples do not follow the
+    density (or the density is not normalisable)."""
+    stein_rhs = Sigma - 0.5 * (h_u @ Sigma + Sigma @ h_u.T)
+    return relative_fro(h_h, stein_rhs)
+
+
+def project_tilt(
+    M: torch.Tensor, delta: float, lambda_r: float, psi_is_phi: bool, Sigma_chol: torch.Tensor
+) -> torch.Tensor:
+    """Project a tilt matrix onto a (sufficient) normalisable region.
+    ψ = φ : the effective quadratic tilt M + λ_r I must stay ⪰ δ λ_r I, so that the
+             orthant-restricted exponent is bounded below whatever the prior does.
+    ψ = h : Σ⁻¹ + M ≻ 0, enforced as Σ^{1/2} M Σ^{1/2} ⪰ -(1-δ) I (Σ = Sigma_chol Sigma_cholᵀ)."""
+    M = sym(M.to(torch.float64))
+    eye = torch.eye(M.shape[0], device=M.device, dtype=torch.float64)
+    if psi_is_phi:
+        T = M + lambda_r * eye
+        w, V = torch.linalg.eigh(T)
+        w = torch.clamp(w, min=delta * lambda_r)
+        return (V * w) @ V.T - lambda_r * eye
+    Lp = Sigma_chol
+    W = Lp.T @ M @ Lp
+    w, V = torch.linalg.eigh(sym(W))
+    if w.min().item() >= -(1 - delta):
+        return M
+    w = torch.clamp(w, min=-(1 - delta))
+    Linv = torch.linalg.solve_triangular(Lp, eye, upper=False)
+    return sym(Linv.T @ ((V * w) @ V.T) @ Linv)
+
+
+def normalisability_margin(
+    M64: torch.Tensor, Sigma_inv: torch.Tensor, lambda_r: float, psi_is_phi: bool
+) -> float:
+    """Sufficient condition (for ReLU / 2-homogeneous φ) that the tilted density is
+    normalisable: Σ⁻¹ + restriction of the tilt is positive definite on every orthant.
+    Positive margin => normalisable.  Negative margin is a warning, not a proof."""
+    if psi_is_phi:
+        eye = torch.eye(M64.shape[0], device=M64.device, dtype=torch.float64)
+        lam_M = torch.linalg.eigvalsh(M64 + lambda_r * eye).min().item()
+        return torch.linalg.eigvalsh(Sigma_inv).min().item() + min(0.0, lam_M)
+    return torch.linalg.eigvalsh(Sigma_inv + M64).min().item()
+
+
 # ----------------------------------------------------------------------------- HMC
 class SingleSiteHMC:
     """Persistent HMC chains for the single-site density of one layer
@@ -152,12 +242,7 @@ class SingleSiteHMC:
 
     def set_prior(self, Sigma: torch.Tensor) -> None:
         """Σ (P,P) float64 prior covariance."""
-        Sigma = sym(Sigma.to(torch.float64))
-        jitter = self.jitter_rel * (Sigma.diagonal().mean().item() + 1e-300)
-        eye = torch.eye(self.P, device=Sigma.device, dtype=Sigma.dtype)
-        self.Sigma = Sigma + jitter * eye
-        self._Sigma_chol = torch.linalg.cholesky(self.Sigma)
-        self.Sigma_inv = torch.cholesky_inverse(self._Sigma_chol)
+        self.Sigma, self._Sigma_chol, self.Sigma_inv = jittered_prior(Sigma, self.jitter_rel)
         self._refresh()
 
     def set_tilt(self, M: torch.Tensor) -> None:
@@ -234,6 +319,8 @@ class SingleSiteHMC:
 
     def load_state_dict(self, d: dict[str, Any]) -> None:
         """Restore a state_dict; Σ and M must already be set to the values it was saved under."""
+        if "sampler" in d:  # only other samplers' states carry a kind; HMC's never did
+            raise ValueError(f"state was saved by a {d['sampler']!r} sampler, not an HMC one")
         if d["h"].shape != (self.n_chains, self.P):
             raise ValueError(
                 f"state has chain shape {tuple(d['h'].shape)}, "
@@ -252,18 +339,7 @@ class SingleSiteHMC:
     # -- energy ----------------------------------------------------------------
     def _tilt_and_grad(self, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """U(h) per chain and u = ∇_h U (n_chains, P)."""
-        ph = self.phi(h)
-        if self.psi_is_phi:
-            psi, psi_p = ph, self.phi_prime(h)
-        else:
-            psi, psi_p = h, None
-        Mpsi = psi @ self.M
-        U = 0.5 * (psi * Mpsi).sum(-1)
-        u = Mpsi if psi_p is None else psi_p * Mpsi
-        if self.lambda_r != 0.0:
-            U = U + 0.5 * self.lambda_r * (ph * ph).sum(-1)
-            u = u + self.lambda_r * self.phi_prime(h) * ph
-        return U, u
+        return tilt_and_grad(h, self.M, self.lambda_r, self.phi, self.phi_prime, self.psi_is_phi)
 
     def tilt_and_grad(self, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """U(h) per chain and u = ∇U, for callers that bring their own samples h (n, P)."""
@@ -365,19 +441,6 @@ class SingleSiteHMC:
         sums["h_h"] += (h.T @ h).double() / n
         sums["h_u"] += (h.T @ u).double() / n
 
-    @staticmethod
-    def _psi_psi_rel_mc_err(psi_psi: torch.Tensor, psi2_psi2: torch.Tensor, n_eff: float) -> float:
-        """||MC standard error of psi_psi||_F / ||psi_psi||_F from the elementwise variance."""
-        var = (psi2_psi2 - psi_psi**2).clamp_min(0.0) / max(n_eff, 1.0)
-        return (var.sqrt().norm() / psi_psi.norm().clamp_min(1e-300)).item()
-
-    def _stein_mismatch(self, h_h: torch.Tensor, h_u: torch.Tensor) -> float:
-        """Relative Frobenius gap between ⟨hhᵀ⟩ and its Stein-identity value Σ - Σ⟨u hᵀ⟩.
-        The identity holds only in equilibrium: a mismatch means the chains are not
-        equilibrated (or the density is not normalisable)."""
-        stein_rhs = self.Sigma - 0.5 * (h_u @ self.Sigma + self.Sigma @ h_u.T)
-        return relative_fro(h_h, stein_rhs)
-
     def run(
         self, n_trans: int, collect: bool = True
     ) -> tuple[dict[str, torch.Tensor] | None, dict[str, float]]:
@@ -439,39 +502,15 @@ class SingleSiteHMC:
         # Too few transitions to estimate the autocorrelation (ess_frac is nan): fall back to
         # the optimistic n_eff = n_chains * n_trans, so the reported MC error is a lower bound.
         n_eff = self.n_chains * n_trans * (ess_frac if math.isfinite(ess_frac) else 1.0)
-        diag["psi_psi_rel_mc_err"] = self._psi_psi_rel_mc_err(psi_psi, psi2_psi2, n_eff)
-        diag["stein_mismatch"] = self._stein_mismatch(h_h, h_u)
+        diag["psi_psi_rel_mc_err"] = psi_psi_rel_mc_err(psi_psi, psi2_psi2, n_eff)
+        diag["stein_mismatch"] = stein_mismatch(h_h, h_u, self.Sigma)
         moments = {"psi_psi": psi_psi, "h_h": h_h, "h_u": h_u}
         return moments, diag
 
     def project_tilt(self, M: torch.Tensor, delta: float) -> torch.Tensor:
-        """Project a tilt matrix onto a (sufficient) normalisable region.
-        ψ = φ : the effective quadratic tilt M + λ_r I must stay ⪰ δ λ_r I, so that the
-                 orthant-restricted exponent is bounded below whatever the prior does.
-        ψ = h : Σ⁻¹ + M ≻ 0, enforced as Σ^{1/2} M Σ^{1/2} ⪰ -(1-δ) I."""
-        M = sym(M.to(torch.float64))
-        eye = torch.eye(self.P, device=self.device, dtype=torch.float64)
-        if self.psi_is_phi:
-            T = M + self.lambda_r * eye
-            w, V = torch.linalg.eigh(T)
-            w = torch.clamp(w, min=delta * self.lambda_r)
-            return (V * w) @ V.T - self.lambda_r * eye
-        Lp = self._Sigma_chol
-        W = Lp.T @ M @ Lp
-        w, V = torch.linalg.eigh(sym(W))
-        if w.min().item() >= -(1 - delta):
-            return M
-        w = torch.clamp(w, min=-(1 - delta))
-        Linv = torch.linalg.solve_triangular(Lp, eye, upper=False)
-        return sym(Linv.T @ ((V * w) @ V.T) @ Linv)
+        """`project_tilt` of M under this sampler's prior and rate tilt."""
+        return project_tilt(M, delta, self.lambda_r, self.psi_is_phi, self._Sigma_chol)
 
     def normalisability_margin(self) -> float:
-        """Sufficient condition (for ReLU / 2-homogeneous φ) that the tilted density is
-        normalisable: Σ⁻¹ + restriction of the tilt is positive definite on every orthant.
-        Positive margin => normalisable.  Negative margin is a warning, not a proof."""
-        if self.psi_is_phi:
-            eye = torch.eye(self.P, device=self.device, dtype=torch.float64)
-            Q = self.Sigma_inv
-            lam_M = torch.linalg.eigvalsh(self.M64 + self.lambda_r * eye).min().item()
-            return torch.linalg.eigvalsh(Q).min().item() + min(0.0, lam_M)
-        return torch.linalg.eigvalsh(self.Sigma_inv + self.M64).min().item()
+        """`normalisability_margin` of the current prior and tilt."""
+        return normalisability_margin(self.M64, self.Sigma_inv, self.lambda_r, self.psi_is_phi)
