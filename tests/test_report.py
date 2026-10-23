@@ -28,14 +28,14 @@ from fct.report import (
 )
 from fct.sweep import (
     LAYERS,
-    Setting,
     expand,
     preset,
     run_setting,
     save_sweep,
     setting_dir,
+    with_grid,
 )
-from tests.report_helpers import known, synthetic_history, synthetic_results
+from tests.report_helpers import known, modularity_setting, synthetic_history, synthetic_results
 
 QUIET = {"log": lambda s: None}
 TASKS = ("linear_teacher", "object_action", "what_where")
@@ -55,7 +55,7 @@ def test_final_mir_equals_known_values_for_every_setting():
                     ("corrected", fm.corrected),
                     ("chance", fm.chance),
                 ):
-                    if layer < s.L:
+                    if layer < s.axes["net.L"]:
                         assert table[row, layer] == known(s, layer, kind)
                     else:  # the setting has no such layer
                         assert np.isnan(table[row, layer])
@@ -74,7 +74,11 @@ def test_markdown_table_prints_the_known_numbers():
 def test_summary_text_names_the_extremes_from_the_numbers():
     results = synthetic_results()
     settings = [r.setting for r in results if r.setting.task == "object_action"]
-    cells = [(known(s, layer, "corrected"), s, layer) for s in settings for layer in range(s.L)]
+    cells = [
+        (known(s, layer, "corrected"), s, layer)
+        for s in settings
+        for layer in range(s.axes["net.L"])
+    ]
     best, worst = max(cells), min(cells)
     text = summary_text(final_mir(results, "object_action"))
     assert "12 of 12" in text
@@ -185,8 +189,10 @@ def test_hand_set_modular_net_scores_high_through_the_real_monitor_to_the_summar
     monitor = make_mir_monitor(dataset, cfg)
     generator = torch.Generator().manual_seed(0)
     nets = {
-        Setting("what_where", L, "tanh", 0.0): _modular_hidden(dataset, L, N),
-        Setting("what_where", L, "tanh", 1e-3): torch.randn(P, L, N, generator=generator).double(),
+        modularity_setting("what_where", L, "tanh", 0.0): _modular_hidden(dataset, L, N),
+        modularity_setting("what_where", L, "tanh", 1e-3): torch.randn(
+            P, L, N, generator=generator
+        ).double(),
     }
 
     def result(setting, hidden):
@@ -215,7 +221,7 @@ def test_sweep_root_from_env(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- a real tiny sweep, partly run
 def _index(task: str, L: int, phi: str, rate: float) -> int:
-    return expand(preset("tiny")).index((task, L, phi, rate))
+    return modularity_setting(task, L, phi, rate).index
 
 
 @pytest.fixture(scope="module")
@@ -239,13 +245,13 @@ def test_load_results_marks_every_setting_missing_in_an_empty_sweep(tmp_path):
 
 def test_load_results_reads_the_finished_settings(partial_root):
     done = [r for r in load_results(partial_root) if r.status == "done"]
-    assert [(r.setting.task, r.setting.L) for r in done] == [
+    assert [(r.setting.task, r.setting.axes["net.L"]) for r in done] == [
         ("linear_teacher", 1),
         ("object_action", 3),
     ]
     for r in done:
         assert r.metrics and r.examples is not None and r.data_cfg.task == r.setting.task
-        assert len(r.history["monitor_mir"][-1]) == r.setting.L
+        assert len(r.history["monitor_mir"][-1]) == r.setting.axes["net.L"]
 
 
 def test_setting_items_for_done_setting_are_text_then_three_figures(partial_root):
@@ -331,9 +337,53 @@ def test_setting_text_names_a_missing_history_key():
 def test_find_result_returns_the_named_setting_and_rejects_unknown_ones():
     results = synthetic_results()
     wanted = results[7].setting
-    assert find_result(results, *wanted) is results[7]
-    with pytest.raises(ValueError, match="no result"):
-        find_result(results, "linear_teacher", 2, "tanh", 0.0)
+    axes = {a: v for a, v in wanted.axes.items() if a != "data.task"}
+    assert find_result(results, wanted.task, axes) is results[7]
+    absent = {"net.L": 2, "net.phi": "tanh", "train.rate_lambda": 0.0}
+    with pytest.raises(LookupError, match="0 results"):
+        find_result(results, "linear_teacher", absent)
+
+
+def test_setting_label_of_the_modularity_grid_is_unchanged():
+    assert setting_label(synthetic_results()[0].setting) == "L1 tanh r=0"
+    last = synthetic_results()[-1].setting
+    assert setting_label(last) == "L5 relu r=0.001"
+
+
+def _phase_results() -> list[SettingResult]:
+    """A 2 x 2 grid whose settings differ only in the two lambdas."""
+    grid = {
+        "net.L": [1],
+        "net.phi": ["tanh"],
+        "train.rate_lambda": [1e-3, 1.0],
+        "train.weight_lambda": [1e-3, 1.0],
+    }
+    sweep = with_grid(preset("tiny"), grid)
+    return [SettingResult(s, "missing", Path("nowhere")) for s in expand(sweep)]
+
+
+def test_find_result_on_a_phase_grid_needs_every_axis_and_rejects_ambiguity():
+    results = _phase_results()
+    full = {"net.L": 1, "net.phi": "tanh", "train.rate_lambda": 1.0, "train.weight_lambda": 1e-3}
+    assert find_result(results, "linear_teacher", full) is results[2]
+    for partial in (
+        {"net.L": 1, "net.phi": "tanh", "train.rate_lambda": 1.0},  # two settings share these
+        {**full, "train.weight_lambda": 0.5},  # none
+    ):
+        with pytest.raises(LookupError, match="results for task"):
+            find_result(results, "linear_teacher", partial)
+
+
+def test_setting_labels_of_a_phase_grid_are_distinct_and_show_every_axis():
+    labels = [setting_label(r.setting) for r in _phase_results()]
+    assert len(set(labels)) == 4
+    assert labels[1] == "L1 tanh r=0.001 weight_lambda=1"
+
+
+def test_load_results_rejects_a_grid_without_the_modularity_axes(tmp_path):
+    save_sweep(with_grid(preset("tiny"), {"net.N": [4, 6]}), tmp_path)
+    with pytest.raises(ValueError, match="net.L"):
+        load_results(tmp_path)
 
 
 def test_loading_does_not_write_into_root_and_reports_a_missing_dataset(tmp_path):

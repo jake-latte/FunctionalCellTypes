@@ -1,10 +1,11 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FunctionalCellTypes — 36-setting sweep as a SLURM array
+#  FunctionalCellTypes — grid sweep (any number of settings) as a SLURM array
 #
 #  One array task trains one setting: `python -m fct sweep run ROOT --index $TASK`.
 #  The grid itself lives in ROOT/sweep.json (write it first with
-#  `python -m fct sweep init ROOT --preset full`); this script only needs its size.
+#  `python -m fct sweep init ROOT --preset full`, or `--preset phase_transition --n-lambda 8`);
+#  this script only needs its size (`sweep count`).
 #
 #  Usage (ROOT = sweep root, as the first argument or in $FCT_SWEEP_ROOT):
 #    bash jobs/fct_sweep.sh ROOT --submit              # submit the full array

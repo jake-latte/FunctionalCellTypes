@@ -31,7 +31,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `model.py`, `train.py` | MLP and the training loop with checkpoint / resume and an optional monitor hook |
 | `modularity.py` | rank binning, plug-in mutual information, preference ratio, MIR, dead neurons, shuffle baseline and bias correction (pure functions) |
 | `monitor.py` | `make_mir_monitor`: the training hook that records per-layer MIR during training |
-| `sweep.py` | the 36-setting grid: `SweepConfig`, `expand`, `run_setting`, `setting_status` |
+| `sweep.py` | a grid of runs over any `Config` fields: `SweepConfig`, `expand`, `run_setting`, `setting_status`, presets |
 | `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `meanfield.py` | HMC sampler and the mean-field saddle-point solver |
@@ -60,20 +60,33 @@ cardinality-dependent floor: the **raw** MIR, the **chance baseline** (the raw M
 factor labels shuffled) and the **corrected** MIR (the shuffled null removed). Their exact definitions,
 with equations, are in `notebooks/modularity.ipynb` and `fct/modularity.py`.
 
-**Sweep.** The grid is 3 tasks x hidden layers {1, 3, 5} x phi {tanh, relu} x rate regulariser
-{0, 1e-3} = 36 settings, indexed in a fixed order (task slowest, rate fastest). A sweep lives in a
-directory `ROOT` that holds `sweep.json`; setting `i` is a normal cache directory
-`ROOT/<task>/L{L}_{phi}_r{rate}/`. Two presets exist: `tiny` (seconds per setting on a CPU, a pipeline
-check that learns nothing meaningful) and `full` (cluster sizes; the numbers in it are placeholders to
-be tuned). The weight regulariser stays at its library default (1e-4).
+**Sweep.** A sweep is a grid over any `Config` fields: `grid` in `ROOT/sweep.json` maps a dotted path
+(`net.L`, `net.phi`, `train.rate_lambda`, `train.weight_lambda`, `data.task`, ...) to a list of values, and the
+settings are the Cartesian product in the order written (first axis slowest), so index `i` is stable. Sizes,
+seeds and the task parameters are shared by all settings (`--set N=64 --set n_epochs=2000 ...`); an axis
+overrides the shared value, except fields the sweep owns (data size, seeds, log/save/monitor schedules).
+Presets: `tiny` (seconds per setting on a CPU, a pipeline check that learns nothing meaningful), `full` and
+`modularity` (cluster sizes, placeholders to tune; the 36-setting grid of 3 tasks x layers {1, 3, 5} x phi
+{tanh, relu} x rate regulariser {0, 1e-3}, directories `ROOT/<task>/L{L}_{phi}_r{rate}/`, weight regulariser at
+its library default), and `phase_transition --n-lambda N_LAMBDA` (linear teacher, L in {1, 2}, phi in {tanh, relu},
+`rate_lambda` and `weight_lambda` each `N_LAMBDA` log-spaced values in [1e-6, 1]). Other grids use directories
+`ROOT/<task>/s{index:04d}_<label>/`, each with a `setting.json` recording its axis values, so a notebook can
+find a setting from its values (`fct.sweep.find_setting_dir`). `--axis PATH=[values]` replaces or adds an axis.
+Indices follow the product order, so adding a value to any axis but the first renumbers the settings after it
+and orphans their directories (`status` then reports them missing): grow a grid in a fresh ROOT, or append to
+the first axis only.
 
 ```sh
 uv run python -m fct sweep init ROOT --preset tiny        # write ROOT/sweep.json (--set n_epochs=100 ...)
-uv run python -m fct sweep list ROOT                      # "<index> <task>/L{L}_{phi}_r{rate}"
-uv run python -m fct sweep count ROOT                     # 36
+uv run python -m fct sweep init ROOT --preset phase_transition --n-lambda 8 --axis 'net.L=[1,2,3]'
+uv run python -m fct sweep list ROOT                      # "<index> <task>/<setting directory>"
+uv run python -m fct sweep count ROOT                     # number of settings (36 for modularity)
 uv run python -m fct sweep run ROOT --index 7             # train one setting (resumable); no --index: all
-uv run python -m fct sweep status ROOT                    # done / partial / missing per setting
+uv run python -m fct sweep status ROOT                    # done / partial / missing / stale per setting
 ```
+
+The results notebook and `fct.report` support the modularity grid (they need the axes `net.L`, `net.phi` and
+`train.rate_lambda`).
 
 **Cluster.** `jobs/fct_sweep.sh` submits the sweep as a SLURM array on the GPU partition (one setting
 per task, a concurrency cap, logs under `tmp/logs/`). Check what it would run before submitting:
