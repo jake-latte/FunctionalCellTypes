@@ -340,8 +340,11 @@ def test_a_wide_hidden_kernel_makes_the_trained_first_layer_smooth_over_the_ring
     initial = make_net(_smoothness_cfg(None).net, 4, 2, CPU, F64).U.detach()
     l2 = _trained_first_layer(_smoothness_cfg(None), tmp_path / "l2")
     spatial = _trained_first_layer(_smoothness_cfg(wide), tmp_path / "spatial")
+    # Absolute thresholds: iid entries give roughness ~ 1 with an SD of about 0.17 for a 16 x 4
+    # layer, so 0.7 is ~2 SD below the null; the relative bound is what pins the smoothing.
     assert _roughness(initial) > 0.7 and _roughness(l2) > 0.7
     assert _roughness(spatial) < 0.3
+    assert _roughness(spatial) < _roughness(l2) / 3
 
 
 # ---------------------------------------------------------------- training end to end

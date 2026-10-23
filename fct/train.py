@@ -197,7 +197,7 @@ def _restore(
 def _log_line(epoch: int, n_epochs: int, parts: dict[str, float]) -> str:
     return (
         f"[{epoch:05d}/{n_epochs:05d}] mse={parts['mse']:.4f} "
-        f"weight L2={parts['weight_l2']:.4f} rate L2={parts['rate_l2']:.4f} "
+        f"weight penalty={parts['weight_l2']:.4f} rate L2={parts['rate_l2']:.4f} "
         f"loss={parts['loss']:.4f}"
     )
 
