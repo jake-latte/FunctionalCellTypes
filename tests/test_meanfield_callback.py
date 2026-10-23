@@ -9,7 +9,15 @@ import pytest
 import torch
 
 from fct.meanfield import HISTORY_KEYS, OuterSnapshot, solve
-from tests.test_meanfield import importance_cfg, relu_problem, resume_cfg, silent, small_net
+from tests.test_meanfield import (
+    Interrupted,
+    importance_cfg,
+    interrupt_on_call,
+    relu_problem,
+    resume_cfg,
+    silent,
+    small_net,
+)
 
 SAMPLERS = {"hmc": resume_cfg, "importance": importance_cfg}
 
@@ -77,3 +85,20 @@ def test_a_raising_callback_stops_the_solve():
 
     with pytest.raises(RuntimeError, match="stop"):
         run("hmc", on_outer=boom)
+
+
+def test_steps_restored_from_a_checkpoint_do_not_call_the_callback(tmp_path, monkeypatch):
+    """An interrupted solve resumes at the checkpoint's step; only the steps run in the
+    resuming call are reported, each with the history including the restored entries."""
+    restore = interrupt_on_call(monkeypatch, 3)  # steps 0 and 1 run; checkpoint after step 1
+    with pytest.raises(Interrupted):
+        run("hmc", checkpoint_dir=tmp_path, config_hash="h0")
+    restore()
+    seen = []
+    run(
+        "hmc",
+        checkpoint_dir=tmp_path,
+        config_hash="h0",
+        on_outer=lambda snap: seen.append((snap.outer, len(snap.history["outer_step"]))),
+    )
+    assert seen == [(2, 3), (3, 4)]

@@ -131,12 +131,47 @@ def test_health_figures_fail_loudly_without_their_diagnostics():
         draw.fig_solver_health({k: v for k, v in history.items() if k != "outer_step"})
 
 
-def test_the_full_dashboard_is_unchanged_by_the_health_split():
-    history = synthetic_history("hmc")
-    shown = titles(draw.fig_solver_history(history))
-    expected = [
-        p.title
-        for p in draw.SOLVER_PANELS
-        if p.key in history and not np.isnan(np.asarray(history[p.key], dtype=float)).all()
+def test_the_full_dashboard_keeps_its_panels_and_zero_based_layers():
+    """Literal titles, in order, so a change to the shared panel list is a visible edit here."""
+    fig = draw.fig_solver_history(synthetic_history("hmc"))
+    assert titles(fig) == [
+        "inner residual  ||⟨ψψᵀ⟩-Φ||/||Φ||",
+        "outer step size  ||ΔΦ||/||Φ|| (before clipping)",
+        "fixed-point residual of Φ̂  (Eq. 31b/c)",
+        "Stein vs direct estimate of Φ̂  (sampler equilibrium)",
+        "train MSE: theory (lines) vs net (dashed)",
+        "adaptive step sizes  η̂ (lines), η (black)",
+        "backtracking: inner (lines), outer (black)",
+        "HMC acceptance",
+        "HMC step size ε",
+        "divergent transitions per run",
+        "relative Monte Carlo error of ⟨ψψᵀ⟩",
+        "sampler ESS / samples",
+        "lag-1 autocorrelation of ||h||²/P",
+        "chain scale  ⟨||h||²⟩ / prior diag",
+        "Stein identity mismatch",
+        "normalisability margin (sufficient cond.)",
+        "kernel alignment with the trained net",
+        "eigenvalues raised to the PD floor",
+        "λ_min(Φ) before PD floor",
     ]
-    assert shown == expected
+    assert legend_labels(fig)[0] == "layer 0"
+
+
+def legend_labels(fig) -> list[str]:
+    return [
+        t.get_text()
+        for ax in fig.axes
+        for t in (ax.get_legend().get_texts() if ax.get_legend() else [])
+    ]
+
+
+def test_the_live_figures_all_count_layers_from_one():
+    """The kernel panels say layer 1 for the first layer, so the health panels must too."""
+    kernels = torch.rand(L, P, P)
+    history = synthetic_history("hmc")
+    for fig in (draw.fig_solver_health(history), draw.fig_sampler_health(history)):
+        labels = [x for x in legend_labels(fig) if x.startswith("layer")]
+        assert "layer 0" not in labels and "layer 1" in labels
+    kernel_titles = titles(draw.fig_layer_kernels({"Φ": kernels}))
+    assert kernel_titles[0].endswith("layer 1")

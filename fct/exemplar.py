@@ -15,27 +15,18 @@ starts a new directory. The hashes are `Config.section_hash`, the ones the artef
 themselves guarded with.
 """
 
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from matplotlib.figure import Figure
 
 from fct.analyse import ExampleOutputs, example_outputs, pick_examples
-from fct.cache import cache_paths
-from fct.config import (
-    Config,
-    DataConfig,
-    MeanFieldConfig,
-    NetConfig,
-    SolverConfig,
-    TrainConfig,
-    save_config,
-)
-from fct.data import Dataset, get_dataset
+from fct.config import Config, SolverConfig
+from fct.data import Dataset
 from fct.draw import fig_kernels, fig_layer_kernels, fig_sampler_health, fig_solver_health
 from fct.meanfield import (
     History,
@@ -47,13 +38,34 @@ from fct.meanfield import (
     run_meanfield,
 )
 from fct.model import MLP
-from fct.train import train_from_config
+from fct.spatial_view import TrainRun, make_config, train_in
 
-CACHE_ROOT_ENV = "FCT_CACHE_ROOT"
 N_EXAMPLE_OUTPUTS = 4
 EXAMPLE_SEED = 0
 
 Show = Callable[[Sequence[Figure]], None]
+
+
+def sgld_theory_constants(
+    beta: float, weight_lambda: float, rate_lambda: float, n_points: int, d_out: int
+) -> dict[str, float]:
+    """The `MeanFieldConfig` constants (prior_scale, alpha, rate_tilt) under which the theory
+    describes the stationary law exp(-beta L) of SGLD on the repo loss L (see `fct.sgld`).
+
+    The loss puts weight_lambda ||theta||^2 on standard-normal-parametrised weights, so under
+    SGLD at beta each weight has variance 1 / (2 beta weight_lambda): that is the prior scale.
+    The 1/N-scaled readout turns the data term into a Gaussian likelihood of precision
+    beta N / (P d_out) on the outputs, which makes the ridge
+    alpha = P d_out / (beta prior_scale) = 2 weight_lambda P d_out. The rate penalty
+    beta rate_lambda sum(phi^2) is the tilt exp(-rate_tilt phi^T phi / 2), so
+    rate_tilt = 2 beta rate_lambda.
+    The library's own defaults (prior_scale = 1 / weight_lambda, alpha = weight_lambda P d_out
+    / beta, rate_tilt = rate_lambda) agree with this only at beta = 1/2."""
+    return {
+        "prior_scale": 1.0 / (2.0 * beta * weight_lambda),
+        "alpha": 2.0 * weight_lambda * n_points * d_out,
+        "rate_tilt": 2.0 * beta * rate_lambda,
+    }
 
 
 def exemplar_config(
@@ -74,33 +86,24 @@ def exemplar_config(
     lr: float,
     n_epochs: int,
     train_seed: int,
-    log_int: int,
-    save_int: int,
 ) -> Config:
-    """The linear-teacher config of the notebook's settings, on the CPU in float64.
-
-    `beta` is both the SGLD inverse temperature of the training and the beta of the mean-field
-    action, so the solved theory describes the distribution the net was sampled from; with
-    Adam it only sets the theory. All P training points enter the solve. The solver settings
-    are left at their defaults, `with_solver` sets them."""
-    return Config(
-        data=DataConfig(task="linear_teacher", P=P, D_in=m, n_latents=k, seed=data_seed),
-        net=NetConfig(N=N, L=L, g=g, phi=phi, seed=net_seed),
-        train=TrainConfig(
-            n_epochs=n_epochs,
-            lr=lr,
-            weight_lambda=weight_lambda,
-            rate_lambda=rate_lambda,
-            log_int=log_int,
-            save_int=save_int,
-            seed=train_seed,
-            optimizer=optimizer,
-            beta=beta,
-        ),
-        meanfield=MeanFieldConfig(n_points=P, beta=beta),
-        device="cpu",
-        dtype="float64",
+    """The linear-teacher config of the notebook's settings, on the CPU in float64
+    (`fct.spatial_view.make_config` without a spatial prior). All P training points enter the
+    solve. With SGLD the mean-field constants are those of `sgld_theory_constants`, so the
+    theory describes the distribution the net was sampled from; with Adam there is no such
+    distribution and the library defaults stand. The solver settings are `with_solver`'s."""
+    cfg = make_config(
+        P=P, m=m, k=k, N=N, L=L, phi=phi, g=g, data_seed=data_seed, net_seed=net_seed,
+        weight_lambda=weight_lambda, rate_lambda=rate_lambda, optimizer=optimizer, beta=beta,
+        lr=lr, n_epochs=n_epochs, train_seed=train_seed, spatial=None, device="cpu",
+    )  # fmt: skip
+    constants = (
+        sgld_theory_constants(beta, weight_lambda, rate_lambda, P, m)  # D_out = m
+        if optimizer == "sgld"
+        else {}
     )
+    meanfield = cfg.meanfield.model_copy(update={"n_points": P, "beta": beta, **constants})
+    return cfg.model_copy(update={"meanfield": meanfield})
 
 
 def with_solver(cfg: Config, **solver_fields) -> Config:
@@ -121,26 +124,21 @@ def exemplar_dirs(cache_root: Path, cfg: Config) -> ExemplarDirs:
     return ExemplarDirs(train, solve)
 
 
-def train_exemplar(
-    cfg: Config, cache_root: Path, log: Log = print
-) -> tuple[Dataset, MLP, History, Path]:
+def train_exemplar(cfg: Config, cache_root: Path, log: Log = print) -> TrainRun:
     """Dataset and trained net of `cfg` through the cache (training resumes from its
-    checkpoints, a finished run is loaded); also the cache directory used."""
-    directory = exemplar_dirs(cache_root, cfg).train
-    save_config(cfg, cache_paths(directory).config)
-    dataset = get_dataset(directory, cfg)
-    net, history = train_from_config(cfg, dataset, directory, log=log)
-    return dataset, net, history, directory
+    checkpoints, a finished run is loaded), with the cache directory used."""
+    return train_in(cfg, exemplar_dirs(cache_root, cfg).train, log)
 
 
-def example_outputs_of(net: MLP, dataset: Dataset, P: int) -> ExampleOutputs:
+def example_outputs_of(net: MLP, dataset: Dataset) -> ExampleOutputs:
     """The net's outputs on a few fixed training points."""
-    return example_outputs(net, dataset, pick_examples(P, N_EXAMPLE_OUTPUTS, EXAMPLE_SEED))
+    indices = pick_examples(len(dataset.x), N_EXAMPLE_OUTPUTS, EXAMPLE_SEED)
+    return example_outputs(net, dataset, indices)
 
 
 def live_figures(snapshot: OuterSnapshot) -> list[Figure]:
     """The three live figures of one snapshot: the kernels Φ_l and Φ̂_l, solver health and
-    sampler health."""
+    sampler health (layers counted from 1 in all three)."""
     step = snapshot.outer
     return [
         fig_layer_kernels({"Φ": snapshot.Phi, "Φ̂": snapshot.Phi_hat}, title=f"outer step {step}"),
@@ -171,17 +169,25 @@ def solve_exemplar(
     plot_every: int,
     show: Show,
     log: Log = print,
+    on_failure: Callable[[], None] = lambda: None,
 ) -> SolveResult:
     """Solve the mean-field problem of `cfg` for the trained net (through the cache), showing
-    the live figures every `plot_every` outer steps and once more at the end."""
-    result = run_meanfield(
-        cfg,
-        dataset,
-        net,
-        exemplar_dirs(cache_root, cfg).solve,
-        log=log,
-        on_outer=live_plotter(plot_every, show),
-    )
+    the live figures every `plot_every` outer steps and once more at the end.
+
+    If the solve raises (an inadequate sampler, say), `on_failure` is called before the
+    exception propagates: a live view uses it to print the log lines it was still holding."""
+    try:
+        result = run_meanfield(
+            cfg,
+            dataset,
+            net,
+            exemplar_dirs(cache_root, cfg).solve,
+            log=log,
+            on_outer=live_plotter(plot_every, show),
+        )
+    except BaseException:
+        on_failure()
+        raise
     show(final_figures(result))
     return result
 
@@ -194,8 +200,9 @@ def final_figures(result: SolveResult) -> list[Figure]:
 
 
 def kernel_comparison(result: SolveResult, net: MLP, dataset: Dataset, cfg: Config) -> Figure:
-    """Solved Φ_l next to the trained net's empirical kernels, layer by layer."""
-    return fig_kernels(result.Phi, net_kernels(net, dataset, cfg))
+    """Solved Φ_l next to the trained net's empirical kernels, layer by layer, each panel on
+    its own colour scale (a shared scale would hide whichever kernel is smaller)."""
+    return fig_kernels(result.Phi, net_kernels(net, dataset, cfg), shared_scale=False)
 
 
 def empirical_kernel_figure(net: MLP, dataset: Dataset, cfg: Config) -> Figure:
@@ -203,31 +210,65 @@ def empirical_kernel_figure(net: MLP, dataset: Dataset, cfg: Config) -> Figure:
     return fig_layer_kernels({"Φ (net)": net_kernels(net, dataset, cfg)}, title="trained net")
 
 
-def cache_root_from_env() -> Path:
-    """The directory named by the environment variable CACHE_ROOT_ENV."""
-    root = os.environ.get(CACHE_ROOT_ENV)
-    if not root:
-        raise RuntimeError(
-            f"set CACHE_ROOT in the notebook or the environment variable {CACHE_ROOT_ENV}"
-        )
-    return Path(root)
+def _per_layer(values, fmt: str = ".3g") -> str:
+    return ", ".join(f"{v:{fmt}}" for v in values)
 
 
-def solve_summary(history: History, sampler: str) -> str:
-    """One markdown paragraph on a finished solve: its length and final train MSE (theory and,
-    if the solve had a net, the net's), the final kernel alignment with the net per layer, and
-    the smallest sampler ESS fraction seen over the run."""
-    n_steps = len(history["outer_step"])
+def _trend(first: np.ndarray, last: np.ndarray) -> str:
+    """Whether the mean over layers fell, rose or stayed."""
+    a, b = float(np.mean(first)), float(np.mean(last))
+    return "fell" if b < a else "rose" if b > a else "was unchanged"
+
+
+def _kernel_scales(name: str, kernels: torch.Tensor) -> str:
+    """Largest eigenvalue and mean diagonal of each layer's kernel."""
+    kernels = kernels.double()
+    top = torch.linalg.eigvalsh(kernels)[:, -1].numpy()
+    diag = torch.diagonal(kernels, dim1=-2, dim2=-1).mean(-1).numpy()
+    return f"{name} kernels: largest eigenvalue {_per_layer(top)}, mean diagonal {_per_layer(diag)}"
+
+
+def solve_summary(
+    history: History,
+    sampler: str,
+    Phi: torch.Tensor | None = None,
+    net_Phi: torch.Tensor | None = None,
+) -> str:
+    """One markdown paragraph on a finished solve, every number measured from it (layers
+    counted from 1): the fixed-point residual of Φ̂ at the first and last outer step and
+    whether it fell, the smallest sampler ESS fraction and where it occurred, the largest
+    eigenvalue and mean diagonal of the solved kernels `Phi` (and of the net's `net_Phi`, if
+    given), the final train MSE (theory and, if the solve had a net, the net's) and the final
+    kernel alignment with the net."""
+    first = np.asarray(history["phihat_fp_resid_stein"][0], dtype=float)
+    last = np.asarray(history["phihat_fp_resid_stein"][-1], dtype=float)
+    parts = [
+        f"{len(history['outer_step'])} outer steps with the {sampler} sampler.",
+        (
+            f"Fixed-point residual of Φ̂ per layer: {_per_layer(first)} at the first step, "
+            f"{_per_layer(last)} at the last, so it {_trend(first, last)}."
+        ),
+    ]
+    ess = np.asarray(history["hmc_ess_frac"], dtype=float)
+    step, layer = np.unravel_index(np.argmin(ess), ess.shape)
+    parts.append(
+        f"Smallest sampler ESS fraction {ess[step, layer]:.3g} (outer step {step}, layer "
+        f"{layer + 1}); at the last step {_per_layer(ess[-1])}."
+    )
+    if Phi is not None:
+        scales = [_kernel_scales("solved", Phi)]
+        if net_Phi is not None:
+            scales.append(_kernel_scales("net", net_Phi))
+        parts.append("; ".join(scales) + ".")
     mse = f"theory {history['train_mse_theory'][-1]:.3g}"
     net_mse = history.get("train_mse_net", [None])[-1]
     if net_mse is not None:
         mse += f", trained net {net_mse:.3g}"
-    text = f"{n_steps} outer steps with the {sampler} sampler. Final train MSE: {mse}."
+    parts.append(f"Final train MSE: {mse}.")
     if "align_net" in history:
-        align = ", ".join(f"{a:.3f}" for a in history["align_net"][-1])
-        text += f" Kernel alignment with the net per layer: {align}."
-    ess = np.min(np.asarray(history["hmc_ess_frac"], dtype=float))
-    return text + f" Smallest sampler ESS fraction over the run: {ess:.3g}."
+        align = _per_layer(np.asarray(history["align_net"][-1]), ".3f")
+        parts.append(f"Kernel alignment with the net per layer: {align}.")
+    return " ".join(parts)
 
 
 def _ipython_clear(wait: bool) -> None:
@@ -265,10 +306,15 @@ class LiveView:
     def log(self, line: str) -> None:
         self.lines = [*self.lines, line][-self.tail :]
 
+    def flush(self) -> None:
+        """Print the held log lines: the last lines of a solve that failed, including one that
+        failed before its first frame."""
+        for line in self.lines:
+            self._out(line)
+
     def show(self, figures: Sequence[Figure]) -> None:
         self._clear(True)
         for figure in figures:
             self._display(figure)
             plt.close(figure)
-        for line in self.lines:
-            self._out(line)
+        self.flush()

@@ -7,7 +7,6 @@ Only positions on a ring (d = 1) can be ordered; a two-dimensional layout needs 
 """
 
 import math
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -29,7 +28,6 @@ from fct.spatial import (
 )
 from fct.train import History, train_from_config
 
-CACHE_ROOT_ENV = "FCT_CACHE_ROOT"
 # Decimals kept when deciding that two lattice coordinates are the same point.
 LATTICE_DECIMALS = 9
 # Log lines and checkpoints per run, so any n_epochs logs ~50 times and can resume from a quarter.
@@ -106,14 +104,6 @@ def layer_spaces(cfg: Config) -> list[LayerSpace]:
     return build_spaces(cfg.spatial, m=d_in, N=cfg.net.N, L=cfg.net.L, n_out=d_in)
 
 
-def cache_root_from_env() -> Path:
-    """The directory holding the notebook's runs, named by $FCT_CACHE_ROOT; RuntimeError if unset."""
-    root = os.environ.get(CACHE_ROOT_ENV)
-    if not root:
-        raise RuntimeError(f"set ${CACHE_ROOT_ENV} to the directory that holds the cached runs")
-    return Path(root)
-
-
 def cache_dir_for(cfg: Config, root: Path) -> Path:
     """A run's cache directory under `root`, named by the hash of its data, net, train and
     spatial settings: changing any of them gives a new directory, an unchanged setup finds its
@@ -135,7 +125,11 @@ def train_run(cfg: Config, root: Path, log: Callable[[str], None] = print) -> Tr
     """Train the run of `cfg` through the normal cache (dataset, checkpoints, final.pt in
     `cache_dir_for(cfg, root)`, plus its config.json so `python -m fct plot` reads it too).
     A finished run is only loaded; an interrupted one resumes from its latest checkpoint."""
-    cache_dir = cache_dir_for(cfg, root)
+    return train_in(cfg, cache_dir_for(cfg, root), log)
+
+
+def train_in(cfg: Config, cache_dir: Path, log: Callable[[str], None] = print) -> TrainRun:
+    """`train_run` with the cache directory given: write its config.json, then train or load."""
     save_config(cfg, cache_paths(cache_dir).config)
     dataset = get_dataset(cache_dir, cfg)
     net, history = train_from_config(cfg, dataset, cache_dir, log=log)

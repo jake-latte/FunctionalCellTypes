@@ -13,7 +13,7 @@ from tests.test_draw_live import synthetic_history
 SETTINGS = {
     "P": 8, "m": 4, "k": 2, "N": 16, "L": 1, "phi": "tanh", "g": 1.0, "data_seed": 1, "net_seed": 2,
     "weight_lambda": 1e-2, "rate_lambda": 1e-3, "optimizer": "sgld", "beta": 5.0, "lr": 1e-2,
-    "n_epochs": 20, "train_seed": 3, "log_int": 10, "save_int": 10,
+    "n_epochs": 20, "train_seed": 3,
 }  # fmt: skip
 QUIET = {"log": lambda message: None}
 
@@ -36,6 +36,26 @@ def test_the_config_carries_every_setting_and_ties_both_betas():
     assert (cfg.train.optimizer, cfg.train.beta, cfg.meanfield.beta) == ("sgld", 5.0, 5.0)
     assert cfg.meanfield.n_points == 8
     assert (cfg.device, cfg.dtype) == ("cpu", "float64")
+    assert cfg.spatial is None
+
+
+def test_sgld_theory_constants_follow_the_stationary_law_of_the_loss():
+    """exp(-beta L) puts variance 1 / (2 beta lambda_w) on each weight; the likelihood precision
+    beta N / (P d_out) gives the ridge 2 lambda_w P d_out; the tilt is 2 beta lambda_r."""
+    c = exemplar.sgld_theory_constants(
+        beta=5.0, weight_lambda=1e-2, rate_lambda=1e-3, n_points=8, d_out=4
+    )
+    assert c["prior_scale"] == pytest.approx(10.0)
+    assert c["alpha"] == pytest.approx(0.64)
+    assert c["rate_tilt"] == pytest.approx(1e-2)
+    assert c["alpha"] == pytest.approx(8 * 4 / (5.0 * c["prior_scale"]))  # P d_out / (beta s)
+
+
+def test_the_config_sets_those_constants_for_sgld_and_leaves_adam_at_the_defaults():
+    sgld = config().meanfield
+    assert (sgld.prior_scale, sgld.alpha, sgld.rate_tilt) == pytest.approx((10.0, 0.64, 1e-2))
+    adam = config(optimizer="adam").meanfield
+    assert (adam.prior_scale, adam.alpha, adam.rate_tilt) == (None, None, None)
 
 
 def test_an_impossible_setting_fails_at_config_time():
@@ -94,17 +114,18 @@ def test_live_figures_are_kernels_solver_health_and_sampler_health():
 def trained(tmp_path_factory):
     root = tmp_path_factory.mktemp("exemplar")
     cfg = config()
-    dataset, net, history, directory = exemplar.train_exemplar(cfg, root, **QUIET)
-    return root, cfg, dataset, net, history, directory
+    run = exemplar.train_exemplar(cfg, root, **QUIET)
+    return root, cfg, run.dataset, run.net, run.history, run.cache_dir
 
 
 def test_training_goes_through_the_cache(trained):
     root, cfg, _dataset, net, history, directory = trained
     assert directory == exemplar.exemplar_dirs(root, cfg).train
     assert (directory / "train" / "final.pt").exists() and (directory / "config.json").exists()
-    assert "grad_norm" in history and len(history["epoch"]) == 2
-    _, again, history_again, _ = exemplar.train_exemplar(cfg, root, **QUIET)
-    for before, after in zip(net.parameters(), again.parameters(), strict=True):
+    assert "grad_norm" in history and len(history["epoch"]) == 20
+    again = exemplar.train_exemplar(cfg, root, **QUIET)
+    history_again = again.history
+    for before, after in zip(net.parameters(), again.net.parameters(), strict=True):
         assert torch.equal(before, after)
     assert history_again["loss"] == history["loss"]
 
@@ -131,15 +152,36 @@ def test_solving_shows_live_frames_then_the_final_ones_and_reloads_from_cache(tr
     )
 
     frames.clear()
-    again = exemplar.solve_exemplar(cfg, dataset, net, root, plot_every=2, show=show, **QUIET)
+    lines = []
+    again = exemplar.solve_exemplar(
+        cfg, dataset, net, root, plot_every=2, show=show, log=lines.append
+    )
     assert frames == [3]  # a loaded solve runs no steps; only the final figures are shown
+    assert any("loaded finished solve" in line for line in lines)
     assert torch.equal(again.Phi, result.Phi)
+
+
+def test_a_failing_solve_calls_on_failure_and_reraises(trained, monkeypatch):
+    root, cfg, dataset, net, _, _ = trained
+
+    def boom(*args, **kwargs):
+        kwargs["log"]("warm-up line")
+        raise RuntimeError("inadequate sampler")
+
+    monkeypatch.setattr(exemplar, "run_meanfield", boom)
+    screen, view = make_view(tail=3)
+    with pytest.raises(RuntimeError, match="inadequate sampler"):
+        exemplar.solve_exemplar(
+            cfg, dataset, net, root, 2, view.show, log=view.log, on_failure=view.flush
+        )
+    # no frame was ever shown, yet the held log line reaches the screen
+    assert screen.events == [("text", "warm-up line")]
 
 
 def test_the_comparison_and_empirical_figures_have_a_panel_per_layer(trained):
     _root, cfg, dataset, net, _, _ = trained
     assert len(exemplar.empirical_kernel_figure(net, dataset, cfg).axes) >= cfg.net.L
-    outputs = exemplar.example_outputs_of(net, dataset, cfg.data.P)
+    outputs = exemplar.example_outputs_of(net, dataset)
     assert len(outputs.indices) == exemplar.N_EXAMPLE_OUTPUTS
 
 
@@ -187,28 +229,35 @@ def test_log_lines_are_kept_across_refreshes_and_the_buffer_is_bounded():
     assert view.lines == ["line 7", "line 8", "line 9"]
 
 
-def test_the_cache_root_comes_from_the_environment_or_fails_loudly(monkeypatch, tmp_path):
-    monkeypatch.delenv(exemplar.CACHE_ROOT_ENV, raising=False)
-    with pytest.raises(RuntimeError, match=exemplar.CACHE_ROOT_ENV):
-        exemplar.cache_root_from_env()
-    monkeypatch.setenv(exemplar.CACHE_ROOT_ENV, str(tmp_path))
-    assert exemplar.cache_root_from_env() == tmp_path
-
-
-def test_the_solve_summary_reports_the_final_numbers():
+def summary_history():
     history = synthetic_history("importance", n_steps=3)
+    history["phihat_fp_resid_stein"] = [[4.0, 2.0], [3.0, 1.0], [2.0, 1.0]]
     history["train_mse_theory"] = [0.5, 0.25, 0.125]
     history["train_mse_net"] = [0.2, 0.2, 0.2]
     history["hmc_ess_frac"] = [[0.5, 0.4], [0.3, 0.9], [0.8, 0.6]]
     history["align_net"] = [[0.1, 0.2], [0.3, 0.4], [0.9, 0.8]]
-    text = exemplar.solve_summary(history, "importance")
-    assert "3 outer steps" in text and "importance" in text
-    assert "0.125" in text and "0.2" in text  # final theory and net train MSE
-    assert "0.9" in text and "0.8" in text  # final alignment per layer
-    assert "0.3" in text  # smallest ESS fraction over the run
+    return history
+
+
+def test_the_solve_summary_reports_what_was_measured():
+    kernels = torch.stack([3 * torch.eye(5), 3 * torch.eye(5)])
+    text = exemplar.solve_summary(summary_history(), "importance", kernels, torch.ones(2, 5, 5))
+    assert "3 outer steps with the importance sampler" in text
+    assert "4, 2 at the first step, 2, 1 at the last, so it fell" in text
+    assert "ESS fraction 0.3 (outer step 1, layer 1); at the last step 0.8, 0.6" in text
+    assert "solved kernels: largest eigenvalue 3, 3, mean diagonal 3, 3" in text
+    assert "net kernels: largest eigenvalue 5, 5, mean diagonal 1, 1" in text
+    assert "theory 0.125, trained net 0.2" in text
+    assert "alignment with the net per layer: 0.900, 0.800" in text
+
+
+def test_the_solve_summary_states_a_rising_residual_as_rising():
+    history = summary_history()
+    history["phihat_fp_resid_stein"] = [[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]]
+    assert "so it rose" in exemplar.solve_summary(history, "hmc")
 
 
 def test_the_solve_summary_without_a_net_omits_the_net_numbers():
     history = synthetic_history("hmc", n_steps=2, with_net=False)
     text = exemplar.solve_summary(history, "hmc")
-    assert "net" not in text and "alignment" not in text
+    assert "net" not in text and "alignment" not in text and "kernels" not in text

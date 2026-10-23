@@ -127,11 +127,13 @@ uv run python notebooks/build_phase_transition.py --no-execute   # rebuild the c
 **Exemplar notebook.** One linear-teacher run end to end: every task and network setting in one cell, SGLD
 training (or Adam) through the `fct` cache with loss curves, outputs and the net's empirical kernels, then the
 mean-field solve with live figures refreshed every `PLOT_EVERY` outer steps: the kernels Phi_l and Phi_hat_l,
-solver health (residuals, step sizes, backtracking, theory-vs-net train MSE) and sampler health (HMC acceptance,
+solver health (residuals, step sizes, backtracking, PD clamping, theory-vs-net train MSE) and sampler health (HMC acceptance,
 step size, divergences, ESS, or the importance ESS and maximum weight), and a final cell with the solved kernels
 next to the empirical ones. `SAMPLER` picks `"hmc"` or `"importance"`. The default sizes are tiny
 (about 30 s per sampler on a CPU) and chosen so the importance sampler, a small-P / mild-tilt tool, does not raise
-`InadequateSamplerError`. The live view is `solve(..., on_outer=callback)`, an observer that cannot change the
+`InadequateSamplerError`. The theory is given the mean-field constants of the SGLD stationary law, which
+differ from the library defaults unless beta = 1/2 (see `docs/design.md`), and a printed summary reports the
+solve's residual trend, ESS and kernel scales. The live view is `solve(..., on_outer=callback)`, an observer that cannot change the
 result. Logic is in `fct/exemplar.py` and `fct/draw.py`; only the source notebook is committed.
 
 ```sh

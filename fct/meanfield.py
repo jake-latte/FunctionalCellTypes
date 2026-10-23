@@ -946,7 +946,8 @@ def solve(
     call (not for steps restored from a checkpoint, and not at all for a loaded final.pt), for
     live plots.  It only observes: it receives copies, draws nothing from the generator, and
     runs after the step's history entry and before its checkpoint is written, so results are
-    identical with and without it.  An exception it raises stops the solve.
+    identical with and without it, except that the time it takes is charged to history["time"] of
+    the following steps.  An exception it raises stops the solve.
     """
     if checkpoint_dir is not None and not config_hash:
         raise ValueError("checkpoint_dir needs a non-empty config_hash to guard against reuse")

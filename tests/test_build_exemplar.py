@@ -7,11 +7,11 @@ import nbformat
 import pytest
 from nbformat.v4 import new_code_cell, new_notebook
 
-from notebooks.build_exemplar import build_notebook, execute_notebook, set_parameters
+from notebooks.build_exemplar import build_notebook
+from notebooks.build_spatial import execute_notebook, set_parameters
 
 TINY = {
     "N_EPOCHS": 300,
-    "TRAIN_LOG_INT": 100,
     "N_OUTER": 6,
     "PLOT_EVERY": 2,
     "N_CHAINS": 32,
@@ -74,6 +74,7 @@ def test_every_task_and_net_setting_is_in_one_cell_and_each_stage_has_its_parame
 def test_the_text_says_why_the_sizes_are_small_and_what_importance_sampling_needs():
     intro = build_notebook().cells[0].source
     assert "InadequateSamplerError" in intro and "small-$P$" in intro
+    assert "sgld_theory_constants" in intro  # the mapping the theory is compared under
 
 
 def test_set_parameters_rewrites_one_assignment_and_keeps_its_comment():
@@ -104,7 +105,9 @@ def test_executes_end_to_end_with_each_sampler(sampler, tmp_path):
     assert "[0005]" in text
     # a second execution reloads the cached training and solve and shows the same frames
     again = execute_notebook(build_notebook(), tmp_path / "runs", {**TINY, "SAMPLER": sampler})
-    assert "ERROR" not in _text(again) and _n_figures(again) == EXPECTED_FIGURES
+    text_again = _text(again)
+    assert "ERROR" not in text_again and _n_figures(again) == EXPECTED_FIGURES
+    assert "loaded finished solve" in text_again
 
 
 def test_the_committed_notebook_is_what_the_builder_produces():

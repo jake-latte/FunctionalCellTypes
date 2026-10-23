@@ -141,6 +141,7 @@ SOLVER_PANELS: list[SolverPanel] = [
     SolverPanel("hmc_stein_mismatch", "Stein identity mismatch", "log"),
     SolverPanel("norm_margin", "normalisability margin (sufficient cond.)", "symlog", 0.0),
     SolverPanel("align_net", "kernel alignment with the trained net", "linear"),
+    SolverPanel("n_pd_clamped", "eigenvalues raised to the PD floor", "symlog"),
     SolverPanel("phi_lambda_min", "λ_min(Φ) before PD floor", "symlog", 0.0),
 ]
 SOLVER_N_COLS = 4
@@ -149,7 +150,7 @@ SOLVER_N_COLS = 4
 # (all-NaN columns) are left out, so one list serves both samplers.
 SOLVER_HEALTH_KEYS = (
     "inner_residual", "outer_grad_rel", "phihat_fp_resid_stein", "train_mse_theory",
-    "eta_phihat", "n_backtrack_inner", "align_net",
+    "eta_phihat", "n_backtrack_inner", "n_pd_clamped", "norm_margin", "align_net",
 )  # fmt: skip
 SAMPLER_HEALTH_KEYS = (
     "hmc_accept", "hmc_eps", "hmc_div", "hmc_ess_frac", "is_max_weight", "hmc_mc_err",
@@ -451,8 +452,11 @@ def _present_columns(history: Mapping[str, ArrayLike | None]) -> dict[str, np.nd
     return cols
 
 
-def _plot_solver_panel(ax: Axes, cols: dict[str, np.ndarray], panel: SolverPanel) -> None:
-    """Draw one diagnostic against the outer step: a line per layer, or a single line."""
+def _plot_solver_panel(
+    ax: Axes, cols: dict[str, np.ndarray], panel: SolverPanel, first_layer: int
+) -> None:
+    """Draw one diagnostic against the outer step: a line per layer (labelled from
+    `first_layer`), or a single line."""
     t, v = cols["outer_step"], cols[panel.key]
     # A single point has no line to draw, so it gets a marker (the first live refresh).
     marker = "o" if len(t) == 1 else None
@@ -461,7 +465,14 @@ def _plot_solver_panel(ax: Axes, cols: dict[str, np.ndarray], panel: SolverPanel
     else:
         for layer in range(v.shape[1]):
             color = LAYER_COLORS[layer % len(LAYER_COLORS)]
-            ax.plot(t, v[:, layer], lw=1.5, color=color, marker=marker, label=f"layer {layer}")
+            ax.plot(
+                t,
+                v[:, layer],
+                lw=1.5,
+                color=color,
+                marker=marker,
+                label=f"layer {layer + first_layer}",
+            )
     overlay = panel.overlay
     if overlay is not None and overlay.key in cols:
         ax.plot(
@@ -488,8 +499,10 @@ def _fig_solver_panels(
     keys: Sequence[str] | None,
     n_cols: int,
     figsize: tuple[float, float] | None,
+    first_layer: int,
 ) -> Figure:
-    """The solver panels for `keys` (all of them if None) that the history records."""
+    """The solver panels for `keys` (all of them if None) that the history records, with
+    layers labelled from `first_layer`."""
     cols = _present_columns(history)
     if "outer_step" not in cols:
         raise ValueError("solver history has no 'outer_step' entries")
@@ -501,7 +514,7 @@ def _fig_solver_panels(
     fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False)
     axes = axes.ravel()
     for ax, panel in zip(axes, panels):
-        _plot_solver_panel(ax, cols, panel)
+        _plot_solver_panel(ax, cols, panel, first_layer)
     for ax in axes[len(panels) :]:
         ax.axis("off")
     for ax in axes[-n_cols:]:
@@ -513,8 +526,9 @@ def _fig_solver_panels(
 def fig_solver_history(
     history: Mapping[str, ArrayLike | None], figsize: tuple[float, float] = (16, 14)
 ) -> Figure:
-    """Dashboard of solver and sampler diagnostics; one panel per recorded key."""
-    return _fig_solver_panels(history, None, SOLVER_N_COLS, figsize)
+    """Dashboard of solver and sampler diagnostics; one panel per recorded key. Layers are
+    labelled from 0 here, as in the CLI's figure; the live-view figures count from 1."""
+    return _fig_solver_panels(history, None, SOLVER_N_COLS, figsize, first_layer=0)
 
 
 # --------------------------------------------------------------------------- live solver view
@@ -522,14 +536,15 @@ def fig_solver_history(
 
 def fig_solver_health(history: Mapping[str, ArrayLike | None]) -> Figure:
     """Is the saddle-point iteration converging: residuals, step sizes, backtracking and the
-    train MSE of the theory (against the net's, when the solve had one)."""
-    return _fig_solver_panels(history, SOLVER_HEALTH_KEYS, HEALTH_N_COLS, None)
+    train MSE of the theory (against the net's, when the solve had one). Layers count from 1,
+    as in `fig_layer_kernels`."""
+    return _fig_solver_panels(history, SOLVER_HEALTH_KEYS, HEALTH_N_COLS, None, first_layer=1)
 
 
 def fig_sampler_health(history: Mapping[str, ArrayLike | None]) -> Figure:
     """Is the sampler under it trustworthy: HMC acceptance, step size, divergences and ESS, or
     the importance ESS and largest weight share; the Monte Carlo error under either."""
-    return _fig_solver_panels(history, SAMPLER_HEALTH_KEYS, HEALTH_N_COLS, None)
+    return _fig_solver_panels(history, SAMPLER_HEALTH_KEYS, HEALTH_N_COLS, None, first_layer=1)
 
 
 def fig_layer_kernels(kernels: Mapping[str, ArrayLike], title: str = "") -> Figure:
