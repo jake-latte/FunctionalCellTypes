@@ -37,6 +37,7 @@ from fct.config import DataConfig
 from fct.data import TASKS, Dataset
 from fct.grid_report import MirRecord, check_finite_mir, check_layer
 from fct.spatial import LayerSpace, Population, torus_distance, wrapped_gaussian_profile
+from fct.spatial_view import KernelComparison, order_weights, panel_grid
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 from fct.tuning import TuningCurves
 
@@ -1568,4 +1569,105 @@ def fig_mir_vs_ratio(records: Iterable[MirRecord]) -> Figure:
     """`plot_mir_vs_ratio` on its own figure."""
     fig, ax = plt.subplots(figsize=(FIG_WIDTH * 0.6, 5), layout="constrained")
     plot_mir_vs_ratio(records, ax)
+    return fig
+
+
+# --------------------------------------------------------------------------- spatial-prior notebook
+# Figures that arrange units by their position in space (layout helpers: `fct.spatial_view`).
+POSITION_TICKS = 8  # at most this many position labels on a weight-image axis
+
+
+def _position_text(position: np.ndarray) -> str:
+    return "(" + ", ".join(f"{c:.2f}" for c in position) + ")"
+
+
+@_styled
+def fig_tuning_by_position(
+    curves: TuningCurves,
+    mir_per_neuron: ArrayLike,
+    latent_names: Sequence[str],
+    positions: Tensor,
+    n_cols: int = TUNING_N_COLS,
+) -> Figure:
+    """The tuning of every neuron, one `plot_neuron_tuning` panel each, placed by the neuron's
+    position: in ring order along rows of `n_cols` for d = 1, at its lattice cell for d = 2
+    (`spatial_view.panel_grid`). Each title gives the neuron index, its position and its MIR;
+    all panels share one rate axis."""
+    mir = _np(mir_per_neuron)
+    n_neurons = curves.mean.shape[0]
+    if len(positions) != n_neurons or len(mir) != n_neurons:
+        raise ValueError(
+            f"{n_neurons} neurons but {len(positions)} positions and {len(mir)} MIR values"
+        )
+    grid = panel_grid(positions, n_cols)
+    fig, axes = plt.subplots(
+        grid.n_rows,
+        grid.n_cols,
+        figsize=(FIG_WIDTH, 3.4 * grid.n_rows + 0.8),
+        sharey=True,
+        squeeze=False,
+        layout="constrained",
+    )
+    xy = _np(positions)
+    used = set(grid.cells)
+    for neuron, (row, col) in enumerate(grid.cells):
+        ax = axes[row, col]
+        plot_neuron_tuning(curves, neuron, mir[neuron], latent_names, ax)
+        ax.set_title(f"neuron {neuron} at {_position_text(xy[neuron])}\nMIR {mir[neuron]:.2f}")
+    for row, col in np.ndindex(axes.shape):
+        if (row, col) not in used:
+            axes[row, col].set_visible(False)
+    first_row, first_col = min(used)
+    axes[first_row, first_col].legend(loc="best", frameon=False)
+    for ax in axes[-1]:
+        ax.set_xlabel("latent value")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("mean rate")
+    return fig
+
+
+@_styled
+def fig_weights_over_embedding(W: Tensor, space: LayerSpace, title: str = "") -> Figure:
+    """Layer weights `W` (post, pre) as an image, rows ordered by the post unit's ring position
+    and columns by the pre unit's, so a spatially smooth weight shows as smooth bands. The
+    colour scale is symmetric about zero. Needs d = 1."""
+    pos_post, pos_pre = space.post.embedding.positions, space.pre.embedding.positions
+    if pos_post.shape[1] != 1:
+        raise ValueError(
+            f"the weight image orders units around a ring, so d = 1 (got d = {pos_post.shape[1]})"
+        )
+    ordered = order_weights(W.detach().cpu(), pos_post.cpu(), pos_pre.cpu())
+    values = _np(ordered.W)
+    bound = np.abs(values).max()
+    fig, ax = plt.subplots(figsize=(0.6 * FIG_WIDTH, 6.5), layout="constrained")
+    image = ax.imshow(values, cmap="RdBu_r", vmin=-bound, vmax=bound, interpolation="none")
+    fig.colorbar(image, ax=ax, label="weight")
+    for axis_name, names, pos, order in (
+        ("x", space.pre.name, pos_pre, ordered.pre_order),
+        ("y", space.post.name, pos_post, ordered.post_order),
+    ):
+        step = max(1, math.ceil(len(order) / POSITION_TICKS))
+        ticks = np.arange(0, len(order), step)
+        labels = [f"{_np(pos)[order[t], 0]:.2f}" for t in ticks]
+        getattr(ax, f"set_{axis_name}ticks")(ticks, labels)
+        getattr(ax, f"set_{axis_name}label")(f"{names} unit, by ring position")
+    ax.set_title(title or f"layer {space.layer} weights over the embedding")
+    return fig
+
+
+@_styled
+def fig_empirical_kernels(comparison: KernelComparison, space: LayerSpace) -> Figure:
+    """Theory against the empirical kernels of a trained weight matrix: post units in the top
+    row, pre units in the bottom, all sorted around the ring. Each panel has its own colour
+    scale, since the trained weights need not have the prior's amplitude."""
+    fig, axes = plt.subplots(2, 2, figsize=KERNEL_FIG_SIZE, layout="constrained")
+    panels = (
+        (comparison.post_theory, f"K_post ({space.post.name}), prior"),
+        (comparison.post_empirical, f"{space.post.name}, from the weights"),
+        (comparison.pre_theory, f"K_pre ({space.pre.name}), prior"),
+        (comparison.pre_empirical, f"{space.pre.name}, from the weights"),
+    )
+    for ax, (kernel, title) in zip(axes.ravel(), panels, strict=True):
+        plot_kernel(kernel, ax=ax, title=title)
+    fig.suptitle(f"layer {space.layer}: prior kernels and the kernels of the trained weights")
     return fig

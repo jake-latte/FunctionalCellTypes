@@ -48,17 +48,28 @@ Phase 2 (ten items, plans confirmed by the PI 2026-10-22; current state in `docs
 - merged 2026-10-23, each reviewed by a fresh reviewer with the record in its merge commit:
   `remove-rate-penalty-p-scaling`, `generic-grid-sweep` (arbitrary grids, `phase_transition` preset,
   `s{index}_label` directories), `spatial-kernels` (`fct/spatial.py`), `tuning-and-grid-plot-helpers`
-  (`fct/tuning.py`, `fct/grid_report.py`, grid figures), `sgld-training` (`train.optimizer`, `train.beta`).
-- in progress on worker branches: `importance-weighted-sampler`, `grid-results-notebook`,
-  `spatial-weight-prior-training` (branches named after the items, worktrees in `.claude/worktrees/`).
-- blocked: `meanfield-grid-solve` and `meanfield-exemplar-notebook` (need the importance sampler),
-  `spatial-notebook` (needs the spatial prior training).
+  (`fct/tuning.py`, `fct/grid_report.py`, grid figures), `sgld-training` (`train.optimizer`, `train.beta`),
+  `spatial-weight-prior-training` (`Config.spatial`, factorised prior in the loss, `fct/schema.py`),
+  `grid-results-notebook` (`fct/grid_view.py`, `notebooks/build_phase_transition.py`),
+  `importance-weighted-sampler` (`fct/importance.py`, `MeanFieldConfig` split into problem fields +
+  `solver: SolverConfig`; reviewed twice: the first review found the ESS gate freezing the solver silently).
+- in review: `spatial-notebook`. In progress on worker branches: `meanfield-grid-solve`,
+  `meanfield-exemplar-notebook`.
+Tooling: pytest's temp dir is pinned to `tmp/pytest` (tests/conftest.py); never write outside the project.
 
 ## Decisions to flag to the PI at review (assumptions I made; easy to change)
 - Phase 2: `penalty_matrix` raises on a clearly negative kernel eigenvalue instead of flooring it; the
   minimum-image Gaussian is indefinite from length_scale ~ box / 10, hence the wrapped Gaussian. Grid sweeps:
   adding a value to any axis but the first renumbers later settings (documented; use a fresh ROOT). SGLD:
   `beta` is silently ignored with Adam (documented); default `beta = 1.0`. `mir_grid` requires `n_layers`.
+- Importance sampler: the ESS gate is step-relative (`solver.min_ess_drop`) and `solver.min_ess_frac` is an
+  absolute floor on accepted points that RAISES `InadequateSamplerError`; with the prior as proposal (PI's
+  choice) the sampler only works for small P / mild tilts (at the default n_points = 100 it raises). Both
+  fields enter the importance result hash.
+- Spatial prior: with the default `SpatialConfig` (min_rel_eig 1e-6, N = 100) the SGLD stability check
+  rejects every default lr * weight_lambda (needs < 6e-10) and Adam starts from a prior term of order 1e9;
+  the notebook uses min_rel_eig 1e-2, N = 16. Open for the PI: eigenvalue floor vs nugget, and drawing the
+  initial weights from the prior. The history key `weight_l2` holds the prior's value in spatial runs.
 - Mean-field rate tilt defaults to `rate_lambda` (exact for the summed penalty); `meanfield.rate_tilt` overrides.
 This was decided in `remove-rate-penalty-p-scaling`, not by the PI.
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};

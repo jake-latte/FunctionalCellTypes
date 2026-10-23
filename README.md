@@ -34,11 +34,12 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `sweep.py` | a grid of runs over any `Config` fields: `SweepConfig`, `expand`, `run_setting`, `setting_status`, presets |
 | `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
 | `grid_view.py` | from a sweep ROOT to the phase-transition figures: snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
+| `spatial_view.py`, `spatial_report.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels, and one list of text and figures per cell |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
-| `notebooks/` | `build_modularity.py`, `build_phase_transition.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
+| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
 | `jobs/fct_sweep.sh` | SLURM array script for the sweep |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
 
@@ -137,6 +138,23 @@ result. Logic is in `fct/exemplar.py` and `fct/draw.py`; only the source noteboo
 uv run python notebooks/build_exemplar.py CACHE_ROOT                     # execute -> tmp/exemplar.ipynb
 uv run python notebooks/build_exemplar.py CACHE_ROOT --set "SAMPLER='importance'" --set N_OUTER=10
 uv run python notebooks/build_exemplar.py --no-execute                   # rebuild the committed source notebook
+```
+
+**Spatial-prior notebook.** One linear-teacher run under the spatial weight prior (`Config.spatial`):
+set the task, network, training (`OPTIMIZER = "sgld" | "adam"`, `BETA`, `LR`, `N_EPOCHS`) and the
+embedding and kernel of each population in the first cells; the notebook plots the kernels, trains
+through the normal cache (re-running reloads a finished run or resumes an interrupted one; the run
+directory under `CACHE_ROOT` is named by a hash of the settings), then shows the loss curves, example
+outputs, the first-layer weights sorted by ring position next to the prior's kernels, and the tuning of
+every neuron to every latent, one panel per neuron placed by its position (ring order for d = 1, lattice
+cell for d = 2). The default sizes are small so SGLD is stable and both optimisers take seconds on a CPU;
+the notebook text says why. Logic is in `fct/spatial_view.py` and `fct/spatial_report.py`; only the
+source notebook is committed.
+
+```sh
+uv run python notebooks/build_spatial.py CACHE_ROOT                       # execute -> tmp/spatial.ipynb
+uv run python notebooks/build_spatial.py CACHE_ROOT --set OPTIMIZER=\'adam\' --set N_EPOCHS=500
+uv run python notebooks/build_spatial.py --no-execute                     # rebuild the committed source notebook
 ```
 
 ## Python library: single runs and the mean-field solver
