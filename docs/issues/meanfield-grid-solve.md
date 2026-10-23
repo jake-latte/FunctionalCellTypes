@@ -22,3 +22,17 @@ PI brief (Mean Field 2): given an initialised grid search (trained or not), one 
 - Status per stage is correct on constructed directories, including stale (hash mismatch) and partial.
 - Existing legacy sweeps keep working; the new script passes `bash -n` and a dry run.
 - Tests CPU only, ruff clean, `docs/design.md` and README updated. **No job is submitted.**
+
+## Review findings (fresh reviewer, 2026-10-23; NOT yet addressed; status stays `in review`)
+Correctness of hashing, stale detection, exit codes, resume and the SLURM plumbing verified. Before merge:
+1. A solve finished WITHOUT the net is reported `done` and skipped after the net is trained, so the grid
+   never gets the net comparison; README says "in either order ... using the trained network if there is one".
+   At least document (delete `meanfield/` to redo); better, flag `net_Phi is None` in final.pt when
+   `train/final.pt` now exists.
+2. The documented ValueError on resuming a no-net partial solve after training has no test; add one.
+3. `_write_config_once` now rewrites config.json non-atomically (`save_config` is a plain write_text); use a
+   tmp file + `os.replace`. Also say in design.md that the rewrite happens before the stale check.
+Follow-ups: the solve hash is spelled out three times (sweep, meanfield, test: import one); `fct_solve.sh`
+duplicates the whole sbatch header (document or test that the headers agree); `meanfield.n_points > P` is not
+caught at sweep load; minor ordering/annotation nits. Merging needs a mechanical README.md module-table
+conflict resolution against main (keep main's notebooks row and this branch's two jobs rows).
