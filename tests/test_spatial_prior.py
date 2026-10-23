@@ -4,11 +4,13 @@ config/hash contract, smoothness of trained weights (ground truth) and training 
 import hashlib
 import itertools
 import json
+import math
 from functools import partial
 
 import pytest
 import torch
 
+from fct.cache import StaleCacheError, cache_paths, latest_checkpoint
 from fct.config import (
     LOSS_VERSION,
     Config,
@@ -30,7 +32,13 @@ from fct.spatial import (
     parameter_factors,
     weight_quadratic_form,
 )
-from fct.train import compute_loss, make_weight_penalty, spatial_weight_penalty
+from fct.train import (
+    compute_loss,
+    load_trained,
+    make_weight_penalty,
+    spatial_weight_penalty,
+    train,
+)
 
 CPU, F64 = torch.device("cpu"), torch.float64
 
@@ -290,3 +298,147 @@ def test_spatial_hash_is_canonical_json_of_the_train_section_with_the_spatial_se
     del payload["train"]["optimizer"], payload["train"]["beta"]  # not hashed for adam
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
     assert cfg.section_hash("train") == expected
+
+
+# ---------------------------------------------------------------- ground truth: smooth weights
+
+
+def _roughness(W: torch.Tensor) -> float:
+    """Mean squared difference between neighbouring rows of W on the ring (row k - 1 next to
+    row 0), over twice the variance of W: about 1 for independent entries, near 0 for rows that
+    vary smoothly around the ring."""
+    neighbour_sq = (W.roll(-1, dims=0) - W).square().mean()
+    return (neighbour_sq / (2 * W.var())).item()
+
+
+def _smoothness_cfg(spatial: SpatialConfig | None) -> Config:
+    return Config(
+        data=DataConfig(P=32, D_in=4, d=2, embedding="linear", seed=1),
+        net=NetConfig(N=16, L=1, g=1.0, phi="tanh", seed=2),
+        train=TrainConfig(
+            n_epochs=600, lr=1e-2, weight_lambda=1e-2, rate_lambda=1e-3, log_int=100, save_int=600
+        ),
+        spatial=spatial,
+        dtype="float64",
+        device="cpu",
+    )
+
+
+def _trained_first_layer(cfg: Config, cache_dir) -> torch.Tensor:
+    ds = make_dataset(cfg.data, CPU, F64)
+    net = make_net(cfg.net, ds.x.shape[1], ds.y.shape[1], CPU, F64)
+    return train(cfg, ds, net, cache_dir, log=lambda s: None)[0].U.detach()
+
+
+def test_a_wide_hidden_kernel_makes_the_trained_first_layer_smooth_over_the_ring(tmp_path):
+    # The 16 hidden units sit on a grid ring 1/16 apart; a kernel 2.4 spacings wide puts its
+    # large penalties on the rough (high-frequency) patterns across neighbouring units, so
+    # training removes those first. The initial weights are independent (roughness ~ 1).
+    wide = SpatialConfig(
+        hidden=PopulationSpec(kernel=KernelSpec(length_scale=0.15)), min_rel_eig=1e-3
+    )
+    initial = make_net(_smoothness_cfg(None).net, 4, 2, CPU, F64).U.detach()
+    l2 = _trained_first_layer(_smoothness_cfg(None), tmp_path / "l2")
+    spatial = _trained_first_layer(_smoothness_cfg(wide), tmp_path / "spatial")
+    assert _roughness(initial) > 0.7 and _roughness(l2) > 0.7
+    assert _roughness(spatial) < 0.3
+
+
+# ---------------------------------------------------------------- training end to end
+
+PRIOR = SpatialConfig(hidden=PopulationSpec(kernel=KernelSpec(length_scale=0.15)), min_rel_eig=1e-3)
+
+
+def _train_cfg(n_epochs=12, optimizer="adam", spatial=PRIOR, **train_kw) -> Config:
+    train_kw = {"log_int": 1, "save_int": 5, "rate_lambda": 1e-3, "weight_lambda": 1e-3, **train_kw}
+    tc = TrainConfig(n_epochs=n_epochs, lr=1e-2, optimizer=optimizer, beta=50.0, **train_kw)
+    return SMALL.model_copy(update={"train": tc, "spatial": spatial})
+
+
+def _setup(cfg):
+    ds = make_dataset(cfg.data, CPU, F64)
+    return ds, make_net(cfg.net, ds.x.shape[1], ds.y.shape[1], CPU, F64)
+
+
+def _same_params(a, b):
+    return all(torch.equal(v, b.state_dict()[k]) for k, v in a.state_dict().items())
+
+
+def test_adam_training_with_the_prior_is_the_plain_adam_loop_on_the_spatial_loss(tmp_path):
+    cfg = _train_cfg()
+    tc = cfg.train
+    ds, net = _setup(cfg)
+    trained, hist = train(cfg, ds, net, tmp_path, log=lambda s: None)
+
+    ds, ref = _setup(cfg)
+    penalty = make_weight_penalty(cfg, ref)
+    optim = torch.optim.Adam(ref.parameters(), lr=tc.lr)
+    for _ in range(tc.n_epochs):
+        optim.zero_grad()
+        loss, _ = compute_loss(ref, ds.x, ds.y, tc.weight_lambda, tc.rate_lambda, penalty)
+        loss.backward()
+        optim.step()
+    assert _same_params(trained, ref)
+    assert set(hist) == {"epoch", "mse", "weight_l2", "rate_l2", "loss"}
+    # The logged weight term is the prior, not the sum of squares.
+    _, first = _setup(cfg)
+    assert hist["weight_l2"][0] == pytest.approx(make_weight_penalty(cfg, first)(first).item())
+    assert hist["weight_l2"][0] != pytest.approx(first.weight_l2().item())
+
+
+@pytest.mark.parametrize("optimizer", ["adam", "sgld"])
+def test_training_with_the_prior_lowers_it_and_differs_from_l2_training(tmp_path, optimizer):
+    cfg = _train_cfg(n_epochs=30, optimizer=optimizer)
+    ds, net = _setup(cfg)
+    trained, hist = train(cfg, ds, net, tmp_path / "spatial", log=lambda s: None)
+    assert all(math.isfinite(v) for v in hist["loss"])
+    assert hist["weight_l2"][-1] < hist["weight_l2"][0]
+
+    plain = _train_cfg(n_epochs=30, optimizer=optimizer, spatial=None)
+    ds, plain_net = _setup(plain)
+    train(plain, ds, plain_net, tmp_path / "l2", log=lambda s: None)
+    assert not _same_params(trained, plain_net)
+
+
+class Interrupt(Exception):
+    pass
+
+
+@pytest.mark.parametrize("optimizer", ["adam", "sgld"])
+def test_resume_with_the_prior_equals_the_uninterrupted_run(tmp_path, optimizer):
+    cfg = _train_cfg(optimizer=optimizer, save_int=3)
+    ds, net_ref = _setup(cfg)
+    _, hist_ref = train(cfg, ds, net_ref, tmp_path / "ref", log=lambda s: None)
+
+    def stop(line):
+        if line.startswith("[") and int(line[1:].split("/")[0]) == 7:
+            raise Interrupt
+
+    _, net_a = _setup(cfg)
+    with pytest.raises(Interrupt):
+        train(cfg, ds, net_a, tmp_path / "run", log=stop)
+    assert latest_checkpoint(cache_paths(tmp_path / "run").train) is not None
+    _, net_b = _setup(cfg)
+    net_b, hist_b = train(cfg, ds, net_b, tmp_path / "run", log=lambda s: None)
+    assert hist_b == hist_ref
+    assert _same_params(net_ref, net_b)
+
+
+def test_sgld_with_a_step_beyond_the_priors_stability_limit_fails_before_training(tmp_path):
+    # The hidden-to-hidden layer of PRIOR on SMALL has lambda_max(M_post) lambda_max(M_pre)
+    # ~ 4e4, so lr * weight_lambda = 1e-4 puts the step at ~4 times the limit.
+    cfg = _train_cfg(optimizer="sgld", weight_lambda=1e-2)
+    ds, net = _setup(cfg)
+    with pytest.raises(ValueError, match="diverges on the spatial prior"):
+        train(cfg, ds, net, tmp_path, log=lambda s: None)
+    assert not any(tmp_path.rglob("*.pt"))
+    adam = _train_cfg(optimizer="adam", weight_lambda=1e-2)  # Adam rescales its steps
+    assert make_weight_penalty(adam, net)(net) > 0
+
+
+def test_a_run_trained_without_the_prior_is_stale_for_a_config_with_it(tmp_path):
+    plain = _train_cfg(spatial=None)
+    ds, net = _setup(plain)
+    train(plain, ds, net, tmp_path, log=lambda s: None)
+    with pytest.raises(StaleCacheError):
+        load_trained(tmp_path, _train_cfg(), CPU, F64)

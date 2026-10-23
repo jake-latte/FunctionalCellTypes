@@ -74,25 +74,55 @@ def spatial_weight_penalty(net: MLP, factors: dict[str, tuple[Tensor, Tensor]]) 
     return torch.stack(terms).sum()
 
 
+def _check_sgld_step_resolves_the_prior(
+    factors: dict[str, tuple[Tensor, Tensor]], tc: TrainConfig
+) -> None:
+    """Raise if an SGLD step of size lr is unstable on the prior term alone.
+
+    weight_lambda * tr(M_rows W M_cols W^T) has curvature 2 weight_lambda lambda_max(M_rows)
+    lambda_max(M_cols) along its stiffest direction, and an Euler step on a quadratic of
+    curvature c diverges once lr * c >= 2. A wide kernel makes lambda_max large (up to
+    1 / min_rel_eig over the largest eigenvalue of K), so this fails at the start instead of
+    after the run has filled with NaN. Passing it is necessary, not sufficient: the data and
+    rate terms add curvature of their own. Adam rescales its steps and needs no such check.
+    """
+    stiffest = max(
+        torch.linalg.eigvalsh(rows)[-1].item() * torch.linalg.eigvalsh(cols)[-1].item()
+        for rows, cols in factors.values()
+    )
+    if tc.lr * tc.weight_lambda * stiffest >= 1:
+        raise ValueError(
+            f"SGLD with lr={tc.lr:g} diverges on the spatial prior alone: lr * weight_lambda * "
+            f"lambda_max(M) = {tc.lr * tc.weight_lambda * stiffest:.3g} must be < 1 "
+            f"(lambda_max(M) = {stiffest:.3g}); lower lr or weight_lambda, or widen the floor "
+            "min_rel_eig"
+        )
+
+
 def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty:
     """The weight term `cfg` asks for: `MLP.weight_l2` without a spatial prior, else the
     spatial prior with the penalty matrices built for `net`'s sizes (float64 on the CPU) and
     then cast to its dtype and device. They are built here, once per run, and are not
-    parameters: a resumed run rebuilds the same matrices from the config.
+    parameters: a resumed run rebuilds the same matrices from the config. For SGLD it raises
+    if `train.lr` cannot resolve the prior (`_check_sgld_step_resolves_the_prior`).
     """
     if cfg.spatial is None:
         return MLP.weight_l2
     spaces = build_spaces(cfg.spatial, m=net.D_in, N=net.N, L=net.L, n_out=net.D_out)
-    factors = {
-        name: (rows.to(net.device, net.dtype), cols.to(net.device, net.dtype))
-        for name, (rows, cols) in parameter_factors(spaces).items()
-    }
+    factors64 = parameter_factors(spaces)
     names = {name for name, _ in net.named_parameters()}
-    if names != set(factors):
+    if names != set(factors64):
         # A parameter without a factor (a bias, say) would otherwise silently drop out.
         raise ValueError(
-            f"the spatial prior covers {sorted(factors)} but the net has parameters {sorted(names)}"
+            f"the spatial prior covers {sorted(factors64)} but the net has parameters "
+            f"{sorted(names)}"
         )
+    if cfg.train.optimizer == "sgld":
+        _check_sgld_step_resolves_the_prior(factors64, cfg.train)
+    factors = {
+        name: (rows.to(net.device, net.dtype), cols.to(net.device, net.dtype))
+        for name, (rows, cols) in factors64.items()
+    }
     return partial(spatial_weight_penalty, factors=factors)
 
 
