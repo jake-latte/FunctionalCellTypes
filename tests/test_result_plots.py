@@ -66,7 +66,7 @@ def test_plot_loss_curves_draws_four_distinguishable_log_lines():
     assert [t.get_text() for t in ax.get_legend().get_texts()] == [
         "loss (total)",
         "mse (raw)",
-        "weight L2 (raw)",
+        "weight penalty (raw)",
         "rate L2 (raw)",
     ]
     assert "not additive" in ax.get_ylabel()

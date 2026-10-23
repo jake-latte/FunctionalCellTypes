@@ -482,7 +482,7 @@ def fig_solver_history(
 LOSS_STYLES = (
     ("loss", "loss (total)", LAYER_COLORS[0], "-"),
     ("mse", "mse (raw)", LAYER_COLORS[1], "--"),
-    ("weight_l2", "weight L2 (raw)", LAYER_COLORS[2], ":"),
+    ("weight_l2", "weight penalty (raw)", LAYER_COLORS[2], ":"),
     ("rate_l2", "rate L2 (raw)", LAYER_COLORS[3], "-."),
 )
 MIR_KEYS = {"raw": "monitor_mir", "corrected": "monitor_mir_corrected"}

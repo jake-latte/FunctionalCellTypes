@@ -47,7 +47,7 @@ from typing import Annotated, Literal, Self
 import torch
 from pydantic import Field, model_validator
 
-from fct.config import PosFloat, PosInt, StrictModel
+from fct.schema import PosFloat, PosInt, StrictModel
 
 DTYPE = torch.float64
 # Dropped images lie beyond this many length scales; exp(-N_IMAGE_SIGMAS^2 / 2) = exp(-32) ~ 1e-14.
@@ -315,3 +315,34 @@ def build_spaces(cfg: SpatialConfig, m: int, N: int, L: int, n_out: int) -> list
     pops += [_make_population(f"hidden {k}", cfg.hidden, N, cfg, index=k) for k in range(1, L + 1)]
     pops.append(_make_population("output", cfg.output, n_out, cfg, index=L + 1))
     return [LayerSpace(layer, pops[layer], pops[layer + 1]) for layer in range(L + 1)]
+
+
+# --------------------------------------------------------------------------- the prior on weights
+
+
+def weight_quadratic_form(
+    W: torch.Tensor, M_rows: torch.Tensor, M_cols: torch.Tensor
+) -> torch.Tensor:
+    """tr(M_rows W M_cols W^T) = sum_{i,a,j,b} W_ia (M_rows)_ij (M_cols)_ab W_jb for W (r, c).
+
+    This is vec(W)^T (M_rows (x) M_cols) vec(W) with vec row-major, without forming the
+    (r c, r c) Kronecker matrix. With identity factors it is exactly W.square().sum(): the
+    products by 1 and sums with 0 are exact, so no round-off separates it from the L2 norm.
+    Works in any dtype and on any device (the factors must match W's).
+    """
+    return ((M_rows @ W @ M_cols) * W).sum()
+
+
+def parameter_factors(spaces: list[LayerSpace]) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    """(M_rows, M_cols) of every `fct.model.MLP` weight in its stored orientation, keyed by the
+    parameter name ("U", "J.0".."J.{L-2}", "V") of the L + 1 layer `spaces`.
+
+    U and J are stored (post, pre), so their rows take M_post; the readout V is stored
+    (pre, post), so its rows take M_pre. `weight_quadratic_form(param, *factors[name])` is
+    then the layer's tr(M_post W M_pre W^T) with W in (post, pre) orientation.
+    """
+    L = len(spaces) - 1
+    names = ["U", *[f"J.{k}" for k in range(L - 1)], "V"]
+    factors = {name: (s.M_post, s.M_pre) for name, s in zip(names[:-1], spaces[:-1], strict=True)}
+    factors["V"] = (spaces[L].M_pre, spaces[L].M_post)
+    return factors
