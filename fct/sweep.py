@@ -363,7 +363,9 @@ def _config_or_value_error(sweep: SweepConfig, axes: Mapping[str, Any], context:
 
 def _validate_axis(sweep: SweepConfig, axis: str, values: list) -> None:
     """One axis alone: sweep-owned fields are rejected, the values are non-empty, each builds
-    a valid Config, and no two build the same one (so `[0, 0.0]` counts as a repeat)."""
+    a valid Config, and no two build the same one (so `[0, 0.0]` counts as a repeat).
+    Each value is built under the sweep's base task, so a task-specific value that is valid
+    only under a task named on a `data.task` axis is rejected here (loudly, naming the axis)."""
     if axis in SWEEP_OWNED_AXES:
         raise ValueError(
             f"grid axis {axis!r} is set by the sweep's own {SWEEP_OWNED_AXES[axis]}; "
@@ -389,6 +391,8 @@ def _validate_combinations(sweep: SweepConfig) -> None:
 
 def _validate_grid(sweep: SweepConfig, grid: dict[str, list]) -> None:
     """Axes first, one at a time, so an error names the culprit; then the combinations."""
+    if not grid:
+        raise ValueError("grid has no axes (a product over no axes would be one bare setting)")
     for axis, values in grid.items():
         _validate_axis(sweep, axis, values)
     _validate_combinations(sweep)

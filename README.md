@@ -72,6 +72,9 @@ its library default), and `phase_transition --n-lambda N_LAMBDA` (linear teacher
 `rate_lambda` and `weight_lambda` each `N_LAMBDA` log-spaced values in [1e-6, 1]). Other grids use directories
 `ROOT/<task>/s{index:04d}_<label>/`, each with a `setting.json` recording its axis values, so a notebook can
 find a setting from its values (`fct.sweep.find_setting_dir`). `--axis PATH=[values]` replaces or adds an axis.
+Indices follow the product order, so adding a value to any axis but the first renumbers the settings after it
+and orphans their directories (`status` then reports them missing): grow a grid in a fresh ROOT, or append to
+the first axis only.
 
 ```sh
 uv run python -m fct sweep init ROOT --preset tiny        # write ROOT/sweep.json (--set n_epochs=100 ...)

@@ -503,7 +503,7 @@ def preset(name: str, n_lambda: int | None = None) -> SweepConfig   # "tiny": N=
                                                                     # "phase_transition": the sizes of "full" + phase_transition(n_lambda); n_lambda is required there and rejected elsewhere; ValueError otherwise
 def phase_transition(n_lambda) -> SweepConfig             # linear teacher; grid net.L [1,2], net.phi [tanh, relu], train.rate_lambda and train.weight_lambda both np.logspace(-6, 0, n_lambda): 4 * n_lambda**2 settings
 def save_sweep(sweep, root) / load_sweep(root) -> SweepConfig   # ROOT/sweep.json; load raises FileNotFoundError naming the path
-def expand(sweep) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given sweep.json and independent of the sizes
+def expand(sweep) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given sweep.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow a grid in a fresh ROOT)
 def get_setting(sweep, index) -> Setting                 # SweepError (a ValueError) "index i is out of range; valid indices are 0..N-1"
 def setting_dir(root, setting) -> Path                   # ROOT / setting.relpath (see Layout)
 def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep

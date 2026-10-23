@@ -189,6 +189,11 @@ def test_a_bad_combination_of_axes_fails_at_load():
         _with_grid(grid)
 
 
+def test_an_empty_grid_is_rejected():
+    with pytest.raises(ValidationError, match="grid has no axes"):
+        _with_grid({})
+
+
 def test_an_invalid_grid_in_sweep_json_fails_at_load(tmp_path):
     tree = {**preset("tiny").model_dump(), "grid": {"net.typo": [1]}}
     (tmp_path / "sweep.json").write_text(json.dumps(tree))
