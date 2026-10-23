@@ -36,6 +36,7 @@ import numpy as np
 from pydantic import Field, ValidationError, model_validator
 
 from fct.cache import (
+    CachePaths,
     StaleCacheError,
     cache_paths,
     latest_checkpoint,
@@ -542,18 +543,23 @@ def setting_status(
     cfg = setting_config(sweep, setting)
     if stage == "train":
         return _artefact_status(paths.train, _train_hash(cfg))
-    status = _artefact_status(paths.meanfield, meanfield_hash(cfg))
-    if status == "done" and _solved_without_net(paths):
+    if _done_without_net(paths, cfg):
         return "stale"
-    return status
+    return _artefact_status(paths.meanfield, meanfield_hash(cfg))
 
 
-def _solved_without_net(paths) -> bool:
-    """A finished solve that ran with no net while a trained net now exists. Its hash is
-    unchanged, so only the stored kernels of the net (absent) tell; only that entry is read."""
-    return (paths.train / "final.pt").exists() and (
-        read_field(paths.meanfield / "final.pt", "net_Phi") is None
-    )
+def _done_without_net(paths: CachePaths, cfg: Config) -> bool:
+    """A solve finished under the CURRENT config that ran with no net, while a trained net now
+    exists. The hash matches (so a solve of another config is never taken for this case); only
+    the stored kernels of the net (absent) tell, and only that entry is read."""
+    if not (paths.train / "final.pt").exists():
+        return False
+    if _artefact_status(paths.meanfield, meanfield_hash(cfg)) != "done":
+        return False
+    try:
+        return read_field(paths.meanfield / "final.pt", "net_Phi") is None
+    except ValueError:  # became unreadable since the hash was read: stale, not a redo
+        return False
 
 
 def _write_config_once(cfg: Config, directory: Path) -> None:
@@ -687,10 +693,10 @@ def run_setting(
     _write_setting_once(sweep, setting, directory)
     status = setting_status(root, sweep, setting, stage)
     paths = cache_paths(directory)
-    if stage == "solve" and status == "stale" and _solved_without_net(paths):
+    if stage == "solve" and _done_without_net(paths, cfg):
         # Finished under the current config, only lacking the net: solve again with it.
         log(f"setting {index}: solved without the net, but the net is trained now; solving again")
-        (paths.meanfield / "final.pt").unlink()
+        (paths.meanfield / "final.pt").unlink(missing_ok=True)
         status = "missing"
     if status == "stale":
         raise StaleCacheError(
@@ -720,11 +726,10 @@ def _check_checkpoint_matches_net(directory: Path, net) -> None:
     compared; SweepError (one line, naming the file) if the net situation has changed since."""
     ckpt = latest_checkpoint(cache_paths(directory).meanfield)
     if ckpt is not None and (read_field(ckpt, "net_Phi") is not None) != (net is not None):
-        written, now = ("with", "without") if net is None else ("without", "with")
-        raise SweepError(
-            f"{ckpt} was written {written} the trained net but the net is now {now} one; "
-            f"delete {ckpt.parent} to solve again"
-        )
+        was = "with the trained net, but there is no trained net now"
+        if net is not None:
+            was = "without the trained net, but there is a trained net now"
+        raise SweepError(f"{ckpt} was written {was}; delete {ckpt.parent} to solve again")
 
 
 def _solve_setting(

@@ -270,6 +270,41 @@ def test_a_solve_without_the_net_is_stale_once_the_net_is_trained_and_is_redone(
     assert any("already done" in line for line in lines)
 
 
+def test_a_no_net_solve_of_another_config_is_stale_not_redone_when_the_net_is_trained(
+    small, tmp_path
+):
+    run_setting(small, 0, tmp_path, **QUIET)  # train
+    final = _dirs(tmp_path, small, 0).meanfield / "final.pt"
+    save_artefact(final, {"x": 0, "net_Phi": None}, "otherhash")
+    assert _status(tmp_path, small, 0, "solve") == "stale"
+    with pytest.raises(StaleCacheError):
+        run_setting(small, 0, tmp_path, stage="solve", **QUIET)
+    assert final.exists()
+
+
+def test_an_unreadable_solve_with_a_trained_net_is_stale_with_one_line_in_the_cli(
+    small, root, capsys
+):
+    _cli(capsys, "run", root, "--index", 0)  # train
+    final = _dirs(root, small, 0).meanfield / "final.pt"
+    final.parent.mkdir(parents=True)
+    final.write_bytes(b"PK\x03\x04truncated")
+    assert _status(root, small, 0, "solve") == "stale"
+    with pytest.raises(StaleCacheError, match="unreadable"):
+        run_setting(small, 0, root, stage="solve", **QUIET)
+    code, _, err = _cli(capsys, "run", root, "--index", 0, "--stage", "solve")
+    assert code == 1 and "Traceback" not in err
+    assert final.exists()
+
+
+def test_resuming_with_a_checkpoint_made_with_the_net_after_it_is_gone_is_refused(small, tmp_path):
+    run_setting(small, 0, tmp_path, **QUIET)  # train
+    _interrupt_solve_without_net(small, tmp_path)  # solves WITH the net, interrupted
+    _dirs(tmp_path, small, 0).train.joinpath("final.pt").unlink()
+    with pytest.raises(SweepError, match=r"with the trained net, but there is no trained net now"):
+        run_setting(small, 0, tmp_path, stage="solve", **QUIET)
+
+
 def test_a_solve_with_the_net_stays_done(small, tmp_path):
     run_setting(small, 0, tmp_path, **QUIET)
     run_setting(small, 0, tmp_path, stage="solve", **QUIET)
@@ -325,6 +360,7 @@ def test_config_json_is_written_atomically(small, tmp_path, monkeypatch):
     with pytest.raises(OSError, match="interrupted"):
         save_config(setting_config(_with_beta(small, 2e3), expand(small)[0]), path)
     assert path.read_text() == before
+    assert not (tmp_path / "config.json.tmp").exists()
 
 
 # ---------------------------------------------------------------------------- CLI

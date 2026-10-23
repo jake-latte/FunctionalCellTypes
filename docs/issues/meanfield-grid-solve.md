@@ -36,3 +36,7 @@ Follow-ups: the solve hash is spelled out three times (sweep, meanfield, test: i
 duplicates the whole sbatch header (document or test that the headers agree); `meanfield.n_points > P` is not
 caught at sweep load; minor ordering/annotation nits. Merging needs a mechanical README.md module-table
 conflict resolution against main (keep main's notebooks row and this branch's two jobs rows).
+
+Re-review fixes (second round): the redo of a solve made without the net now requires the hash to match (a no-net solve of
+another config, or an unreadable one, stays `stale` and raises StaleCacheError, file untouched); a checkpoint written with the net
+and resumed with none is refused too; save_config removes its .tmp on failure.

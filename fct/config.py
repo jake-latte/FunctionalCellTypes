@@ -303,8 +303,12 @@ def save_config(cfg: Config, path: str | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Write then rename: an interrupted save never leaves a truncated config.json.
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(cfg.model_dump(), indent=2, sort_keys=True) + "\n")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(cfg.model_dump(), indent=2, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def resolve_device(cfg: Config) -> torch.device:
