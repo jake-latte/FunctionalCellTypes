@@ -8,12 +8,11 @@ import pytest
 import torch
 
 from fct import draw
+from fct.cache import CACHE_ROOT_ENV, cache_root_from_env
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.spatial import KernelSpec, SpatialConfig, build_spaces
 from fct.spatial_view import (
-    CACHE_ROOT_ENV,
     cache_dir_for,
-    cache_root_from_env,
     empirical_kernels,
     make_config,
     order_weights,

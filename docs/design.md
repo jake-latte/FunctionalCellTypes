@@ -36,9 +36,10 @@ fct/
   sweep.py         # a grid of Config fields: SweepConfig, expand, run_setting, status, presets
   explanations.py  # MIR_EXPLANATION: the notebook's markdown/LaTeX definition of raw, corrected and chance-baseline MIR
   report.py        # what the results notebook shows: read-only load of a sweep ROOT, final-MIR table, prose from numbers
+  exemplar.py      # the exemplar notebook's logic: config from flat settings, cache layout, cached train / solve, live refresh
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
   __main__.py      # `python -m fct ...` -> cli.main()
-notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py build + execute the notebooks (cells are one-line library calls)
+notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls)
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
 docs/issues/*.md   # current work items (finished ones move to docs/issues/archive/)
@@ -326,7 +327,9 @@ terms agree and `beta L_tex = beta (0.5 N mse) + P_weight + P_rates`. SGLD on `L
 `exp(-beta L) = exp(-beta 0.5 N mse - beta weight_lambda weight_l2 - beta rate_lambda rate_l2)`. The Latex regulariser
 strengths are therefore `lambda_tex = beta * lambda_repo` (`P_weight = lambda_tex weight_l2`, likewise for the rates), and
 `weight_lambda` / `rate_lambda` stay the repo's own quantities. `beta` sets only the noise, never the loss; `lr` is the step
-size `dt`. (The mean-field code uses the same mapping, `alpha = lambda_w P D_out / beta`.)
+size `dt`. (The mean-field defaults do not follow this mapping: `prior_scale = 1/weight_lambda`, `alpha = weight_lambda P D_out / beta`,
+`rate_tilt = rate_lambda` and `learning_prefactor = 1/2` describe the stationary law only at `beta = 1/2`, the prefactor only at `prior_scale = 1`. The exemplar
+notebook passes the constants of `exp(-beta L)`, see the exemplar section; whether the library should do so for SGLD nets is a PI decision, pending.)
 
 Monitor hook: `monitor(net)` is called under `torch.no_grad()` with the global RNG state restored afterwards,
 at the START of every epoch e with `e % monitor_int == 0` (after e's periodic checkpoint, before its step; so e = 0
@@ -399,8 +402,16 @@ a relu, L=2, beta=1e3 problem, layer 1: 0.08 at P=8, 0.03 at P=16, 0.0085 at P=4
 def empirical_kernels(net, X, readout) -> tuple[Tensor, Tensor]     # notebook
 @dataclass
 class SolveResult: Phi: Tensor; Phi_hat: Tensor; history: dict[str, list]; samplers: list[SingleSiteHMC | ImportanceSampler]
+class OuterSnapshot(NamedTuple): outer: int; history: dict[str, list]; Phi: Tensor; Phi_hat: Tensor
 def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, log=print,
-          checkpoint_dir: Path | None = None, config_hash: str = "") -> SolveResult
+          checkpoint_dir: Path | None = None, config_hash: str = "",
+          on_outer: Callable[[OuterSnapshot], Any] | None = None) -> SolveResult
+    # on_outer (default None: nothing changes): called after every outer step run in this call with an OuterSnapshot
+    # (the step index, the history so far, Phi, Phi_hat), for live plots. The kernels and the history's lists are copies
+    # (the history's numpy entries are shared, read-only); it draws nothing from the generator and runs after the
+    # history entry and before the checkpoint, so results are bit-for-bit those without it (tests/test_meanfield_callback.py,
+    # with the pins of tests/test_meanfield_pins.py). Not called for steps restored from a checkpoint, nor for a loaded
+    # final.pt (no steps run). An exception it raises stops the solve.
     # Algorithm 1 exactly as the notebook, settings from cfg.solver; single-site expectations from one sampler per
     # layer, SingleSiteHMC (solver.sampler="hmc", bit-for-bit the pre-split solver) or ImportanceSampler ("importance").
     # A sampler run validates the step before it (backtracking): HMC on divergences / resets / step-size collapse,
@@ -413,7 +424,7 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # resume from its latest ckpt_*.pt (ValueError if it was written with a net and `net` is None, or vice
     # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then
     # replaces the checkpoints; every checkpoint stores cfg.model_dump() as "meanfield_config" for provenance
-def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print) -> SolveResult
+def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print, on_outer=None) -> SolveResult
     # rate tilt: the solver's tilt is a per-sample coefficient of phi^T phi summed over the n_points solved points, and the
     # trained loss sums the penalty over samples, so its per-sample coefficient is exactly rate_lambda: rate_tilt=None
     # defaults to train.rate_lambda, and an explicit meanfield.rate_tilt overrides it.
@@ -527,10 +538,15 @@ fig_representation(pca: LayerPCA) -> Figure           # notebook cell 15 layout
 plot_neuron_map(map2d, half_width, ax=None); fig_neuron_maps(maps, half_width, n_cols, title) -> Figure   # cell 16
 plot_training_history(history, ax=None)               # mse / loss vs epoch, log y
 fig_solver_history(history) -> Figure                 # the notebook's plot_history dashboard, plus ESS / weight-share panels;
-                                                      # absent, all-None and all-NaN columns (the other sampler's diagnostics) get no panel
+                                                      # absent, all-None and all-NaN columns (the other sampler's diagnostics) get no panel; panels "backtracking" and
+                                                      # "eigenvalues raised to the PD floor" (n_backtrack_inner/outer, n_pd_clamped) joined the dashboard with the live view; layers are labelled from 0 here
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
 plot_kernel_vs_distance(space, ax=None); plot_embedding(space, ax=None)   # spatial prior of one LayerSpace: K_ij vs torus distance with the wrapped analytic curve; unit positions (ring d = 1, plane d = 2, legend outside the axis)
 fig_kernel(space: LayerSpace) -> Figure               # 2 x 2: K_pre, K_post, K vs distance, positions; ValueError for d > 2
+fig_solver_health(history); fig_sampler_health(history)   # the live view's two groups of solver_history panels, layers labelled from 1 like fig_layer_kernels (SOLVER_HEALTH_KEYS: residuals, outer step size,
+                                                      # fixed-point residual, train MSE theory vs net, step sizes, backtracking, alignment; SAMPLER_HEALTH_KEYS: HMC acceptance /
+                                                      # eps / divergences, ESS, importance max weight, MC error); panels the sampler does not record are omitted; ValueError if none are
+fig_layer_kernels({name: (L,P,P) stack}, title="")    # one row per name (e.g. Φ, Φ̂), one column per layer, each panel its own colour scale
 fig_tuning_by_position(curves, mir_per_neuron, latent_names, positions, n_cols=4) -> Figure   # spatial notebook: one plot_neuron_tuning panel per neuron placed by position (ring order in wrapped rows d = 1, lattice cell d = 2), title = index, position, MIR
 fig_weights_over_embedding(W, space, title="") -> Figure    # W (post, pre) as an image, rows/columns sorted around their rings, symmetric colour scale; ValueError unless d = 1
 fig_empirical_kernels(comparison: KernelComparison, space) -> Figure   # prior K_post/K_pre next to the empirical W W^T / n_pre and W^T W / n_post, ring-sorted, own colour scale per panel
@@ -886,6 +902,20 @@ Sweep-independent helpers for the phase-transition notebook; all pure functions 
 Notebook cells, in order: parameter cell (`ROOT`), setup (loads `RESULTS`), selector (`L`, `PHI`, `LAMBDA_R`, `LAMBDA_W`, `MIR_KIND`), the one-setting plot suite (`report.setting_items`: loss curves, example outputs, MIR over training), tuning (`N_PLOT_NEURONS`, `PLOT_LAYER` counted from 1, `NEURON_ORDER`, `NEURON_SEED`), the matrix and the scatter (`GLOBAL_L`, `GLOBAL_PHI`, by default the chosen setting's). Tuning curves use the rates phi(H), not H.
 
 Limits: the viewer needs positive lambdas. A grid containing lambda = 0 cannot be snapped on a log scale (`snap_to_grid` raises) and the figures use log axes. A request outside the grid snaps to the nearest endpoint, and the only signal is the "snapped to" line of `snap_text`. The global prose counts settings with no MIR yet apart from stale (other config) or unreadable ones, which it names with their lambdas and reason, and lists the provisional cells by their lambdas. `GridSelection.unusable` holds the latter.
+
+## exemplar.py and the exemplar notebook
+
+`notebooks/build_exemplar.py` builds `exemplar.ipynb` (source only; executed copies go to the ignored `tmp/`): one linear-teacher run, trained with SGLD (or Adam), then the mean-field solve of the same problem with live diagnostics. `fct/exemplar.py` holds all the logic; the cells set variables and call it and `fct.draw`.
+
+- `exemplar_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed) -> Config`: a thin wrapper over `spatial_view.make_config` (no spatial prior, CPU, float64; log and checkpoint intervals as there) that adds the `meanfield` section: `n_points = P` (all points are solved), `beta`, and, **for SGLD**, `prior_scale`, `alpha` and `rate_tilt` from `sgld_theory_constants(beta, weight_lambda, rate_lambda, n_points, d_out)` (four keys: `prior_scale`, `alpha`, `rate_tilt`, `learning_prefactor`). `with_solver(cfg, **solver_fields)` sets `SolverConfig` fields (unknown ones raise).
+- Why the constants are overridden: SGLD at `beta` samples `exp(-beta L)`, so each (standard-normal-parametrised) weight has variance `1 / (2 beta weight_lambda)` (pinned by a test: weights in directions the data does not span have that variance), the readout's Gaussian likelihood gives the ridge `alpha = P d_out / (beta prior_scale) = 2 weight_lambda P d_out`, the rate penalty is the tilt `2 beta rate_lambda`, and, the solver's kernels being unscaled (`Sigma = prior_scale Phi0`), the data-term prefactor is `learning_prefactor = 1 / (2 prior_scale) = beta weight_lambda` (the library's fixed 1/2 holds only for `prior_scale = 1`). The library defaults describe the same distribution only at `beta = 1/2`. With the defaults the solved kernels were about 19 times too large at `beta = 10`, which the scale-invariant alignment (0.996) hid; an exact Gibbs / closed-form check by the reviewer found the fixed point near the net's kernel scale only with the prefactor above (c = 0.1 there; at c = 0.5 the single-site precision is non-normalisable near it). For Adam there is no Gibbs distribution and the defaults stand.
+- Cache layout under CACHE_ROOT: `exemplar-<section_hash(data, net, train)>/{data, train, config.json}` and, inside it, `solve-<section_hash(data, net, train, meanfield)>/meanfield/` (`exemplar_dirs`). A solver setting therefore re-solves without retraining. `train_exemplar(cfg, cache_root, log) -> spatial_view.TrainRun` (via `spatial_view.train_in`, which `train_run` shares) and `solve_exemplar(cfg, dataset, net, cache_root, plot_every, show, log, on_failure) -> SolveResult` go through `train_from_config` / `run_meanfield`, so both resume from checkpoints and reload finished work. `on_failure` is called before an exception from the solve propagates (the notebook passes `LiveView.flush`).
+- Live view: `live_figures(snapshot)` is `[fig_layer_kernels({Φ, Φ̂}), fig_solver_health, fig_sampler_health]` (layers counted from 1 in all three); `live_plotter(every, show)` is an `on_outer` callback that calls `show(figures)` at outer steps 0, every, 2 every, ...; `solve_exemplar` calls `show` once more with the finished solve's figures (a loaded final.pt runs no steps). Plotting time is charged to the history's `time`. `LiveView(tail)` is the notebook edge: `show` does `clear_output(wait=True)`, displays and closes the figures, then reprints its last `tail` log lines (`log` collects them, `flush` prints them), because clearing empties the whole cell output. IPython is imported lazily; the clear / display / print functions are injectable.
+- `kernel_comparison` (solved Φ_l beside the net's, `draw.fig_kernels` with an own colour scale per panel), `empirical_kernel_figure`, `example_outputs_of(net, dataset)`, `solve_summary(history, sampler, Phi=None, net_Phi=None)` (markdown computed from the solve: first and last fixed-point residual of Φ̂ with "fell" / "rose", smallest ESS fraction and where, largest eigenvalue and mean diagonal of the solved and the net's kernels, train MSE theory and net, alignment). `cache_root_from_env` lives in `fct.cache` (`$FCT_CACHE_ROOT`), shared with the spatial notebook.
+
+Notebook cells, in order: intro, task and net (the `parameters` cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `DATA_SEED`, `N`, `L`, `PHI`, `G`, `NET_SEED`, `WEIGHT_LAMBDA`, `RATE_LAMBDA`), training settings (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup, train, loss / outputs / empirical kernels, solver settings (`SAMPLER`, `INIT`, `N_OUTER_HMC`, `N_OUTER_IMPORTANCE`, `PLOT_EVERY`, `SOLVER_SEED`, `SOLVE_LOG_INT`; HMC: `N_CHAINS`, `WARMUP_TRANS`, `N_TRANS`, `N_TRANS_OUTER`; importance: `N_IMPORTANCE_SAMPLES`; only the chosen sampler's are passed), the live solve and its printed summary, the kernel comparison. The builder reuses `build_spatial.build_main`, `set_parameters` (rewrites one-line `NAME = value` assignments; a name not assigned exactly once is an error) and `execute_notebook`, which is how the tests run it tiny with each sampler.
+
+Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD epochs; HMC 512 chains, 5 / 10 transitions per run, 80 outer steps; importance sampling 40) run the whole notebook in about 20 to 45 s on a CPU (training about 7 s, a solve 3 to 9 s, the rest figures and kernel start-up). Measured at these defaults (seed 0, `init = "net"`): HMC's fixed-point residual of Φ̂ goes 0.225 to 0.17 over 80 steps (0.45 / 0.49 / 0.48 / 0.51 at steps 10 / 20 / 30 / 40, 0.15 at step 60), importance sampling's 0.446 to 0.352 over 40; neither has reached its Monte Carlo floor, so the default solves are **not converged** (the printed summary says "fell" or "rose" from the measured values). The smallest ESS fraction is 0.028 (HMC, step 3) and 0.126 (importance, floor 0.01). The top kernel eigenvalue is 14.4 (HMC) and 13.2 (importance) against 13.2 (net), mean diagonal 0.94 / 0.895 against 0.912; because `init = "net"` starts at the net's kernels this agreement is partly inherited. From `init = "lazy"` the same HMC solve after 40 steps has residual 0.76 and kernels about a quarter too small (10.1 against 13.2, diagonal 0.68 against 0.91), with an ESS fraction down to 0.004. The theory's train MSE (0.031) is that of the mean predictor; the net's kernel-GP mean predictor gives 0.029, one sampled net 0.051. Importance sampling draws from the prior, a small-P, mild-tilt tool: it raised `InadequateSamplerError` at step 45 of an 80-step run from `init = "net"`, and does not complete at P = 24 (hence `N_OUTER_IMPORTANCE = 40`).
 
 ## spatial_view.py, spatial_report.py and the spatial-prior notebook
 
