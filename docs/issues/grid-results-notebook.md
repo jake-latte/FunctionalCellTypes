@@ -1,14 +1,14 @@
 ---
 type: data-science
 complexity: complex
-status: blocked
+status: in progress
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
 
 # Phase-transition results notebook: one-setting viewer and global modularity plots
 
-Confirmed by the PI 2026-10-22. The helpers (tuning curves, neuron ordering, matrix/ratio plots) are split out as `tuning-and-grid-plot-helpers`; this item wires them to the sweep and builds the notebook. Blocked until `generic-grid-sweep` (setting lookup by axis values) and the helpers are merged.
+Confirmed by the PI 2026-10-22. The helpers (tuning curves, neuron ordering, matrix/ratio plots) are split out as `tuning-and-grid-plot-helpers`; this item wires them to the sweep and builds the notebook.
 
 ## Proposed plan
 Source notebook built by a script (as `notebooks/build_modularity.py`; executed notebooks are not committed). Cells:
