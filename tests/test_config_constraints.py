@@ -131,6 +131,7 @@ def test_default_data_hash_unchanged():
 def test_train_section_hashes_hold_the_loss_version(sections):
     cfg = default_config()
     payload = {**cfg.model_dump(include={*sections, "dtype"}), "loss_version": LOSS_VERSION}
+    del payload["train"]["optimizer"], payload["train"]["beta"]  # adam: SGLD fields not hashed
     if "meanfield" in sections:  # hashed in its flat pre-split layout, see hash_payload
         payload["meanfield"] = cfg.meanfield.hash_payload()
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]

@@ -12,6 +12,9 @@ from fct import draw
 from fct.analyse import ExampleOutputs, GridPredictions, LayerPCA
 from fct.config import DataConfig
 from fct.data import Dataset
+from fct.grid_report import MirRecord
+from fct.tuning import tuning_curves
+from tests.draw_helpers import assert_png as _assert_png
 
 P_GRID, L, N, K, P_TRAIN = 4, 2, 3, 3, 6
 
@@ -27,12 +30,6 @@ def _randn(*shape, seed=0):
 
 def _has_artist(ax):
     return bool(ax.images or ax.collections or ax.lines or ax.patches)
-
-
-@pytest.fixture(autouse=True)
-def close_figures():
-    yield
-    plt.close("all")
 
 
 @pytest.fixture
@@ -109,12 +106,6 @@ def _training_history():
         "rate_l2": n.tolist(),
         "loss": (2.0 / n).tolist(),
     }
-
-
-def _assert_png(fig, tmp_path):
-    out = tmp_path / "fig.png"
-    fig.savefig(out)
-    assert out.stat().st_size > 0
 
 
 def _plot_calls(grid, pca, dataset):
@@ -368,3 +359,117 @@ def test_fig_example_outputs_title_puts_the_legend_below_the_axes(title):
     assert fig.get_suptitle() == title
     assert (legend.y1 <= axes_bottom) if title else (legend.y0 >= axes_top)
     plt.close(fig)
+
+
+# --------------------------------------------------------------------------- tuning and grid plots
+
+
+@pytest.fixture
+def tuning():
+    """Tuning curves of 6 neurons to 3 latents and a per-neuron MIR for them."""
+    factors = _rand(200, 3, seed=1)
+    rates = _randn(200, 6, seed=2) + factors[:, :1]
+    return tuning_curves(rates, factors, 5), np.linspace(0.1, 0.9, 6)
+
+
+def _mir_records():
+    return [MirRecord(lr, lw, layer, 0.5) for lr in (0.1, 1) for lw in (0.1, 1) for layer in (0, 1)]
+
+
+def test_fig_tuning_has_a_panel_and_a_curve_per_latent_with_a_common_rate_axis(tuning, tmp_path):
+    curves, mir = tuning
+    fig = draw.fig_tuning(curves, [4, 0, 2], mir, ["a", "b", "c"])
+    panels = [ax for ax in fig.axes if ax.get_visible()]
+    assert len(panels) == 3
+    assert "neuron 4" in panels[0].get_title() and "MIR 0.74" in panels[0].get_title()
+    assert all(len(ax.containers) == 3 for ax in panels)
+    assert panels[0].get_shared_y_axes().joined(panels[0], panels[2])
+    _assert_png(fig, tmp_path)
+
+
+def test_fig_tuning_latent_colours_differ_from_layer_colours(tuning):
+    assert not {draw._latent_color(k) for k in range(6)} & set(draw.LAYER_COLORS)
+
+
+@pytest.mark.parametrize(
+    ("indices", "names", "mir_len", "match"),
+    [
+        ([0], ["a"], 6, "latent_names"),
+        ([], ["a", "b", "c"], 6, "empty"),
+        ([6], ["a", "b", "c"], 6, "must lie in"),
+        ([0], ["a", "b", "c"], 5, "mir_per_neuron"),
+    ],
+)
+def test_fig_tuning_rejects_bad_inputs(tuning, indices, names, mir_len, match):
+    curves, mir = tuning
+    with pytest.raises(ValueError, match=match):
+        draw.fig_tuning(curves, indices, mir[:mir_len], names)
+
+
+def test_fig_mir_matrix_is_a_phase_diagram_with_blank_nan_and_log_tick_labels(tmp_path):
+    mir = np.random.default_rng(0).random((2, 3, 4))
+    mir[1, 0, 0] = np.nan
+    fig = draw.fig_mir_matrix([0.1, 1, 10], [0.01, 0.1, 1, 10], mir)
+    heatmaps = [ax for ax in fig.axes if ax.images]
+    assert len(heatmaps) == 2
+    assert heatmaps[0].images[0].origin == "lower"  # lambda_r increases upwards
+    assert [t.get_text() for t in heatmaps[0].get_xticklabels()] == [
+        "$10^{-2}$",
+        "$10^{-1}$",
+        "$10^{0}$",
+        "$10^{1}$",
+    ]
+    assert heatmaps[0].get_yticklabels()[0].get_text() == "$10^{-1}$"
+    assert heatmaps[1].images[0].get_array().mask[0, 0]
+    assert len({im.get_clim() for ax in heatmaps for im in ax.images}) == 1
+    _assert_png(fig, tmp_path)
+
+
+def test_fig_mir_matrix_rejects_mismatched_axes_and_non_positive_lambdas():
+    with pytest.raises(ValueError, match="mir_by_layer"):
+        draw.fig_mir_matrix([1, 2], [1, 2, 3], np.zeros((1, 3, 2)))
+    with pytest.raises(ValueError, match="lambda_w_values"):
+        draw.fig_mir_matrix([1, 2], [0, 2], np.zeros((1, 2, 2)))
+
+
+def test_mir_heatmap_and_matrix_share_the_cell_drawing():
+    ax = draw.plot_mir_matrix(np.full((2, 2), 0.5), [1, 10], [1, 10])
+    assert ax.images[0].get_clim() == (0.0, 1.0)
+    assert len(ax.texts) == 4  # each finite cell is annotated
+
+
+def test_fig_mir_vs_ratio_has_a_log_axis_and_one_dot_per_network(tmp_path):
+    records = _mir_records()
+    fig = draw.fig_mir_vs_ratio(records)
+    ax = fig.axes[0]
+    assert ax.get_xscale() == "log"
+    assert sum(len(c.get_offsets()) for c in ax.collections) == len(records)
+    assert ax.get_legend() is not None
+    _assert_png(fig, tmp_path)
+
+
+def test_fig_mir_vs_ratio_rejects_non_positive_lambdas_and_no_records():
+    with pytest.raises(ValueError, match="lambda_r"):
+        draw.fig_mir_vs_ratio([MirRecord(0.0, 1.0, 0, 0.5)])
+    with pytest.raises(ValueError, match="no records"):
+        draw.fig_mir_vs_ratio([])
+
+
+def test_plot_mir_matrix_rejects_a_value_outside_the_colour_scale():
+    with pytest.raises(ValueError, match="outside the colour range"):
+        draw.plot_mir_matrix(np.full((2, 2), 1.5), [1, 10], [1, 10])
+
+
+@pytest.mark.parametrize("neuron", [-1, 6])
+def test_plot_neuron_tuning_rejects_a_neuron_out_of_range(tuning, neuron):
+    with pytest.raises(ValueError, match="outside"):
+        draw.plot_neuron_tuning(tuning[0], neuron, 0.5, ["a", "b", "c"])
+
+
+def test_plot_mir_vs_ratio_validates_records_and_lists_only_layers_present():
+    with pytest.raises(ValueError, match="non-finite"):
+        draw.plot_mir_vs_ratio([MirRecord(1.0, 1.0, 0, float("nan"))])
+    with pytest.raises(TypeError, match="integer"):
+        draw.plot_mir_vs_ratio([MirRecord(1.0, 1.0, 1.0, 0.5)])
+    ax = draw.plot_mir_vs_ratio([MirRecord(1.0, 1.0, 0, 0.5), MirRecord(1.0, 2.0, 2, 0.5)])
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["layer 1", "layer 3"]

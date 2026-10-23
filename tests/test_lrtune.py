@@ -355,7 +355,7 @@ def test_evaluate_setting_scores_a_finished_setting_without_touching_its_cache(t
     assert math.isfinite(row["train_mse"]) and math.isfinite(row["heldout_mse"])
     assert not row["diverged"] and row["lr"] == sweep.lr and row["task"] == "linear_teacher"
     assert row["n_epochs"] == sweep.n_epochs and row["null_mse"] > 0
-    assert len(row["mir_corrected"].split(";")) == setting.L
+    assert len(row["mir_corrected"].split(";")) == setting.axes["net.L"]
     assert cache_paths(setting_dir(tmp_path, setting)).train.exists()
 
 
@@ -403,7 +403,7 @@ def test_subset_indices_and_trial_names():
     sweep = preset("tiny")
     indices = subset_indices(sweep, ["what_where"], [1, 5])
     settings = [expand(sweep)[i] for i in indices]
-    assert len(indices) == 8 and {s.L for s in settings} == {1, 5}
+    assert len(indices) == 8 and {s.axes["net.L"] for s in settings} == {1, 5}
     assert {s.task for s in settings} == {"what_where"}
     with pytest.raises(ValueError, match="unknown"):
         subset_indices(sweep, ["nope"], [1])

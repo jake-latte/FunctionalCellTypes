@@ -1,6 +1,9 @@
 """The notebook builder: structure of the source, and an end-to-end execution on a partial tiny
 sweep (most settings missing) that must render a message for each missing setting."""
 
+import ast
+from pathlib import Path
+
 import nbformat
 import pytest
 
@@ -11,8 +14,8 @@ from notebooks.build_modularity import (
     with_root,
     write_notebook,
 )
+from tests.report_helpers import QUIET
 
-QUIET = {"log": lambda s: None}
 N_SETTINGS = 36
 FIGURES_PER_SETTING = 3  # loss curves, example outputs, MIR history
 
@@ -54,14 +57,24 @@ def test_running_the_setup_cell_sets_a_legible_dpi(tmp_path):
         assert mpl.rcParams["figure.dpi"] == 100
 
 
+def _named_setting(line: str) -> tuple:
+    """(task, L, phi, rate_lambda) named by a cell `show(setting_items(find_result(...)))`."""
+    find = ast.parse(line).body[0].value.args[0].args[0]
+    task, axes = find.args[1], ast.literal_eval(find.args[2])
+    return (ast.literal_eval(task), axes["net.L"], axes["net.phi"], axes["train.rate_lambda"])
+
+
 def test_each_setting_cell_names_one_distinct_grid_setting():
     """Cells select settings by name; together they name exactly the grid."""
     named = {
-        line.split("find_result(RESULTS, ")[1].split("))")[0]
+        _named_setting(line)
         for line in _code(build_notebook()).splitlines()
         if "find_result(" in line
     }
-    expected = {f'"{s.task}", {s.L}, "{s.phi}", {s.rate_lambda!r}' for s in expand(preset("tiny"))}
+    expected = {
+        (s.task, s.axes["net.L"], s.axes["net.phi"], s.axes["train.rate_lambda"])
+        for s in expand(preset("tiny"))
+    }
     assert named == expected
 
 
@@ -172,3 +185,11 @@ def test_executes_on_a_mix_of_done_partial_and_missing_settings(tmp_path):
         "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
     )
     assert png == 2 * FIGURES_PER_SETTING + len(SWEEP_TASKS)
+
+
+def test_the_committed_notebook_is_what_the_builder_produces():
+    """The source notebook is generated; a stale copy would call an outdated API."""
+    committed = nbformat.read(Path(__file__).parents[1] / "notebooks" / "modularity.ipynb", 4)
+    assert [(c.cell_type, c.source) for c in committed.cells] == [
+        (c.cell_type, c.source) for c in build_notebook().cells
+    ]

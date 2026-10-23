@@ -8,15 +8,17 @@ machines without a display). A `plot_*` function creates a figure only when it i
 
 import functools
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import NamedTuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.colors import LogNorm
 from matplotlib.figure import Figure
+from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Rectangle
 from matplotlib.ticker import MaxNLocator
@@ -33,7 +35,10 @@ from fct.analyse import (
 )
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
+from fct.grid_report import MirRecord, check_finite_mir, check_layer
+from fct.spatial import LayerSpace, Population, torus_distance, wrapped_gaussian_profile
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
+from fct.tuning import TuningCurves
 
 ArrayLike = Tensor | np.ndarray | Sequence[float]
 
@@ -61,6 +66,11 @@ _GREY = "#52514e"  # reference lines and the trained-network overlay
 FIG_WIDTH = 13.0  # inches; the width of the full-width results figures
 HEATMAP_WIDTH = FIG_WIDTH + 1  # the shared colourbar sits outside the panels
 ANNOTATION_SIZE = 12  # numbers written inside heatmap cells
+KERNEL_FIG_SIZE = (0.7 * FIG_WIDTH, 9)  # inches; fig_kernel's 2 x 2 panels
+KERNEL_CURVE_POINTS = 200  # samples of the analytic curve in the K-versus-distance panel
+KERNEL_MARKER_AREA = 6  # scatter marker area (points^2) for the K_ij cloud
+EMBEDDING_MARKER_AREA = 14  # scatter marker area for the unit positions
+RING_RADIUS_PRE, RING_RADIUS_POST = 1.0, 0.8  # d = 1: the pre ring outside, the post ring inside
 PROVISIONAL_COLOR = "#e69f00"  # orange: distinct from viridis and from the grey of missing cells
 PROVISIONAL_HATCH = "//"  # hatch pattern over the cells of a provisional heatmap row
 STYLE_RC = {
@@ -560,10 +570,16 @@ def _layer_color(layer: int) -> str:
     return LAYER_COLORS[layer % len(LAYER_COLORS)]
 
 
-def _layer_legend(ax: Axes, n_layers: int, extra: list[Line2D] | None = None) -> None:
-    """Legend beside the axis so it never covers the curves."""
+def _layer_legend(
+    ax: Axes,
+    n_layers: int,
+    extra: list[Line2D] | None = None,
+    layers: Sequence[int] | None = None,
+) -> None:
+    """Legend beside the axis so it never covers the curves; lists `layers` (default all)."""
     handles = [
-        Line2D([], [], color=_layer_color(i), label=f"layer {i + 1}") for i in range(n_layers)
+        Line2D([], [], color=_layer_color(i), label=f"layer {i + 1}")
+        for i in (range(n_layers) if layers is None else layers)
     ]
     ax.legend(
         handles=handles + (extra or []),
@@ -1061,6 +1077,38 @@ def _hatch_provisional_rows(ax: Axes, row_status: Sequence[str], n_cols: int) ->
             )
 
 
+def _draw_mir_cells(
+    ax: Axes,
+    values: np.ndarray,
+    shades: np.ndarray,
+    x_labels: Sequence[str],
+    y_labels: Sequence[str],
+    vmin: float,
+    vmax: float,
+    origin: str = "upper",
+) -> AxesImage:
+    """Cells of a MIR heatmap: `shades` coloured on [vmin, vmax] (NaN in the missing-cell grey),
+    labelled ticks, each finite value written in its cell. Returns the image for a colourbar."""
+    cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)
+    image = ax.imshow(
+        np.ma.masked_invalid(shades), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto", origin=origin
+    )
+    ax.set_xticks(range(len(x_labels)), list(x_labels))
+    ax.set_yticks(range(len(y_labels)), list(y_labels))
+    ax.tick_params(length=0)
+    _annotate_cells(ax, values, shades, vmin, vmax)
+    return image
+
+
+def _mir_colour_range(arrays: Iterable[np.ndarray]) -> tuple[float, float]:
+    """Shared MIR colour scale [min(0, data), max(1, data)] over the finite entries, so a value
+    outside [0, 1] (round-off) is shown, not clipped."""
+    finite = np.concatenate([a[np.isfinite(a)] for a in arrays])
+    if not finite.size:
+        return 0.0, 1.0
+    return min(0.0, float(finite.min())), max(1.0, float(finite.max()))
+
+
 def _check_in_range(values: np.ndarray, vmin: float, vmax: float) -> None:
     finite = values[np.isfinite(values)]
     if finite.size and (finite.min() < vmin or finite.max() > vmax):
@@ -1097,12 +1145,8 @@ def plot_mir_heatmap(
     _check_in_range(values[~provisional], vmin, vmax)
     shades = np.where(provisional[:, None], np.clip(values, vmin, vmax), values)
     ax = _get_ax(ax, figsize=(7, 6))
-    cmap = plt.get_cmap("viridis").with_extremes(bad=_MISSING_GREY)
-    image = ax.imshow(np.ma.masked_invalid(shades), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
-    ax.set_xticks(range(values.shape[1]), [f"layer {i + 1}" for i in range(values.shape[1])])
-    ax.set_yticks(range(len(row_labels)), list(row_labels))
-    ax.tick_params(length=0)
-    _annotate_cells(ax, values, shades, vmin, vmax)
+    layer_labels = [f"layer {i + 1}" for i in range(values.shape[1])]
+    image = _draw_mir_cells(ax, values, shades, layer_labels, row_labels, vmin, vmax)
     _label_unfinished_rows(ax, row_status, values.shape[1])
     _hatch_provisional_rows(ax, row_status, values.shape[1])
     ax.set_title(title)
@@ -1123,9 +1167,7 @@ def fig_mir_heatmaps(
     [0, 1] (round-off) is shown, not clipped; provisional rows do not enter the scale."""
     arrays = {name: _np(a) for name, a in panels.items()}
     finished = np.array([s != PROVISIONAL for s in row_status], dtype=bool)
-    finite = np.concatenate([a[finished][np.isfinite(a[finished])] for a in arrays.values()])
-    vmin = min(0.0, float(finite.min())) if finite.size else 0.0
-    vmax = max(1.0, float(finite.max())) if finite.size else 1.0
+    vmin, vmax = _mir_colour_range([a[finished] for a in arrays.values()])
     fig, axes = plt.subplots(
         1,
         len(arrays),
@@ -1141,4 +1183,313 @@ def fig_mir_heatmaps(
         fig.suptitle(title)
     if PROVISIONAL in row_status:
         fig.supxlabel(PROVISIONAL_NOTE)
+    return fig
+
+
+# --------------------------------------------------------------------------- spatial kernels
+
+
+def _population_color(population: Population, space: LayerSpace) -> str:
+    """The pre factor takes LAYER_COLORS[0], the post factor LAYER_COLORS[1]."""
+    return LAYER_COLORS[0] if population is space.pre else LAYER_COLORS[1]
+
+
+def plot_kernel_vs_distance(space: LayerSpace, ax: Axes | None = None) -> Axes:
+    """Every K_ij of the pre and post factors against its torus distance d_ij (points), with
+    the analytic wrapped Gaussian along one axis as a line for each factor (exactly K for d = 1;
+    for d = 2 the points scatter around it because K depends on both axis differences)."""
+    ax = _get_ax(ax)
+    for pop in (space.pre, space.post):
+        x = pop.embedding.positions
+        color = _population_color(pop, space)
+        dist = torus_distance(x, x, pop.embedding.box).ravel()
+        ax.scatter(
+            _np(dist),
+            _np(pop.K).ravel(),
+            s=KERNEL_MARKER_AREA,
+            alpha=0.4,
+            color=color,
+            rasterized=True,
+        )
+        # the profile is a function of the per-axis minimum-image distance, so the curve is only
+        # meaningful up to box / 2 (in d > 1 the Euclidean torus distance reaches box * sqrt(d) / 2)
+        d_max = min(dist.max().item(), pop.embedding.box / 2)
+        d_line = torch.linspace(0, d_max, KERNEL_CURVE_POINTS, dtype=x.dtype)
+        curve = wrapped_gaussian_profile(
+            d_line, pop.kernel.length_scale, pop.embedding.box, pop.kernel.amplitude
+        )
+        ax.plot(
+            _np(d_line),
+            _np(curve),
+            color=color,
+            label=f"{pop.name}: length_scale = {pop.kernel.length_scale:g}",
+        )
+    ax.set_xlabel("torus distance")
+    ax.set_ylabel("K_ij")
+    ax.legend(frameon=False)
+    return ax
+
+
+def _plot_ring(population: Population, radius: float, color: str, ax: Axes) -> None:
+    angle = 2 * np.pi * _np(population.embedding.positions)[:, 0] / population.embedding.box
+    ax.scatter(
+        radius * np.cos(angle),
+        radius * np.sin(angle),
+        s=EMBEDDING_MARKER_AREA,
+        color=color,
+        label=population.name,
+    )
+
+
+def _check_drawable_dimension(space: LayerSpace) -> int:
+    """The dimension d of the space, if it can be drawn (1 or 2)."""
+    d = space.pre.embedding.positions.shape[1]
+    if d > 2:
+        raise ValueError(f"can only draw embeddings for d = 1 or 2, got d = {d}")
+    return d
+
+
+def plot_embedding(space: LayerSpace, ax: Axes | None = None) -> Axes:
+    """Unit positions of the pre and post populations: on a ring (d = 1, pre outside, post
+    inside) or on the plane (d = 2). The legend sits outside the axis, to the right, so the
+    figure needs constrained layout (as `fig_kernel` uses) to leave room for it."""
+    d = _check_drawable_dimension(space)
+    ax = _get_ax(ax)
+    if d == 1:
+        _plot_ring(space.pre, RING_RADIUS_PRE, LAYER_COLORS[0], ax)
+        _plot_ring(space.post, RING_RADIUS_POST, LAYER_COLORS[1], ax)
+        ax.set_aspect("equal")
+        ax.set_axis_off()
+    elif d == 2:
+        for pop in (space.pre, space.post):
+            xy = _np(pop.embedding.positions)
+            ax.scatter(
+                xy[:, 0],
+                xy[:, 1],
+                s=EMBEDDING_MARKER_AREA,
+                color=_population_color(pop, space),
+                label=pop.name,
+            )
+        ax.set_xlim(0, space.pre.embedding.box)
+        ax.set_ylim(0, space.pre.embedding.box)
+        ax.set_aspect("equal")
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    return ax
+
+
+# --------------------------------------------------------------------------- tuning and grid MIR
+TUNING_N_COLS = 4  # tuning panels per row
+# One colour per latent, none of them in LAYER_COLORS: a page can show layer k and latent k.
+LATENT_COLORS = ["#7b3294", "#8c510a", "#00a6b5", "#5c5c5c", "#b8a800", "#000000"]
+
+
+def _latent_color(latent: int) -> str:
+    return LATENT_COLORS[latent % len(LATENT_COLORS)]
+
+
+def _check_positive(values: np.ndarray, what: str) -> None:
+    if not (np.isfinite(values) & (values > 0)).all():
+        raise ValueError(f"{what} must all be positive and finite for a log axis, got {values}")
+
+
+def plot_neuron_tuning(
+    curves: TuningCurves,
+    neuron: int,
+    mir: float,
+    latent_names: Sequence[str],
+    ax: Axes | None = None,
+) -> Axes:
+    """One neuron's tuning: a mean rate (+- standard error) curve per latent against the
+    latent's bin centre; the title is the neuron index and its MIR."""
+    mean, sem, centres = _np(curves.mean), _np(curves.sem), _np(curves.centres)
+    if not 0 <= neuron < mean.shape[0]:
+        raise ValueError(f"neuron {neuron} is outside [0, {mean.shape[0]})")
+    if len(latent_names) != mean.shape[1]:
+        raise ValueError(
+            f"latent_names has {len(latent_names)} entries for {mean.shape[1]} latents"
+        )
+    ax = _get_ax(ax)
+    for k, name in enumerate(latent_names):
+        ax.errorbar(
+            centres[k],
+            mean[neuron, k],
+            yerr=sem[neuron, k],
+            color=_latent_color(k),
+            marker="o",
+            capsize=2,
+            label=name,
+        )
+    ax.set_title(f"neuron {neuron}, MIR {mir:.2f}")
+    ax.grid(alpha=0.25, lw=0.5)
+    return ax
+
+
+@_styled
+def fig_kernel(space: LayerSpace) -> Figure:
+    """One layer's spatial prior: K_pre and K_post as matrices, K against torus distance with
+    the analytic curve, and the unit positions."""
+    _check_drawable_dimension(space)
+    fig, axes = plt.subplots(2, 2, figsize=KERNEL_FIG_SIZE, layout="constrained")
+    plot_kernel(space.pre.K, ax=axes[0, 0], title=f"K_pre ({space.pre.name})")
+    plot_kernel(space.post.K, ax=axes[0, 1], title=f"K_post ({space.post.name})")
+    plot_kernel_vs_distance(space, ax=axes[1, 0])
+    plot_embedding(space, ax=axes[1, 1])
+    axes[1, 1].set_title("positions")
+    fig.suptitle(f"layer {space.layer}: K = K_post (x) K_pre")
+    return fig
+
+
+@_styled
+def fig_tuning(
+    curves: TuningCurves,
+    neuron_indices: Sequence[int],
+    mir_per_neuron: ArrayLike,
+    latent_names: Sequence[str],
+) -> Figure:
+    """One panel per chosen neuron, one curve per latent, a common rate axis. Latents have
+    their own scales, so the x axis is each curve's own bin centres ("latent value")."""
+    mir = _np(mir_per_neuron)
+    n_neurons = curves.mean.shape[0]
+    if len(neuron_indices) == 0:
+        raise ValueError("neuron_indices is empty")
+    if len(mir) != n_neurons:
+        raise ValueError(f"mir_per_neuron has {len(mir)} entries for {n_neurons} neurons")
+    if not all(0 <= i < n_neurons for i in neuron_indices):
+        raise ValueError(f"neuron_indices must lie in [0, {n_neurons}), got {list(neuron_indices)}")
+    n_cols = min(TUNING_N_COLS, len(neuron_indices))
+    n_rows = math.ceil(len(neuron_indices) / n_cols)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(FIG_WIDTH, 3.2 * n_rows + 0.8),
+        sharey=True,
+        squeeze=False,
+        layout="constrained",
+    )
+    flat = list(axes.ravel())
+    for ax, neuron in zip(flat, neuron_indices, strict=False):
+        plot_neuron_tuning(curves, neuron, mir[neuron], latent_names, ax)
+    for ax in flat[len(neuron_indices) :]:
+        ax.set_visible(False)
+    for ax in axes[-1]:
+        ax.set_xlabel("latent value")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("mean rate")
+    flat[0].legend(loc="best", frameon=False)
+    return fig
+
+
+def _log_tick_label(value: float) -> str:
+    """10^k for a power of ten, else three significant figures."""
+    exponent = math.log10(value)
+    if math.isclose(exponent, round(exponent)):
+        return f"$10^{{{round(exponent)}}}$"
+    return f"{value:.3g}"
+
+
+def plot_mir_matrix(
+    values: ArrayLike,
+    lambda_r_values: ArrayLike,
+    lambda_w_values: ArrayLike,
+    title: str = "",
+    ax: Axes | None = None,
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+) -> Axes:
+    """One layer's MIR over the (lambda_r, lambda_w) grid; `values` is (n_r, n_w), NaN cells grey.
+
+    It is a phase diagram: both lambdas increase from the bottom-left (`origin="lower"`),
+    lambda_w along x and lambda_r up y, ticks labelled in powers of ten. The image is on
+    `ax.images[0]` for a colourbar.
+    """
+    values, lam_r, lam_w = _np(values), _np(lambda_r_values), _np(lambda_w_values)
+    _check_positive(lam_r, "lambda_r_values")
+    _check_positive(lam_w, "lambda_w_values")
+    if values.shape != (len(lam_r), len(lam_w)):
+        raise ValueError(f"values {values.shape} do not match the grid {(len(lam_r), len(lam_w))}")
+    _check_in_range(values, vmin, vmax)
+    ax = _get_ax(ax, figsize=(7, 6))
+    _draw_mir_cells(
+        ax,
+        values,
+        values,
+        [_log_tick_label(v) for v in lam_w],
+        [_log_tick_label(v) for v in lam_r],
+        vmin,
+        vmax,
+        origin="lower",
+    )
+    ax.set(xlabel=r"$\lambda_w$", ylabel=r"$\lambda_r$", title=title)
+    return ax
+
+
+@_styled
+def fig_mir_matrix(
+    lambda_r_values: ArrayLike, lambda_w_values: ArrayLike, mir_by_layer: ArrayLike
+) -> Figure:
+    """One `plot_mir_matrix` per hidden layer, `mir_by_layer` (L, n_r, n_w), on one shared
+    colour scale (`_mir_colour_range`) and colourbar."""
+    mir = _np(mir_by_layer)
+    n_r, n_w = len(_np(lambda_r_values)), len(_np(lambda_w_values))
+    if mir.ndim != 3 or mir.shape[1:] != (n_r, n_w):
+        raise ValueError(f"mir_by_layer must have shape (L, {n_r}, {n_w}), got {mir.shape}")
+    vmin, vmax = _mir_colour_range([mir])
+    fig, axes = plt.subplots(
+        1,
+        len(mir),
+        figsize=(HEATMAP_WIDTH, 0.5 * n_r + 3.2),
+        sharey=True,
+        squeeze=False,
+        layout="constrained",
+    )
+    axes = list(axes[0])
+    for layer, (ax, values) in enumerate(zip(axes, mir, strict=True)):
+        plot_mir_matrix(
+            values, lambda_r_values, lambda_w_values, f"layer {layer + 1}", ax, vmin, vmax
+        )
+        if layer:
+            ax.set_ylabel("")
+    _add_mir_colorbar(fig, axes[-1].images[0], axes, shrink=0.6)
+    return fig
+
+
+def plot_mir_vs_ratio(
+    records: Iterable[MirRecord], ax: Axes | None = None, legend: bool = True
+) -> Axes:
+    """MIR of every network (one dot per record) against lambda_r / lambda_w on a log axis,
+    coloured by hidden layer."""
+    records = list(records)
+    if not records:
+        raise ValueError("no records")
+    n_layers = max(rec.layer for rec in records) + 1
+    for lr, lw, layer, value in records:
+        check_layer(layer, n_layers)
+        check_finite_mir(value, lr, lw)
+    lam_r, lam_w, layer, mir = (np.array(col, dtype=float) for col in zip(*records, strict=True))
+    _check_positive(lam_r, "lambda_r")
+    _check_positive(lam_w, "lambda_w")
+    ax = _get_ax(ax, figsize=(8, 5))
+    present = np.unique(layer).astype(int)
+    for each in present:
+        keep = layer == each
+        ax.scatter(
+            lam_r[keep] / lam_w[keep],
+            mir[keep],
+            s=MARKER_SIZE**2,
+            alpha=0.8,
+            color=_layer_color(each),
+        )
+    ax.set_xscale("log")
+    ax.set(xlabel=r"$\lambda_r / \lambda_w$", ylabel="MIR")
+    ax.grid(alpha=0.25, lw=0.5)
+    if legend:
+        _layer_legend(ax, n_layers, layers=present.tolist())
+    return ax
+
+
+@_styled
+def fig_mir_vs_ratio(records: Iterable[MirRecord]) -> Figure:
+    """`plot_mir_vs_ratio` on its own figure."""
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH * 0.6, 5), layout="constrained")
+    plot_mir_vs_ratio(records, ax)
     return fig

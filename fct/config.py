@@ -104,6 +104,11 @@ class TrainConfig(StrictModel):
     monitor_int: NonNegInt = 0
     monitor_bins: Annotated[int, Field(ge=2)] = 10
     monitor_shuffles: PosInt = 5
+    # "sgld" adds Gaussian noise of variance 2 * lr / beta to every step (see fct.sgld). `beta`
+    # is read only by SGLD; both fields enter the hash only for SGLD (`section_hash`), so
+    # adam runs keep the hashes they had before these fields existed.
+    optimizer: Literal["adam", "sgld"] = "adam"
+    beta: PosFloat = 1.0
 
 
 class SolverConfig(StrictModel):
@@ -257,7 +262,8 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections. The
+        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections, and
+        `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser. The
         meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
@@ -271,6 +277,8 @@ class Config(StrictModel):
             hashed["meanfield"] = self.meanfield.hash_payload()
         if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
+            if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes
+                del hashed["train"]["optimizer"], hashed["train"]["beta"]
         canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 

@@ -420,9 +420,9 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
     mir = history["monitor_mir_corrected"][-1]
     return {
         "task": setting.task,
-        "L": setting.L,
-        "phi": setting.phi,
-        "rate_lambda": setting.rate_lambda,
+        "L": setting.axes["net.L"],
+        "phi": setting.axes["net.phi"],
+        "rate_lambda": setting.axes["train.rate_lambda"],
         "lr": sweep.lr,
         "seed": sweep.seeds.train,
         "n_epochs": sweep.n_epochs,
@@ -501,7 +501,7 @@ def subset_indices(sweep: SweepConfig, tasks: Sequence[str], layers: Sequence[in
     unknown = (set(tasks) - set(SWEEP_TASKS)) | (set(layers) - set(LAYERS))
     if unknown:
         raise ValueError(f"unknown tasks or layer counts: {sorted(unknown, key=str)}")
-    return [i for i, s in enumerate(expand(sweep)) if s.task in tasks and s.L in layers]
+    return [i for i, s in enumerate(expand(sweep)) if s.task in tasks and s.axes["net.L"] in layers]
 
 
 def _prepare_root(sweep: SweepConfig, root: Path) -> None:

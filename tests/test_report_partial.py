@@ -160,7 +160,7 @@ def test_checkpoint_at_epoch_zero_without_monitor_entry_loads(root):
     cfg = cpu_config(root)
     dataset = get_dataset(setting_dir(root, FIRST), cfg)
     net = make_net(cfg.net, dataset.x.shape[1], dataset.y.shape[1], CPU, torch.float32)
-    payload = _payload(net, torch.optim.Adam(net.parameters()), _new_history(True), 0)
+    payload = _payload(net, torch.optim.Adam(net.parameters()), _new_history(True, "adam"), 0)
     write_checkpoint(
         _train_dir(root), "ckpt_", 0, payload, cfg.section_hash("data", "net", "train")
     )
@@ -187,7 +187,7 @@ def results_with_extreme_provisional() -> tuple[list[SettingResult], Setting]:
     """Every setting done except the first, whose provisional values beat all finished ones."""
     out = synthetic_results()
     s = out[0].setting
-    high = [[0.99] * s.L, [0.99] * s.L]
+    high = [[0.99] * s.axes["net.L"], [0.99] * s.axes["net.L"]]
     out[0] = provisional(s, monitor_mir_corrected=high, monitor_mir=high)
     return out, s
 
@@ -218,7 +218,7 @@ def test_summary_statistics_use_finished_settings_only_and_list_the_provisional(
     assert "11 of 12 settings finished" in text and "1 provisional" in text
     assert "0.990" not in text  # the provisional best does not leak into the extremes
     finished = [r.setting for r in results[1:] if r.setting.task == s.task]
-    cells = [known(f, layer, "corrected") for f in finished for layer in range(f.L)]
+    cells = [known(f, layer, "corrected") for f in finished for layer in range(f.axes["net.L"])]
     assert f"{max(cells):.3f}" in text and f"{min(cells):.3f}" in text
     assert f"corrected {np.mean(cells):.3f}" in text  # the mean pools the finished ones only
     assert "Provisional" in text and setting_label(s) in text and "epoch 4 of 6" in text
@@ -271,7 +271,7 @@ def extreme_provisional(value: float) -> tuple[list[SettingResult], Setting]:
     """Finished settings with MIR in [0, 1] and a provisional first one at `value`."""
     out = synthetic_results()
     s = out[0].setting
-    column = [[value] * s.L, [value] * s.L]
+    column = [[value] * s.axes["net.L"], [value] * s.axes["net.L"]]
     out[0] = provisional(
         s, monitor_mir=column, monitor_mir_corrected=column, monitor_mir_chance=column
     )
@@ -304,7 +304,7 @@ def test_a_provisional_corrected_value_below_every_finished_one_is_not_the_worst
     results, s = extreme_provisional(-3.0)
     text = summary_text(final_mir(results, s.task))
     finished = [r.setting for r in results[1:] if r.setting.task == s.task]
-    lowest = min(known(f, layer, "corrected") for f in finished for layer in range(f.L))
+    lowest = min(known(f, layer, "corrected") for f in finished for layer in range(f.axes["net.L"]))
     assert "-3.000" not in text
     assert f"({lowest:.3f})" in text
 

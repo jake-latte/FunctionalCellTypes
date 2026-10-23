@@ -17,15 +17,19 @@ fct/
   data.py          # task / data generation (Dataset, fourier_embedding, embed, grid_targets, task_dims)
   tasks.py         # pure generators of the linear-teacher, object-action and what-where tasks
   model.py         # MLP architecture, make_net
-  train.py         # training loop with checkpoint / resume
+  train.py         # training loop with checkpoint / resume (Adam or SGLD)
+  sgld.py          # SGLD torch optimiser
   hmc.py           # SingleSiteHMC sampler, the pure single-site density pieces, linear-algebra helpers
   importance.py    # ImportanceSampler: self-normalised IS of the single-site density from the prior
   meanfield.py     # saddle-point solver (Algorithm 1) with checkpoint / resume
   analyse.py       # pure analysis functions + cached wrappers
   modularity.py    # neuron-factor mutual information, preference, MIR (pure)
+  tuning.py        # tuning_curves (MIR's bins) and select_neurons: pure helpers for the grid notebook
+  grid_report.py   # MirRecord and mir_grid: sweep records -> (layer, lambda_r, lambda_w) MIR array
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
+  spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1} (pure)
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
-  sweep.py         # the 36-setting grid: SweepConfig, expand, run_setting, status
+  sweep.py         # a grid of Config fields: SweepConfig, expand, run_setting, status, presets
   explanations.py  # MIR_EXPLANATION: the notebook's markdown/LaTeX definition of raw, corrected and chance-baseline MIR
   report.py        # what the results notebook shows: read-only load of a sweep ROOT, final-MIR table, prose from numbers
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
@@ -81,7 +85,8 @@ samples (version 1 summed it, version 2 averaged it): every train cache (`train/
 change is rejected with `StaleCacheError` the next time it is loaded; data caches are unaffected. A sweep ROOT whose
 settings were finished before the change is not silently reused: `sweep status` lists them as `stale`, `run_setting` raises
 `StaleCacheError` instead of calling them done, and the results notebook shows them with a note and no results. Use fresh cache directories or
-delete the old ones. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
+delete the old ones. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
+hashed train section, so every pre-existing Adam hash and cache is unchanged. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
 enters the hash by value.
 
 The meanfield section enters every hash as `MeanFieldConfig.hash_payload()`, not as its nested dump: the problem fields
@@ -128,6 +133,8 @@ class TrainConfig(BaseModel):
     monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
     monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
     monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1)
+    optimizer: Literal["adam", "sgld"] = "adam"
+    beta: float = 1.0                   # SGLD inverse temperature (> 0); ignored, and not hashed, for adam
 class MeanFieldConfig(BaseModel):      # the problem: the equations being solved
     n_points: int = 100                 # solve on the first n_points training points (X=x[:n_points])
     beta: float = 1e6
@@ -280,7 +287,7 @@ def compute_loss(net, x, y, weight_lambda, rate_lambda) -> tuple[Tensor, dict[st
     # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2
     # weight_l2 = sum of squares of every parameter, rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
-History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus the monitor_* keys below when monitored
+History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus grad_norm, param_msd for SGLD; plus the monitor_* keys below when monitored
 def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
           monitor: Callable[[MLP], dict[str, list]] | None = None) -> tuple[MLP, History]
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
@@ -290,6 +297,24 @@ def train_from_config(cfg: Config, dataset: Dataset, cache_dir: Path, log=print,
     # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the sweep
 def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[MLP, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
 ```
+
+SGLD (`train.optimizer = "sgld"`, `fct/sgld.py`). The `SGLD(params, lr, beta)` optimiser takes the full-batch
+Euler-Maruyama step `theta <- theta - lr * grad L + sqrt(2 * lr / beta) * N(0, I)` with `dt = lr`, where `L` is the
+unchanged `compute_loss`. Its stationary law is `p(theta) ~ exp(-beta L)` as `lr -> 0`; at finite `lr` the stationary
+variance on a quadratic of curvature `c` is `1 / (beta c (1 - lr c / 2))`. The noise is drawn from the global torch
+generator, whose state is checkpointed, so a resumed SGLD run equals an uninterrupted one exactly. `optimizer="adam"`
+(default) is unchanged. SGLD histories carry two extra per-logged-epoch keys: `grad_norm` (L2 norm of the full gradient of
+the step) and `param_msd` (squared displacement of the step, averaged over parameters; `param_msd / (2 lr)` is an
+effective temperature that tends to `1/beta` when the noise dominates the drift).
+
+Mapping to `Latex/sections/01_setup.tex`. The Latex trains `d(theta) = -grad L_tex dt + sqrt(2/beta) eta` with
+`L_tex = N/(2Pn) sum (f - y)^2 + (1/beta) P_weight + (1/beta) P_rates`, i.e. `p ~ exp(-beta L_tex)`. The repo loss is
+`L = 0.5 N mse + weight_lambda weight_l2 + rate_lambda rate_l2` and `mse` is the mean over the P*n entries, so the data
+terms agree and `beta L_tex = beta (0.5 N mse) + P_weight + P_rates`. SGLD on `L` at inverse temperature `beta` samples
+`exp(-beta L) = exp(-beta 0.5 N mse - beta weight_lambda weight_l2 - beta rate_lambda rate_l2)`. The Latex regulariser
+strengths are therefore `lambda_tex = beta * lambda_repo` (`P_weight = lambda_tex weight_l2`, likewise for the rates), and
+`weight_lambda` / `rate_lambda` stay the repo's own quantities. `beta` sets only the noise, never the loss; `lr` is the step
+size `dt`. (The mean-field code uses the same mapping, `alpha = lambda_w P D_out / beta`.)
 
 Monitor hook: `monitor(net)` is called under `torch.no_grad()` with the global RNG state restored afterwards,
 at the START of every epoch e with `e % monitor_int == 0` (after e's periodic checkpoint, before its step; so e = 0
@@ -434,7 +459,9 @@ factor_labels(factor (P,), n_bins) -> (labels, C)     # int factors relabelled 0
 mutual_information(bins, n_bins, labels, n_labels) -> (N,)   # one flat bincount for all neurons
 neuron_factor_information(rates (P,N), factors, groups=None, n_bins=10) -> FactorInformation(member_mi (N,M), group_mi (N,K), group_names)
 preference(group_mi, tol=1e-12) -> (r, dead)
-mir(r, K) -> float;  layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
+neuron_mir(r, K) -> (N,)   # per-neuron (r - 1/K)/(1 - 1/K); K = len(layer_mir(...).group_names); dead neuron -> 0
+mir(r, K) -> float         # = neuron_mir(r, K).mean()
+layer_mir(...) -> LayerMIR(mir, r, group_mi, n_dead, group_names)
 network_mir(rates (P,L,N), ...) -> list[LayerMIR]     # rates are phi(H); the caller applies phi
 layer_mir_report(rates (P,N), factors, groups=None, n_bins=10, n_shuffles=5, seed=0) -> LayerMIRReport(mir, mir_corrected, mir_chance, n_dead, n_dead_corrected)
                                                       # exactly the numbers of layer_mir (none / shuffle) and shuffled_mir, in one pass: one binning, one shuffle loop
@@ -467,7 +494,7 @@ lengths, bad dtypes, K < 2).
 
 Every `plot_*` takes `ax: Axes | None = None`, creates its own figure only if
 none is given, returns the `ax`. `fig_*` functions build multi-panel figures
-from `plot_*` and return the `Figure`. Nothing calls `plt.show()`.
+from `plot_*` (a figure that is one plot, like `fig_mir_vs_ratio`, just wraps its `plot_*`) and return the `Figure`. Nothing calls `plt.show()`.
 
 ```python
 plot_test_error(test_error, half_width, ax=None)      # notebook cell 13 left (LogNorm, jet)
@@ -480,6 +507,8 @@ plot_training_history(history, ax=None)               # mse / loss vs epoch, log
 fig_solver_history(history) -> Figure                 # the notebook's plot_history dashboard, plus ESS / weight-share panels;
                                                       # absent, all-None and all-NaN columns (the other sampler's diagnostics) get no panel
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
+plot_kernel_vs_distance(space, ax=None); plot_embedding(space, ax=None)   # spatial prior of one LayerSpace: K_ij vs torus distance with the wrapped analytic curve; unit positions (ring d = 1, plane d = 2, legend outside the axis)
+fig_kernel(space: LayerSpace) -> Figure               # 2 x 2: K_pre, K_post, K vs distance, positions; ValueError for d > 2
 plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_scale=True) -> Figure   # theory vs net kernels per layer; shared_scale=False gives each panel its own colour scale
 
 # Result figures. `history` is the train.py history extended by the monitor with the keys below.
@@ -492,6 +521,11 @@ plot_mir_history(history, ax=None, which="raw", legend=True)   # one solid line 
                                                       # which="raw": monitor_mir plus monitor_mir_chance dotted in the layer colour, y fixed to [-0.05, 1.05];
                                                       # "corrected": monitor_mir_corrected, same range (the corrected MIR is >= 0 up to round-off; the lower limit extends only if a value goes below -0.05)
 plot_dead_neurons(history, ax=None, legend=True)      # monitor_n_dead_corrected per layer vs monitor_epoch
+plot_neuron_tuning(curves, neuron, mir, latent_names, ax=None); fig_tuning(curves, neuron_indices, mir_per_neuron, latent_names) -> Figure
+                                                       # one panel per neuron, one curve per latent (LATENT_COLORS, not the layer colours), common rate axis
+plot_mir_matrix(values (n_r,n_w), lambda_r_values, lambda_w_values, title, ax, vmin, vmax)   # phase diagram: origin="lower", log tick labels, NaN grey
+fig_mir_matrix(lambda_r_values, lambda_w_values, mir_by_layer (L,n_r,n_w)) -> Figure         # one per layer, shared _mir_colour_range + colourbar
+plot_mir_vs_ratio(records: Iterable[MirRecord], ax=None, legend=True); fig_mir_vs_ratio(records) -> Figure   # MIR vs lambda_r/lambda_w, log x, colour by layer
 fig_mir_history(history, title="") -> Figure          # three panels sharing epoch: raw (+ baseline, legend), corrected, dead neurons
 plot_prediction_scatter(y_true, y_pred, ax=None, r2=None)   # all entries, identity line; r2 (computed by the caller) shown in a legend below the axis as "R² on these examples"
 plot_paired_bars(y_true, y_pred, labels, ax=None, threshold=None)   # true / predicted value per output; artists labelled, the caller makes the (figure-level) legend
@@ -515,34 +549,64 @@ different number of layers in different monitor calls.
 
 ## sweep.py
 
-The grid of the study (3 tasks x hidden layers {1,3,5} x phi {tanh,relu} x rate_lambda {0,1e-3} = 36 settings) in one
-place, so SLURM array jobs and local checks share a code path. Layout under a sweep `ROOT`:
+A sweep is a grid over any `Config` fields, in one place so SLURM array jobs and local checks share a code path. The shared
+settings (sizes, optimiser, monitor, seeds, task parameters) are the base `Config`; `grid` lists the axes that vary. Layout under a
+sweep `ROOT`:
 
 ```
-ROOT/sweep.json                      # SweepConfig, written by `sweep init`
-ROOT/<task>/L{L}_{phi}_r{rate}/      # one normal fct cache dir per setting, e.g. what_where/L3_relu_r0.001, linear_teacher/L1_tanh_r0
+ROOT/sweep.json                          # SweepConfig, written by `sweep init`
+ROOT/<task>/s{index:04d}_<label>/        # grid sweeps: one normal fct cache dir per setting, e.g. linear_teacher/s0001_L1_phitanh_rate_lambda1e-06_weight_lambda0.001
+ROOT/<task>/s.../setting.json            # {"index": 7, "grid_hash": "...", "axes": {"net.L": 2, ...}}, written by run_setting beside config.json
+ROOT/<task>/L{L}_{phi}_r{rate}/          # sweep.json without `grid` (the modularity grid): the original names, e.g. what_where/L3_relu_r0.001
 ```
+
+The index makes a directory name unique (`:g` would print two close floats alike); the label (the last part of each axis path
+and its value, characters outside letters, digits and `._+-` replaced by `-`) is for people. The index is zero-padded to
+`INDEX_WIDTH = 4` digits so names sort in index order; `expand` refuses a grid of more than 10**4 settings. `setting.json` lets a
+notebook find a setting from its axis values (`find_setting_dir`) without recomputing the grid.
 
 ```python
 SWEEP_TASKS = ("linear_teacher", "object_action", "what_where"); LAYERS = (1, 3, 5); PHIS = ("tanh", "relu"); RATE_LAMBDAS = (0.0, 1e-3)
-class Setting(NamedTuple): task: str; L: int; phi: str; rate_lambda: float
+MODULARITY_GRID = {"data.task": SWEEP_TASKS, "net.L": LAYERS, "net.phi": PHIS, "train.rate_lambda": RATE_LAMBDAS}   # used when sweep.json has no grid
+@dataclass(frozen=True) class Setting: index: int; axes: dict[axis, value] (grid order); task: str; relpath: Path
+    # consumers read axes explicitly, e.g. setting.axes["net.L"]
+MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda"); SWEEP_OWNED_AXES: dict[axis, the sweep field to change instead]
 class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
-                             # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto"
-    # task parameters are validated at load time by building each task's DataConfig; weight_lambda is the TrainConfig default (1e-4)
-def preset(name: str) -> SweepConfig                     # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full": N=256, P=4096, 15000 epochs (placeholders to tune); ValueError otherwise
+                             # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
+                             # task = "linear_teacher" (the base task, used unless data.task is an axis), grid: dict[str, list] | None = None
+    # grid: axis = dotted Config path (net.L, net.phi, train.rate_lambda, train.weight_lambda, data.task, ...), values = explicit lists; an axis
+    # overrides the base value (net.N over N, train.lr over lr, ...), except the fields the sweep owns, which are rejected: data.P, data.D_in,
+    # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles (change the
+    # sweep field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
+    # build the same Config, so [0, 0.0] is a repeat), then every combination is built into a Config, so a bad axis name or value fails
+    # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the TrainConfig default (1e-4) unless it is an axis
+def preset(name: str, n_lambda: int | None = None) -> SweepConfig   # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full" and "modularity": N=256, P=4096, 15000 epochs (placeholders to tune), the modularity grid;
+                                                                    # "phase_transition": the sizes of "full" + phase_transition(n_lambda); n_lambda is required there and rejected elsewhere; ValueError otherwise
+def phase_transition(n_lambda) -> SweepConfig             # linear teacher; grid net.L [1,2], net.phi [tanh, relu], train.rate_lambda and train.weight_lambda both np.logspace(-6, 0, n_lambda): 4 * n_lambda**2 settings
 def save_sweep(sweep, root) / load_sweep(root) -> SweepConfig   # ROOT/sweep.json; load raises FileNotFoundError naming the path
-def expand(sweep) -> list[Setting]                       # itertools.product(SWEEP_TASKS, LAYERS, PHIS, RATE_LAMBDAS): task slowest, rate_lambda fastest; index i is stable and independent of the preset
-def get_setting(sweep, index) -> Setting                 # SweepError (a ValueError) "index i is out of range; valid indices are 0..35"
-def setting_dir(root, setting) -> Path                   # ROOT/<task>/L{L}_{phi}_r{rate:g}
+def expand(sweep) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given sweep.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow a grid in a fresh ROOT)
+def get_setting(sweep, index) -> Setting                 # SweepError (a ValueError) "index i is out of range; valid indices are 0..N-1"
+def setting_dir(root, setting) -> Path                   # ROOT / setting.relpath (see Layout)
 def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep
-def setting_config(sweep, setting) -> Config             # data, net (seed = seeds.net), train (rate_lambda = the swept value, monitor_* from the sweep), dtype, device
+def setting_config(sweep, setting) -> Config             # base config for the setting's task (net seed = seeds.net, monitor_* from the sweep) with each axis value written over it
 def setting_status(root, sweep, setting) -> "done" | "partial" | "missing" | "stale"   # done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stale = a final.pt with another hash; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
+def grid_hash(sweep) -> str                               # short hash of the built values of every axis (so [0, 1e-3] == [0.0, 1e-3]) plus the base task unless data.task is an axis; stored in setting.json
+def read_setting(directory, sweep) -> {"index", "grid_hash", "axes"}   # a setting directory's setting.json; SweepError naming the directory if it was written under another grid or has no grid hash
+def built_values(sweep) -> {axis: [values as the built Config holds them]}   # used by grid_hash and the directory labels, so a value has one spelling in both
+def find_setting_dir(root, sweep, values) -> Path         # the one run setting of `sweep` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
+                                                          # a subset of the axes is enough if unambiguous); only the sweep's own directories are considered; LookupError if none, several, or an unknown axis
+def has_settings(root) -> bool                            # ROOT already holds a setting directory; `sweep init` refuses to write a new sweep.json there without --force
 def run_setting(sweep, index, root, log=print) -> None
-    # first validates/writes config.json (SweepError if an existing one differs: the sweep changed under existing artefacts; this
+    # first validates/writes config.json and setting.json (SweepError if an existing one differs: the sweep changed under existing artefacts; this
     # check comes BEFORE the done check, so a changed sweep raises even for a done setting), then returns at once if done,
     # else get_dataset + train_from_config(cfg, dataset, dir, log, monitor=make_mir_monitor(dataset, cfg)); resumes a partial run exactly (see train.py)
 ```
+
+CLI: `python -m fct sweep init ROOT --preset phase_transition --n-lambda 8 [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`.
+`--set` overrides a shared entry by dotted key; `--axis PATH=[values]` replaces or adds a grid axis (JSON list; the modularity presets have no editable axes and reject it); `--set grid...` is rejected (use `--axis`). `sweep count|list|status|run --index i` all read the same `expand`, and `jobs/fct_sweep.sh` takes the array size
+from `sweep count`. `lrtune.py` and `notebooks/build_modularity.py` are written for the modularity grid (they read
+`setting.axes["net.L"]`, `["net.phi"]`, `["train.rate_lambda"]`); `report.py` needs those three axes too (see below).
 
 All settings share the seeds, so they differ only in the swept axes. The history of a finished setting has the `monitor_*` keys of
 monitor.py. The monitor runs at epochs 0, k*monitor_int for every k with k*monitor_int < n_epochs, and n_epochs, so
@@ -566,7 +630,7 @@ the rates, rank bins, plug-in MI, preference, MIR, dead neurons, the raw MIR and
 baseline and the corrected MIR, and how to read the plots and tables; it restates `fct/modularity.py`, and a test checks its
 numbers that have a source in the code (dead threshold `modularity.DEAD_TOL`, noise factor `modularity.NOISE_FACTOR`, the
 `TrainConfig` monitor defaults) are filled in from it, and tests recompute the quoted floor examples and check the `$`/`$$` equations are balanced), a summary cell per task, then a cell per setting, each selecting its setting by name with
-`find_result(RESULTS, task, L, phi, rate)`, so a reordered grid fails loudly instead of mislabelling), and
+`find_result(RESULTS, task, {"net.L": L, "net.phi": phi, "train.rate_lambda": rate})`, so a reordered grid fails loudly instead of mislabelling), and
 `execute_notebook(nb, root)` runs a deep copy in a fresh kernel (no timing metadata, so equal runs give equal notebooks) after
 `with_root` has put `ROOT = '<root>'` into the tagged parameter cell; the source `nb` stays output-free. In the source the cell
 is `ROOT = None`, which falls back to `$FCT_SWEEP_ROOT`. `python notebooks/build_modularity.py ROOT` writes the executed
@@ -585,7 +649,8 @@ which carries all logic and tests. Only the source notebook (`--no-execute`, no 
     # to provisional rows (the MIR's epoch m is not the checkpoint's); row_status() gives draw.py's "provisional"
 
 def sweep_root_from_env() -> Path               # $FCT_SWEEP_ROOT; RuntimeError if unset
-def load_results(root) -> list[SettingResult]   # 36 entries in grid order; FileNotFoundError if no sweep.json
+def load_results(root) -> list[SettingResult]   # one entry per setting in grid order (36 for the modularity grid); FileNotFoundError if no sweep.json; ValueError if the grid lacks net.L, net.phi or train.rate_lambda
+    # (the report supports the modularity grid; a grid with those axes plus others, like phase_transition, loads, and `setting_label` shows every axis so labels stay distinct)
     # read-only: nothing is generated, cached or written under ROOT (a running job may be writing to it); settings are read on the CPU,
     # validated against the config rebuilt from sweep.json. done: from final.pt (StaleCacheError if written under another config).
     # partial: from the latest checkpoint via train.load_latest_checkpoint -> the same data as a done setting (history exactly as
@@ -595,7 +660,7 @@ def load_results(root) -> list[SettingResult]   # 36 entries in grid order; File
     # dataset file gives a note "dataset not readable". Exceptions that are not about a bad file (a bug in the model code) propagate.
     # A dataset file that is missing (done or partial) also gives "partial" with a note, no data. No checkpoint: "missing".
     # A checkpoint at epoch 0 or without a monitor entry loads (no loss curve / MIR yet; the prose says so).
-def find_result(results, task, L, phi, rate_lambda) -> SettingResult    # ValueError if absent
+def find_result(results, task, axes) -> SettingResult    # axes = {dotted path: value} of every axis but the task; LookupError if none or several match
 def final_mir(results, task) -> FinalMIR        # last monitor call; ValueError for a done setting without monitor history
 def mir_table_markdown(fm) / summary_text(fm) / overview_text(results) / setting_text(result)   # prose generated from the numbers
     # summary_text: "N of M settings finished, K provisional (still running)"; extremes of the corrected MIR over layer-cells with ties
@@ -703,3 +768,49 @@ bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct swe
 `--index` (digits only, read as base 10) applies to `--submit`/`--dry-run` only; a comma in the project or python path is rejected
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
+
+## spatial.py (spatial embeddings and weight kernels)
+
+Every unit of the input, each hidden layer and the output gets a position on the torus `[0, box)^d` (default `d = 1`, a ring).
+The weight prior of layer l is `K^l = K^post (x) K^pre` and the penalty is `M = K^{-1}`, built per factor. Not yet part of
+`Config`; the penalty is applied in a later item. The maths (wrapped Gaussian, truncation, floor, orientation of the readout)
+is stated once, in the module docstring of `fct/spatial.py`.
+
+```python
+# config (strict pydantic, like fct.config)
+EmbeddingSpec(kind="grid"|"random", shape=None, seed=0)   # grid shape must multiply to n, None -> n points for d = 1; random takes no shape
+KernelSpec(length_scale=0.1, amplitude=1.0)               # length_scale in the same units as box
+PopulationSpec(embedding, kernel)
+SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6)   # hidden 1..L share `hidden`; grid in d > 1 needs a shape
+
+# pure computation (float64, CPU)
+make_embedding(spec, n, d, box, index=0) -> Embedding(positions (n, d), box)   # local generator: global RNG untouched
+torus_distance(x, y, box) -> (n, m)                       # Euclidean norm of per-axis minimum-image differences (figure only)
+periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post, n_pre)   # wrapped Gaussian, diagonal = amplitude
+wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
+penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, fraction_floored, n_negative, cond_before, cond_after))
+build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
+```
+
+Populations are indexed 0 (input, m), 1..L (hidden 1..hidden L, N), L + 1 (output, n_out); layer l maps population l to l + 1,
+matching `MLP`: U is layer 0, J_1..J_{L-1} the hidden layers, the readout layer L. The post `Population` of layer l is the same
+object as the pre `Population` of layer l + 1 (embedding, K, M computed once per population object). A random
+embedding draws from a generator seeded `embedding.seed * 1000 + population index` (at most 1000 populations),
+so populations differ, runs repeat and no two (seed, index) pairs collide. `MLP.V` is stored (pre, post): for
+layer L the weight in (post, pre) orientation is `V.T`.
+
+The floor. `M` is the inverse of `K` with eigenvalues floored at `min_rel_eig` times the largest. A smooth kernel has many
+eigenvalues below that: at the defaults (`length_scale = 0.1`, `min_rel_eig = 1e-6`) 83% of a 100-unit ring's eigenvalues are
+floored. So the floor is where the prior's near-zero-variance directions are capped, and it defines `M` on that subspace;
+`FloorReport` gives the floored fraction and `n_negative` (eigenvalues below `-1e-10` times the largest, which is an error:
+`penalty_matrix` raises). Whether to replace the floor by a nugget, `M = (K + sigma^2 I)^{-1}`, is pending a PI decision.
+
+## tuning.py, grid_report.py and the grid figures
+
+Sweep-independent helpers for the phase-transition notebook; all pure functions on plain inputs.
+
+- `tuning.tuning_curves(rates (P,N), factors (P,K), n_bins) -> TuningCurves(mean, sem, centres, count)`: mean rate per neuron in the bins of each latent, other latents marginalised. The bins are exactly the MIR's (`modularity.factor_labels` per latent): a floating latent is rank-binned into `n_bins` (equal-count when its values are distinct; ties share a bin), an integer latent is categorical with one bin per level and its `centres` are the level values. Arrays are as wide as the largest latent's bin count; an empty or padded bin is NaN, as is the SEM of a bin with fewer than 2 samples. `factors` is one tensor, so a call is all-categorical (integer dtype) or all-float; integer factors cast to float are rank-binned with interior empty bins, so pass them as integers. `mean`/`sem` are `(N,K,B)`, `centres`/`count` `(K,B)`. The SEM uses sums of squares about each neuron's global mean so a large rate offset does not cancel it to 0.
+- `tuning.select_neurons(mir_per_neuron, n, order, seed)`: `order` in `random` (seeded), `mir_ascending`, `mir_descending`; `n` outside `1..N`, unknown order or NaN is an error.
+- `modularity.neuron_mir(r, K)`: per-neuron `(r - 1/K)/(1 - 1/K)` from `LayerMIR.r`; `mir` is its mean.
+- `grid_report.mir_grid(records: Iterable[MirRecord], lambda_r_values, lambda_w_values, n_layers) -> (n_layers, n_r, n_w)`, `MirRecord(lambda_r, lambda_w, layer, mir)` with 0-based integer layers; NaN where missing (a layer without records is a NaN plane). Duplicate cells, off-grid lambdas (matched to rtol 1e-9), layers outside `[0, n_layers)`, non-finite MIR, near-duplicate grid values and empty input raise.
+- `draw` figures: see the draw.py block above. The lambda axes of `fig_mir_matrix` and `fig_mir_vs_ratio` must be positive (log scale).

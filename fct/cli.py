@@ -46,9 +46,12 @@ from fct.meanfield import load_meanfield, net_kernels, run_meanfield
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
+    GRID_PRESETS,
+    PRESET_NAMES,
     SweepConfig,
     SweepError,
     expand,
+    has_settings,
     load_sweep,
     preset,
     run_setting,
@@ -312,12 +315,45 @@ def _load_sweep(root: Path) -> SweepConfig:
         raise CliError(f"{path} is not a valid sweep config: {err}") from err
 
 
+def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
+    """Replace (or add) grid axes in a dumped sweep tree: each item is `config.path=[v1,v2]`."""
+    if axes and tree["grid"] is None:
+        raise CliError(
+            f"preset {preset_name!r} is the modularity grid, which has no editable axes; "
+            f"--axis needs one of {list(GRID_PRESETS)}"
+        )
+    for item in axes:
+        key, sep, text = item.partition("=")
+        values = _parse_value(text)
+        if not key or not sep or not isinstance(values, list):
+            raise CliError(f"--axis expects config.path=[value, ...], got {item!r}")
+        tree["grid"][key] = values
+
+
+def _reject_grid_overrides(overrides: Sequence[str]) -> None:
+    for item in overrides:
+        key = item.partition("=")[0]
+        if key == "grid" or key.startswith("grid."):
+            raise CliError(f"--set {key}: the grid is edited with --axis PATH=[values]")
+
+
 def cmd_sweep_init(args: argparse.Namespace) -> int:
     path = sweep_path(args.root)
     if path.exists() and not args.force:
         raise CliError(f"{path} already exists; pass --force to overwrite it")
+    if has_settings(args.root) and not args.force:
+        raise CliError(
+            f"{args.root} already holds setting directories, which belong to the old sweep.json; "
+            "use a fresh ROOT, or pass --force to write a new sweep.json beside them"
+        )
+    _reject_grid_overrides(args.set)
     try:
-        tree = _override_tree(preset(args.preset).model_dump(), args.set)
+        base = preset(args.preset, args.n_lambda)
+    except ValueError as err:  # a missing or unwanted --n-lambda
+        raise CliError(str(err)) from err
+    try:
+        tree = _override_tree(base.model_dump(), args.set)
+        _override_axes(tree, args.axis, args.preset)
         sweep = SweepConfig.model_validate(tree)
     except ValidationError as err:
         raise CliError(str(err)) from err
@@ -394,7 +430,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> int:
 
 
 def _add_sweep_parser(sub) -> None:
-    p_sweep = sub.add_parser("sweep", help="the 36-setting grid", description="the 36-setting grid")
+    p_sweep = sub.add_parser("sweep", help="a grid of runs", description="a grid of runs")
     actions = p_sweep.add_subparsers(dest="action", required=True)
 
     def add(name: str, func, help_: str) -> argparse.ArgumentParser:
@@ -404,15 +440,26 @@ def _add_sweep_parser(sub) -> None:
         return p
 
     p_init = add("init", cmd_sweep_init, "write ROOT/sweep.json from a preset")
-    p_init.add_argument("--preset", choices=["tiny", "full"], default="tiny")
+    p_init.add_argument("--preset", choices=PRESET_NAMES, default="tiny")
+    p_init.add_argument(
+        "--n-lambda", type=int, default=None, metavar="N_LAMBDA",
+        help=f"points per log-spaced lambda axis (required by {list(GRID_PRESETS)}, else not allowed)",
+    )  # fmt: skip
+    p_init.add_argument(
+        "--axis", action="append", default=[], metavar="PATH=[V,...]",
+        help="replace or add a grid axis, e.g. --axis net.L=[1,2,3] (repeatable)",
+    )  # fmt: skip
     p_init.add_argument(
         "--set", action="append", default=[], metavar="KEY=VALUE",
         help="override a sweep entry by dotted key, e.g. --set n_epochs=100 (repeatable)",
     )  # fmt: skip
-    p_init.add_argument("--force", action="store_true", help="overwrite an existing sweep.json")
+    p_init.add_argument(
+        "--force", action="store_true",
+        help="overwrite an existing sweep.json, and write one beside existing setting directories",
+    )  # fmt: skip
     add("list", cmd_sweep_list, "print `index directory` for every setting")
     add("count", cmd_sweep_count, "print the number of settings")
-    add("status", cmd_sweep_status, "print done / partial / missing for every setting")
+    add("status", cmd_sweep_status, "print done / partial / missing / stale for every setting")
     p_run = add("run", cmd_sweep_run, "train one setting (--index) or all of them in order")
     p_run.add_argument("--index", type=int, default=None, help="setting index (see `sweep list`)")
 
