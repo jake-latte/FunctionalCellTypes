@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.colors import LogNorm
@@ -33,6 +34,7 @@ from fct.analyse import (
 )
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
+from fct.spatial import LayerSpace, Population, torus_distance, wrapped_gaussian_profile
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 
 ArrayLike = Tensor | np.ndarray | Sequence[float]
@@ -61,6 +63,11 @@ _GREY = "#52514e"  # reference lines and the trained-network overlay
 FIG_WIDTH = 13.0  # inches; the width of the full-width results figures
 HEATMAP_WIDTH = FIG_WIDTH + 1  # the shared colourbar sits outside the panels
 ANNOTATION_SIZE = 12  # numbers written inside heatmap cells
+KERNEL_FIG_SIZE = (0.7 * FIG_WIDTH, 9)  # inches; fig_kernel's 2 x 2 panels
+KERNEL_CURVE_POINTS = 200  # samples of the analytic curve in the K-versus-distance panel
+KERNEL_MARKER_AREA = 6  # scatter marker area (points^2) for the K_ij cloud
+EMBEDDING_MARKER_AREA = 14  # scatter marker area for the unit positions
+RING_RADIUS_PRE, RING_RADIUS_POST = 1.0, 0.8  # d = 1: the pre ring outside, the post ring inside
 PROVISIONAL_COLOR = "#e69f00"  # orange: distinct from viridis and from the grey of missing cells
 PROVISIONAL_HATCH = "//"  # hatch pattern over the cells of a provisional heatmap row
 STYLE_RC = {
@@ -1134,4 +1141,110 @@ def fig_mir_heatmaps(
         fig.suptitle(title)
     if PROVISIONAL in row_status:
         fig.supxlabel(PROVISIONAL_NOTE)
+    return fig
+
+
+# --------------------------------------------------------------------------- spatial kernels
+
+
+def _population_color(population: Population, space: LayerSpace) -> str:
+    """The pre factor takes LAYER_COLORS[0], the post factor LAYER_COLORS[1]."""
+    return LAYER_COLORS[0] if population is space.pre else LAYER_COLORS[1]
+
+
+def plot_kernel_vs_distance(space: LayerSpace, ax: Axes | None = None) -> Axes:
+    """Every K_ij of the pre and post factors against its torus distance d_ij (points), with
+    the analytic wrapped Gaussian along one axis as a line for each factor (exactly K for d = 1;
+    for d = 2 the points scatter around it because K depends on both axis differences)."""
+    ax = _get_ax(ax)
+    for pop in (space.pre, space.post):
+        x = pop.embedding.positions
+        color = _population_color(pop, space)
+        dist = torus_distance(x, x, pop.embedding.box).ravel()
+        ax.scatter(
+            _np(dist),
+            _np(pop.K).ravel(),
+            s=KERNEL_MARKER_AREA,
+            alpha=0.4,
+            color=color,
+            rasterized=True,
+        )
+        # the profile is a function of the per-axis minimum-image distance, so the curve is only
+        # meaningful up to box / 2 (in d > 1 the Euclidean torus distance reaches box * sqrt(d) / 2)
+        d_max = min(dist.max().item(), pop.embedding.box / 2)
+        d_line = torch.linspace(0, d_max, KERNEL_CURVE_POINTS, dtype=x.dtype)
+        curve = wrapped_gaussian_profile(
+            d_line, pop.kernel.length_scale, pop.embedding.box, pop.kernel.amplitude
+        )
+        ax.plot(
+            _np(d_line),
+            _np(curve),
+            color=color,
+            label=f"{pop.name}: length_scale = {pop.kernel.length_scale:g}",
+        )
+    ax.set_xlabel("torus distance")
+    ax.set_ylabel("K_ij")
+    ax.legend(frameon=False)
+    return ax
+
+
+def _plot_ring(population: Population, radius: float, color: str, ax: Axes) -> None:
+    angle = 2 * np.pi * _np(population.embedding.positions)[:, 0] / population.embedding.box
+    ax.scatter(
+        radius * np.cos(angle),
+        radius * np.sin(angle),
+        s=EMBEDDING_MARKER_AREA,
+        color=color,
+        label=population.name,
+    )
+
+
+def _check_drawable_dimension(space: LayerSpace) -> int:
+    """The dimension d of the space, if it can be drawn (1 or 2)."""
+    d = space.pre.embedding.positions.shape[1]
+    if d > 2:
+        raise ValueError(f"can only draw embeddings for d = 1 or 2, got d = {d}")
+    return d
+
+
+def plot_embedding(space: LayerSpace, ax: Axes | None = None) -> Axes:
+    """Unit positions of the pre and post populations: on a ring (d = 1, pre outside, post
+    inside) or on the plane (d = 2). The legend sits outside the axis, to the right, so the
+    figure needs constrained layout (as `fig_kernel` uses) to leave room for it."""
+    d = _check_drawable_dimension(space)
+    ax = _get_ax(ax)
+    if d == 1:
+        _plot_ring(space.pre, RING_RADIUS_PRE, LAYER_COLORS[0], ax)
+        _plot_ring(space.post, RING_RADIUS_POST, LAYER_COLORS[1], ax)
+        ax.set_aspect("equal")
+        ax.set_axis_off()
+    elif d == 2:
+        for pop in (space.pre, space.post):
+            xy = _np(pop.embedding.positions)
+            ax.scatter(
+                xy[:, 0],
+                xy[:, 1],
+                s=EMBEDDING_MARKER_AREA,
+                color=_population_color(pop, space),
+                label=pop.name,
+            )
+        ax.set_xlim(0, space.pre.embedding.box)
+        ax.set_ylim(0, space.pre.embedding.box)
+        ax.set_aspect("equal")
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    return ax
+
+
+@_styled
+def fig_kernel(space: LayerSpace) -> Figure:
+    """One layer's spatial prior: K_pre and K_post as matrices, K against torus distance with
+    the analytic curve, and the unit positions."""
+    _check_drawable_dimension(space)
+    fig, axes = plt.subplots(2, 2, figsize=KERNEL_FIG_SIZE, layout="constrained")
+    plot_kernel(space.pre.K, ax=axes[0, 0], title=f"K_pre ({space.pre.name})")
+    plot_kernel(space.post.K, ax=axes[0, 1], title=f"K_post ({space.post.name})")
+    plot_kernel_vs_distance(space, ax=axes[1, 0])
+    plot_embedding(space, ax=axes[1, 1])
+    axes[1, 1].set_title("positions")
+    fig.suptitle(f"layer {space.layer}: K = K_post (x) K_pre")
     return fig

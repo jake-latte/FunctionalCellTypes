@@ -23,6 +23,7 @@ fct/
   analyse.py       # pure analysis functions + cached wrappers
   modularity.py    # neuron-factor mutual information, preference, MIR (pure)
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
+  spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1} (pure)
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   sweep.py         # the 36-setting grid: SweepConfig, expand, run_setting, status
   explanations.py  # MIR_EXPLANATION: the notebook's markdown/LaTeX definition of raw, corrected and chance-baseline MIR
@@ -429,6 +430,8 @@ plot_neuron_map(map2d, half_width, ax=None); fig_neuron_maps(maps, half_width, n
 plot_training_history(history, ax=None)               # mse / loss vs epoch, log y
 fig_solver_history(history) -> Figure                 # the notebook's plot_history dashboard
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
+plot_kernel_vs_distance(space, ax=None); plot_embedding(space, ax=None)   # spatial prior of one LayerSpace: K_ij vs torus distance with the wrapped analytic curve; unit positions (ring d = 1, plane d = 2, legend outside the axis)
+fig_kernel(space: LayerSpace) -> Figure               # 2 x 2: K_pre, K_post, K vs distance, positions; ValueError for d > 2
 plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_scale=True) -> Figure   # theory vs net kernels per layer; shared_scale=False gives each panel its own colour scale
 
 # Result figures. `history` is the train.py history extended by the monitor with the keys below.
@@ -652,3 +655,39 @@ bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct swe
 `--index` (digits only, read as base 10) applies to `--submit`/`--dry-run` only; a comma in the project or python path is rejected
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
+
+## spatial.py (spatial embeddings and weight kernels)
+
+Every unit of the input, each hidden layer and the output gets a position on the torus `[0, box)^d` (default `d = 1`, a ring).
+The weight prior of layer l is `K^l = K^post (x) K^pre` and the penalty is `M = K^{-1}`, built per factor. Not yet part of
+`Config`; the penalty is applied in a later item. The maths (wrapped Gaussian, truncation, floor, orientation of the readout)
+is stated once, in the module docstring of `fct/spatial.py`.
+
+```python
+# config (strict pydantic, like fct.config)
+EmbeddingSpec(kind="grid"|"random", shape=None, seed=0)   # grid shape must multiply to n, None -> n points for d = 1; random takes no shape
+KernelSpec(length_scale=0.1, amplitude=1.0)               # length_scale in the same units as box
+PopulationSpec(embedding, kernel)
+SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6)   # hidden 1..L share `hidden`; grid in d > 1 needs a shape
+
+# pure computation (float64, CPU)
+make_embedding(spec, n, d, box, index=0) -> Embedding(positions (n, d), box)   # local generator: global RNG untouched
+torus_distance(x, y, box) -> (n, m)                       # Euclidean norm of per-axis minimum-image differences (figure only)
+periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post, n_pre)   # wrapped Gaussian, diagonal = amplitude
+wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
+penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, fraction_floored, n_negative, cond_before, cond_after))
+build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
+```
+
+Populations are indexed 0 (input, m), 1..L (hidden 1..hidden L, N), L + 1 (output, n_out); layer l maps population l to l + 1,
+matching `MLP`: U is layer 0, J_1..J_{L-1} the hidden layers, the readout layer L. The post `Population` of layer l is the same
+object as the pre `Population` of layer l + 1 (embedding, K, M computed once per population object). A random
+embedding draws from a generator seeded `embedding.seed * 1000 + population index` (at most 1000 populations),
+so populations differ, runs repeat and no two (seed, index) pairs collide. `MLP.V` is stored (pre, post): for
+layer L the weight in (post, pre) orientation is `V.T`.
+
+The floor. `M` is the inverse of `K` with eigenvalues floored at `min_rel_eig` times the largest. A smooth kernel has many
+eigenvalues below that: at the defaults (`length_scale = 0.1`, `min_rel_eig = 1e-6`) 83% of a 100-unit ring's eigenvalues are
+floored. So the floor is where the prior's near-zero-variance directions are capped, and it defines `M` on that subspace;
+`FloorReport` gives the floored fraction and `n_negative` (eigenvalues below `-1e-10` times the largest, which is an error:
+`build_spaces` raises). Whether to replace the floor by a nugget, `M = (K + sigma^2 I)^{-1}`, is pending a PI decision.

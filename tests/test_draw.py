@@ -12,6 +12,7 @@ from fct import draw
 from fct.analyse import ExampleOutputs, GridPredictions, LayerPCA
 from fct.config import DataConfig
 from fct.data import Dataset
+from tests.draw_helpers import assert_png as _assert_png
 
 P_GRID, L, N, K, P_TRAIN = 4, 2, 3, 3, 6
 
@@ -27,12 +28,6 @@ def _randn(*shape, seed=0):
 
 def _has_artist(ax):
     return bool(ax.images or ax.collections or ax.lines or ax.patches)
-
-
-@pytest.fixture(autouse=True)
-def close_figures():
-    yield
-    plt.close("all")
 
 
 @pytest.fixture
@@ -109,12 +104,6 @@ def _training_history():
         "rate_l2": n.tolist(),
         "loss": (2.0 / n).tolist(),
     }
-
-
-def _assert_png(fig, tmp_path):
-    out = tmp_path / "fig.png"
-    fig.savefig(out)
-    assert out.stat().st_size > 0
 
 
 def _plot_calls(grid, pca, dataset):
