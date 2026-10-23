@@ -36,27 +36,28 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
 | add-modularity-metrics | `fct/modularity.py`: rank binning, plug-in MI (nats), preference r, MIR, dead neurons, shuffled-label baseline, shuffle-based bias correction |
 | add-result-plots | `analyse.py` example outputs / decoders / `prediction_report` (both R^2 conventions); `draw.py` loss curves, MIR history (raw, corrected, chance, dead counts), per-task example figures |
 
-## State (2026-10-21, evening): all items merged; STOPPED for the PI's review
-Merged, each reviewed by fresh correctness + style reviewers: task generators, modularity metrics, result
-plots, MIR training monitor, sweep runner (`fct/sweep.py`), SLURM script (`jobs/fct_sweep.sh`, never
-submitted), results notebook (`fct/report.py`, `notebooks/build_modularity.py`, source notebook only),
-plot feedback (larger figures, MIR explanation in `fct/explanations.py`), partial results (running
-settings shown from their latest checkpoint, provisional), learning-rate tuning (`fct/lrtune.py`,
-`docs/lr_tuning.md`: lr = 1e-3 accepted by the PI, provisional), and the loss change.
-LOSS CHANGE (PI decisions): the rate penalty was averaged over P (`LOSS_VERSION = 2`) and is summed over P again
-(`LOSS_VERSION = 3`, issue `remove-rate-penalty-p-scaling`), the default
-`weight_lambda` is 1e-4, `rate_lambda` unchanged, lr 1e-3 not re-tuned. Every earlier train, sweep and
-meanfield cache is stale (`sweep status` shows `stale`). Under version 2 `what_where` learned and the
-averaged penalty at `rate_lambda = 1e-3` was small (see docs/issues/archive/average-rate-penalty.md); those
-results, and the tiny-pipeline results below, were measured under version 2 and are stale by construction.
-`run-tiny-pipeline` is `in review`: tiny preset 36/36 on CPU, 3 settings on the T1000, notebook executed
-into git-ignored `tmp/modularity.ipynb`. Nothing was submitted.
-Next (PI): review; decide the `rate_lambda` values for the sweep (deferred); set the
-`full` preset sizes in `fct/sweep.py` (N=256, P=4096, 15000 epochs are placeholders); tune the SBATCH
-cpus/mem/time in `jobs/fct_sweep.sh`; `--dry-run`; submit. Build the notebook on the real ROOT with
-`python notebooks/build_modularity.py ROOT` (it can run while jobs are still running).
+## State (2026-10-23): phase 2 under way; the first program is complete and awaits the PI
+The first program (task generators, MIR, sweep runner, SLURM script never submitted, notebook, lr tuning,
+loss change to LOSS_VERSION 3 = rate penalty summed over P, `weight_lambda` 1e-4, mean-field tilt defaulting
+to `rate_lambda`) is fully merged; its items are in `docs/issues/archive/`. Nothing was submitted. Still for
+the PI: review the tiny results (`tmp/modularity.ipynb`), decide the `rate_lambda` values, set the `full`
+preset sizes in `fct/sweep.py`, tune the SBATCH lines in `jobs/fct_sweep.sh`, `--dry-run`, submit.
+
+Phase 2 (ten items, plans confirmed by the PI 2026-10-22; current state in `docs/issues/*.md`):
+- merged 2026-10-23, each reviewed by a fresh reviewer with the record in its merge commit:
+  `remove-rate-penalty-p-scaling`, `generic-grid-sweep` (arbitrary grids, `phase_transition` preset,
+  `s{index}_label` directories), `spatial-kernels` (`fct/spatial.py`), `tuning-and-grid-plot-helpers`
+  (`fct/tuning.py`, `fct/grid_report.py`, grid figures), `sgld-training` (`train.optimizer`, `train.beta`).
+- in progress on worker branches: `importance-weighted-sampler`, `grid-results-notebook`,
+  `spatial-weight-prior-training` (branches named after the items, worktrees in `.claude/worktrees/`).
+- blocked: `meanfield-grid-solve` and `meanfield-exemplar-notebook` (need the importance sampler),
+  `spatial-notebook` (needs the spatial prior training).
 
 ## Decisions to flag to the PI at review (assumptions I made; easy to change)
+- Phase 2: `penalty_matrix` raises on a clearly negative kernel eigenvalue instead of flooring it; the
+  minimum-image Gaussian is indefinite from length_scale ~ box / 10, hence the wrapped Gaussian. Grid sweeps:
+  adding a value to any axis but the first renumbers later settings (documented; use a fresh ROOT). SGLD:
+  `beta` is silently ignored with Adam (documented); default `beta = 1.0`. `mir_grid` requires `n_layers`.
 - Mean-field rate tilt defaults to `rate_lambda` (exact for the summed penalty); `meanfield.rate_tilt` overrides.
 This was decided in `remove-rate-penalty-p-scaling`, not by the PI.
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};
