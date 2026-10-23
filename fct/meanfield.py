@@ -36,7 +36,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
@@ -93,6 +93,21 @@ _ARRAY_KEYS = frozenset(HISTORY_KEYS) - {
 History = dict[str, list]
 Log = Callable[[str], Any]
 Sampler = SingleSiteHMC | ImportanceSampler
+
+
+class OuterSnapshot(NamedTuple):
+    """What an `on_outer` callback sees after outer step `outer`: the kernels and the history
+    so far. The kernels and the history's lists are copies, so the solver cannot be reached
+    through them; the history's entries (numpy arrays) are shared and must be treated as
+    read-only."""
+
+    outer: int
+    history: History
+    Phi: torch.Tensor  # (L, P, P)
+    Phi_hat: torch.Tensor  # (L, P, P)
+
+
+OnOuter = Callable[[OuterSnapshot], Any]
 
 
 class InadequateSamplerError(RuntimeError):
@@ -786,6 +801,12 @@ def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> N
 
 
 # ----------------------------------------------------------------------------- (de)serialisation
+def _snapshot(st: _SolverState) -> OuterSnapshot:
+    """The state after the outer step just run, copied (see `OuterSnapshot`)."""
+    history = {k: list(v) for k, v in st.history.items()}
+    return OuterSnapshot(st.outer - 1, history, st.Phi.clone(), st.Phi_hat.clone())
+
+
 def _history_to_lists(history: History) -> History:
     """numpy entries -> nested lists of Python scalars, so the payload is weights_only-loadable."""
     return {
@@ -890,6 +911,7 @@ def solve(
     log: Log = print,
     checkpoint_dir: Path | None = None,
     config_hash: str = "",
+    on_outer: OnOuter | None = None,
 ) -> SolveResult:
     """Solve  min_Φ max_Φ̂ S(Φ, Φ̂)  by Algorithm 1 of arXiv:2502.07998 with the
     single-site expectations estimated by persistent HMC (cfg.solver.sampler="hmc") or by
@@ -919,6 +941,12 @@ def solve(
     outer steps, and final.pt at the end (which then replaces the checkpoints); each holds
     cfg in full for provenance.  A saved state must have been written with a net iff `net`
     is given.  Without checkpoint_dir, nothing touches disk.
+
+    `on_outer`, if given, is called with an `OuterSnapshot` after every outer step run in this
+    call (not for steps restored from a checkpoint, and not at all for a loaded final.pt), for
+    live plots.  It only observes: it receives copies, draws nothing from the generator, and
+    runs after the step's history entry and before its checkpoint is written, so results are
+    identical with and without it.  An exception it raises stops the solve.
     """
     if checkpoint_dir is not None and not config_hash:
         raise ValueError("checkpoint_dir needs a non-empty config_hash to guard against reuse")
@@ -941,6 +969,8 @@ def solve(
     while st.outer < cfg.solver.n_outer:
         _outer_step(prob, st, t_start, log)
         st.elapsed = time.time() - t_start
+        if on_outer is not None:
+            on_outer(_snapshot(st))
         if checkpoint_dir is not None and st.outer % cfg.solver.save_int == 0:
             write_checkpoint(
                 checkpoint_dir, CKPT_PREFIX, st.outer, _to_payload(st, cfg), config_hash, CKPT_WIDTH
@@ -963,11 +993,17 @@ def _meanfield_hash(cfg: Config) -> str:
 
 
 def run_meanfield(
-    cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log: Log = print
+    cfg: Config,
+    dataset: Dataset,
+    net: MLP,
+    cache_dir: Path,
+    log: Log = print,
+    on_outer: OnOuter | None = None,
 ) -> SolveResult:
     """Solve on the first cfg.meanfield.n_points training points, caching under
     CACHE_DIR/meanfield (returns final.pt if present, resumes from a checkpoint otherwise).
-    The rate tilt is train.rate_lambda unless meanfield.rate_tilt overrides it."""
+    The rate tilt is train.rate_lambda unless meanfield.rate_tilt overrides it.
+    `on_outer` is passed to `solve`."""
     X, Y = _solver_inputs(dataset, cfg)
     return solve(
         X,
@@ -982,6 +1018,7 @@ def run_meanfield(
         log=log,
         checkpoint_dir=cache_paths(cache_dir).meanfield,
         config_hash=_meanfield_hash(cfg),
+        on_outer=on_outer,
     )
 
 
