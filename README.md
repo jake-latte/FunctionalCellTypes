@@ -34,7 +34,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `sweep.py` | the 36-setting grid: `SweepConfig`, `expand`, `run_setting`, `setting_status` |
 | `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
-| `hmc.py`, `meanfield.py` | HMC sampler and the mean-field saddle-point solver |
+| `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
 | `notebooks/` | `build_modularity.py` builds the results notebook; `modularity.ipynb` is its source (no outputs) |
 | `jobs/fct_sweep.sh` | SLURM array script for the sweep |
@@ -108,7 +108,11 @@ uv run python -m fct plot-example CACHE_DIR   # figure that needs no results
 ```
 
 `solve` uses `train.rate_lambda` as its rate tilt, the per-sample coefficient of the trained
-(summed) rate penalty; `--set meanfield.rate_tilt=...` overrides it.
+(summed) rate penalty; `--set meanfield.rate_tilt=...` overrides it. The `meanfield` section
+holds the problem (points, `beta`, prior, `alpha`, rate tilt); how it is solved lives in
+`meanfield.solver`, e.g. `--set meanfield.solver.sampler=importance` for importance sampling
+from the prior instead of HMC, or `--set meanfield.solver.n_chains=512`. A `config.json` in
+the older flat layout still loads.
 
 `init --set` takes dotted keys with JSON values (`--set net.phi=tanh`,
 `--set data.cov=[[1,0],[0,1]]`); unknown keys are rejected, and an existing `config.json` is

@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: in progress
+status: in review
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
@@ -26,3 +26,21 @@ PI brief (Mean Field 1): in addition to HMC, offer simple importance-weighted sa
 - A tiny end-to-end solve with `sampler="importance"` runs, checkpoints and resumes.
 - Old `config.json` with only the old keys loads; its meanfield hash is unchanged.
 - Tests CPU only, ruff clean, `docs/design.md` updated.
+
+## Notes for the PI (decisions made here, easy to revert)
+- `log_int` and `save_int` still enter the mean-field result hash. They change no number, but they were in the hash before
+  the split, and leaving them out would change the hash of every existing result (every cached solve would go stale once).
+  The rule "diagnostics-only fields do not invalidate" holds for every field added from now on: `config.LEGACY_SOLVER_FIELDS`
+  is frozen, and a test makes every new solver field pick a hash rule.
+- Added `solver.min_ess_frac` (default 0.01): a run whose ESS / draws falls below it counts as a broken step, so the
+  solver reverts and halves it, the importance counterpart of HMC's divergence / reset checks. It is needed because
+  the variance-based MC error reads ~0 when one draw carries all the weight, so on its own it cannot see a collapse.
+- Under `sampler="importance"` the HMC-only fields (`n_chains`, `n_leap`, ...) still enter the hash. That is harmless:
+  changing one makes an importance result stale when it need not.
+- `--set meanfield.n_chains=...` is now an error that says to use `meanfield.solver.n_chains`. Flat `config.json` files
+  load. Mixing both on the command line would be ambiguous, because `--set` edits the dumped (nested) config.
+- New history column `is_max_weight`. The solver dashboard gains ESS / weight-share panels and leaves out all-NaN columns.
+- The pinned fixtures (`tests/fixtures/`, written by d1d3091) are bit-for-bit on this host. A different BLAS or thread
+  count could reorder float reductions and fail them; regenerate only on purpose (`tests/pinned_runs.py`).
+- Merge with the SGLD item: the result-hash pins include the train section. If that item changes the dump of the default
+  `TrainConfig`, the pins will fail. That is a real signal that every existing meanfield and train cache goes stale.

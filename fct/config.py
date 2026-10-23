@@ -112,8 +112,9 @@ class SolverConfig(StrictModel):
 
     `sampler` picks the single-site expectations: persistent HMC chains ("hmc") or
     self-normalised importance sampling from the Gaussian prior ("importance", see
-    `fct.importance`). The HMC block is read only by "hmc", the importance block only by
-    "importance"; Algorithm 1 and the rest by both.
+    `fct.importance`). Only HMC reads n_chains, n_leap, eps0, target_accept, adapt_rate,
+    precondition, max_div_frac and eps_collapse; only importance sampling reads the importance
+    block; both read everything else (a run is n_trans / n_trans_outer transitions of either).
     """
 
     sampler: Literal["hmc", "importance"] = "hmc"
@@ -137,7 +138,7 @@ class SolverConfig(StrictModel):
     max_rel_step: PosFloat = 0.1
     pd_floor_rel: PosFloat = 1e-8
     inv_floor_rel: PosFloat = 1e-4
-    # HMC
+    # Sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition)
     n_chains: PosInt = 2048
     n_trans: PosInt = 2
     n_trans_outer: PosInt = 5
