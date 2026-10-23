@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
@@ -23,7 +23,7 @@ PI brief (Mean Field 2): given an initialised grid search (trained or not), one 
 - Existing legacy sweeps keep working; the new script passes `bash -n` and a dry run.
 - Tests CPU only, ruff clean, `docs/design.md` and README updated. **No job is submitted.**
 
-## Review findings (fresh reviewer, 2026-10-23; NOT yet addressed; status stays `in review`)
+## Review findings (fresh reviewer, 2026-10-23; addressed in e815f25 and the merge of main; n_points > P is checked at solve time, not at load, so train-only sweeps with a small P still load)
 Correctness of hashing, stale detection, exit codes, resume and the SLURM plumbing verified. Before merge:
 1. A solve finished WITHOUT the net is reported `done` and skipped after the net is trained, so the grid
    never gets the net comparison; README says "in either order ... using the trained network if there is one".
