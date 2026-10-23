@@ -208,11 +208,17 @@ def test_penalty_matrix_inverts_on_the_retained_eigendirections():
     assert torch.linalg.eigvalsh(M).max().item() == pytest.approx(1e6, rel=1e-6)
 
 
-def test_penalty_matrix_counts_and_clamps_negative_eigenvalues():
+def test_penalty_matrix_rejects_a_clearly_negative_eigenvalue():
     K = torch.tensor([[1.0, 2.0], [2.0, 1.0]], dtype=DTYPE)  # eigenvalues 3 and -1
-    M, report = penalty_matrix(K, min_rel_eig=1e-6)
-    assert report.n_negative == 1 and report.n_floored == 1
-    assert torch.linalg.eigvalsh(M).min().item() > 0
+    with pytest.raises(ValueError, match="1 clearly negative"):
+        penalty_matrix(K, min_rel_eig=1e-6)
+
+
+def test_penalty_matrix_tolerates_a_round_off_negative_eigenvalue():
+    # rank-1 kernel: the second eigenvalue is zero up to round-off, which may land negative
+    v = torch.tensor([1.0, 0.5], dtype=DTYPE)
+    _, report = penalty_matrix(torch.outer(v, v), min_rel_eig=1e-6)
+    assert report.n_negative == 0 and report.n_floored == 1
 
 
 def test_build_spaces_floors_83_of_100_eigenvalues_of_a_default_ring():

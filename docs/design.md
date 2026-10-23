@@ -684,9 +684,10 @@ build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 la
 
 Populations are indexed 0 (input, m), 1..L (hidden 1..hidden L, N), L + 1 (output, n_out); layer l maps population l to l + 1,
 matching `MLP`: U is layer 0, J_1..J_{L-1} the hidden layers, the readout layer L. The post `Population` of layer l is the same
-object as the pre `Population` of layer l + 1 (embedding, K, M computed once). A random embedding uses seed
-a generator seeded `embedding.seed * 1000 + population index` (at most 1000 populations), so populations differ, runs repeat and no two (seed, index) pairs collide. `MLP.V` is stored (pre, post): for layer L the weight
-in (post, pre) orientation is `V.T`.
+object as the pre `Population` of layer l + 1 (embedding, K, M computed once per population object). A random
+embedding draws from a generator seeded `embedding.seed * 1000 + population index` (at most 1000 populations),
+so populations differ, runs repeat and no two (seed, index) pairs collide. `MLP.V` is stored (pre, post): for
+layer L the weight in (post, pre) orientation is `V.T`.
 
 The floor. `M` is the inverse of `K` with eigenvalues floored at `min_rel_eig` times the largest. A smooth kernel has many
 eigenvalues below that: at the defaults (`length_scale = 0.1`, `min_rel_eig = 1e-6`) 83% of a 100-unit ring's eigenvalues are

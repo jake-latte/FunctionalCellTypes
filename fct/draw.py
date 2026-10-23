@@ -1169,7 +1169,10 @@ def plot_kernel_vs_distance(space: LayerSpace, ax: Axes | None = None) -> Axes:
             color=color,
             rasterized=True,
         )
-        d_line = torch.linspace(0, dist.max().item(), KERNEL_CURVE_POINTS, dtype=x.dtype)
+        # the profile is a function of the per-axis minimum-image distance, so the curve is only
+        # meaningful up to box / 2 (in d > 1 the Euclidean torus distance reaches box * sqrt(d) / 2)
+        d_max = min(dist.max().item(), pop.embedding.box / 2)
+        d_line = torch.linspace(0, d_max, KERNEL_CURVE_POINTS, dtype=x.dtype)
         curve = wrapped_gaussian_profile(
             d_line, pop.kernel.length_scale, pop.embedding.box, pop.kernel.amplitude
         )

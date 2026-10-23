@@ -15,7 +15,8 @@ layers share a population object. Orientation: U and J are stored (post, pre), b
 orientation is `V.T`; `M_post` acts on its rows and `M_pre` on its columns.
 
 The kernel. A Gaussian of the minimum-image distance is not positive definite on the torus
-once length_scale exceeds roughly box / 5, so the kernel is the wrapped (periodised) Gaussian,
+once length_scale exceeds roughly box / 10 (the default length_scale is 0.1 box), so the
+kernel is the wrapped (periodised) Gaussian,
 which is positive semi-definite for every length_scale:
 
     K_ij = amplitude * prod_axes W(delta_a) / W(0),  delta = x_i - x_j reduced to [-box/2, box/2],
@@ -33,7 +34,7 @@ The penalty. M comes from the symmetric eigendecomposition with eigenvalues floo
 of a 100-unit ring at the defaults), so the floor is not just a round-off guard: it caps the
 prior's near-zero-variance directions, and so it defines M on that subspace. `FloorReport`
 gives the floored fraction. A kernel with a clearly negative eigenvalue is an error, not
-something to floor (`build_spaces` raises).
+something to floor (`penalty_matrix` raises).
 
 Everything is pure float64 on the CPU, so inversions are accurate and independent of the
 training device.
@@ -239,6 +240,12 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
     top, bottom = eigvals[-1].item(), eigvals[0].item()
     if top <= 0:
         raise ValueError("K needs a positive largest eigenvalue")
+    n_negative = int((eigvals < -NEGATIVE_RTOL * top).sum().item())
+    if n_negative:
+        raise ValueError(
+            f"K has {n_negative} clearly negative eigenvalues (below -{NEGATIVE_RTOL:g} times "
+            "the largest); it is not a covariance and must not be floored"
+        )
     floor = min_rel_eig * top
     floored = eigvals.clamp(min=floor)
     M = (eigvecs / floored) @ eigvecs.T
@@ -246,7 +253,7 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
     report = FloorReport(
         n_floored=n_floored,
         fraction_floored=n_floored / len(eigvals),
-        n_negative=int((eigvals < -NEGATIVE_RTOL * top).sum().item()),
+        n_negative=n_negative,
         cond_before=top / bottom if bottom > 0 else float("inf"),
         cond_after=top / floored[0].item(),
     )
@@ -295,8 +302,6 @@ def _make_population(
         emb.positions, emb.positions, spec.kernel.length_scale, cfg.box, spec.kernel.amplitude
     )
     M, report = penalty_matrix(K, cfg.min_rel_eig)
-    if report.n_negative:
-        raise ValueError(f"kernel of {name} has {report.n_negative} clearly negative eigenvalues")
     return Population(name, emb, spec.kernel, K, M, report)
 
 

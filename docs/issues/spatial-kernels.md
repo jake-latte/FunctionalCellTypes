@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked | awaiting your confirmation -->
@@ -24,7 +24,7 @@ Spatial Variation, step 1 (`Latex/sections/01_setup.tex`, "Network"): every neur
 - Inputs are spaced evenly on the 1-D ring (the `grid` embedding); outputs likewise by default. Hidden populations default to `grid` too; `random` stays available.
 
 ## Implementation note
-- The kernel is the wrapped (periodised) Gaussian, not the Gaussian of the minimum-image distance named in the plan: the latter is not positive definite on the torus once the length scale exceeds roughly box / 5, which would make `M = K^{-1}` meaningless. The wrapped form is positive semi-definite for every length scale and equals the plain Gaussian for length scale << box.
+- The kernel is the wrapped (periodised) Gaussian, not the Gaussian of the minimum-image distance named in the plan: the latter is not positive definite on the torus once the length scale exceeds roughly box / 10 (already at the default length scale of 0.1 box), which would make `M = K^{-1}` meaningless. The wrapped form is positive semi-definite for every length scale and equals the plain Gaussian for length scale << box.
 - Pending PI decision: at the defaults 83% of a 100-unit ring's eigenvalues lie below the floor, so the floor defines the prior on the high-frequency subspace rather than guarding round-off. The likely replacement is a nugget, `M = (K + sigma^2 I)^{-1}`, with `sigma^2` a `KernelSpec` field.
 
 ## Acceptance criteria
