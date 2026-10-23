@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 import torch
 
+import fct.config
 import fct.meanfield as mf
 from fct.cache import StaleCacheError
 from fct.config import Config, DataConfig, MeanFieldConfig, NetConfig, TrainConfig
@@ -22,7 +23,6 @@ from fct.data import Dataset
 from fct.hmc import relative_fro
 from fct.meanfield import (
     HISTORY_KEYS,
-    RateTiltError,
     empirical_kernels,
     load_meanfield,
     net_kernels,
@@ -323,7 +323,6 @@ def small_config(beta=1e3):
         train=TrainConfig(weight_lambda=1e-3, rate_lambda=1e-3),
         meanfield=MeanFieldConfig(
             n_points=10,
-            rate_tilt=1e-3 / 12,  # rate_lambda / P: required, see run_meanfield
             beta=beta,
             n_chains=32,
             n_outer=2,
@@ -389,6 +388,16 @@ def test_load_meanfield_is_stale_when_beta_changes(cached_run):
         load_meanfield(cache_dir, small_config(beta=2e3), "cpu")
 
 
+def test_load_meanfield_rejects_a_result_from_another_loss_version(tmp_path, monkeypatch):
+    cfg = small_config()
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+        run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+    with pytest.raises(StaleCacheError):
+        load_meanfield(tmp_path, cfg, "cpu")
+
+
 def test_load_meanfield_without_result_fails_loudly(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_meanfield(tmp_path, small_config(), "cpu")
@@ -426,9 +435,13 @@ def test_net_kernels_reject_more_points_than_data():
         net_kernels(net, small, cfg)
 
 
-@pytest.mark.parametrize("rate_lambda, tilt", [(1e-3, None), (0.0, None), (1e-3, 1e-4)])
-def test_run_meanfield_needs_an_explicit_tilt_only_for_a_nonzero_rate_penalty(
-    tmp_path, rate_lambda, tilt
+@pytest.mark.parametrize(
+    "rate_lambda, tilt, expected",
+    [(1e-3, None, 1e-3), (0.0, None, 0.0), (1e-3, 1e-4, 1e-4)],
+    ids=["default-is-rate_lambda", "no-penalty", "explicit-override"],
+)
+def test_run_meanfield_tilts_with_rate_lambda_unless_overridden(
+    tmp_path, monkeypatch, rate_lambda, tilt, expected
 ):
     cfg = small_config()
     cfg = cfg.model_copy(
@@ -437,18 +450,22 @@ def test_run_meanfield_needs_an_explicit_tilt_only_for_a_nonzero_rate_penalty(
             "meanfield": cfg.meanfield.model_copy(update={"rate_tilt": tilt}),
         }
     )
+    used = []
+    make_problem = mf._make_problem
+
+    def spy(*args, **kwargs):
+        prob = make_problem(*args, **kwargs)
+        used.append(prob.rate_tilt)
+        return prob
+
+    monkeypatch.setattr(mf, "_make_problem", spy)
     net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
-    if rate_lambda != 0 and tilt is None:
-        with pytest.raises(ValueError, match=r"rate_tilt.*rate_lambda / P"):
-            run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
-    else:
-        run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+    run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+    assert used == [expected]
 
 
-def test_load_meanfield_applies_the_same_explicit_tilt_check(cached_run):
+def test_load_meanfield_accepts_an_unset_rate_tilt(cached_run):
     cfg, _, _, cache_dir, _ = cached_run
-    unset = cfg.model_copy(
-        update={"meanfield": cfg.meanfield.model_copy(update={"rate_tilt": None})}
-    )
-    with pytest.raises(RateTiltError, match="rate_tilt"):
-        load_meanfield(cache_dir, unset, "cpu")
+    assert cfg.meanfield.rate_tilt is None
+    Phi, _, _ = load_meanfield(cache_dir, cfg, "cpu")
+    assert Phi.shape[-1] == cfg.meanfield.n_points

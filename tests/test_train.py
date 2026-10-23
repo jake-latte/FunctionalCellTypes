@@ -62,7 +62,7 @@ def test_compute_loss_matches_hand_computation():
     z = (h @ net.V) / 3  # (P, 1)
     mse = ((y - z) ** 2).mean()
     w2 = net.U.square().sum() + net.V.square().sum()
-    r2 = torch.relu(h).square().sum() / 2  # sum over neurons, mean over the P=2 samples
+    r2 = torch.relu(h).square().sum()  # sum over samples and neurons
     expected = 0.5 * 3 * mse + lw * w2 + lr_ * r2
 
     loss, parts = compute_loss(net, x, y, lw, lr_)
@@ -87,7 +87,7 @@ def test_compute_loss_two_layers_sums_every_layer_and_every_weight():
     z = (h2 @ net.V) / 3
     mse = ((y - z) ** 2).mean()
     w2 = net.U.square().sum() + net.J[0].square().sum() + net.V.square().sum()
-    r2 = (torch.tanh(h1).square().sum() + torch.tanh(h2).square().sum()) / 2  # P = 2
+    r2 = torch.tanh(h1).square().sum() + torch.tanh(h2).square().sum()  # all samples and layers
     expected = 0.5 * 3 * mse + lw * w2 + lr_ * r2
 
     loss, parts = compute_loss(net, x, y, lw, lr_)
@@ -266,29 +266,29 @@ def _two_sample_net():
     return net
 
 
-def test_rate_l2_is_the_sum_over_neurons_averaged_over_samples():
+def test_rate_l2_is_the_sum_over_samples_neurons_and_layers():
     net = _two_sample_net()
     x = torch.tensor([[3.0], [-2.0]], dtype=F64)  # h = [[3, -3], [-2, 2]]; relu -> [[3,0],[0,2]]
     y = torch.zeros(2, 1, dtype=F64)
     loss, parts = compute_loss(net, x, y, weight_lambda=0.0, rate_lambda=0.5)
-    assert parts["rate_l2"].item() == pytest.approx((9 + 4) / 2)
+    assert parts["rate_l2"].item() == pytest.approx(9 + 4)
     assert parts["mse"].item() == 0.0  # V = 0 and y = 0
-    assert loss.item() == pytest.approx(0.5 * 6.5)  # only the rate term remains
+    assert loss.item() == pytest.approx(0.5 * 13)  # only the rate term remains
 
 
 def test_loss_golden_value_is_tied_to_the_loss_version():
     # Change the expected value and LOSS_VERSION together whenever the loss definition changes:
     # LOSS_VERSION is what rejects caches made under the previous definition.
-    assert fct.config.LOSS_VERSION == 2
+    assert fct.config.LOSS_VERSION == 3
     net = _two_sample_net()
     with torch.no_grad():
         net.V.copy_(torch.tensor([[1.0], [0.5]], dtype=F64))
     x = torch.tensor([[3.0], [-2.0]], dtype=F64)
     y = torch.tensor([[1.0], [0.0]], dtype=F64)
-    # z = [0.75, -0.5], mse = 0.15625, weight_l2 = 3.25, rate_l2 = (9 + 4) / 2 = 6.5
+    # z = [0.75, -0.5], mse = 0.15625, weight_l2 = 3.25, rate_l2 = 9 + 4 = 13
     loss, _ = compute_loss(net, x, y, weight_lambda=0.1, rate_lambda=0.2)
-    assert loss.item() == pytest.approx(0.5 * 2 * 0.15625 + 0.1 * 3.25 + 0.2 * 6.5)
-    assert loss.item() == pytest.approx(1.78125)
+    assert loss.item() == pytest.approx(0.5 * 2 * 0.15625 + 0.1 * 3.25 + 0.2 * 13)
+    assert loss.item() == pytest.approx(3.08125)
 
 
 def test_loss_is_assembled_from_the_parts():
@@ -305,22 +305,24 @@ def test_loss_is_assembled_from_the_parts():
     assert p["loss"].item() == pytest.approx(loss.item())
 
 
-def test_rate_l2_does_not_depend_on_the_number_of_samples():
+def test_rate_l2_grows_with_the_number_of_samples():
     cfg = _cfg()
     ds, net = _setup(cfg)
     _, once = compute_loss(net, ds.x, ds.y, 1e-3, 1e-3)
     _, twice = compute_loss(net, ds.x.repeat(2, 1), ds.y.repeat(2, 1), 1e-3, 1e-3)
-    assert twice["rate_l2"].item() == pytest.approx(once["rate_l2"].item())
+    assert once["rate_l2"].item() > 0
+    assert twice["rate_l2"].item() == pytest.approx(2 * once["rate_l2"].item())
     assert twice["mse"].item() == pytest.approx(once["mse"].item())
-    assert twice["loss"].item() == pytest.approx(once["loss"].item())
+    rate_part = 1e-3 * once["rate_l2"].item()
+    assert twice["loss"].item() - once["loss"].item() == pytest.approx(rate_part)
 
 
-def test_history_logs_the_averaged_rate_l2(tmp_path):
+def test_history_logs_the_summed_rate_l2(tmp_path):
     cfg = _cfg(n_epochs=1, log_int=1)
     ds, net = _setup(cfg)
     summed = net.phi(net(ds.x)[0]).square().sum().item()  # before the first step
     _, hist = train(cfg, ds, net, tmp_path, log=lambda s: None)
-    assert hist["rate_l2"][0] == pytest.approx(summed / ds.x.shape[0])
+    assert hist["rate_l2"][0] == pytest.approx(summed)
 
 
 @pytest.mark.parametrize("interrupt_at", [None, 10], ids=["final.pt", "checkpoint"])
