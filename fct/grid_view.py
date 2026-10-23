@@ -163,6 +163,9 @@ class GridSelection:
     n_layers: int
     provisional: list[tuple[float, float]]
     n_settings: int  # settings of this depth and activation, with or without a record
+    # (lambda_r, lambda_w, why) of settings that cannot be shown as results of this sweep: a
+    # final.pt from another config (stale) or an unreadable checkpoint or dataset (noted)
+    unusable: list[tuple[float, float, str]]
 
 
 def _last_mir(result: SettingResult, kind: str, depth: int) -> list[float] | None:
@@ -193,8 +196,11 @@ def grid_selection(
     `kind` is "raw" or "corrected" (shuffle-bias-corrected). A finished setting gives its final
     MIR, a partial one the last monitor call of its checkpoint (listed in `provisional`); a
     setting with no MIR yet gives no record. ValueError if no setting has this depth and
-    activation."""
+    activation; ValueError if `depth` is not a whole number."""
     _check_kind(kind)
+    if int(depth) != depth:
+        raise ValueError(f"depth must be a whole number, got {depth}")
+    depth = int(depth)
     values = axis_values(results)
     chosen = [
         r
@@ -206,12 +212,14 @@ def grid_selection(
             f"no setting has L={depth} and phi={phi!r}; "
             f"depths {values[DEPTH_AXIS]}, activations {values[PHI_AXIS]}"
         )
-    records, provisional = [], []
+    records, provisional, unusable = [], [], []
     for r in chosen:
+        lr, lw = r.setting.axes[LAMBDA_R_AXIS], r.setting.axes[LAMBDA_W_AXIS]
+        if r.status == "stale" or r.note:
+            unusable.append((lr, lw, r.note or r.status))
         last = _last_mir(r, kind, depth)
         if last is None:
             continue
-        lr, lw = r.setting.axes[LAMBDA_R_AXIS], r.setting.axes[LAMBDA_W_AXIS]
         records += [MirRecord(lr, lw, layer, mir) for layer, mir in enumerate(last)]
         if r.provisional:
             provisional.append((lr, lw))
@@ -222,6 +230,7 @@ def grid_selection(
         depth,
         provisional,
         len(chosen),
+        unusable,
     )
 
 
@@ -286,6 +295,7 @@ class SettingData(NamedTuple):
     net: MLP
     dataset: Dataset
     cfg: Config  # on the CPU
+    epoch: int  # epochs completed by the weights read (n_epochs for a done setting)
 
 
 def load_setting_data(root: Path, result: SettingResult) -> SettingData:
@@ -300,9 +310,10 @@ def load_setting_data(root: Path, result: SettingResult) -> SettingData:
     cpu, dtype = torch.device("cpu"), resolve_dtype(cfg.dtype)
     if result.status == "done":
         net, _ = load_trained(directory, cfg, cpu, dtype)
+        epoch = cfg.train.n_epochs
     else:
-        net, _, _ = load_latest_checkpoint(directory, cfg, cpu, dtype)
-    return SettingData(net, get_dataset(directory, cfg), cfg)
+        net, _, epoch = load_latest_checkpoint(directory, cfg, cpu, dtype)
+    return SettingData(net, get_dataset(directory, cfg), cfg, epoch)
 
 
 # ---------------------------------------------------------------------------- items
@@ -337,8 +348,10 @@ def tuning_items(
     title = f"{label}, layer {layer + 1}: tuning of {len(chosen)} neurons ({order}, {kind} MIR)"
     note = ""
     if result.provisional:
-        note = f" This is provisional: the net is the latest checkpoint ({result.progress})."
-        title += f" - provisional, {result.progress}"
+        # the checkpoint read here may be newer than the one `result` was loaded from
+        progress = f"epoch {data.epoch} of {tc.n_epochs}"
+        note = f" This is provisional: the net is the latest checkpoint ({progress})."
+        title += f" - provisional, {progress}"
     text = (
         f"**{label}**, layer {layer + 1}: mean firing rate (phi) of {len(chosen)} neurons "
         f"chosen {order}, against each latent (other latents averaged out). Layer mean "
@@ -349,21 +362,36 @@ def tuning_items(
     return [text, fig]
 
 
+def _cells(pairs: Sequence[tuple[float, float]]) -> str:
+    return ", ".join(f"(lambda_r={lr:g}, lambda_w={lw:g})" for lr, lw in pairs)
+
+
 def _global_title(kind: str, depth: int, phi: str, sel: GridSelection) -> str:
     title = f"{kind} MIR of every network, L={depth}, {phi}"
-    return title + (
-        f" - provisional ({len(sel.provisional)} from checkpoints)" if sel.provisional else ""
-    )
+    if not sel.provisional:
+        return title
+    n = len(sel.provisional)
+    shown = _cells(sel.provisional) if n <= 2 else f"{n} from checkpoints"
+    return f"{title} - provisional: {shown}"
 
 
 def _global_text(kind: str, depth: int, phi: str, sel: GridSelection) -> str:
     n_cells = len({(r.lambda_r, r.lambda_w) for r in sel.records})
+    n_not_run = sel.n_settings - n_cells - len(sel.unusable)
     text = (
         f"L={depth}, {phi}: {kind} layer-average MIR of {n_cells} of {sel.n_settings} networks; "
-        "the rest have none yet (blank in the matrix)."
+        f"{n_not_run} have none yet (blank in the matrix)."
     )
     if sel.provisional:
-        text += f" Of these, {len(sel.provisional)} are {_PROVISIONAL}."
+        text += f" {len(sel.provisional)} shown are {_PROVISIONAL}: {_cells(sel.provisional)}."
+    if sel.unusable:
+        listed = "; ".join(
+            f"(lambda_r={lr:g}, lambda_w={lw:g}): {why}" for lr, lw, why in sel.unusable
+        )
+        text += (
+            f" {len(sel.unusable)} network(s) are blank because their files are stale or "
+            f"unreadable, not because they have not run: {listed}."
+        )
     return text
 
 

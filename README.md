@@ -114,7 +114,8 @@ curves, example outputs, MIR over training and the tuning curves of its neurons;
 network of one depth and activation, as a (lambda_r, lambda_w) matrix per hidden layer and against
 lambda_r / lambda_w. A setting still running is shown from its latest checkpoint and labelled
 provisional; a missing one gets a message. The default MIR is the shuffle-bias-corrected one (`MIR_KIND`
-switches to raw). Logic is in `fct/grid_view.py`; only the source notebook is committed.
+switches to raw). The lambdas must be positive (log axes), and a request outside the grid snaps to its
+nearest endpoint, signalled only by the printed "snapped to" line. Logic is in `fct/grid_view.py`; only the source notebook is committed.
 
 ```sh
 uv run python notebooks/build_phase_transition.py ROOT           # execute on ROOT -> tmp/phase_transition.ipynb

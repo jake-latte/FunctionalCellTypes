@@ -25,7 +25,6 @@ from fct.grid_view import (
     choose_setting,
     factor_matrix,
     grid_selection,
-    layer_rates,
     load_setting_data,
     matrix_items,
     neuron_mir_values,
@@ -207,11 +206,11 @@ def test_neuron_mir_rejects_an_unknown_kind():
 # ------------------------------------------------------------------ real tiny sweep
 @pytest.fixture(scope="module")
 def root(tmp_path_factory) -> Path:
-    """Settings 0 and 1 done, 2 stopped at its checkpoint (final.pt removed), 3 never run."""
+    """Settings 0 and 1 done, 2 stopped at its checkpoint (final.pt removed), 3 never run; 8 (L=2) done."""
     root = tmp_path_factory.mktemp("phase")
     sweep = tiny_phase_sweep()
     save_sweep(sweep, root)
-    for index in (0, 1, 2):
+    for index in (0, 1, 2, 8):
         run_setting(sweep, index, root, **QUIET)
     (setting_dir(root, expand(sweep)[2]) / "train" / "final.pt").unlink()
     return root
@@ -261,6 +260,7 @@ def test_tuning_of_a_partial_setting_is_labelled_provisional(root, results):
     items = tuning_items(root, choice_for(results, 2), 0, 2, "random", 1, "raw")
     assert "provisional" in items[0]
     assert "provisional" in items[-1].get_suptitle()
+    assert "epoch 4 of 6" in items[0] and "epoch 4 of 6" in items[-1].get_suptitle()
 
 
 def test_tuning_of_a_missing_setting_is_a_message_and_no_figure(root, results):
@@ -273,10 +273,46 @@ def test_tuning_layer_outside_the_net_fails_loudly(root, results):
         tuning_items(root, choice_for(results, 0), 3, 2, "random", 0, "raw")
 
 
-def test_layer_rates_are_phi_of_the_hidden_layer(root, results):
-    loaded = load_setting_data(root, choice_for(results, 0).result)
-    rates = layer_rates(loaded.net, loaded.dataset.x, 0)
-    with torch.no_grad():
-        expected = loaded.net.phi(loaded.net(loaded.dataset.x)[0][:, 0])
-    assert torch.equal(rates, expected)
-    assert rates.shape == (loaded.cfg.data.P, loaded.cfg.net.N)
+@pytest.mark.parametrize("kind", ["raw", "corrected"])
+def test_second_layer_tuning_matches_the_monitored_mir_of_layer_two(root, results, kind):
+    """Layer index 1 of a 2-layer net is checked against the monitor's second entry."""
+    result = choice_for(results, 8).result  # L=2 tanh
+    loaded = load_setting_data(root, result)
+    tc = loaded.cfg.train
+    view = tuning_view(
+        loaded.net, loaded.dataset, 1, tc.monitor_bins, kind, tc.monitor_shuffles, tc.seed
+    )
+    key = {"raw": "monitor_mir", "corrected": "monitor_mir_corrected"}[kind]
+    monitored = result.history[key][-1]
+    assert len(monitored) == 2
+    assert float(view.neuron_mir.mean()) == pytest.approx(monitored[1], abs=1e-6)
+    assert monitored[0] != pytest.approx(monitored[1], abs=1e-6)  # the layers do differ
+
+
+def test_unusable_settings_are_named_apart_from_not_yet_run():
+    results = synthetic({0: "done"})
+    results[1] = SettingResult(results[1].setting, "stale", Path("x"), note="old loss version")
+    results[2] = SettingResult(
+        results[2].setting, "partial", Path("x"), note="checkpoint not shown: truncated"
+    )
+    for build in (matrix_items, ratio_items):
+        text = build(results, **GLOBAL)[0]
+        assert "1 of 4 networks" in text and "1 have none yet" in text
+        assert "stale or unreadable" in text
+        assert "old loss version" in text and "truncated" in text
+        assert "lambda_r=1e-06, lambda_w=1" in text  # setting 1
+        assert "lambda_r=1, lambda_w=1e-06" in text  # setting 2
+
+
+def test_provisional_cells_are_listed_by_their_lambdas():
+    results = synthetic({0: "done", 3: "partial"})
+    text, fig = matrix_items(results, **GLOBAL)
+    assert "(lambda_r=1, lambda_w=1)" in text
+    assert "(lambda_r=1, lambda_w=1)" in fig.get_suptitle()
+
+
+def test_depth_is_coerced_to_an_int_and_a_fraction_is_rejected():
+    results = synthetic({0: "done"})
+    assert grid_selection(results, 1.0, "tanh", "raw").n_layers == 1
+    with pytest.raises(ValueError, match="whole number"):
+        grid_selection(results, 1.5, "tanh", "raw")
