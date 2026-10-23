@@ -2,7 +2,9 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 #  FunctionalCellTypes — grid sweep (any number of settings) as a SLURM array
 #
-#  One array task trains one setting: `python -m fct sweep run ROOT --index $TASK`.
+#  One array task trains one setting: `python -m fct sweep run ROOT --index $TASK --stage train`.
+#  jobs/fct_solve.sh runs this same script with FCT_STAGE=solve, which solves the mean-field
+#  saddle point of each setting instead (see that file).
 #  The grid itself lives in ROOT/sweep.json (write it first with
 #  `python -m fct sweep init ROOT --preset full`, or `--preset phase_transition --n-lambda 8`);
 #  this script only needs its size (`sweep count`).
@@ -17,6 +19,9 @@
 #  Environment overrides:
 #    FCT_MAX_CONCURRENT  cap on simultaneously-running array tasks (default 4)
 #    FCT_PYTHON          interpreter (default <project>/.venv/bin/python)
+#    FCT_STAGE           train (default) or solve; set by jobs/fct_solve.sh, not normally by hand
+#    FCT_ENTRY, FCT_LOG_NAME   the script sbatch submits and the log-file prefix; set by the
+#                        wrapper (default: this script, fct_sweep)
 #
 #  SLURM runs this script directly per array task (ROOT as its only argument).
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -42,9 +47,14 @@ MAX_CONCURRENT="${FCT_MAX_CONCURRENT:-4}"
 #  Everything below this line is machinery — rarely needs editing.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-USAGE="Use: bash jobs/fct_sweep.sh [ROOT] (--submit | --dry-run | --list | --status) [--index N]"
+STAGE="${FCT_STAGE:-train}"
+LOG_NAME="${FCT_LOG_NAME:-fct_sweep}"
+
+USAGE="Use: bash jobs/${LOG_NAME}.sh [ROOT] (--submit | --dry-run | --list | --status) [--index N]"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+[[ "${STAGE}" == "train" || "${STAGE}" == "solve" ]] || die "FCT_STAGE must be train or solve (got '${STAGE}')."
 
 # SLURM executes a copy of this script from its spool directory, so the project
 # location is passed in through FCT_PROJECT by --submit; interactively it is derived
@@ -56,6 +66,8 @@ PYTHON="${FCT_PYTHON:-${PROJECT}/.venv/bin/python}"
 # resolved against the caller's directory first.
 [[ "${PYTHON}" == /* || "${PYTHON}" != */* ]] || PYTHON="${PWD}/${PYTHON}"
 LOG_DIR="${PROJECT}/tmp/logs"
+# The script sbatch submits: this one, or the wrapper that selected the stage.
+ENTRY="${FCT_ENTRY:-${SELF_DIR}/$(basename "${BASH_SOURCE[0]}")}"
 
 # ── Parse CLI: ROOT, one action, optional --index N ───────────────────────────
 ROOT="${FCT_SWEEP_ROOT:-}"
@@ -102,7 +114,8 @@ if [[ -z "${ACTION}" ]]; then
     echo "Node: $(hostname), GPU: ${CUDA_VISIBLE_DEVICES:-auto}"
     echo "root=${ROOT}"
     echo "========================================================"
-    fct sweep run "${ROOT}" --index "${SLURM_ARRAY_TASK_ID}"
+    echo "stage=${STAGE}"
+    fct sweep run "${ROOT}" --index "${SLURM_ARRAY_TASK_ID}" --stage "${STAGE}"
     EXIT_CODE=$?
     echo "Task ${SLURM_ARRAY_TASK_ID} finished with exit code ${EXIT_CODE}."
     exit ${EXIT_CODE}
@@ -111,7 +124,7 @@ fi
 # ── Read-only actions ─────────────────────────────────────────────────────────
 case "${ACTION}" in
     --list)   fct sweep list "${ROOT}";   exit $? ;;
-    --status) fct sweep status "${ROOT}"; exit $? ;;
+    --status) fct sweep status "${ROOT}" --stage "${STAGE}"; exit $? ;;
 esac
 
 # ── --submit / --dry-run: build one sbatch command and either print or run it ─
@@ -133,16 +146,16 @@ fi
 SBATCH_CMD=(
     sbatch
     --array="${ARRAY_SPEC}"
-    --output="${LOG_DIR}/fct_sweep_%A_%a.out"
-    --error="${LOG_DIR}/fct_sweep_%A_%a.err"
+    --output="${LOG_DIR}/${LOG_NAME}_%A_%a.out"
+    --error="${LOG_DIR}/${LOG_NAME}_%A_%a.err"
     --export="ALL,FCT_PROJECT=${PROJECT},FCT_PYTHON=${PYTHON}"
-    "${SELF_DIR}/$(basename "${BASH_SOURCE[0]}")" "${ROOT}"
+    "${ENTRY}" "${ROOT}"
 )
 
 if [[ "${ACTION}" == "--dry-run" ]]; then
     echo "Dry run — nothing submitted. --submit would run:"
     printf '  %q' "${SBATCH_CMD[@]}"; echo
-    echo "  per task: ${PYTHON} -m fct sweep run ${ROOT} --index \$SLURM_ARRAY_TASK_ID"
+    echo "  per task: ${PYTHON} -m fct sweep run ${ROOT} --index \$SLURM_ARRAY_TASK_ID --stage ${STAGE}"
     exit 0
 fi
 
