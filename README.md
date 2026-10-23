@@ -90,7 +90,8 @@ uv run python -m fct sweep run ROOT --index 7 --stage solve    # solve one setti
 uv run python -m fct sweep status ROOT --stage solve      # the same states for the solves
 ```
 
-An initialised grid can be trained, solved, or both, in either order: `--stage train` (the default) trains the
+An initialised grid can be trained, solved, or both, in either order (a solve finished before the net was
+trained is reported `stale` and redone with the net, so the comparison with the net is never missing): `--stage train` (the default) trains the
 networks, `--stage solve` solves the mean-field saddle point of each setting into `<setting>/meanfield/`, using
 the trained network of that setting for the comparison if there is one and solving on its own otherwise. The solver
 settings are the `meanfield` section of `sweep.json` (for example

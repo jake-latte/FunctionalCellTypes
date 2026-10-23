@@ -9,8 +9,8 @@ import torch
 import fct.meanfield as mf
 from fct.cache import StaleCacheError, cache_paths, save_artefact
 from fct.cli import main
-from fct.config import MeanFieldConfig, SolverConfig, load_config
-from fct.meanfield import InadequateSamplerError, load_meanfield
+from fct.config import MeanFieldConfig, SolverConfig, load_config, save_config
+from fct.meanfield import InadequateSamplerError, load_meanfield, meanfield_hash
 from fct.sweep import (
     SweepConfig,
     SweepError,
@@ -47,7 +47,7 @@ def _dirs(root, sweep, i):
 
 
 def _solve_hash(sweep, i):
-    return setting_config(sweep, expand(sweep)[i]).section_hash("data", "net", "train", "meanfield")
+    return meanfield_hash(setting_config(sweep, expand(sweep)[i]))
 
 
 def _write_solved(root, sweep, i, config_hash=None):
@@ -95,16 +95,11 @@ def test_the_meanfield_section_never_changes_training_hashes_or_directories():
             for sweep in (legacy, changed)
         ]
         assert hashes[0] == hashes[1]
-    assert setting_config(legacy, expand(legacy)[0]).meanfield == MeanFieldConfig()
+    assert setting_config(legacy, expand(legacy)[0]).meanfield == legacy.meanfield
 
 
 def test_rate_tilt_follows_the_library_default(small):
     assert setting_config(small, expand(small)[0]).meanfield.rate_tilt is None
-
-
-def test_the_solve_hash_is_the_one_run_meanfield_writes(small):
-    cfg = setting_config(small, expand(small)[0])
-    assert _solve_hash(small, 0) == mf._meanfield_hash(cfg)
 
 
 # ---------------------------------------------------------------------------- status
@@ -257,6 +252,79 @@ def test_an_inadequate_sampler_fails_the_setting_and_leaves_no_final(small, tmp_
     with pytest.raises(InadequateSamplerError, match="inadequate"):
         run_setting(small, 0, tmp_path, stage="solve", **QUIET)
     assert not (_dirs(tmp_path, small, 0).meanfield / "final.pt").exists()
+
+
+def test_a_solve_without_the_net_is_stale_once_the_net_is_trained_and_is_redone(small, tmp_path):
+    run_setting(small, 0, tmp_path, stage="solve", **QUIET)
+    assert _status(tmp_path, small, 0, "solve") == "done"
+    assert "align_net" not in _history(tmp_path, small, 0)
+    run_setting(small, 0, tmp_path, **QUIET)  # train
+    assert _status(tmp_path, small, 0, "solve") == "stale"
+    lines: list[str] = []
+    run_setting(small, 0, tmp_path, stage="solve", log=lines.append)
+    assert any("solved without the net" in line for line in lines)
+    assert _status(tmp_path, small, 0, "solve") == "done"
+    assert "align_net" in _history(tmp_path, small, 0)
+    lines.clear()
+    run_setting(small, 0, tmp_path, stage="solve", log=lines.append)  # now a no-op
+    assert any("already done" in line for line in lines)
+
+
+def test_a_solve_with_the_net_stays_done(small, tmp_path):
+    run_setting(small, 0, tmp_path, **QUIET)
+    run_setting(small, 0, tmp_path, stage="solve", **QUIET)
+    assert _status(tmp_path, small, 0, "solve") == "done"
+
+
+def _interrupt_solve_without_net(small, root):
+    def stop_at_outer_step_1(line: str) -> None:
+        if line.startswith("[0001]"):
+            raise Interrupt
+
+    with pytest.raises(Interrupt):
+        run_setting(small, 0, root, stage="solve", log=stop_at_outer_step_1)
+
+
+def test_resuming_a_partial_solve_after_training_is_refused_with_a_sweep_error(small, tmp_path):
+    _interrupt_solve_without_net(small, tmp_path)
+    run_setting(small, 0, tmp_path, **QUIET)  # train
+    with pytest.raises(SweepError, match=r"ckpt_00001\.pt.*without the trained net.*delete"):
+        run_setting(small, 0, tmp_path, stage="solve", **QUIET)
+    assert not (_dirs(tmp_path, small, 0).meanfield / "final.pt").exists()
+
+
+def test_cli_turns_the_partial_solve_mismatch_into_one_line(small, root, capsys):
+    _interrupt_solve_without_net(small, root)
+    _cli(capsys, "run", root, "--index", 0)  # train
+    code, _, err = _cli(capsys, "run", root, "--index", 0, "--stage", "solve")
+    assert code == 1
+    assert "without the trained net" in err and "Traceback" not in err
+
+
+def test_solving_more_points_than_the_data_has_is_a_sweep_error_but_training_is_fine(
+    small, tmp_path
+):
+    tree = small.model_dump()
+    tree["meanfield"]["n_points"] = small.P + 1
+    too_many = SweepConfig.model_validate(tree)  # loads: a train-only sweep never reads it
+    with pytest.raises(SweepError, match="n_points"):
+        run_setting(too_many, 0, tmp_path, stage="solve", **QUIET)
+    run_setting(too_many, 0, tmp_path, **QUIET)
+
+
+def test_config_json_is_written_atomically(small, tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    save_config(setting_config(small, expand(small)[0]), path)
+    before = path.read_text()
+    assert not (tmp_path / "config.json.tmp").exists()
+
+    def fail(src, dst):
+        raise OSError("interrupted")
+
+    monkeypatch.setattr("fct.config.os.replace", fail)
+    with pytest.raises(OSError, match="interrupted"):
+        save_config(setting_config(_with_beta(small, 2e3), expand(small)[0]), path)
+    assert path.read_text() == before
 
 
 # ---------------------------------------------------------------------------- CLI

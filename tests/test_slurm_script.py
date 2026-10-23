@@ -333,6 +333,19 @@ def test_solve_script_requests_one_gpu_per_task():
     assert "#SBATCH -J fct-solve" in header
 
 
+def _sbatch_directives(script: Path) -> list[str]:
+    return [line for line in script.read_text().splitlines() if line.startswith("#SBATCH")]
+
+
+def test_the_two_sbatch_headers_agree_apart_from_the_job_name():
+    # sbatch reads the header from the submitted file, so the wrapper repeats it.
+    def without_name(script):
+        return [d for d in _sbatch_directives(script) if not d.startswith("#SBATCH -J")]
+
+    assert without_name(SCRIPT) == without_name(SOLVE_SCRIPT)
+    assert _sbatch_directives(SCRIPT)[0] == "#SBATCH -J fct-sweep"
+
+
 def test_an_unknown_stage_in_the_environment_fails(fake_sbatch, stub_python, root):
     r = run_script(
         fake_sbatch, stub_python[0], str(root), "--dry-run", env_extra={"FCT_STAGE": "plot"}

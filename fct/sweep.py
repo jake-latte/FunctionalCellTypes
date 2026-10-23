@@ -35,7 +35,13 @@ from typing import Annotated, Any, Literal, Self
 import numpy as np
 from pydantic import Field, ValidationError, model_validator
 
-from fct.cache import StaleCacheError, cache_paths, latest_checkpoint, read_config_hash
+from fct.cache import (
+    StaleCacheError,
+    cache_paths,
+    latest_checkpoint,
+    read_config_hash,
+    read_field,
+)
 from fct.config import (
     Config,
     DataConfig,
@@ -52,7 +58,7 @@ from fct.config import (
     save_config,
 )
 from fct.data import Dataset, get_dataset, task_dims
-from fct.meanfield import run_meanfield
+from fct.meanfield import meanfield_hash, run_meanfield
 from fct.monitor import make_mir_monitor
 from fct.train import load_trained, train_from_config
 
@@ -504,10 +510,6 @@ def _train_hash(cfg: Config) -> str:
     return cfg.section_hash("data", "net", "train")
 
 
-def _solve_hash(cfg: Config) -> str:
-    return cfg.section_hash("data", "net", "train", "meanfield")
-
-
 def _check_stage(stage: str) -> None:
     if stage not in STAGES:
         raise ValueError(f"unknown stage {stage!r}; valid: {list(STAGES)}")
@@ -533,13 +535,25 @@ def setting_status(
     current data, net and train sections and the loss version. "solve": meanfield/final.pt
     written under those and the meanfield section. Otherwise as `_artefact_status`: stale
     is a final.pt written under another config (or unreadable), partial a checkpoint without a
-    final.pt, else missing."""
+    final.pt, else missing. A finished solve that ran without the net is also stale once the
+    net is trained (`_solved_without_net`): it lacks the comparison with the net."""
     _check_stage(stage)
     paths = cache_paths(setting_dir(root, setting))
     cfg = setting_config(sweep, setting)
     if stage == "train":
         return _artefact_status(paths.train, _train_hash(cfg))
-    return _artefact_status(paths.meanfield, _solve_hash(cfg))
+    status = _artefact_status(paths.meanfield, meanfield_hash(cfg))
+    if status == "done" and _solved_without_net(paths):
+        return "stale"
+    return status
+
+
+def _solved_without_net(paths) -> bool:
+    """A finished solve that ran with no net while a trained net now exists. Its hash is
+    unchanged, so only the stored kernels of the net (absent) tell; only that entry is read."""
+    return (paths.train / "final.pt").exists() and (
+        read_field(paths.meanfield / "final.pt", "net_Phi") is None
+    )
 
 
 def _write_config_once(cfg: Config, directory: Path) -> None:
@@ -645,6 +659,13 @@ def find_setting_dir(root: Path, sweep: SweepConfig, values: Mapping[str, Any]) 
     return matches[0]
 
 
+_STAGE_DIRS = {"train": "train", "solve": "meanfield"}
+_STAGE_SECTIONS = {
+    "train": "(data, net or train sections, or loss definition)",
+    "solve": "(data, net, train or meanfield sections, or loss definition)",
+}
+
+
 def run_setting(
     sweep: SweepConfig,
     index: int,
@@ -665,6 +686,12 @@ def run_setting(
     _write_config_once(cfg, directory)
     _write_setting_once(sweep, setting, directory)
     status = setting_status(root, sweep, setting, stage)
+    paths = cache_paths(directory)
+    if stage == "solve" and status == "stale" and _solved_without_net(paths):
+        # Finished under the current config, only lacking the net: solve again with it.
+        log(f"setting {index}: solved without the net, but the net is trained now; solving again")
+        (paths.meanfield / "final.pt").unlink()
+        status = "missing"
     if status == "stale":
         raise StaleCacheError(
             f"setting {index}: {directory}/{_STAGE_DIRS[stage]}/final.pt was written under a "
@@ -675,6 +702,11 @@ def run_setting(
     if status == "done":
         log(f"setting {index} ({directory}) already done ({stage})")
         return
+    if stage == "solve" and cfg.meanfield.n_points > cfg.data.P:
+        raise SweepError(
+            f"setting {index}: meanfield.n_points={cfg.meanfield.n_points} exceeds the dataset "
+            f"size P={cfg.data.P}; lower it in sweep.json"
+        )
     log(f"setting {index}: {directory} ({stage})")
     dataset = get_dataset(directory, cfg)
     if stage == "train":
@@ -683,22 +715,30 @@ def run_setting(
         _solve_setting(cfg, dataset, directory, log)
 
 
-_STAGE_DIRS = {"train": "train", "solve": "meanfield"}
-_STAGE_SECTIONS = {
-    "train": "(data, net or train sections, or loss definition)",
-    "solve": "(data, net, train or meanfield sections, or loss definition)",
-}
+def _check_checkpoint_matches_net(directory: Path, net) -> None:
+    """A solver checkpoint continues the run it came from, which fixed whether a net is
+    compared; SweepError (one line, naming the file) if the net situation has changed since."""
+    ckpt = latest_checkpoint(cache_paths(directory).meanfield)
+    if ckpt is not None and (read_field(ckpt, "net_Phi") is not None) != (net is not None):
+        written, now = ("with", "without") if net is None else ("without", "with")
+        raise SweepError(
+            f"{ckpt} was written {written} the trained net but the net is now {now} one; "
+            f"delete {ckpt.parent} to solve again"
+        )
 
 
-def _solve_setting(cfg: Config, dataset: Dataset, directory: Path, log: Callable[[str], None]):
+def _solve_setting(
+    cfg: Config, dataset: Dataset, directory: Path, log: Callable[[str], None]
+) -> None:
     """Solve the setting's saddle point. The trained net, if train/final.pt exists, adds the
     comparison with the net to the history; without one the solve runs on its own. The choice
-    is fixed when a solve starts: resuming a checkpoint needs the same (a ValueError from
-    `solve` names the file otherwise). An InadequateSamplerError propagates and leaves no
+    is fixed when a solve starts: resuming a checkpoint needs the same (SweepError otherwise,
+    see `_check_checkpoint_matches_net`). An InadequateSamplerError propagates and leaves no
     final.pt."""
     net = None
     if (cache_paths(directory).train / "final.pt").exists():
         net, _ = load_trained(directory, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype))
     else:
         log("no trained net: solving without the comparison with the net")
+    _check_checkpoint_matches_net(directory, net)
     run_meanfield(cfg, dataset, net, directory, log=log)

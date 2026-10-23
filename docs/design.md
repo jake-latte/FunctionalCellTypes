@@ -602,6 +602,7 @@ class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monito
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), grid: dict[str, list] | None = None
     # meanfield: the problem fields plus the `solver` group, library defaults (rate_tilt None: follows train.rate_lambda). It reaches every setting's
     # Config.meanfield but never enters a training hash or a directory name, so a sweep.json without it (legacy) loads with the defaults and keeps both;
+    # its n_points must not exceed P, checked when a setting is solved (SweepError), not at load, so a train-only sweep with a small P still loads;
     # it is read by the solve stage only (a meanfield.* path is also valid as a grid axis, as any Config field)
     # grid: axis = dotted Config path (net.L, net.phi, train.rate_lambda, train.weight_lambda, data.task, ...), values = explicit lists; an axis
     # overrides the base value (net.N over N, train.lr over lr, ...), except the fields the sweep owns, which are rejected: data.P, data.D_in,
@@ -633,7 +634,12 @@ def run_setting(sweep, index, root, log=print, stage="train") -> None
     #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_mir_monitor(dataset, cfg)); resumes a partial run exactly (see train.py)
     #   stage "solve": run_meanfield(cfg, dataset, net, dir, log) into DIR/meanfield/, net = the trained net if train/final.pt exists (history gets the
     #     net-comparison keys), else None (keys absent; "no trained net" is logged). Resumes from a solver checkpoint; the net-or-not choice is fixed
-    #     once a solve has started (solve raises a ValueError naming the checkpoint if it differs), so train before solving, or delete meanfield/.
+    #     once a solve has started: a checkpoint written with the other choice raises SweepError (one line, naming the file; `sweep run --index` prints it
+    #     and exits 1), so train before solving, or delete meanfield/. A FINISHED solve that ran without the net is `stale` in the status once
+    #     train/final.pt exists (its hash is unchanged; the stored net_Phi is None), and run_setting then deletes that final.pt and solves again
+    #     with the net, so a grid solved first and trained later ends up with the net comparison everywhere.
+    #     config.json is rewritten (atomically, save_config writes a .tmp sibling and renames it) BEFORE the stale check, so even a stale solve's
+    #     config.json already holds the sweep's current meanfield
     #     An InadequateSamplerError (importance sampling below the ESS floor) propagates and leaves no final.pt
 ```
 
@@ -807,9 +813,10 @@ bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct swe
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
 
-`jobs/fct_solve.sh` is the same array job at the solve stage: a thin wrapper that sets `FCT_STAGE=solve`, `FCT_LOG_NAME=fct_solve`
+`jobs/fct_solve.sh` is the same array job at the solve stage: a short script that sets `FCT_STAGE=solve`, `FCT_LOG_NAME=fct_solve`
 and `FCT_ENTRY` (the script `--submit` hands to sbatch) and execs `fct_sweep.sh`, so the two share every option, the
-fake-sbatch tests and the sbatch header (job name `fct-solve`, one GPU per task). Each task runs
+fake-sbatch tests. Its `#SBATCH` header is a copy of `fct_sweep.sh`'s (job name `fct-solve`, one GPU per task), because sbatch reads
+the header from the submitted file; a test checks that the two agree apart from `-J`. Each task runs
 `python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID --stage solve`; `--status` shows the solve stage; logs are
 `tmp/logs/fct_solve_%A_%a.{out,err}`. Resubmitting is safe: a finished solve is skipped, a partial one resumes. Written and dry-run
 only, like the train script.

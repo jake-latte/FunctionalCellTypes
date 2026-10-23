@@ -13,11 +13,14 @@
 #    bash jobs/fct_solve.sh ROOT --dry-run [--index N]
 #    bash jobs/fct_solve.sh ROOT --list | --status     # --status shows the solve stage
 #
-#  This file is a thin wrapper: it only fixes the stage and its own job name and log prefix.
-#  SLURM runs it directly per array task (ROOT as its only argument).
+#  This file fixes the stage, its own job name and the log prefix, and hands everything else to
+#  fct_sweep.sh. The #SBATCH header below repeats fct_sweep.sh's (apart from -J) because sbatch
+#  reads it from the file that is submitted, which is this one; tests/test_slurm_script.py
+#  checks that the two agree. SLURM runs it directly per array task (ROOT as its only argument).
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# --array, --output and --error are passed by --submit (see jobs/fct_sweep.sh).
+# --array, --output and --error are passed by --submit (see jobs/fct_sweep.sh). Keep the rest
+# equal to the header of jobs/fct_sweep.sh.
 #SBATCH -J fct-solve
 #SBATCH -p gpu
 #SBATCH --gres=gpu:1
