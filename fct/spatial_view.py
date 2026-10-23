@@ -7,6 +7,7 @@ Only positions on a ring (d = 1) can be ordered; a two-dimensional layout needs 
 """
 
 import math
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -28,6 +29,7 @@ from fct.spatial import (
 )
 from fct.train import History, train_from_config
 
+CACHE_ROOT_ENV = "FCT_CACHE_ROOT"
 # Decimals kept when deciding that two lattice coordinates are the same point.
 LATTICE_DECIMALS = 9
 # Log lines and checkpoints per run, so any n_epochs logs ~50 times and can resume from a quarter.
@@ -100,6 +102,14 @@ def layer_spaces(cfg: Config) -> list[LayerSpace]:
         raise ValueError("the config has no spatial section")
     d_in = cfg.data.D_in  # linear teacher: the output has as many features as the input
     return build_spaces(cfg.spatial, m=d_in, N=cfg.net.N, L=cfg.net.L, n_out=d_in)
+
+
+def cache_root_from_env() -> Path:
+    """The directory holding the notebook's runs, named by $FCT_CACHE_ROOT; RuntimeError if unset."""
+    root = os.environ.get(CACHE_ROOT_ENV)
+    if not root:
+        raise RuntimeError(f"set ${CACHE_ROOT_ENV} to the directory that holds the cached runs")
+    return Path(root)
 
 
 def cache_dir_for(cfg: Config, root: Path) -> Path:

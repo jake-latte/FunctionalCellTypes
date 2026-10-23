@@ -11,7 +11,9 @@ from fct import draw
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.spatial import KernelSpec, SpatialConfig, build_spaces
 from fct.spatial_view import (
+    CACHE_ROOT_ENV,
     cache_dir_for,
+    cache_root_from_env,
     empirical_kernels,
     make_config,
     order_weights,
@@ -242,3 +244,11 @@ def test_train_run_trains_then_reloads_from_the_cache(tmp_path, optimizer):
     assert lines == []  # final.pt exists: nothing is trained or logged
     assert torch.equal(again.net.U, first.net.U)
     assert again.history["epoch"] == first.history["epoch"]
+
+
+def test_cache_root_comes_from_the_environment_or_fails(monkeypatch, tmp_path):
+    monkeypatch.delenv(CACHE_ROOT_ENV, raising=False)
+    with pytest.raises(RuntimeError, match=CACHE_ROOT_ENV):
+        cache_root_from_env()
+    monkeypatch.setenv(CACHE_ROOT_ENV, str(tmp_path))
+    assert cache_root_from_env() == tmp_path
