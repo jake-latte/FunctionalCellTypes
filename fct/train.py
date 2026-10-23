@@ -138,8 +138,8 @@ def _history_keys(tc: TrainConfig) -> tuple[str, ...]:
 
 def _record(history: History, epoch: int, parts: dict[str, float]) -> None:
     history["epoch"].append(epoch)
-    for key in parts:
-        history[key].append(parts[key])
+    for key, value in parts.items():
+        history[key].append(value)
 
 
 def _make_optimiser(net: MLP, tc: TrainConfig) -> torch.optim.Optimizer:
