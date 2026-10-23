@@ -319,6 +319,8 @@ class SingleSiteHMC:
 
     def load_state_dict(self, d: dict[str, Any]) -> None:
         """Restore a state_dict; Σ and M must already be set to the values it was saved under."""
+        if "sampler" in d:  # only other samplers' states carry a kind; HMC's never did
+            raise ValueError(f"state was saved by a {d['sampler']!r} sampler, not an HMC one")
         if d["h"].shape != (self.n_chains, self.P):
             raise ValueError(
                 f"state has chain shape {tuple(d['h'].shape)}, "

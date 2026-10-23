@@ -18,6 +18,10 @@ proposal.  That collapse is the failure mode to watch, and `ess_frac` and `max_w
 what report it: the Monte Carlo error is computed with n_eff = ESS, but its variance factor is
 itself estimated from the weighted draws and reads ~0 once a single draw dominates, so it
 cannot detect a collapse on its own.
+
+The ESS fraction is a property of the density, not of the sample size: it falls roughly
+exponentially with P and with the strength of the tilt, so the prior proposal suits small P and
+mild tilts only (at the solver's default n_points=100 it is ~1e-3 or less; use HMC there).
 """
 
 import math
@@ -210,8 +214,7 @@ class ImportanceSampler:
         self-normalised together.  Returns (moments, diagnostics) like `SingleSiteHMC.run`;
         moments is None when collect is False.
 
-        With collect=False there is no chain to advance, so a single batch is drawn for the
-        diagnostics (a warm-up or probe of n_trans transitions costs one batch).
+        With collect=False only the diagnostics are computed (still from n_trans batches).
 
         diagnostics: ess_frac (Kish ESS / number of draws), ess, max_weight (largest normalised
         weight), h2_mean (weighted ⟨||h||²/P⟩), prior_h2 (mean diagonal of Σ), and NaN for the
@@ -219,7 +222,7 @@ class ImportanceSampler:
         """
         if n_trans < 1:
             raise ValueError(f"n_trans must be >= 1, got {n_trans}")
-        batches = [self._draw_batch(collect) for _ in range(n_trans if collect else 1)]
+        batches = [self._draw_batch(collect) for _ in range(n_trans)]
         self.n_transitions_total += len(batches)
         log_total = _logsumexp([b.log_sum_w for b in batches])
         ess = math.exp(2 * log_total - _logsumexp([b.log_sum_w2 for b in batches]))

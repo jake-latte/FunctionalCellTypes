@@ -174,6 +174,19 @@ def test_draws_are_reproducible_and_independent_of_state(Sigma, M):
     assert torch.equal(ma["psi_psi"], mb["psi_psi"])
 
 
+def test_run_draws_n_trans_batches_with_or_without_moments(Sigma, M):
+    s = importance(Sigma, M, "readout_h", seed=12, n=32)
+    s.run(3, collect=False)
+    s.run(2)
+    assert s.n_transitions_total == 5
+
+
+def test_hmc_load_state_dict_rejects_an_importance_state(Sigma, M):
+    s = hmc(Sigma, M, "readout_h", seed=13)
+    with pytest.raises(ValueError, match="importance"):
+        s.load_state_dict(importance(Sigma, M, "readout_h", seed=13, n=16).state_dict())
+
+
 def test_load_state_dict_rejects_an_hmc_state(Sigma, M):
     s = importance(Sigma, M, "readout_h", seed=9, n=16)
     with pytest.raises(ValueError, match="importance"):
