@@ -18,13 +18,13 @@ from fct.draw import (
 from fct.grid_view import tuning_view
 from fct.model import MLP
 from fct.report import Item
-from fct.spatial import LayerSpace
+from fct.spatial import LayerSpace, Population
 from fct.spatial_view import TrainRun, ordered_kernel_comparison
 
 EXAMPLE_SEED = 0
 
 
-def _populations(spaces: Sequence[LayerSpace]) -> list:
+def _populations(spaces: Sequence[LayerSpace]) -> list[Population]:
     """Every population once, input first (consecutive layers share one)."""
     return [spaces[0].pre, *(s.post for s in spaces)]
 

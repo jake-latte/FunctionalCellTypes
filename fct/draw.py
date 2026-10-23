@@ -1579,12 +1579,12 @@ def fig_empirical_kernels(comparison: KernelComparison, space: LayerSpace) -> Fi
     scale, since the trained weights need not have the prior's amplitude."""
     fig, axes = plt.subplots(2, 2, figsize=KERNEL_FIG_SIZE, layout="constrained")
     panels = (
-        (comparison.post_theory, f"K_post ({space.post.name}), prior", "W W^T / n_pre"),
-        (comparison.post_empirical, f"{space.post.name}, from the weights", "W W^T / n_pre"),
-        (comparison.pre_theory, f"K_pre ({space.pre.name}), prior", "W^T W / n_post"),
-        (comparison.pre_empirical, f"{space.pre.name}, from the weights", "W^T W / n_post"),
+        (comparison.post_theory, f"K_post ({space.post.name}), prior"),
+        (comparison.post_empirical, f"{space.post.name}, from the weights"),
+        (comparison.pre_theory, f"K_pre ({space.pre.name}), prior"),
+        (comparison.pre_empirical, f"{space.pre.name}, from the weights"),
     )
-    for ax, (kernel, title, _) in zip(axes.ravel(), panels, strict=True):
+    for ax, (kernel, title) in zip(axes.ravel(), panels, strict=True):
         plot_kernel(kernel, ax=ax, title=title)
     fig.suptitle(f"layer {space.layer}: prior kernels and the kernels of the trained weights")
     return fig

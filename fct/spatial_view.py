@@ -100,6 +100,8 @@ def layer_spaces(cfg: Config) -> list[LayerSpace]:
     """The L + 1 layers' spatial factors for the network `cfg` describes."""
     if cfg.spatial is None:
         raise ValueError("the config has no spatial section")
+    if cfg.data.task != "linear_teacher":
+        raise ValueError(f"only the linear teacher is supported here, got {cfg.data.task!r}")
     d_in = cfg.data.D_in  # linear teacher: the output has as many features as the input
     return build_spaces(cfg.spatial, m=d_in, N=cfg.net.N, L=cfg.net.L, n_out=d_in)
 

@@ -8,7 +8,7 @@ latents, one panel per neuron placed by its position. All logic is in `fct.spati
 `fct.spatial_report`; each cell only calls it. Run
 
     python notebooks/build_spatial.py CACHE_ROOT                  # execute, write tmp/spatial.ipynb
-    python notebooks/build_spatial.py CACHE_ROOT --set OPTIMIZER=adam --set N_EPOCHS=200
+    python notebooks/build_spatial.py CACHE_ROOT --set "OPTIMIZER='adam'" --set N_EPOCHS=200   # Python literals
     python notebooks/build_spatial.py --no-execute                # source only: notebooks/spatial.ipynb
 
 CACHE_ROOT holds the cached runs (`$FCT_CACHE_ROOT` works in the notebook too). Only the source
