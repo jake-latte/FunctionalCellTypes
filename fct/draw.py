@@ -115,6 +115,8 @@ SOLVER_PANELS: list[SolverPanel] = [
     SolverPanel("hmc_eps", "HMC step size ε", "log"),
     SolverPanel("hmc_div", "divergent transitions per run", "symlog"),
     SolverPanel("hmc_mc_err", "relative Monte Carlo error of ⟨ψψᵀ⟩", "log"),
+    SolverPanel("hmc_ess_frac", "sampler ESS / samples", "log"),
+    SolverPanel("is_max_weight", "largest importance weight share", "log"),
     SolverPanel("hmc_rho1", "lag-1 autocorrelation of ||h||²/P", "linear"),
     SolverPanel("hmc_h2_ratio", "chain scale  ⟨||h||²⟩ / prior diag", "log", 1.0),
     SolverPanel("hmc_stein_mismatch", "Stein identity mismatch", "log"),
@@ -396,6 +398,8 @@ def _present_columns(history: Mapping[str, ArrayLike | None]) -> dict[str, np.nd
 
     Absent keys, literal None and all-None columns (e.g. `train_mse_net` when no net was
     given) mean "not recorded" and are dropped; a column with only some Nones is corrupt.
+    All-NaN columns are dropped too: they are the diagnostics the solver's sampler does not
+    have (the HMC-only ones under importance sampling, `is_max_weight` under HMC).
     """
     wanted = {"outer_step", "eta_phi", "train_mse_net"} | {p.key for p in SOLVER_PANELS}
     cols = {}
@@ -408,7 +412,10 @@ def _present_columns(history: Mapping[str, ArrayLike | None]) -> dict[str, np.nd
             continue
         if any(missing):
             raise ValueError(f"history column {key!r} has missing (None) entries")
-        cols[key] = _np(values)
+        column = _np(values)
+        if np.isnan(column).all():
+            continue
+        cols[key] = column
     return cols
 
 

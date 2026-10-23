@@ -326,6 +326,21 @@ def test_fig_solver_history_ignores_unrelated_columns(tmp_path):
     _assert_png(draw.fig_solver_history(h), tmp_path)
 
 
+def test_fig_solver_history_skips_diagnostics_the_sampler_does_not_have():
+    """Under importance sampling the HMC-only columns are all NaN, under HMC is_max_weight is."""
+    h = _solver_history()
+    nan = np.full_like(h["hmc_accept"], np.nan)
+    h |= {k: nan for k in ("hmc_accept", "hmc_eps", "hmc_div", "hmc_rho1")}
+    h |= {"hmc_ess_frac": np.full_like(nan, 0.5), "is_max_weight": np.full_like(nan, 1e-3)}
+    titles = [a.get_title() for a in draw.fig_solver_history(h).axes if a.axison]
+    assert not any("HMC" in t or "autocorrelation" in t or "divergent" in t for t in titles)
+    assert any("ESS" in t for t in titles) and any("weight" in t for t in titles)
+
+    h["is_max_weight"] = nan
+    titles = [a.get_title() for a in draw.fig_solver_history(h).axes if a.axison]
+    assert not any("weight" in t for t in titles)
+
+
 def test_fig_solver_history_skips_absent_keys():
     h = {k: v for k, v in _solver_history().items() if k != "hmc_eps"}
     fig = draw.fig_solver_history(h)
