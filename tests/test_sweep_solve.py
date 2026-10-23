@@ -326,3 +326,12 @@ def test_list_and_count_are_unchanged_by_the_solver_section(small, root, capsys)
     assert _cli(capsys, "count", root)[1].strip() == "2"
     names = [line.split()[1] for line in _cli(capsys, "list", root)[1].splitlines()]
     assert names == [str(setting_dir(root, s).relative_to(root)) for s in expand(small)]
+
+
+def test_cli_init_sets_the_solver_by_dotted_key(tmp_path, capsys):
+    _cli(
+        capsys, "init", tmp_path, "--preset", "tiny",
+        "--set", "meanfield.n_points=7", "--set", "meanfield.solver.sampler=importance",
+    )  # fmt: skip
+    meanfield = load_sweep(tmp_path).meanfield
+    assert meanfield.n_points == 7 and meanfield.solver.sampler == "importance"

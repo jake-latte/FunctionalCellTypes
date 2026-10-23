@@ -594,7 +594,10 @@ MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda"); SWEEP_OWNED_AXES: d
 class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
-                             # task = "linear_teacher" (the base task, used unless data.task is an axis), grid: dict[str, list] | None = None
+                             # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), grid: dict[str, list] | None = None
+    # meanfield: the problem fields plus the `solver` group, library defaults (rate_tilt None: follows train.rate_lambda). It reaches every setting's
+    # Config.meanfield but never enters a training hash or a directory name, so a sweep.json without it (legacy) loads with the defaults and keeps both;
+    # it is read by the solve stage only (a meanfield.* path is also valid as a grid axis, as any Config field)
     # grid: axis = dotted Config path (net.L, net.phi, train.rate_lambda, train.weight_lambda, data.task, ...), values = explicit lists; an axis
     # overrides the base value (net.N over N, train.lr over lr, ...), except the fields the sweep owns, which are rejected: data.P, data.D_in,
     # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles (change the
@@ -610,22 +613,30 @@ def get_setting(sweep, index) -> Setting                 # SweepError (a ValueEr
 def setting_dir(root, setting) -> Path                   # ROOT / setting.relpath (see Layout)
 def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep
 def setting_config(sweep, setting) -> Config             # base config for the setting's task (net seed = seeds.net, monitor_* from the sweep) with each axis value written over it
-def setting_status(root, sweep, setting) -> "done" | "partial" | "missing" | "stale"   # done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stale = a final.pt with another hash; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint)
+def setting_status(root, sweep, setting, stage="train") -> "done" | "partial" | "missing" | "stale"   # stage "train": done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stage "solve": the same for meanfield/final.pt and the hash of data, net, train, meanfield (what run_meanfield writes); stale = a final.pt with another hash, or an unreadable one; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint). The stages are independent: a solve is stale when the solver or the training config changed, a trained net never when only the solver did
 def grid_hash(sweep) -> str                               # short hash of the built values of every axis (so [0, 1e-3] == [0.0, 1e-3]) plus the base task unless data.task is an axis; stored in setting.json
 def read_setting(directory, sweep) -> {"index", "grid_hash", "axes"}   # a setting directory's setting.json; SweepError naming the directory if it was written under another grid or has no grid hash
 def built_values(sweep) -> {axis: [values as the built Config holds them]}   # used by grid_hash and the directory labels, so a value has one spelling in both
 def find_setting_dir(root, sweep, values) -> Path         # the one run setting of `sweep` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
                                                           # a subset of the axes is enough if unambiguous); only the sweep's own directories are considered; LookupError if none, several, or an unknown axis
 def has_settings(root) -> bool                            # ROOT already holds a setting directory; `sweep init` refuses to write a new sweep.json there without --force
-def run_setting(sweep, index, root, log=print) -> None
-    # first validates/writes config.json and setting.json (SweepError if an existing one differs: the sweep changed under existing artefacts; this
-    # check comes BEFORE the done check, so a changed sweep raises even for a done setting), then returns at once if done,
-    # else get_dataset + train_from_config(cfg, dataset, dir, log, monitor=make_mir_monitor(dataset, cfg)); resumes a partial run exactly (see train.py)
+def run_setting(sweep, index, root, log=print, stage="train") -> None
+    # first validates/writes config.json and setting.json (SweepError if an existing one differs in data, net, train or the like: the sweep changed
+    # under existing artefacts; this check comes BEFORE the done check, so a changed sweep raises even for a done setting; only the meanfield section
+    # may differ, and config.json is then updated to the sweep's, so `python -m fct solve DIR` solves what the sweep does),
+    # StaleCacheError if the stage's final.pt is stale, returns at once if done (log "already done (<stage>)"), else get_dataset and
+    #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_mir_monitor(dataset, cfg)); resumes a partial run exactly (see train.py)
+    #   stage "solve": run_meanfield(cfg, dataset, net, dir, log) into DIR/meanfield/, net = the trained net if train/final.pt exists (history gets the
+    #     net-comparison keys), else None (keys absent; "no trained net" is logged). Resumes from a solver checkpoint; the net-or-not choice is fixed
+    #     once a solve has started (solve raises a ValueError naming the checkpoint if it differs), so train before solving, or delete meanfield/.
+    #     An InadequateSamplerError (importance sampling below the ESS floor) propagates and leaves no final.pt
 ```
 
 CLI: `python -m fct sweep init ROOT --preset phase_transition --n-lambda 8 [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`.
 `--set` overrides a shared entry by dotted key; `--axis PATH=[values]` replaces or adds a grid axis (JSON list; the modularity presets have no editable axes and reject it); `--set grid...` is rejected (use `--axis`). `sweep count|list|status|run --index i` all read the same `expand`, and `jobs/fct_sweep.sh` takes the array size
-from `sweep count`. `lrtune.py` and `notebooks/build_modularity.py` are written for the modularity grid (they read
+from `sweep count`. `sweep status` and `sweep run` take `--stage train|solve` (default train): train the nets or solve the
+saddle points of the same initialised grid, locally or as an array job (`jobs/fct_solve.sh`); `list` and `count` do not depend on the stage.
+Solver settings are `meanfield` in sweep.json, set with `--set meanfield.n_points=50 --set meanfield.solver.n_outer=100 ...` at `sweep init`. `lrtune.py` and `notebooks/build_modularity.py` are written for the modularity grid (they read
 `setting.axes["net.L"]`, `["net.phi"]`, `["train.rate_lambda"]`); `report.py` needs those three axes too (see below).
 
 All settings share the seeds, so they differ only in the swept axes. The history of a finished setting has the `monitor_*` keys of
@@ -758,14 +769,16 @@ python -m fct plot-example CACHE_DIR                                 # result-in
 python -m fct sweep init ROOT [--preset tiny|full] [--set n_epochs=100 ...] [--force]   # writes ROOT/sweep.json; --set takes dotted keys like `init`
 python -m fct sweep list ROOT      # "<index> <task>/L{L}_{phi}_r{rate}" per setting
 python -m fct sweep count ROOT     # 36
-python -m fct sweep status ROOT    # "<index> done|partial|missing|stale <dir>" per setting, then "N done, N partial, N missing, N stale"
-python -m fct sweep run ROOT [--index i]   # train setting i (a SLURM array task); without --index, all settings in order
+python -m fct sweep status ROOT [--stage train|solve]   # "<index> done|partial|missing|stale <dir>" per setting, then "N done, N partial, N missing, N stale"
+python -m fct sweep run ROOT [--index i] [--stage train|solve]   # train (default) or solve setting i (a SLURM array task); without --index, all settings in order
 ```
 
 The sweep subcommands exit 1 with one stderr line for a missing or invalid sweep.json, an out-of-range index, or a setting whose
 config.json differs from what sweep.json builds (`SweepError`); an error raised by training itself propagates with its traceback.
 `run` without `--index` continues past a failing setting, prints `error: setting i failed: <Type>: <message>` (and the traceback for
-anything but a `SweepError`), and exits 1 listing the failed indices.
+anything but a `SweepError`), and exits 1 listing the failed indices. With `--index`, an `InadequateSamplerError` from a solve
+(the importance sampler cannot represent the problem; see `meanfield.py`) is one stderr line and exit 1, with no final.pt written; in
+a run of all settings it is reported like any other failure and the remaining settings still run.
 
 `--which all` (default) draws each figure whose inputs exist and lists the skipped ones — learning|representation|neurons|training need train/final.pt, solver needs meanfield/final.pt, kernels needs both; a single `--which` with missing inputs exits 1.
 
@@ -784,10 +797,17 @@ bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct swe
 
 `ROOT` is the first argument or `$FCT_SWEEP_ROOT`; it must exist and hold a `sweep.json`. Array size comes from `fct sweep count`.
 `FCT_MAX_CONCURRENT` (default 4) caps running tasks; `FCT_PYTHON` overrides `<project>/.venv/bin/python`. Each task runs
-`python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
+`python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID --stage train` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
 `--index` (digits only, read as base 10) applies to `--submit`/`--dry-run` only; a comma in the project or python path is rejected
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
+
+`jobs/fct_solve.sh` is the same array job at the solve stage: a thin wrapper that sets `FCT_STAGE=solve`, `FCT_LOG_NAME=fct_solve`
+and `FCT_ENTRY` (the script `--submit` hands to sbatch) and execs `fct_sweep.sh`, so the two share every option, the
+fake-sbatch tests and the sbatch header (job name `fct-solve`, one GPU per task). Each task runs
+`python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID --stage solve`; `--status` shows the solve stage; logs are
+`tmp/logs/fct_solve_%A_%a.{out,err}`. Resubmitting is safe: a finished solve is skipped, a partial one resumes. Written and dry-run
+only, like the train script.
 
 ## spatial.py (spatial embeddings and weight kernels)
 

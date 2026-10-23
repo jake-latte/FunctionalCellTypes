@@ -38,7 +38,8 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
 | `notebooks/` | `build_modularity.py` and `build_phase_transition.py` build the results notebooks; the `.ipynb` files are their sources (no outputs) |
-| `jobs/fct_sweep.sh` | SLURM array script for the sweep |
+| `jobs/fct_sweep.sh` | SLURM array script for the sweep (train stage) |
+| `jobs/fct_solve.sh` | the same array job at the solve stage (mean-field saddle points) |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
 
 ## The modularity study
@@ -84,7 +85,17 @@ uv run python -m fct sweep list ROOT                      # "<index> <task>/<set
 uv run python -m fct sweep count ROOT                     # number of settings (36 for modularity)
 uv run python -m fct sweep run ROOT --index 7             # train one setting (resumable); no --index: all
 uv run python -m fct sweep status ROOT                    # done / partial / missing / stale per setting
+uv run python -m fct sweep run ROOT --index 7 --stage solve    # solve one setting's saddle point (resumable)
+uv run python -m fct sweep status ROOT --stage solve      # the same states for the solves
 ```
+
+An initialised grid can be trained, solved, or both, in either order: `--stage train` (the default) trains the
+networks, `--stage solve` solves the mean-field saddle point of each setting into `<setting>/meanfield/`, using
+the trained network of that setting for the comparison if there is one and solving on its own otherwise. The solver
+settings are the `meanfield` section of `sweep.json` (for example
+`--set meanfield.n_points=50 --set meanfield.solver.sampler=importance` at `sweep init`); changing them never
+invalidates a trained network, only the solves. An importance-sampling solve whose proposal cannot represent the
+problem fails that setting with `InadequateSamplerError` and writes no result.
 
 The results notebook and `fct.report` support the modularity grid (they need the axes `net.L`, `net.phi` and
 `train.rate_lambda`).
@@ -96,6 +107,7 @@ per task, a concurrency cap, logs under `tmp/logs/`). Check what it would run be
 bash jobs/fct_sweep.sh ROOT --dry-run                     # print the sbatch command, run nothing
 bash jobs/fct_sweep.sh ROOT --submit [--index N]          # FCT_MAX_CONCURRENT caps running tasks (default 4)
 bash jobs/fct_sweep.sh ROOT --list | --status
+bash jobs/fct_solve.sh ROOT --dry-run                     # the same array job at the solve stage
 ```
 
 **Results notebook.** The notebook shows, per task and setting, loss curves, example outputs of the
