@@ -14,9 +14,10 @@ from fct.train import MONITOR_EPOCH, MONITOR_PREFIX
 TINY = [
     "data.P=64", "data.D_in=8", "net.N=8", "net.L=2",
     "train.n_epochs=6", "train.save_int=3", "train.log_int=3",
-    "meanfield.n_points=8", "meanfield.n_chains=64", "meanfield.n_outer=2",
-    "meanfield.n_inner_max=3", "meanfield.warmup_trans=10", "meanfield.n_init_samples=256",
-    "meanfield.save_int=1", "analysis.n_grid=5", "analysis.n_components=3", "device=cpu",
+    "meanfield.n_points=8", "meanfield.solver.n_chains=64", "meanfield.solver.n_outer=2",
+    "meanfield.solver.n_inner_max=3", "meanfield.solver.warmup_trans=10",
+    "meanfield.solver.n_init_samples=256",
+    "meanfield.solver.save_int=1", "analysis.n_grid=5", "analysis.n_components=3", "device=cpu",
 ]  # fmt: skip
 
 FIGURES = ["learning", "representation", "neurons", "training", "solver", "kernels", "example"]
@@ -71,6 +72,16 @@ def test_init_applies_set_with_json_and_string_values(tmp_path):
     written = json.loads((tmp_path / "config.json").read_text())
     assert written["net"]["L"] == 2 and written["net"]["phi"] == "tanh"
     assert written["data"]["cov"] == [[1, 0], [0, 1]]
+
+
+def test_init_sets_solver_fields_in_their_group_and_rejects_them_flat(tmp_path, capsys):
+    args = ["init", str(tmp_path), "--set", "meanfield.solver.sampler=importance"]
+    assert main(args) == 0
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["meanfield"]["solver"]["sampler"] == "importance"
+    # Flat, the key would sit next to the dumped solver group: ambiguous, so refused by name.
+    assert main(["init", str(tmp_path), "--force", "--set", "meanfield.n_chains=64"]) == 1
+    assert "meanfield.solver" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("key", ["net.bogus=1", "bogus.L=1", "net=3", "net.L.x=1"])

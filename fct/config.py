@@ -9,7 +9,7 @@ Fields are range-constrained too, so impossible values fail at load time naming 
 import hashlib
 import json
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -106,10 +106,17 @@ class TrainConfig(StrictModel):
     monitor_shuffles: PosInt = 5
 
 
-class MeanFieldConfig(StrictModel):
-    n_points: PosInt = 100  # solve on the first n_points training points
-    beta: PosFloat = 1e6
-    readout: Literal["h", "phi"] = "h"
+class SolverConfig(StrictModel):
+    """How the saddle point is found: Algorithm 1, the single-site sampler, the initial guess,
+    logging and checkpoints. `MeanFieldConfig` holds the equations being solved.
+
+    `sampler` picks the single-site expectations: persistent HMC chains ("hmc") or
+    self-normalised importance sampling from the Gaussian prior ("importance", see
+    `fct.importance`). The HMC block is read only by "hmc", the importance block only by
+    "importance"; Algorithm 1 and the rest by both.
+    """
+
+    sampler: Literal["hmc", "importance"] = "hmc"
     # Algorithm 1
     n_outer: PosInt = 300
     n_inner_max: PosInt = 30
@@ -130,10 +137,6 @@ class MeanFieldConfig(StrictModel):
     max_rel_step: PosFloat = 0.1
     pd_floor_rel: PosFloat = 1e-8
     inv_floor_rel: PosFloat = 1e-4
-    prior_scale: PosFloat | None = None
-    alpha: PosFloat | None = None
-    learning_prefactor: PosFloat = 0.5
-    rate_tilt: NonNegFloat | None = None
     # HMC
     n_chains: PosInt = 2048
     n_trans: PosInt = 2
@@ -146,11 +149,91 @@ class MeanFieldConfig(StrictModel):
     sample_dtype: Literal["float32", "float64"] = "float32"
     jitter_rel: PosFloat = 1e-6
     precondition: bool = True
+    # Importance sampling: draws per transition (n_trans / n_trans_outer transitions per run,
+    # as for HMC), the proposal N(0, s^2 Sigma) with s = importance_proposal_scale, and the
+    # smallest ESS / draws a run may have before the solver treats the step that caused it as
+    # breaking the sampler (and backtracks).
+    n_importance_samples: PosInt = 4096
+    importance_proposal_scale: PosFloat = 1.0
+    min_ess_frac: Annotated[float, Field(ge=0, le=1)] = 0.01
+    # Initial guess, logging, checkpoints, randomness
     init: Literal["lazy", "gaussian", "net"] = "lazy"
     n_init_samples: PosInt = 20_000
     log_int: PosInt = 5
     save_int: PosInt = 10
     seed: int = 0
+
+
+# The solver fields that existed before the sampler choice. They enter the mean-field result
+# hash exactly as they did then (flat, next to the problem fields), so results solved before
+# the sampler choice existed stay valid. log_int and save_int change no number but are among
+# them: dropping them would change every existing hash.
+LEGACY_SOLVER_FIELDS = (
+    "n_outer", "n_inner_max", "inner_tol", "inner_tol_mc", "eta_phi", "eta_phihat", "eta_max",
+    "eta_grow", "max_backtrack", "eta_min_rel", "max_div_frac", "max_h2_growth", "max_mc_err",
+    "eps_collapse", "project_tilt", "tilt_floor", "max_rel_step", "pd_floor_rel",
+    "inv_floor_rel", "n_chains", "n_trans", "n_trans_outer", "n_leap", "eps0", "target_accept",
+    "adapt_rate", "warmup_trans", "sample_dtype", "jitter_rel", "precondition", "init",
+    "n_init_samples", "log_int", "save_int", "seed",
+)  # fmt: skip
+# Fields that enter the result hash only when sampler == "importance": with "hmc" they change
+# nothing, and leaving them out keeps the hash of an HMC solve what it always was.
+IMPORTANCE_FIELDS = (
+    "sampler", "n_importance_samples", "importance_proposal_scale", "min_ess_frac",
+)  # fmt: skip
+
+
+class MeanFieldConfig(StrictModel):
+    """The mean-field problem: which points, and the constants of the action (`beta`, the
+    prior scale, `alpha`, the learning prefactor, the rate tilt; None means "derived from the
+    train section", see `fct.meanfield`). How it is solved is `solver`.
+
+    A flat section in the layout used before the split (solver fields next to the problem
+    fields) still loads: the solver keys are moved into `solver`. A key given both flat and in
+    `solver` is an error.
+    """
+
+    n_points: PosInt = 100  # solve on the first n_points training points
+    beta: PosFloat = 1e6
+    readout: Literal["h", "phi"] = "h"
+    prior_scale: PosFloat | None = None
+    alpha: PosFloat | None = None
+    learning_prefactor: PosFloat = 0.5
+    rate_tilt: NonNegFloat | None = None
+    solver: SolverConfig = SolverConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _flat_solver_keys_into_the_group(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        flat = {k: v for k, v in data.items() if k in SolverConfig.model_fields}
+        if not flat:
+            return data
+        group = data.get("solver", {})
+        if isinstance(group, SolverConfig):
+            group = group.model_dump(exclude_unset=True)
+        if not isinstance(group, dict):
+            return data  # let field validation report the bad `solver` value
+        twice = sorted(flat.keys() & group.keys())
+        if twice:
+            raise ValueError(
+                f"{twice} given both in meanfield and in meanfield.solver; "
+                "set solver fields only in meanfield.solver"
+            )
+        rest = {k: v for k, v in data.items() if k not in flat}
+        return {**rest, "solver": {**group, **flat}}
+
+    def hash_payload(self) -> dict[str, Any]:
+        """The section as it enters a cache hash: the problem fields and LEGACY_SOLVER_FIELDS
+        in one flat dict (the pre-split layout), plus IMPORTANCE_FIELDS when the sampler is
+        "importance"."""
+        solver = self.solver.model_dump()
+        payload = self.model_dump(exclude={"solver"})
+        payload.update({k: solver[k] for k in LEGACY_SOLVER_FIELDS})
+        if self.solver.sampler != "hmc":
+            payload.update({k: solver[k] for k in IMPORTANCE_FIELDS})
+        return payload
 
 
 class AnalysisConfig(StrictModel):
@@ -173,7 +256,8 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections.
+        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections. The
+        meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
@@ -182,6 +266,8 @@ class Config(StrictModel):
         if unknown:
             raise ValueError(f"unknown config sections {sorted(unknown)}")
         hashed = self.model_dump(include={*sections, "dtype"})
+        if "meanfield" in sections:
+            hashed["meanfield"] = self.meanfield.hash_payload()
         if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
         canonical = json.dumps(hashed, sort_keys=True)

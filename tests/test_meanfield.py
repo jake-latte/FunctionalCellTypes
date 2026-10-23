@@ -21,6 +21,7 @@ from fct.cache import StaleCacheError
 from fct.config import Config, DataConfig, MeanFieldConfig, NetConfig, TrainConfig
 from fct.data import Dataset
 from fct.hmc import relative_fro
+from fct.importance import ImportanceSampler
 from fct.meanfield import (
     HISTORY_KEYS,
     empirical_kernels,
@@ -469,3 +470,117 @@ def test_load_meanfield_accepts_an_unset_rate_tilt(cached_run):
     assert cfg.meanfield.rate_tilt is None
     Phi, _, _ = load_meanfield(cache_dir, cfg, "cpu")
     assert Phi.shape[-1] == cfg.meanfield.n_points
+
+
+# ----------------------------------------------------------------------------- importance sampler
+HMC_ONLY_KEYS = ("hmc_accept", "hmc_eps", "hmc_div", "hmc_reset", "hmc_max_abs_dH", "hmc_rho1")
+
+
+def test_importance_solve_recovers_analytic_saddle(linear_problem):
+    """The same L=1 Gaussian problem as the HMC test, with fresh prior draws instead of chains."""
+    X, Y = linear_problem
+    cfg = linear_cfg(sampler="importance", n_importance_samples=4096, n_trans=25, n_trans_outer=50)
+    result = solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent)
+    Phi_star, _, Sigma, _ = analytic_saddle(X, Y)
+    h = result.history
+    dist = relative_fro(result.Phi[0], Phi_star)
+    print(f"\nL=1 linear, importance: |Phi-Phi*|/|Phi*|={dist:.3e}")
+    assert all(r[0] < 0.1 for r in h["phihat_fp_resid_stein"][-5:])
+    assert dist < 0.2 * relative_fro(Sigma, Phi_star)
+    assert dist < 0.04
+    assert all(np.isnan(v).all() for k in HMC_ONLY_KEYS for v in h[k])
+    assert all(0.1 < v[0] <= 1 for v in h["hmc_ess_frac"])
+    assert all(0 < v[0] < 1e-3 for v in h["is_max_weight"])
+
+
+def test_hmc_history_has_no_importance_diagnostics(linear_solution):
+    result, _ = linear_solution
+    assert all(np.isnan(v).all() for v in result.history["is_max_weight"])
+
+
+def importance_cfg(**overrides):
+    base = {"sampler": "importance", "n_importance_samples": 256, "sample_dtype": "float64"}
+    cfg = resume_cfg()
+    return cfg.model_copy(update={"solver": cfg.solver.model_copy(update={**base, **overrides})})
+
+
+def test_importance_solve_with_net_runs_and_resumes_exactly(tmp_path, monkeypatch):
+    X, Y = relu_problem(8, 8, seed=52)
+    net = small_net(8)
+    cfg = importance_cfg()
+    full = solve_relu(X, Y, cfg, net)
+    assert set(full.history) == set(HISTORY_KEYS)
+    assert all(isinstance(s, ImportanceSampler) for s in full.samplers)
+
+    restore = interrupt_on_call(monkeypatch, 3)
+    with pytest.raises(Interrupted):
+        solve_relu(X, Y, cfg, net, checkpoint_dir=tmp_path, config_hash="h0")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["ckpt_00002.pt"]
+    restore()
+    resumed = solve_relu(X, Y, cfg, net, checkpoint_dir=tmp_path, config_hash="h0")
+
+    # No chain state to round-trip: the only state is the generator, so the resumed run is
+    # the uninterrupted one exactly.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["final.pt"]
+    assert torch.equal(resumed.Phi, full.Phi) and torch.equal(resumed.Phi_hat, full.Phi_hat)
+    for key in ("phihat_fp_resid_stein", "hmc_ess_frac", "is_max_weight", "align_net"):
+        for a, b in zip(resumed.history[key], full.history[key]):
+            assert np.array_equal(a, b), key
+
+
+def test_an_hmc_checkpoint_does_not_load_into_importance_samplers(tmp_path, monkeypatch):
+    """Belt and braces under the cache hash, which already differs between the two samplers."""
+    X, Y = relu_problem(8, 8, seed=53)
+    restore = interrupt_on_call(monkeypatch, 3)
+    with pytest.raises(Interrupted):
+        solve_relu(X, Y, resume_cfg(), checkpoint_dir=tmp_path, config_hash="h0")
+    restore()
+    with pytest.raises(ValueError, match="importance"):
+        solve_relu(X, Y, importance_cfg(), checkpoint_dir=tmp_path, config_hash="h0")
+
+
+def test_collapsed_weights_count_as_an_unhealthy_run():
+    cfg = importance_cfg().solver
+    healthy = {"h2_mean": 1.0, "ess_frac": 0.5, "psi_psi_rel_mc_err": 0.01}
+    assert mf._healthy(healthy, 1.0, cfg.n_trans, float("nan"), cfg)
+    collapsed = {**healthy, "ess_frac": 0.5 * cfg.min_ess_frac}
+    assert not mf._healthy(collapsed, 1.0, cfg.n_trans, float("nan"), cfg)
+
+
+def test_extreme_tilt_step_is_backtracked_under_importance_sampling():
+    """A huge inner step size drives the tilt where the prior proposal's weights collapse; the
+    solver must see it (ESS below min_ess_frac), revert and halve the step."""
+    X, Y = relu_problem(8, 8, seed=54)
+    # gaussian init and a tolerance never met: the lazy init would make Phi_hat = 0 the inner
+    # solution, and the loop would stop before validating any step.
+    cfg = importance_cfg(
+        init="gaussian", eta_phihat=1e4, eta_max=1e4, inner_tol=1e-12, inner_tol_mc=1e-12,
+        n_inner_max=5, n_outer=1, max_backtrack=50,
+    )  # fmt: skip
+    result = solve_relu(X, Y, cfg)
+    assert result.history["n_backtrack_inner"][0].sum() > 0
+
+
+def test_run_meanfield_records_the_full_meanfield_config(cached_run):
+    cfg, _, _, cache_dir, _ = cached_run
+    payload = torch.load(cache_dir / "meanfield" / "final.pt", weights_only=True)
+    assert payload["meanfield_config"] == cfg.meanfield.model_dump()
+
+
+def with_solver(cfg, **solver):
+    mf_cfg = cfg.meanfield.model_copy(
+        update={"solver": cfg.meanfield.solver.model_copy(update=solver)}
+    )
+    return cfg.model_copy(update={"meanfield": mf_cfg})
+
+
+def test_load_meanfield_is_stale_when_the_sampler_changes(cached_run):
+    cfg, _, _, cache_dir, _ = cached_run
+    with pytest.raises(StaleCacheError):
+        load_meanfield(cache_dir, with_solver(cfg, sampler="importance"), "cpu")
+
+
+def test_load_meanfield_ignores_importance_settings_of_an_hmc_result(cached_run):
+    cfg, _, _, cache_dir, first = cached_run
+    Phi, _, _ = load_meanfield(cache_dir, with_solver(cfg, n_importance_samples=7), "cpu")
+    torch.testing.assert_close(Phi, first.Phi)

@@ -11,7 +11,7 @@ import math
 import pytest
 import torch
 
-from fct.config import default_config, load_config
+from fct.config import default_config, load_config, save_config
 from tests.pinned_runs import (
     FIXTURES,
     HASHES_FILE,
@@ -58,4 +58,14 @@ def test_legacy_config_file_loads_and_keeps_its_hashes():
     cfg, pins = load_config(LEGACY_CONFIG_FILE), _pinned_hashes()["legacy"]
     assert cfg == legacy_config()
     assert cfg.section_hash("meanfield") == pins["meanfield"]
+    assert cfg.section_hash(*MEANFIELD_RESULT_SECTIONS) == pins["result"]
+
+
+def test_legacy_config_rewritten_in_the_current_layout_keeps_its_hashes(tmp_path):
+    """A config.json written by the current code (solver group nested) is the same config."""
+    path = tmp_path / "config.json"
+    save_config(load_config(LEGACY_CONFIG_FILE), path)
+    cfg, pins = load_config(path), _pinned_hashes()["legacy"]
+    assert "solver" in json.loads(path.read_text())["meanfield"]
+    assert cfg == legacy_config()
     assert cfg.section_hash(*MEANFIELD_RESULT_SECTIONS) == pins["result"]
