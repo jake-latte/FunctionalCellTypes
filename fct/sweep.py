@@ -7,6 +7,10 @@ list of values. `expand` lists the Cartesian product in a stable order, so a SLU
 and a local check name the same setting. Each setting is a normal fct cache directory that
 `run_setting` fills by the same path as `python -m fct train`: config.json, dataset, training
 with the MIR monitor.
+`run_setting(..., stage="solve")` instead solves the mean-field saddle point of the same
+setting into its `meanfield/` directory, with the sweep's `meanfield` section (problem fields
+plus the `solver` group; it never enters a training hash, so the same sweep.json defines both
+stages and a legacy sweep.json without it keeps its training hashes and directory names).
 
 A sweep.json without `grid` is the 36-setting modularity grid (task x layers x phi x
 rate_lambda), kept with its original directory names ROOT/<task>/L{L}_{phi}_r{rate}/. A sweep
@@ -31,10 +35,18 @@ from typing import Annotated, Any, Literal, Self
 import numpy as np
 from pydantic import Field, ValidationError, model_validator
 
-from fct.cache import StaleCacheError, cache_paths, latest_checkpoint, read_config_hash
+from fct.cache import (
+    CachePaths,
+    StaleCacheError,
+    cache_paths,
+    latest_checkpoint,
+    read_config_hash,
+    read_field,
+)
 from fct.config import (
     Config,
     DataConfig,
+    MeanFieldConfig,
     NetConfig,
     NonNegInt,
     PosFloat,
@@ -42,11 +54,14 @@ from fct.config import (
     StrictModel,
     TrainConfig,
     load_config,
+    resolve_device,
+    resolve_dtype,
     save_config,
 )
-from fct.data import get_dataset, task_dims
+from fct.data import Dataset, get_dataset, task_dims
+from fct.meanfield import meanfield_hash, run_meanfield
 from fct.monitor import make_mir_monitor
-from fct.train import train_from_config
+from fct.train import load_trained, train_from_config
 
 SWEEP_FILE = "sweep.json"
 SETTING_FILE = "setting.json"
@@ -87,6 +102,8 @@ SWEEP_OWNED_AXES = {
 }
 
 Status = Literal["done", "partial", "missing", "stale"]
+Stage = Literal["train", "solve"]
+STAGES: tuple[Stage, ...] = ("train", "solve")
 
 
 class SweepError(ValueError):
@@ -146,6 +163,10 @@ class SweepConfig(StrictModel):
     schedules), which are rejected. Task parameters and the whole grid are validated at load time
     by building every setting's `Config`, so a bad axis name, value or combination fails when
     sweep.json is read, naming the axis.
+
+    `meanfield` is the mean-field problem and its solver (`MeanFieldConfig`, library defaults;
+    the rate tilt follows `train.rate_lambda` unless set). It is read by the solve stage only:
+    changing it never makes a trained setting stale.
     """
 
     N: PosInt
@@ -165,6 +186,7 @@ class SweepConfig(StrictModel):
     device: Literal["auto", "cpu", "cuda"] = "auto"
     # The base task, used unless `data.task` is a grid axis.
     task: Literal["linear_teacher", "object_action", "what_where"] = "linear_teacher"
+    meanfield: MeanFieldConfig = MeanFieldConfig()
     grid: dict[str, list[Any]] | None = None
 
     @model_validator(mode="after")
@@ -335,6 +357,7 @@ def _base_config(sweep: SweepConfig, task: str) -> Config:
             monitor_bins=sweep.monitor_bins,
             monitor_shuffles=sweep.monitor_shuffles,
         ),
+        meanfield=sweep.meanfield,
         dtype=sweep.dtype,
         device=sweep.device,
     )
@@ -488,33 +511,74 @@ def _train_hash(cfg: Config) -> str:
     return cfg.section_hash("data", "net", "train")
 
 
-def setting_status(root: Path, sweep: SweepConfig, setting: Setting) -> Status:
-    """done = train/final.pt exists and was written under this setting's current config (data,
-    net, train sections and the loss version); stale = a final.pt written under another, or one
-    that cannot be read;
-    partial = a checkpoint but no final.pt; else missing. Only the hash of final.pt is read."""
-    train_dir = cache_paths(setting_dir(root, setting)).train
-    final = train_dir / "final.pt"
+def _check_stage(stage: str) -> None:
+    if stage not in STAGES:
+        raise ValueError(f"unknown stage {stage!r}; valid: {list(STAGES)}")
+
+
+def _artefact_status(directory: Path, current_hash: str) -> Status:
+    """done = directory/final.pt exists and carries `current_hash`; stale = a final.pt with
+    another hash, or one that cannot be read; partial = checkpoints but no final.pt; else
+    missing. Only the hash of final.pt is read."""
+    final = directory / "final.pt"
     if final.exists():
-        current = _train_hash(setting_config(sweep, setting))
         try:
-            return "done" if read_config_hash(final) == current else "stale"
+            return "done" if read_config_hash(final) == current_hash else "stale"
         except ValueError:  # an unreadable final.pt cannot be reused, whatever config it had
             return "stale"
-    return "partial" if latest_checkpoint(train_dir) is not None else "missing"
+    return "partial" if latest_checkpoint(directory) is not None else "missing"
+
+
+def setting_status(
+    root: Path, sweep: SweepConfig, setting: Setting, stage: Stage = "train"
+) -> Status:
+    """State of one stage of a setting. "train": train/final.pt written under this setting's
+    current data, net and train sections and the loss version. "solve": meanfield/final.pt
+    written under those and the meanfield section. Otherwise as `_artefact_status`: stale
+    is a final.pt written under another config (or unreadable), partial a checkpoint without a
+    final.pt, else missing. A finished solve that ran without the net is also stale once the
+    net is trained (`_solved_without_net`): it lacks the comparison with the net."""
+    _check_stage(stage)
+    paths = cache_paths(setting_dir(root, setting))
+    cfg = setting_config(sweep, setting)
+    if stage == "train":
+        return _artefact_status(paths.train, _train_hash(cfg))
+    if _done_without_net(paths, cfg):
+        return "stale"
+    return _artefact_status(paths.meanfield, meanfield_hash(cfg))
+
+
+def _done_without_net(paths: CachePaths, cfg: Config) -> bool:
+    """A solve finished under the CURRENT config that ran with no net, while a trained net now
+    exists. The hash matches (so a solve of another config is never taken for this case); only
+    the stored kernels of the net (absent) tell, and only that entry is read."""
+    if not (paths.train / "final.pt").exists():
+        return False
+    if _artefact_status(paths.meanfield, meanfield_hash(cfg)) != "done":
+        return False
+    try:
+        return read_field(paths.meanfield / "final.pt", "net_Phi") is None
+    except ValueError:  # became unreadable since the hash was read: stale, not a redo
+        return False
 
 
 def _write_config_once(cfg: Config, directory: Path) -> None:
-    """Write config.json for a new setting; fail if an existing one differs, because the
-    artefacts beside it belong to that config."""
+    """Write config.json for a new setting; fail if an existing one differs in anything but the
+    meanfield section, because the artefacts beside it belong to that config. The meanfield
+    section is the sweep's current solver (no training artefact depends on it, and `python -m
+    fct solve` reads it from here), so it is brought up to date."""
     path = cache_paths(directory).config
     if not path.exists():
         save_config(cfg, path)
-    elif load_config(path) != cfg:
+        return
+    existing = load_config(path)
+    if existing.model_copy(update={"meanfield": cfg.meanfield}) != cfg:
         raise SweepError(
             f"{path} differs from the config sweep.json builds for this setting; "
             "use a fresh ROOT or delete the setting directory"
         )
+    if existing.meanfield != cfg.meanfield:
+        save_config(cfg, path)
 
 
 def _setting_record(sweep: SweepConfig, setting: Setting) -> dict:
@@ -601,28 +665,85 @@ def find_setting_dir(root: Path, sweep: SweepConfig, values: Mapping[str, Any]) 
     return matches[0]
 
 
-def run_setting(
-    sweep: SweepConfig, index: int, root: Path, log: Callable[[str], None] = print
-) -> None:
-    """Train setting `index` into its cache directory; resumes a partial run, skips a done one.
+_STAGE_DIRS = {"train": "train", "solve": "meanfield"}
+_STAGE_SECTIONS = {
+    "train": "(data, net or train sections, or loss definition)",
+    "solve": "(data, net, train or meanfield sections, or loss definition)",
+}
 
-    StaleCacheError if the setting was finished under another config or loss definition: its
+
+def run_setting(
+    sweep: SweepConfig,
+    index: int,
+    root: Path,
+    log: Callable[[str], None] = print,
+    stage: Stage = "train",
+) -> None:
+    """Run one stage of setting `index` in its cache directory; resumes a partial run, skips a
+    done one. "train" trains the net; "solve" solves the mean-field saddle point, comparing
+    with the trained net if there is one (see `_solve_setting`).
+
+    StaleCacheError if the stage was finished under another config or loss definition: its
     results would silently stand in for a run of the current one."""
+    _check_stage(stage)
     setting = get_setting(sweep, index)
     directory = setting_dir(root, setting)
     cfg = setting_config(sweep, setting)
     _write_config_once(cfg, directory)
     _write_setting_once(sweep, setting, directory)
-    status = setting_status(root, sweep, setting)
+    status = setting_status(root, sweep, setting, stage)
+    paths = cache_paths(directory)
+    if stage == "solve" and _done_without_net(paths, cfg):
+        # Finished under the current config, only lacking the net: solve again with it.
+        log(f"setting {index}: solved without the net, but the net is trained now; solving again")
+        (paths.meanfield / "final.pt").unlink(missing_ok=True)
+        status = "missing"
     if status == "stale":
         raise StaleCacheError(
-            f"setting {index}: {directory}/train/final.pt was written under a different config "
-            "or loss definition than the current one, or is unreadable, so its results are not "
-            "those of this sweep. To rerun it, delete the sweep ROOT or use a fresh one."
+            f"setting {index}: {directory}/{_STAGE_DIRS[stage]}/final.pt was written under a "
+            f"different config {_STAGE_SECTIONS[stage]} than the current one, or is unreadable, "
+            "so its results are not those of this sweep. To rerun it, delete the sweep ROOT or "
+            "use a fresh one."
         )
     if status == "done":
-        log(f"setting {index} ({directory}) already done")
+        log(f"setting {index} ({directory}) already done ({stage})")
         return
-    log(f"setting {index}: {directory}")
+    if stage == "solve" and cfg.meanfield.n_points > cfg.data.P:
+        raise SweepError(
+            f"setting {index}: meanfield.n_points={cfg.meanfield.n_points} exceeds the dataset "
+            f"size P={cfg.data.P}; lower it in sweep.json"
+        )
+    log(f"setting {index}: {directory} ({stage})")
     dataset = get_dataset(directory, cfg)
-    train_from_config(cfg, dataset, directory, log=log, monitor=make_mir_monitor(dataset, cfg))
+    if stage == "train":
+        train_from_config(cfg, dataset, directory, log=log, monitor=make_mir_monitor(dataset, cfg))
+    else:
+        _solve_setting(cfg, dataset, directory, log)
+
+
+def _check_checkpoint_matches_net(directory: Path, net) -> None:
+    """A solver checkpoint continues the run it came from, which fixed whether a net is
+    compared; SweepError (one line, naming the file) if the net situation has changed since."""
+    ckpt = latest_checkpoint(cache_paths(directory).meanfield)
+    if ckpt is not None and (read_field(ckpt, "net_Phi") is not None) != (net is not None):
+        was = "with the trained net, but there is no trained net now"
+        if net is not None:
+            was = "without the trained net, but there is a trained net now"
+        raise SweepError(f"{ckpt} was written {was}; delete {ckpt.parent} to solve again")
+
+
+def _solve_setting(
+    cfg: Config, dataset: Dataset, directory: Path, log: Callable[[str], None]
+) -> None:
+    """Solve the setting's saddle point. The trained net, if train/final.pt exists, adds the
+    comparison with the net to the history; without one the solve runs on its own. The choice
+    is fixed when a solve starts: resuming a checkpoint needs the same (SweepError otherwise,
+    see `_check_checkpoint_matches_net`). An InadequateSamplerError propagates and leaves no
+    final.pt."""
+    net = None
+    if (cache_paths(directory).train / "final.pt").exists():
+        net, _ = load_trained(directory, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype))
+    else:
+        log("no trained net: solving without the comparison with the net")
+    _check_checkpoint_matches_net(directory, net)
+    run_meanfield(cfg, dataset, net, directory, log=log)

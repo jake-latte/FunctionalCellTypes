@@ -297,7 +297,7 @@ def test_cli_init_with_bad_key_fails_cleanly(tmp_path, capsys, bad):
 
 def test_cli_run_all_runs_every_setting_in_order(tmp_path, capsys, monkeypatch):
     calls = []
-    monkeypatch.setattr("fct.cli.run_setting", lambda sweep, i, root, log: calls.append(i))
+    monkeypatch.setattr("fct.cli.run_setting", lambda sweep, i, root, log, stage: calls.append(i))
     _cli(capsys, "init", tmp_path, "--preset", "tiny")
     code, _, _ = _cli(capsys, "run", tmp_path)
     assert code == 0 and calls == list(range(36))
@@ -306,7 +306,7 @@ def test_cli_run_all_runs_every_setting_in_order(tmp_path, capsys, monkeypatch):
 def test_cli_run_all_continues_past_failures_and_lists_them(tmp_path, capsys, monkeypatch):
     calls = []
 
-    def flaky(sweep, i, root, log):
+    def flaky(sweep, i, root, log, stage):
         calls.append(i)
         if i in (3, 10):
             raise RuntimeError(f"boom {i}")
@@ -321,7 +321,7 @@ def test_cli_run_all_continues_past_failures_and_lists_them(tmp_path, capsys, mo
 
 
 def test_unexpected_error_in_a_single_run_keeps_its_traceback(tmp_path, capsys, monkeypatch):
-    def broken(sweep, i, root, log):
+    def broken(sweep, i, root, log, stage):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("fct.cli.run_setting", broken)

@@ -989,7 +989,7 @@ def _save_final(checkpoint_dir: Path, payload: dict, config_hash: str) -> None:
         ckpt.unlink()
 
 
-def _meanfield_hash(cfg: Config) -> str:
+def meanfield_hash(cfg: Config) -> str:
     return cfg.section_hash("data", "net", "train", "meanfield")
 
 
@@ -1018,7 +1018,7 @@ def run_meanfield(
         net=net,
         log=log,
         checkpoint_dir=cache_paths(cache_dir).meanfield,
-        config_hash=_meanfield_hash(cfg),
+        config_hash=meanfield_hash(cfg),
         on_outer=on_outer,
     )
 
@@ -1031,5 +1031,5 @@ def load_meanfield(
     path = cache_paths(cache_dir).meanfield / FINAL_NAME
     if not path.exists():
         raise FileNotFoundError(f"{path} does not exist; run `python -m fct solve` first")
-    payload = load_artefact(path, _meanfield_hash(cfg), device)
+    payload = load_artefact(path, meanfield_hash(cfg), device)
     return payload["Phi"], payload["Phi_hat"], _history_from_lists(payload["history"])
