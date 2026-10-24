@@ -20,7 +20,7 @@ import argparse
 import ast
 import copy
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +117,7 @@ show(kernel_items(SPACES))"""
 
 SETUP = """import matplotlib as mpl
 
+from fct.cache import cache_root_from_env
 from fct.report import show
 from fct.spatial_report import (
     kernel_items,
@@ -124,7 +125,7 @@ from fct.spatial_report import (
     tuning_by_position_items,
     weight_items,
 )
-from fct.spatial_view import cache_root_from_env, layer_spaces, make_config, train_run
+from fct.spatial_view import layer_spaces, make_config, train_run
 
 mpl.rcParams["figure.dpi"] = 100
 RUNS_ROOT = CACHE_ROOT or cache_root_from_env()"""
@@ -233,8 +234,17 @@ def _parse_override(text: str) -> tuple[str, Any]:
         raise argparse.ArgumentTypeError(f"{literal!r} is not a Python literal") from err
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+def build_main(
+    build: Callable[[], NotebookNode],
+    source_out: Path,
+    executed_out: Path,
+    description: str,
+    set_example: str,
+    argv: list[str] | None = None,
+) -> int:
+    """The command line shared by the notebook builders that take a CACHE_ROOT and `--set`
+    overrides: build the notebook, execute it unless --no-execute, write it."""
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("cache_root", nargs="?", type=Path, help="directory for the cached runs")
     parser.add_argument(
         "--set",
@@ -243,20 +253,27 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         type=_parse_override,
         metavar="NAME=VALUE",
-        help="set a parameter of the notebook (a Python literal), e.g. OPTIMIZER='adam'",
+        help=f"set a parameter of the notebook (a Python literal), e.g. {set_example}",
     )
     parser.add_argument("--out", type=Path, help="default: the source notebook, or tmp/ if run")
     parser.add_argument("--no-execute", action="store_true", help="write the source only")
     args = parser.parse_args(argv)
-    nb = build_notebook()
+    nb = build()
     if not args.no_execute:
         if args.cache_root is None:
             parser.error("give a CACHE_ROOT")
         nb = execute_notebook(nb, args.cache_root, dict(args.overrides))
-    out = args.out or (SOURCE_OUT if args.no_execute else EXECUTED_OUT)
+    out = args.out or (source_out if args.no_execute else executed_out)
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"wrote {write_notebook(nb, out)}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    description = __doc__.split("\n\n")[0]
+    return build_main(
+        build_notebook, SOURCE_OUT, EXECUTED_OUT, description, "OPTIMIZER='adam'", argv
+    )
 
 
 if __name__ == "__main__":

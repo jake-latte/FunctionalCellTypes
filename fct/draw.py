@@ -109,6 +109,7 @@ class SolverPanel(NamedTuple):
 
 _NET_OVERLAY = Overlay("train_mse_net", "net", _GREY, "--")
 _ETA_OVERLAY = Overlay("eta_phi", "η (Φ)", "#0b0b0b", "-")
+_BACKTRACK_OVERLAY = Overlay("n_backtrack_outer", "outer", "#0b0b0b", "-")
 
 # Display order of the solver dashboard.
 SOLVER_PANELS: list[SolverPanel] = [
@@ -122,6 +123,13 @@ SOLVER_PANELS: list[SolverPanel] = [
     SolverPanel(
         "eta_phihat", "adaptive step sizes  η̂ (lines), η (black)", "log", None, _ETA_OVERLAY
     ),
+    SolverPanel(
+        "n_backtrack_inner",
+        "backtracking: inner (lines), outer (black)",
+        "symlog",
+        None,
+        _BACKTRACK_OVERLAY,
+    ),
     SolverPanel("hmc_accept", "HMC acceptance", "linear", 0.75),
     SolverPanel("hmc_eps", "HMC step size ε", "log"),
     SolverPanel("hmc_div", "divergent transitions per run", "symlog"),
@@ -133,9 +141,22 @@ SOLVER_PANELS: list[SolverPanel] = [
     SolverPanel("hmc_stein_mismatch", "Stein identity mismatch", "log"),
     SolverPanel("norm_margin", "normalisability margin (sufficient cond.)", "symlog", 0.0),
     SolverPanel("align_net", "kernel alignment with the trained net", "linear"),
+    SolverPanel("n_pd_clamped", "eigenvalues raised to the PD floor", "symlog"),
     SolverPanel("phi_lambda_min", "λ_min(Φ) before PD floor", "symlog", 0.0),
 ]
 SOLVER_N_COLS = 4
+# The two groups of the live view, in dashboard order: is the saddle-point iteration
+# converging, and is the sampler under it trustworthy. Panels a sampler does not record
+# (all-NaN columns) are left out, so one list serves both samplers.
+SOLVER_HEALTH_KEYS = (
+    "inner_residual", "outer_grad_rel", "phihat_fp_resid_stein", "train_mse_theory",
+    "eta_phihat", "n_backtrack_inner", "n_pd_clamped", "norm_margin", "align_net",
+)  # fmt: skip
+SAMPLER_HEALTH_KEYS = (
+    "hmc_accept", "hmc_eps", "hmc_div", "hmc_ess_frac", "is_max_weight", "hmc_mc_err",
+)  # fmt: skip
+HEALTH_N_COLS = 3
+HEALTH_ROW_HEIGHT = 3.2  # inches per row of panels
 
 
 # --------------------------------------------------------------------------- helpers
@@ -412,7 +433,8 @@ def _present_columns(history: Mapping[str, ArrayLike | None]) -> dict[str, np.nd
     All-NaN columns are dropped too: they are the diagnostics the solver's sampler does not
     have (the HMC-only ones under importance sampling, `is_max_weight` under HMC).
     """
-    wanted = {"outer_step", "eta_phi", "train_mse_net"} | {p.key for p in SOLVER_PANELS}
+    wanted = {"outer_step"} | {p.key for p in SOLVER_PANELS}
+    wanted |= {p.overlay.key for p in SOLVER_PANELS if p.overlay is not None}
     cols = {}
     for key in wanted:
         values = history.get(key)
@@ -430,15 +452,27 @@ def _present_columns(history: Mapping[str, ArrayLike | None]) -> dict[str, np.nd
     return cols
 
 
-def _plot_solver_panel(ax: Axes, cols: dict[str, np.ndarray], panel: SolverPanel) -> None:
-    """Draw one diagnostic against the outer step: a line per layer, or a single line."""
+def _plot_solver_panel(
+    ax: Axes, cols: dict[str, np.ndarray], panel: SolverPanel, first_layer: int
+) -> None:
+    """Draw one diagnostic against the outer step: a line per layer (labelled from
+    `first_layer`), or a single line."""
     t, v = cols["outer_step"], cols[panel.key]
+    # A single point has no line to draw, so it gets a marker (the first live refresh).
+    marker = "o" if len(t) == 1 else None
     if v.ndim == 1:
-        ax.plot(t, v, lw=1.5, color=LAYER_COLORS[0])
+        ax.plot(t, v, lw=1.5, color=LAYER_COLORS[0], marker=marker)
     else:
         for layer in range(v.shape[1]):
             color = LAYER_COLORS[layer % len(LAYER_COLORS)]
-            ax.plot(t, v[:, layer], lw=1.5, color=color, label=f"layer {layer}")
+            ax.plot(
+                t,
+                v[:, layer],
+                lw=1.5,
+                color=color,
+                marker=marker,
+                label=f"layer {layer + first_layer}",
+            )
     overlay = panel.overlay
     if overlay is not None and overlay.key in cols:
         ax.plot(
@@ -447,6 +481,7 @@ def _plot_solver_panel(ax: Axes, cols: dict[str, np.ndarray], panel: SolverPanel
             lw=1.5,
             ls=overlay.linestyle,
             color=overlay.color,
+            marker=marker,
             label=overlay.label,
         )
     if panel.hline is not None:
@@ -459,25 +494,81 @@ def _plot_solver_panel(ax: Axes, cols: dict[str, np.ndarray], panel: SolverPanel
         ax.legend(fontsize=7, frameon=False)
 
 
-def fig_solver_history(
-    history: Mapping[str, ArrayLike | None], figsize: tuple[float, float] = (16, 14)
+def _fig_solver_panels(
+    history: Mapping[str, ArrayLike | None],
+    keys: Sequence[str] | None,
+    n_cols: int,
+    figsize: tuple[float, float] | None,
+    first_layer: int,
 ) -> Figure:
-    """Dashboard of solver and sampler diagnostics; one panel per recorded key."""
+    """The solver panels for `keys` (all of them if None) that the history records, with
+    layers labelled from `first_layer`."""
     cols = _present_columns(history)
     if "outer_step" not in cols:
         raise ValueError("solver history has no 'outer_step' entries")
-    panels = [p for p in SOLVER_PANELS if p.key in cols]
+    panels = [p for p in SOLVER_PANELS if p.key in cols and (keys is None or p.key in keys)]
     if not panels:
         raise ValueError("solver history contains none of the diagnostics to plot")
-    n_rows = math.ceil(len(panels) / SOLVER_N_COLS)
-    fig, axes = plt.subplots(n_rows, SOLVER_N_COLS, figsize=figsize, squeeze=False)
+    n_rows = math.ceil(len(panels) / n_cols)
+    figsize = figsize or (FIG_WIDTH, HEALTH_ROW_HEIGHT * n_rows)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False)
     axes = axes.ravel()
     for ax, panel in zip(axes, panels):
-        _plot_solver_panel(ax, cols, panel)
+        _plot_solver_panel(ax, cols, panel, first_layer)
     for ax in axes[len(panels) :]:
         ax.axis("off")
-    for ax in axes[-SOLVER_N_COLS:]:
+    for ax in axes[-n_cols:]:
         ax.set_xlabel("outer step", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def fig_solver_history(
+    history: Mapping[str, ArrayLike | None], figsize: tuple[float, float] = (16, 14)
+) -> Figure:
+    """Dashboard of solver and sampler diagnostics; one panel per recorded key. Layers are
+    labelled from 0 here, as in the CLI's figure; the live-view figures count from 1."""
+    return _fig_solver_panels(history, None, SOLVER_N_COLS, figsize, first_layer=0)
+
+
+# --------------------------------------------------------------------------- live solver view
+
+
+def fig_solver_health(history: Mapping[str, ArrayLike | None]) -> Figure:
+    """Is the saddle-point iteration converging: residuals, step sizes, backtracking and the
+    train MSE of the theory (against the net's, when the solve had one). Layers count from 1,
+    as in `fig_layer_kernels`."""
+    return _fig_solver_panels(history, SOLVER_HEALTH_KEYS, HEALTH_N_COLS, None, first_layer=1)
+
+
+def fig_sampler_health(history: Mapping[str, ArrayLike | None]) -> Figure:
+    """Is the sampler under it trustworthy: HMC acceptance, step size, divergences and ESS, or
+    the importance ESS and largest weight share; the Monte Carlo error under either."""
+    return _fig_solver_panels(history, SAMPLER_HEALTH_KEYS, HEALTH_N_COLS, None, first_layer=1)
+
+
+def fig_layer_kernels(kernels: Mapping[str, ArrayLike], title: str = "") -> Figure:
+    """One row of (P, P) panels per named (L, P, P) stack, one column per layer.
+
+    Each panel has its own colour scale: Φ and Φ̂ (or a theory and a net kernel) can differ by
+    orders of magnitude, and a shared scale would render the smaller one flat."""
+    if not kernels:
+        raise ValueError("no kernels to draw")
+    stacks = {name: _np(stack) for name, stack in kernels.items()}
+    shapes = {stack.shape for stack in stacks.values()}
+    if len(shapes) != 1:
+        raise ValueError(f"kernel stacks must have the same shape, got {sorted(shapes)}")
+    if any(stack.ndim != 3 for stack in stacks.values()):
+        raise ValueError(f"need (L, P, P) stacks, got {sorted(shapes)}")
+    n_layers = next(iter(stacks.values())).shape[0]
+    fig, axes = plt.subplots(
+        len(stacks), n_layers, figsize=(3.6 * n_layers, 3.8 * len(stacks)), squeeze=False
+    )
+    for row, (name, stack) in zip(axes, stacks.items()):
+        for layer, ax in enumerate(row):
+            plot_kernel(stack[layer], ax=ax, title=f"{name}, layer {layer + 1}")
+    if title:
+        fig.suptitle(title)
     fig.tight_layout()
     return fig
 

@@ -30,6 +30,18 @@ class CachePaths:
     figures: Path
 
 
+CACHE_ROOT_ENV = "FCT_CACHE_ROOT"
+
+
+def cache_root_from_env() -> Path:
+    """The directory holding a notebook's cached runs, named by $FCT_CACHE_ROOT; RuntimeError
+    if unset."""
+    root = os.environ.get(CACHE_ROOT_ENV)
+    if not root:
+        raise RuntimeError(f"set ${CACHE_ROOT_ENV} to the directory that holds the cached runs")
+    return Path(root)
+
+
 def cache_paths(cache_dir: Path) -> CachePaths:
     root = Path(cache_dir)
     return CachePaths(
