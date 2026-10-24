@@ -37,7 +37,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
 | add-modularity-metrics | `fct/modularity.py`: rank binning, plug-in MI (nats), preference r, MIR, dead neurons, shuffled-label baseline, shuffle-based bias correction |
 | add-result-plots | `analyse.py` example outputs / decoders / `prediction_report` (both R^2 conventions); `draw.py` loss curves, MIR history (raw, corrected, chance, dead counts), per-task example figures |
 
-## State (2026-10-23): phase 2 under way; the first program is complete and awaits the PI
+## State (2026-10-24): both programs are complete and merged; everything now awaits the PI
 The first program (task generators, MIR, sweep runner, SLURM script never submitted, notebook, lr tuning,
 loss change to LOSS_VERSION 3 = rate penalty summed over P, `weight_lambda` 1e-4, mean-field tilt defaulting
 to `rate_lambda`) is fully merged; its items are in `docs/issues/archive/`. Nothing was submitted. Still for
@@ -53,8 +53,14 @@ Phase 2 (ten items, plans confirmed by the PI 2026-10-22; current state in `docs
   `grid-results-notebook` (`fct/grid_view.py`, `notebooks/build_phase_transition.py`),
   `importance-weighted-sampler` (`fct/importance.py`, `MeanFieldConfig` split into problem fields +
   `solver: SolverConfig`; reviewed twice: the first review found the ESS gate freezing the solver silently).
-- in review: `spatial-notebook`. In progress on worker branches: `meanfield-grid-solve`,
-  `meanfield-exemplar-notebook`.
+- merged 2026-10-23/24, likewise reviewed: `spatial-notebook` (`fct/spatial_view.py`, `fct/spatial_report.py`,
+  `notebooks/build_spatial.py`), `meanfield-exemplar-notebook` (`solve(..., on_outer=...)` hook, live solver
+  figures in `draw.py`, `fct/exemplar.py`, `notebooks/build_exemplar.py`; reviewed twice), `meanfield-grid-solve`
+  (`SweepConfig.meanfield`, `run_setting(stage="solve")`, `sweep status/run --stage solve`, `jobs/fct_solve.sh`
+  never submitted; reviewed twice). Main tip after the last merge: 871ccf7; 1321 tests pass, ruff clean.
+No worker branches or worktrees remain. Nothing has been submitted to SLURM.
+Still for the PI: the first-program checklist above, plus the phase-2 decisions below (the SGLD mapping one
+changes numbers). Executed notebooks are not committed: build them with `notebooks/build_*.py` into `tmp/`.
 Tooling: pytest's temp dir is pinned to `tmp/pytest` (tests/conftest.py); never write outside the project.
 
 ## Decisions to flag to the PI at review (assumptions I made; easy to change)
@@ -70,6 +76,17 @@ Tooling: pytest's temp dir is pinned to `tmp/pytest` (tests/conftest.py); never 
   rejects every default lr * weight_lambda (needs < 6e-10) and Adam starts from a prior term of order 1e9;
   the notebook uses min_rel_eig 1e-2, N = 16. Open for the PI: eigenvalue floor vs nugget, and drawing the
   initial weights from the prior. The history key `weight_l2` holds the prior's value in spatial runs.
+- **SGLD theory constants (exemplar review, PI decision pending).** The library's mean-field constants
+  (`prior_scale = 1/weight_lambda`, `alpha = weight_lambda P d_out / beta`, `rate_tilt = rate_lambda`, data-term
+  prefactor 1/2) describe the SGLD stationary law exp(-beta L) only at beta = 1/2 and prior_scale = 1. The
+  matching constants are prior_scale = 1/(2 beta weight_lambda), alpha = 2 weight_lambda P d_out,
+  rate_tilt = 2 beta rate_lambda, learning_prefactor = 1/(2 prior_scale); `fct.exemplar.sgld_theory_constants`
+  returns them and the exemplar notebook uses them (weight variance 4.81 vs 5.00 predicted; closed-form check on
+  the linear L=1 net). `run_meanfield`'s defaults are UNCHANGED, so every other mean-field result (grid solves,
+  pinned fixtures) still uses the old constants. Decide whether the library should adopt the mapping.
+- Exemplar notebook: the solves are not converged at the default 40/80 outer steps (residual still falling);
+  the importance sampler only works for small P (default P = 20; raises at 24).
+- Grid solve: `jobs/fct_solve.sh` duplicates the sbatch header of `jobs/fct_sweep.sh` (keep them in step by hand).
 - Mean-field rate tilt defaults to `rate_lambda` (exact for the summed penalty); `meanfield.rate_tilt` overrides.
 This was decided in `remove-rate-penalty-p-scaling`, not by the PI.
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};
