@@ -174,11 +174,11 @@ def _shuffled_member_information(
     return _member_information(bins, n_bins, [(labels[perm], C) for labels, C in encoded])
 
 
-def _subtract_null(member_mi: Tensor, null: Tensor) -> Tensor:
+def _subtract_null(raw_mi: Tensor, null: Tensor) -> Tensor:
     """Bias-corrected member information: subtract the shuffled mean, clamp at 0, and zero
     the rows whose raw total is not above twice their null total (indistinguishable from noise)."""
-    noise_like = member_mi.sum(dim=1) <= NOISE_FACTOR * null.sum(dim=1)
-    corrected = (member_mi - null).clamp(min=0.0)
+    noise_like = raw_mi.sum(dim=1) <= NOISE_FACTOR * null.sum(dim=1)
+    corrected = (raw_mi - null).clamp(min=0.0)
     corrected[noise_like] = 0.0
     return corrected
 

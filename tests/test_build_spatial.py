@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import torch
 
+from fct.grid_view import TuningView
 from fct.spatial import EmbeddingSpec, PopulationSpec, SpatialConfig, build_spaces
 from fct.spatial_view import ordered_kernel_comparison, population_spec
 from fct.tuning import tuning_curves
@@ -36,6 +37,8 @@ PLOTTING_FUNCTIONS = {
     "plot_tuning_by_position",
     "plot_overlaps",
 }
+
+BAR_WIDTH = 0.8  # width of the raw information bars, as the notebook's setting
 
 # Ring positions of 6 units in a scrambled order: unit 0 is 4th around the ring, and so on.
 RING = torch.tensor([[0.50], [0.00], [0.75], [0.25], [0.90], [0.10]], dtype=torch.float64)
@@ -322,17 +325,21 @@ def _panel_slope(ax) -> float:
 
 def _information(n_units: int = 6, n_latents: int = 2, with_null: bool = True):
     """(raw, used, null) informations: unit u has raw 0.1 * (u + 1) nats about latent 0 and 0.05
-    about the others; the used estimate is the raw one minus a null of 0.04."""
+    about the others; the used estimate is the raw one minus a null of 0.03 / 0.06."""
     raw = torch.full((n_units, n_latents), 0.05)
     raw[:, 0] = 0.1 * (torch.arange(n_units) + 1)
-    null = torch.full_like(raw, 0.04)
+    null = torch.tensor([0.03, 0.06]).repeat(n_units, 1)  # differs by latent
     return raw, (raw - null).clamp(min=0), (null if with_null else None)
 
 
+def _view(unit: int, n_units: int = 6, with_null: bool = True, latents=("z0", "z1")) -> TuningView:
+    raw, used, null = _information(n_units=n_units, with_null=with_null)
+    return TuningView(_tuned_layer(unit), np.zeros(6), used, raw, null, list(latents))
+
+
 def _plot_tuning(fns, unit, positions, n_cols, with_null=True):
-    raw, used, null = _information(with_null=with_null)
     return fns["plot_tuning_by_position"](
-        _tuned_layer(unit), np.zeros(6), ["z0", "z1"], positions, n_cols, raw, used, null
+        _view(unit, with_null=with_null), positions, n_cols, BAR_WIDTH
     )
 
 
@@ -382,9 +389,11 @@ def test_information_bars_show_raw_and_used_estimates_and_the_null_per_latent(no
     assert [p.get_x() + p.get_width() / 2 for p in bars.patches[:2]] == pytest.approx([0, 1])
     assert bars.patches[0].get_alpha() < bars.patches[2].get_alpha()  # raw pale, used full
     assert [t.get_text() for t in bars.get_xticklabels()] == ["z0", "z1"]
-    null_marks = [c for c in bars.collections if c.get_segments()]
-    ys = sorted(float(seg[0][1]) for c in null_marks for seg in c.get_segments())
-    assert ys == pytest.approx(null[unit].tolist())
+    segments = [seg for c in bars.collections for seg in c.get_segments()]
+    assert len(segments) == 2
+    for f, seg in enumerate(segments):  # one mark per latent, inside that latent's bar slot
+        assert seg[0][1] == pytest.approx(float(null[unit, f]))
+        assert seg[0][0] < f < seg[1][0]
 
 
 def test_the_information_bars_have_no_null_marker_without_a_null(notebook_functions):
@@ -408,26 +417,19 @@ def test_tuning_by_position_checks_sizes(notebook_functions):
 
 
 def test_tuning_by_position_refuses_too_few_latent_names(notebook_functions):
-    raw, used, null = _information()
     with pytest.raises(ValueError, match="latent names"):
-        notebook_functions["plot_tuning_by_position"](
-            _tuned_layer(0), np.zeros(6), ["z0"], RING, 2, raw, used, null
-        )
+        notebook_functions["plot_tuning_by_position"](_view(0, latents=("z0",)), RING, 2, BAR_WIDTH)
 
 
 def test_tuning_by_position_refuses_informations_of_the_wrong_shape(notebook_functions):
-    raw, used, null = _information(n_units=5)
     with pytest.raises(ValueError, match="informations"):
-        notebook_functions["plot_tuning_by_position"](
-            _tuned_layer(0), np.zeros(6), ["z0", "z1"], RING, 2, raw, used, null
-        )
+        notebook_functions["plot_tuning_by_position"](_view(0, n_units=5), RING, 2, BAR_WIDTH)
 
 
 def test_tuning_by_position_draws_device_tensors(notebook_functions):
     raw, used, null = (on_fake_device(t) for t in _information())
-    fig = notebook_functions["plot_tuning_by_position"](
-        _tuned_layer(0), np.zeros(6), ["z0", "z1"], RING, 4, raw, used, null
-    )
+    view = TuningView(_tuned_layer(0), np.zeros(6), used, raw, null, ["z0", "z1"])
+    fig = notebook_functions["plot_tuning_by_position"](view, RING, 4, BAR_WIDTH)
     assert len(_visible(fig)) == 12
 
 
