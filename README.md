@@ -161,13 +161,15 @@ embedding and kernel of each population in the first cells; the notebook tabulat
 floor and the SGLD step-size condition, plots the prior kernels, trains
 through the normal cache (re-running reloads a finished run or resumes an interrupted one; the run
 directory under `CACHE_ROOT` is named by a hash of the settings), then shows the loss curves, example
-outputs, the first-layer weights sorted by ring position next to the prior's kernels, and the tuning of
+outputs, the first-layer weights sorted by ring position next to the prior's kernels, the activity
+kernels Phi^(l) of every hidden layer over the training samples (sorted by a chosen latent), and the tuning of
 every neuron to every latent, one panel per neuron placed by its position (ring order for d = 1, lattice
 cell for d = 2). The default sizes are small so SGLD is stable and both optimisers take seconds on a CPU;
 the notebook text says why. The library computes (`fct/spatial_view.py`, `fct/spatial.py`,
 `fct/grid_view.py`); every figure is drawn by a plotting function written out in the cell that shows
 it, after a markdown cell with the equation of what is plotted. The kernels shown are the weight
-prior and the weights' second moments over units, not the mean-field kernels over samples. Only the
+prior and the weights' second moments over units, not the activity kernels Phi^(l) over samples, which
+have their own figure. Only the
 source notebook is committed.
 
 ```sh

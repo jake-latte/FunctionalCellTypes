@@ -3,6 +3,7 @@
 on a tiny configuration for each optimiser (CPU)."""
 
 import ast
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -250,20 +251,26 @@ def _block_phi() -> torch.Tensor:
 def test_activity_kernels_one_panel_per_layer_titled_with_the_kernel_scale(
     notebook_functions, tmp_path
 ):
-    fig = notebook_functions["plot_activity_kernels"](_block_phi(), np.arange(6), "")
+    fig = notebook_functions["plot_activity_kernels"](_block_phi(), np.arange(6), "", "h")
     assert_png(fig, tmp_path)
     panels = [ax for ax in fig.axes if ax.images]
     assert len(panels) == 2
-    assert "hidden layer 1" in panels[0].get_title() and "= 1" in panels[0].get_title()
-    assert "hidden layer 2" in panels[1].get_title() and "= 2" in panels[1].get_title()
-    # each panel has its own colour scale: layer 0 spans 0 to 1, layer 1 spans 0 to 2
-    assert panels[0].images[0].get_clim() == (0.0, 1.0)
-    assert panels[1].images[0].get_clim() == (0.0, 2.0)
+    # psi is phi(h) below the last layer and h on it under readout "h"
+    assert re.fullmatch(r"hidden layer 1, .*phi.*: .* = 1", panels[0].get_title())
+    assert re.fullmatch(r"hidden layer 2, .*psi = h.*: .* = 2", panels[1].get_title())
+    # each panel has its own scale, symmetric about zero: layer 0 spans 1, layer 1 spans 2
+    assert panels[0].images[0].get_clim() == (-1.0, 1.0)
+    assert panels[1].images[0].get_clim() == (-2.0, 2.0)
+
+
+def test_activity_kernels_last_layer_is_phi_of_h_under_the_phi_readout(notebook_functions):
+    fig = notebook_functions["plot_activity_kernels"](_block_phi(), np.arange(6), "", "phi")
+    assert all("phi" in ax.get_title() for ax in fig.axes if ax.images)
 
 
 def test_activity_kernels_sorting_permutes_rows_and_columns_together(notebook_functions):
     order = np.array([0, 3, 1, 4, 2, 5])  # interleaves the two blocks
-    fig = notebook_functions["plot_activity_kernels"](_block_phi(), order, "z0")
+    fig = notebook_functions["plot_activity_kernels"](_block_phi(), order, "z0", "h")
     shown = next(ax for ax in fig.axes if ax.images).images[0].get_array()
     phi = _block_phi()[0].numpy()
     assert np.array_equal(shown, phi[np.ix_(order, order)])
@@ -274,22 +281,26 @@ def test_activity_kernels_sorting_permutes_rows_and_columns_together(notebook_fu
 
 def test_activity_kernels_refuse_an_order_that_is_not_a_permutation(notebook_functions):
     with pytest.raises(ValueError, match="permutation"):
-        notebook_functions["plot_activity_kernels"](_block_phi(), np.array([0, 0, 1, 2, 3, 4]), "")
+        notebook_functions["plot_activity_kernels"](
+            _block_phi(), np.array([0, 0, 1, 2, 3, 4]), "", "h"
+        )
 
 
 def test_sample_order_sorts_by_the_latent_and_keeps_dataset_order_for_none(notebook_functions):
     factors = {"z0": torch.tensor([0.3, -1.0, 0.9, 0.0]), "z1": torch.tensor([4.0, 3, 2, 1])}
     order = notebook_functions["sample_order"]
-    assert order(factors, 0, 4).tolist() == [1, 3, 0, 2]
-    assert order(factors, 1, 4).tolist() == [3, 2, 1, 0]
+    assert order(factors, "z0", 4).tolist() == [1, 3, 0, 2]
+    assert order(factors, "z1", 4).tolist() == [3, 2, 1, 0]
     assert order(factors, None, 4).tolist() == [0, 1, 2, 3]
 
 
 def test_the_phi_figure_inputs_may_live_on_the_training_device(notebook_functions):
     """Latents and kernels on a GPU refuse `.numpy()`; the helper and the plot go through `.cpu()`."""
     factors = {"z0": on_fake_device(torch.tensor([0.3, -1.0, 0.9, 0.0, 0.5, 2.0]))}
-    order = notebook_functions["sample_order"](factors, 0, 6)
-    fig = notebook_functions["plot_activity_kernels"](on_fake_device(_block_phi()), order, "z0")
+    order = notebook_functions["sample_order"](factors, "z0", 6)
+    fig = notebook_functions["plot_activity_kernels"](
+        on_fake_device(_block_phi()), order, "z0", "h"
+    )
     assert len([ax for ax in fig.axes if ax.images]) == 2
 
 
