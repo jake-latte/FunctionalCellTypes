@@ -126,7 +126,7 @@ def test_every_figure_cell_is_introduced_by_an_equation():
     ]
     assert len(figure_cells) == len(PLOTTING_FUNCTIONS)
     for i in figure_cells:
-        assert "$" in _previous_markdown(nb, i), nb.cells[i].source
+        assert "$$" in _previous_markdown(nb, i), nb.cells[i].source  # a display equation
 
 
 def test_every_figure_cell_defines_its_plotting_function_before_calling_it():
@@ -145,6 +145,14 @@ def test_every_figure_cell_defines_its_plotting_function_before_calling_it():
         assert len(names & PLOTTING_FUNCTIONS) == 1, names
         defined |= names
     assert PLOTTING_FUNCTIONS <= defined
+
+
+def test_the_loss_and_the_depth_have_different_symbols():
+    """L is the depth; the loss is mathcal L, never a bare L in an equation."""
+    text = "\n".join(c.source for c in build_notebook().cells if c.cell_type == "markdown")
+    for clash in ("$L = ", "$$L = ", "\\nabla_\\theta L", "\\beta L", "$L$ curve", "1/K"):
+        assert clash not in text, clash
+    assert "\\mathcal{L}" in text
 
 
 def test_the_kernel_text_says_they_are_not_the_mean_field_kernels():
@@ -189,7 +197,7 @@ def test_loss_curves_draw_every_logged_term(notebook_functions):
     (ax,) = fig.axes
     labels = [line.get_label() for line in ax.lines]
     # a term that is zero throughout is invisible on a log axis, so the legend says so
-    assert len(labels) == 4 and labels[-1].endswith("(zero)") and labels[0] == "loss $L$"
+    assert len(labels) == 4 and labels[-1].endswith("(zero)") and labels[0] == r"loss $\mathcal{L}$"
 
 
 def test_example_outputs_show_each_example_and_a_scatter(notebook_functions, tmp_path):
@@ -201,6 +209,10 @@ def test_example_outputs_show_each_example_and_a_scatter(notebook_functions, tmp
     assert_png(fig, tmp_path)
     titles = [ax.get_title(loc="left") for ax in fig.axes]
     assert "example 3" in titles and "example 7" in titles and len(fig.axes) == 3
+    # output-index labels only under the last example row
+    first, last = fig.axes[0], fig.axes[1]
+    assert not first.xaxis.get_tick_params()["labelbottom"]
+    assert last.xaxis.get_tick_params()["labelbottom"]
 
 
 def test_kernel_comparison_and_weights_render_on_a_ring(notebook_functions, tmp_path):
@@ -274,6 +286,11 @@ def test_tuning_by_position_checks_sizes(notebook_functions):
         notebook_functions["plot_tuning_by_position"](
             _tuned_layer(0), np.zeros(6), ["z0", "z1"], RING[:4], 2
         )
+
+
+def test_tuning_by_position_refuses_too_few_latent_names(notebook_functions):
+    with pytest.raises(ValueError, match="latent names"):
+        notebook_functions["plot_tuning_by_position"](_tuned_layer(0), np.zeros(6), ["z0"], RING, 2)
 
 
 # ---------------------------------------------------------------- parameters and execution

@@ -38,7 +38,7 @@ fct/
   exemplar.py      # the exemplar notebook's logic: config from flat settings, cache layout, cached train / solve, live refresh
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
   __main__.py      # `python -m fct ...` -> cli.main()
-notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls)
+notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
 docs/issues/*.md   # current work items (finished ones move to docs/issues/archive/)

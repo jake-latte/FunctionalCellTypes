@@ -63,7 +63,7 @@ what is plotted.
   stored (post, pre), are $W_1 = U$ of shape $(N, m)$, $W_l = J_{l-1}$, and $W_{L+1} = V^\top$.
   The rates are $r^{(l)}_{i\mu} = \phi(h^{(l)}_{i\mu})$.
 - Loss (`fct/train.py`):
-  $L = \frac{N}{2}\,\mathrm{mse} + \lambda_w \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \lambda_r \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
+  $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \lambda_w \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \lambda_r \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
   with $\mathrm{mse} = \frac{1}{P m} \sum_\mu \lVert y_\mu - \hat y_\mu \rVert^2$,
   $\lambda_w$ = `WEIGHT_LAMBDA`, $\lambda_r$ = `RATE_LAMBDA`; the penalty matrices $M$ are
   defined in the spatial prior section.
@@ -92,9 +92,9 @@ DEVICE = "cpu"  # "cpu", "cuda" or "auto"; these nets are tiny"""
 TRAINING_TEXT = r"""## Training
 
 With `OPTIMIZER = "sgld"` every epoch is one full-batch Langevin step on all weights $\theta$,
-$$\theta \leftarrow \theta - \mathrm{lr}\, \nabla_\theta L + \sqrt{2\, \mathrm{lr} / \beta}\; \xi, \qquad \xi \sim \mathcal{N}(0, I),$$
-whose stationary law for a small step is $p(\theta) \propto e^{-\beta L(\theta)}$, with $\beta$ =
-`BETA`. With `"adam"` the net minimises $L$ and $\beta$ is unused. SGLD takes plain gradient steps
+$$\theta \leftarrow \theta - \mathrm{lr}\, \nabla_\theta \mathcal{L} + \sqrt{2\, \mathrm{lr} / \beta}\; \xi, \qquad \xi \sim \mathcal{N}(0, I),$$
+whose stationary law for a small step is $p(\theta) \propto e^{-\beta \mathcal{L}(\theta)}$, with $\beta$ =
+`BETA`. With `"adam"` the net minimises $\mathcal{L}$ and $\beta$ is unused. SGLD takes plain gradient steps
 plus noise, so in the same number of epochs it fits the teacher less closely than Adam does."""
 
 TRAINING = """OPTIMIZER = "sgld"  # "sgld" (Langevin noise of variance 2 * LR / BETA per step) or "adam"
@@ -135,14 +135,14 @@ Every unit $i$ of population $p$ (the input, hidden layer $l$, the output) has a
 $x^p_i$ on the torus $[0, \mathrm{box})^d$ (`D`, `BOX`), placed on a grid or uniformly at random.
 The population's kernel is the wrapped Gaussian of `fct/spatial.py`, with amplitude $A_p$ and
 length scale $\ell_p$ set by `population_spec`:
-$$K^p_{ij} = A_p \prod_{a=1}^{d} \frac{W(\delta_a)}{W(0)}, \qquad W(\delta) = \sum_{|n| \le n_\mathrm{img}} e^{-(\delta + n\, \mathrm{box})^2 / 2 \ell_p^2},$$
+$$K^p_{ij} = A_p \prod_{a=1}^{d} \frac{G(\delta_a)}{G(0)}, \qquad G(\delta) = \sum_{|n| \le n_\mathrm{img}} e^{-(\delta + n\, \mathrm{box})^2 / 2 \ell_p^2},$$
 where $\delta = x^p_i - x^p_j$ reduced to $[-\mathrm{box}/2, \mathrm{box}/2]$ on every axis $a$.
 Weight layer $l$ maps population pre to population post, and its prior covariance is
 $K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l$. The penalty uses the inverse with floored
 eigenvalues: from $K^p = \sum_j \lambda_j v_j v_j^\top$,
 $$M^p = \sum_j \max(\lambda_j,\, \epsilon\, \lambda_{\max})^{-1}\, v_j v_j^\top, \qquad \epsilon = \texttt{MIN\_REL\_EIG},$$
 and the loss term is $\lambda_w \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top)$.
-Under SGLD at inverse temperature $\beta$ the stationary law $\propto e^{-\beta L}$ makes the
+Under SGLD at inverse temperature $\beta$ the stationary law $\propto e^{-\beta \mathcal{L}}$ makes the
 prior alone
 $$\mathrm{vec}(W_l) \sim \mathcal{N}\big(0,\ (2 \beta \lambda_w)^{-1}\, K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l\big)$$
 up to the floor (exactly, with $K^p$ replaced by $(M^p)^{-1}$). These kernels are over *units*:
@@ -189,18 +189,19 @@ FLOOR_TEXT = r"""### The eigenvalue floor and the SGLD step size
 
 A smooth kernel has eigenvalues down to round-off, so the floor $\epsilon$ is what keeps $M^p$
 finite. It sets the largest penalty eigenvalue of a population, and that of a layer is the
-product of its two factors':
-$$\lambda_{\max}(M^p) = \frac{1}{\epsilon\, \lambda_{\max}(K^p)}, \qquad \lambda_{\max}(M_l) = \lambda_{\max}(M^{\mathrm{post}}_l)\, \lambda_{\max}(M^{\mathrm{pre}}_l).$$
+product of those of its two factors, so the floor enters squared:
+$$\lambda_{\max}(M^p) = \frac{1}{\epsilon\, \lambda_{\max}(K^p)}, \qquad \lambda_{\max}(M_l) = \lambda_{\max}(M^{\mathrm{post}}_l)\, \lambda_{\max}(M^{\mathrm{pre}}_l) = \frac{1}{\epsilon^2\, \lambda_{\max}(K^{\mathrm{post}}_l)\, \lambda_{\max}(K^{\mathrm{pre}}_l)}.$$
 The prior term has curvature $2 \lambda_w \lambda_{\max}(M_l)$ along its stiffest direction, and
 an Euler step of size lr on a quadratic diverges once lr times its curvature reaches 2, so SGLD
 needs (and `fct.train` refuses to start otherwise)
 $$\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l) < 1 \quad \text{for every layer } l.$$
 At the defaults (rings of 12 input, 16 hidden and 12 output units, $\ell = 0.15$, $A = 1$,
 $\epsilon = 10^{-2}$), $\lambda_{\max}(K) \approx 4.51$ for 12 units and $6.02$ for 16, so
-$\lambda_{\max}(M_l) \approx 1 / (10^{-4} \cdot 4.51 \cdot 6.02) \approx 368$ and
+$\lambda_{\max}(M_l) \approx 1 / (\epsilon^2 \cdot 4.51 \cdot 6.02) = 1 / (10^{-4} \cdot 4.51 \cdot 6.02) \approx 368$ and
 $\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l) \approx 10^{-2} \cdot 3 \cdot 10^{-3} \cdot 368 \approx 0.011$:
 both optimisers are stable and 2000 epochs take seconds on a CPU. The library default
-$\epsilon = 10^{-6}$ would make it $10^4$ times larger; a larger network or a lower floor needs a
+$\epsilon = 10^{-6}$ would make both $10^8$ times larger ($\lambda_{\max}(M_l) \approx 3.7 \cdot 10^{10}$,
+$\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l) \approx 1.1 \cdot 10^6$); a larger network or a lower floor needs a
 smaller `LR` or `WEIGHT_LAMBDA`. The tables give the numbers for the current settings."""
 
 FLOOR = r"""def top_eigenvalue(matrix):
@@ -242,14 +243,14 @@ One figure per weight layer $l$, showing the two factors of its prior covariance
 $K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l$. Top: $K^{\mathrm{pre}}_l$ and
 $K^{\mathrm{post}}_l$ as matrices, units in index order. Bottom left: every entry $K^p_{ij}$
 against the torus distance $\lVert x^p_i - x^p_j \rVert$ (points), with the kernel along one axis
-$$k_p(\delta) = A_p\, \frac{W(\delta)}{W(0)}, \qquad 0 \le \delta \le \mathrm{box} / 2,$$
+$$\kappa_p(\delta) = A_p\, \frac{G(\delta)}{G(0)}, \qquad 0 \le \delta \le \mathrm{box} / 2,$$
 as a line. Bottom right: the unit positions (for $d = 1$ the pre ring outside, the post ring
 inside). For $d = 1$ the points lie on the line; for $d = 2$ they scatter around it, because
 $K$ depends on both axis differences, not only on the distance."""
 
 KERNELS = r"""def plot_layer_prior(space):
     # The prior of one weight layer: K_pre and K_post as matrices, K_ij against torus distance
-    # with the profile k(delta), and the unit positions.
+    # with the profile kappa(delta), and the unit positions.
     d = space.pre.embedding.positions.shape[1]
     if d > 2:
         raise ValueError(f"can only draw positions for d = 1 or 2, got d = {d}")
@@ -265,11 +266,11 @@ KERNELS = r"""def plot_layer_prior(space):
         x, box = pop.embedding.positions, pop.embedding.box
         dist = torus_distance(x, x, box).ravel()
         ax.scatter(dist.numpy(), pop.K.ravel().numpy(), s=6, alpha=0.4, color=color)
-        # k(delta) is a function of one axis difference, defined up to box / 2
+        # kappa(delta) is a function of one axis difference, defined up to box / 2
         delta = torch.linspace(0, min(dist.max().item(), box / 2), 200, dtype=x.dtype)
-        k = wrapped_gaussian_profile(delta, pop.kernel.length_scale, box, pop.kernel.amplitude)
+        kappa = wrapped_gaussian_profile(delta, pop.kernel.length_scale, box, pop.kernel.amplitude)
         label = rf"{which}: {pop.name}, $\ell$ = {pop.kernel.length_scale:g}"
-        ax.plot(delta.numpy(), k.numpy(), color=color, label=label)
+        ax.plot(delta.numpy(), kappa.numpy(), color=color, label=label)
     ax.set(xlabel=r"torus distance $\Vert x_i - x_j \Vert$", ylabel="$K_{ij}$")
     ax.legend(frameon=False)
 
@@ -313,15 +314,15 @@ display(
 LOSS_TEXT = r"""## Loss curves
 
 The loss and its three raw terms, as logged during training, against epoch on a log axis:
-$$L = \frac{N}{2}\, \mathrm{mse} + \lambda_w\, \Omega_w + \lambda_r\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
-The terms are drawn unweighted, so they do not add up to the $L$ curve; a term that is zero at
+$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \lambda_w\, \Omega_w + \lambda_r\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
+The terms are drawn unweighted, so they do not add up to the $\mathcal{L}$ curve; a term that is zero at
 every epoch has no point on a log axis and is marked "(zero)" in the legend. Under SGLD the
 curves settle to a noisy stationary level rather than to a minimum."""
 
 LOSS = r"""def plot_loss_curves(history, title):
     # The logged loss L and its raw terms against epoch, on a log axis.
     terms = {
-        "loss": "loss $L$",
+        "loss": r"loss $\mathcal{L}$",
         "mse": "mse",
         "weight_l2": r"weight penalty $\Omega_w$",
         "rate_l2": r"rate penalty $\Omega_r$",
@@ -374,6 +375,7 @@ def plot_example_outputs(outputs, title):
         ax.set_title(f"example {mu}", loc="left")
         ax.set_ylabel("output")
         ax.margins(y=0.25)
+        ax.tick_params(labelbottom=row == n - 1)  # index labels on the last row only
     ax.set_xlabel("output index $a$")
     ax.set_xticks(index)
     first.legend(frameon=False, loc="upper right", ncol=2)
@@ -488,10 +490,13 @@ the bin mean of the latent, the other latents averaged out:
 $$\bar r_{if}(b) = \frac{1}{|b|} \sum_{\mu \in b} r^{(l)}_{i\mu}, \qquad \bar z_f(b) = \frac{1}{|b|} \sum_{\mu \in b} z_{f\mu},$$
 with error bars of one standard error. Each title gives the neuron's position and its MIR:
 $I_{if}$ is the plug-in mutual information (nats) of the rank-binned rate with the rank-binned
-latent, both in $B$ bins (with `MIR_KIND = "corrected"`, minus its mean over `N_SHUFFLES` label
-shuffles and clamped at 0; a neuron with no information above that null gets $\rho_i = 1/K$), and
-$$\rho_i = \frac{\max_f I_{if}}{\sum_f I_{if}}, \qquad \mathrm{MIR}_i = \frac{\rho_i - 1/K}{1 - 1/K},$$
-with $K$ the number of latents; the layer's MIR is the mean over its neurons. One panel per neuron,
+latent, both in $B$ bins. With `MIR_KIND = "corrected"`, $I_{if}$ is that minus its mean over
+`N_SHUFFLES` label shuffles, clamped at 0; and a neuron whose raw total $\sum_f I_{if}$ is not above
+twice its shuffled-null total (`NOISE_FACTOR` in `fct/modularity.py`) counts as noise: all its
+$I_{if}$ are set to 0 and it gets $\rho_i = 1/k$, even when some of its corrected information is
+positive. Then
+$$\rho_i = \frac{\max_f I_{if}}{\sum_f I_{if}}, \qquad \mathrm{MIR}_i = \frac{\rho_i - 1/k}{1 - 1/k},$$
+with $k$ the number of latents; the layer's MIR is the mean over its neurons. One panel per neuron,
 placed by its position (ring order along rows of `N_COLS` for $d = 1$, its lattice cell for
 $d = 2$), all on one rate axis: a modular neuron has one sloped curve and the others flat."""
 
@@ -510,6 +515,8 @@ def plot_tuning_by_position(curves, mir, latent_names, positions, n_cols):
     xy = positions.detach().cpu().numpy()  # (N, d)
     if not len(mean) == len(xy) == len(mir):
         raise ValueError(f"{len(mean)} neurons but {len(xy)} positions and {len(mir)} MIR values")
+    if len(latent_names) != mean.shape[1]:
+        raise ValueError(f"{len(latent_names)} latent names for {mean.shape[1]} latents")
     grid = panel_grid(positions, n_cols)
     fig, axes = plt.subplots(
         grid.n_rows,
