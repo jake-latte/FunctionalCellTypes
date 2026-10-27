@@ -115,7 +115,8 @@ from IPython.display import Markdown, display
 
 from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.cache import cache_root_from_env
-from fct.grid_view import tuning_view
+from fct.grid_view import layer_rates, tuning_view
+from fct.modularity import information_overlap, neuron_factor_information
 from fct.spatial import torus_distance, wrapped_gaussian_profile
 from fct.spatial_view import (
     layer_spaces,
@@ -123,6 +124,7 @@ from fct.spatial_view import (
     order_weights,
     ordered_kernel_comparison,
     panel_grid,
+    position_order,
     train_run,
 )
 
@@ -565,6 +567,60 @@ for layer in range(RUN.net.L):
 plt.show()"""
 
 
+OVERLAP_TEXT = r"""## Overlap of the neurons' information about the latents
+
+How much two neurons of a hidden layer carry information about the same latents. With $I_{if}$ the
+mutual information (nats) of neuron $i$ with latent $f$ from the tuning section (the
+`MIR_KIND` estimate with `N_BINS` and `N_SHUFFLES`, so shuffle-corrected for `"corrected"`), the
+overlap of neurons $i$ and $j$ of layer $l$ is
+$$C^{(l)}_{ij} = \frac{1}{k} \sum_{f=1}^{k} I^{(l)}_{if}\, I^{(l)}_{jf},$$
+with $k$ the number of latents, in nats$^2$. $C$ is symmetric; its diagonal
+$C_{ii} = \frac{1}{k} \sum_f I_{if}^2$ is large for a neuron that is informative about some latent,
+and an off-diagonal entry is large only when both neurons are informative about a common latent, so
+a modular layer shows blocks of neurons sharing a latent. One matrix per hidden layer, neurons in
+ring order for $d = 1$ and in index order otherwise, all on one colour scale starting at 0."""
+
+OVERLAP = r"""def plot_information_overlap(C, order, vmax, layer, kind):
+    # One (N, N) overlap matrix with its neurons shown in `order`, on a colour scale from 0 to vmax.
+    values = C.detach().cpu().numpy()
+    if values.ndim != 2 or values.shape[0] != values.shape[1] or len(order) != len(values):
+        raise ValueError(f"need a square matrix and one order entry per neuron, got {values.shape}")
+    shown = values[np.ix_(order, order)]
+    fig, ax = plt.subplots(figsize=(7, 6), layout="constrained")
+    # A layer with no information at all (all C = 0) would give an empty colour range; show 0..1.
+    image = ax.imshow(shown, cmap="viridis", vmin=0, vmax=vmax or 1.0, interpolation="none")
+    fig.colorbar(image, ax=ax, label=r"$C_{ij}$  (nats$^2$)")
+    label = "neuron, by ring position" if kind == "ring" else "neuron, by index"
+    ax.set(
+        xlabel=label,
+        ylabel=label,
+        title=f"hidden layer {layer + 1}: information overlap",
+    )
+    return fig
+
+
+overlaps, orders = [], []
+for layer in range(RUN.net.L):
+    rates = layer_rates(RUN.net, RUN.dataset.x, layer).cpu()
+    factors = {name: f.cpu() for name, f in RUN.dataset.factors.items()}
+    info = neuron_factor_information(
+        rates,
+        factors,
+        RUN.dataset.groups,
+        N_BINS,
+        "shuffle" if MIR_KIND == "corrected" else "none",
+        N_SHUFFLES,
+        TRAIN_SEED,
+    )
+    overlaps.append(information_overlap(info.member_mi))
+    positions = SPACES[layer].post.embedding.positions
+    orders.append(position_order(positions) if D == 1 else np.arange(len(positions)))
+vmax = max(float(C.max()) for C in overlaps)
+for layer, (C, order) in enumerate(zip(overlaps, orders)):
+    plot_information_overlap(C, order, vmax, layer, "ring" if D == 1 else "index")
+plt.show()"""
+
+
 def build_notebook() -> NotebookNode:
     """The notebook without outputs: settings, the prior, training, then one markdown cell with
     the equation and one code cell with the plotting function per figure."""
@@ -599,6 +655,8 @@ def build_notebook() -> NotebookNode:
         new_code_cell(WEIGHTS),
         new_markdown_cell(TUNING_TEXT),
         new_code_cell(TUNING),
+        new_markdown_cell(OVERLAP_TEXT),
+        new_code_cell(OVERLAP),
     ]
     # Fixed ids, so rebuilding the notebook does not churn the diff.
     for i, cell in enumerate(cells, start=1):
