@@ -655,7 +655,8 @@ not resolve. One figure per hidden layer, $C^I$ left and $C^r$ right, neurons in
 $d = 1$ and in index order otherwise (the ticks give the neuron index, as in the titles of the
 tuning panels). $C^I$ is on one colour scale starting at 0, $C^r$ on one scale symmetric about 0,
 each shared by all layers. If every $C^I$ is zero its scale is 0 to 1 and the title says "(no
-information)", so an empty matrix is not read as data."""
+information)", so an empty matrix is not read as data; if every $C^r$ is zero its scale is $-1$ to
+1."""
 
 OVERLAP = r"""def plot_overlaps(C_info, C_rate, order, info_max, rate_max, layer, kind):
     # The information overlap (viridis, 0 to info_max) and the rate overlap (diverging, +-rate_max)
@@ -665,17 +666,20 @@ OVERLAP = r"""def plot_overlaps(C_info, C_rate, order, info_max, rate_max, layer
         if values.ndim != 2 or values.shape[0] != values.shape[1]:
             raise ValueError(f"C must be a square matrix, got shape {values.shape}")
     if info.shape != rate.shape:
-        raise ValueError(f"the two overlaps must be of the same neurons: {info.shape} vs {rate.shape}")
+        raise ValueError(
+            f"the two overlaps must be of the same neurons: {info.shape} vs {rate.shape}"
+        )
     if len(order) != len(info):
         raise ValueError(f"need one order entry per neuron: {len(order)} for {len(info)}")
     informative = info_max > 0
     # A layer with no information (all C = 0) would give an empty colour range; show 0..1.
-    info_max = info_max if informative else 1.0
-    rate_max = rate_max if rate_max > 0 else 1.0
+    info_top = info_max if informative else 1.0
+    # Likewise for a layer whose rate overlap is all zero: the scale is -1 to 1.
+    rate_top = rate_max if rate_max > 0 else 1.0
     fig, axes = plt.subplots(1, 2, figsize=(13, 6), layout="constrained")
     shown = np.ix_(order, order)
-    left = axes[0].imshow(info[shown], cmap="viridis", vmin=0, vmax=info_max)
-    right = axes[1].imshow(rate[shown], cmap="RdBu_r", vmin=-rate_max, vmax=rate_max)
+    left = axes[0].imshow(info[shown], cmap="viridis", vmin=0, vmax=info_top)
+    right = axes[1].imshow(rate[shown], cmap="RdBu_r", vmin=-rate_top, vmax=rate_top)
     fig.colorbar(left, ax=axes[0], label=r"$C^I_{ij}$  (nats$^2$)")
     fig.colorbar(right, ax=axes[1], label=r"$C^r_{ij}$  (rate$^2$)")
     ticks = np.arange(0, len(order), max(1, int(np.ceil(len(order) / 8))))

@@ -253,10 +253,9 @@ def rate_overlap(mean: Tensor) -> Tensor:
     if mean.ndim != 3:
         raise ValueError(f"mean must be 3-D (N, k, B), got shape {tuple(mean.shape)}")
     empty = mean.isnan()
-    shared = empty[0]
-    if not (empty == shared).all():
+    if not (empty.all(0) == empty.any(0)).all():
         raise ValueError("a bin must be empty for all neurons or for none")
-    valid = ~shared.flatten()
+    valid = ~empty.all(0).flatten()
     if not valid.any():
         raise ValueError("every bin is empty")
     return _overlap(mean.flatten(1)[:, valid], int(valid.sum()))

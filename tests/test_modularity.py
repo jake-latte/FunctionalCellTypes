@@ -595,6 +595,11 @@ def test_rate_overlap_rejects_all_bins_empty():
         rate_overlap(torch.full((2, 1, 3), torch.nan))
 
 
+def test_rate_overlap_rejects_no_neurons():
+    with pytest.raises(ValueError, match="empty"):
+        rate_overlap(torch.zeros(0, 2, 3))
+
+
 @pytest.mark.parametrize("shape", [(5,), (2, 3), (2, 3, 4, 5)])
 def test_rate_overlap_rejects_non_3d_input(shape):
     with pytest.raises(ValueError, match="3-D"):
