@@ -8,7 +8,10 @@ import pytest
 import torch
 
 from fct.cli import main
+from fct.config import load_config, save_config
+from fct.meanfield import SpatialPriorUnsupportedError
 from fct.monitor import MIR_MONITOR_KEYS
+from fct.spatial import SpatialConfig
 from fct.train import MONITOR_EPOCH, MONITOR_PREFIX
 
 TINY = [
@@ -244,3 +247,32 @@ def test_solve_and_plot_solver_default_to_rate_lambda_as_tilt(tmp_path):
     assert main(["train", str(tmp_path)]) == 0
     assert main(["solve", str(tmp_path)]) == 0
     assert main(["plot", str(tmp_path), "--which", "solver"]) == 0
+
+
+def test_solve_on_a_spatial_cache_fails_with_one_line_and_writes_nothing(tmp_path, capsys):
+    cache = tmp_path / "cache"
+    assert _init(cache) == 0
+    cfg = load_config(cache / "config.json")
+    save_config(cfg.model_copy(update={"spatial": SpatialConfig()}), cache / "config.json")
+    assert main(["train", str(cache)]) == 0
+    capsys.readouterr()
+    assert main(["solve", str(cache)]) == 1
+    err = capsys.readouterr().err.strip()
+    assert err.startswith("error:") and "no spatial prior" in err and "\n" not in err
+    assert not (cache / "meanfield").exists()
+
+
+def test_sweep_run_stage_solve_maps_the_spatial_error_to_a_cli_error(tmp_path, monkeypatch, capsys):
+    """SweepConfig has no `spatial` field yet, so a spatial setting cannot be built: run_setting
+    is replaced by a stub that raises the solver's error, to test the mapping in cmd_sweep_run."""
+    from fct import cli
+
+    def refuse(*args, **kwargs):
+        raise SpatialPriorUnsupportedError("the solver has no spatial prior; unset `spatial`")
+
+    monkeypatch.setattr(cli, "run_setting", refuse)
+    monkeypatch.setattr(cli, "_load_sweep", lambda root: None)
+    args = ["sweep", "run", str(tmp_path), "--index", "0", "--stage", "solve"]
+    assert main(args) == 1
+    err = capsys.readouterr().err.strip()
+    assert err.startswith("error:") and "no spatial prior" in err and "\n" not in err

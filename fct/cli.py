@@ -42,7 +42,13 @@ from fct.draw import (
     fig_solver_history,
     plot_training_history,
 )
-from fct.meanfield import InadequateSamplerError, load_meanfield, net_kernels, run_meanfield
+from fct.meanfield import (
+    InadequateSamplerError,
+    SpatialPriorUnsupportedError,
+    load_meanfield,
+    net_kernels,
+    run_meanfield,
+)
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
@@ -184,7 +190,10 @@ def cmd_solve(args: argparse.Namespace) -> int:
     if n_points > P:
         raise CliError(f"meanfield.n_points={n_points} exceeds the dataset size data.P={P}")
     net, _ = _load_net(args.cache_dir, cfg)
-    run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
+    try:
+        run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
+    except SpatialPriorUnsupportedError as err:  # fixable by the user, no traceback
+        raise CliError(str(err)) from err
     return 0
 
 
@@ -417,8 +426,9 @@ def _run_all(sweep: SweepConfig, root: Path, stage: Stage) -> None:
 def cmd_sweep_run(args: argparse.Namespace) -> int:
     """One setting with --index (a SLURM array task), else every setting in order.
 
-    Only sweep errors (bad index, config mismatch) and an inadequate sampler (change the solver
-    config) become CliError; anything else raised by training or solving keeps its traceback.
+    Only sweep errors (bad index, config mismatch), an inadequate sampler (change the solver
+    config) and a spatial config the solver refuses become CliError; anything else raised by training or
+    solving keeps its traceback.
     """
     sweep = _load_sweep(args.root)
     if args.index is None:
@@ -426,7 +436,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> int:
         return 0
     try:
         run_setting(sweep, args.index, args.root, log=print, stage=args.stage)
-    except (SweepError, InadequateSamplerError) as err:  # fixable by the user, no traceback
+    except (
+        SweepError,
+        InadequateSamplerError,
+        SpatialPriorUnsupportedError,
+    ) as err:  # fixable by the user, no traceback
         raise CliError(str(err)) from err
     return 0
 
