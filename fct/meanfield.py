@@ -115,14 +115,25 @@ class InadequateSamplerError(RuntimeError):
 
 
 # ----------------------------------------------------------------------------- public results
+def readout_activities(
+    H: torch.Tensor, phi: Callable[[torch.Tensor], torch.Tensor], readout: str
+) -> list[torch.Tensor]:
+    """ψ^l (P, N) of every hidden layer from the pre-activations H (P, L, N): φ(h^l), except
+    on the last layer under readout "h", where the output reads h^L itself and ψ^L = h^L."""
+    if readout not in ("h", "phi"):
+        raise ValueError(f'readout must be "h" or "phi", got {readout!r}')
+    L = H.shape[1]
+    return [phi(H[:, l]) if (l < L - 1 or readout == "phi") else H[:, l] for l in range(L)]
+
+
 @torch.no_grad()
 def empirical_kernels(net: MLP, X: torch.Tensor, readout: str) -> tuple[torch.Tensor, torch.Tensor]:
     """Φ_l = ψ(h^l) ψ(h^l)ᵀ / N from the trained network at the solver's inputs, and the
     raw pre-activations (P, L, N) (the N neurons are samples from the net's own
     single-site density, which is what the theory predicts)."""
     H, _ = net(X)  # (P, L, N)
-    L, N = H.shape[1], H.shape[2]
-    psis = [net.phi(H[:, l]) if (l < L - 1 or readout == "phi") else H[:, l] for l in range(L)]
+    N = H.shape[2]
+    psis = readout_activities(H, net.phi, readout)
     return torch.stack([psi @ psi.T / N for psi in psis]), H
 
 

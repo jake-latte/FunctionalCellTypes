@@ -27,6 +27,7 @@ from fct.meanfield import (
     empirical_kernels,
     load_meanfield,
     net_kernels,
+    readout_activities,
     run_meanfield,
     solve,
 )
@@ -210,6 +211,30 @@ def test_empirical_kernels_match_definition():
     torch.testing.assert_close(Phi[2], H[:, 2] @ H[:, 2].T / 5)
     Phi_phi, _ = empirical_kernels(net, X, "phi")
     torch.testing.assert_close(Phi_phi[2], torch.relu(H[:, 2]) @ torch.relu(H[:, 2]).T / 5)
+
+
+def test_readout_activities_are_phi_of_h_except_h_on_the_last_layer_under_readout_h():
+    H = torch.randn(6, 3, 5, generator=torch.Generator().manual_seed(0), dtype=torch.float64)
+    psis = readout_activities(H, torch.tanh, "h")
+    assert len(psis) == 3 and all(psi.shape == (6, 5) for psi in psis)
+    for layer in (0, 1):
+        assert torch.equal(psis[layer], torch.tanh(H[:, layer]))
+    assert torch.equal(psis[2], H[:, 2])
+    assert torch.equal(readout_activities(H, torch.tanh, "phi")[2], torch.tanh(H[:, 2]))
+
+
+def test_readout_activities_reject_an_unknown_readout():
+    with pytest.raises(ValueError, match="readout"):
+        readout_activities(torch.zeros(2, 1, 3), torch.tanh, "rates")
+
+
+def test_empirical_kernels_are_built_from_the_readout_activities():
+    X, _ = relu_problem(6, 8, seed=31)
+    net = small_net(8, L=2, N=5)
+    for readout in ("h", "phi"):
+        Phi, H = empirical_kernels(net, X, readout)
+        psis = readout_activities(H, net.phi, readout)
+        assert torch.equal(Phi, torch.stack([psi @ psi.T / 5 for psi in psis]))
 
 
 def test_init_net_requires_a_net():
