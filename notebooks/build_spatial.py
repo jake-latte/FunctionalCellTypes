@@ -115,8 +115,8 @@ from IPython.display import Markdown, display
 
 from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.cache import cache_root_from_env
-from fct.grid_view import layer_rates, tuning_view
-from fct.modularity import information_overlap, neuron_factor_information
+from fct.grid_view import tuning_view
+from fct.modularity import information_overlap
 from fct.spatial import torus_distance, wrapped_gaussian_profile
 from fct.spatial_view import (
     layer_spaces,
@@ -570,49 +570,53 @@ plt.show()"""
 OVERLAP_TEXT = r"""## Overlap of the neurons' information about the latents
 
 How much two neurons of a hidden layer carry information about the same latents. With $I_{if}$ the
-mutual information (nats) of neuron $i$ with latent $f$ from the tuning section (the
+mutual information (nats) of neuron $i$ with latent $f$ exactly as in the tuning section (the
 `MIR_KIND` estimate with `N_BINS` and `N_SHUFFLES`, so shuffle-corrected for `"corrected"`), the
 overlap of neurons $i$ and $j$ of layer $l$ is
 $$C^{(l)}_{ij} = \frac{1}{k} \sum_{f=1}^{k} I^{(l)}_{if}\, I^{(l)}_{jf},$$
 with $k$ the number of latents, in nats$^2$. $C$ is symmetric; its diagonal
 $C_{ii} = \frac{1}{k} \sum_f I_{if}^2$ is large for a neuron that is informative about some latent,
 and an off-diagonal entry is large only when both neurons are informative about a common latent, so
-a modular layer shows blocks of neurons sharing a latent. One matrix per hidden layer, neurons in
-ring order for $d = 1$ and in index order otherwise, all on one colour scale starting at 0."""
+a modular layer shows blocks of neurons sharing a latent. A neuron the tuning section counts as
+noise has all $I_{if} = 0$ (for `"corrected"`), hence an all-zero row and column. One matrix per
+hidden layer, neurons in ring order for $d = 1$ and in index order otherwise (the ticks give the
+neuron index, as in the titles of the tuning panels), all on one colour scale starting at 0. If
+every $C$ is zero the scale is 0 to 1 and the title says "(no information)", so an empty matrix is
+not read as data."""
 
 OVERLAP = r"""def plot_information_overlap(C, order, vmax, layer, kind):
     # One (N, N) overlap matrix with its neurons shown in `order`, on a colour scale from 0 to vmax.
     values = C.detach().cpu().numpy()
-    if values.ndim != 2 or values.shape[0] != values.shape[1] or len(order) != len(values):
-        raise ValueError(f"need a square matrix and one order entry per neuron, got {values.shape}")
+    if values.ndim != 2 or values.shape[0] != values.shape[1]:
+        raise ValueError(f"C must be a square matrix, got shape {values.shape}")
+    if len(order) != len(values):
+        raise ValueError(f"need one order entry per neuron: {len(order)} for {len(values)}")
     shown = values[np.ix_(order, order)]
+    informative = vmax > 0
     fig, ax = plt.subplots(figsize=(7, 6), layout="constrained")
     # A layer with no information at all (all C = 0) would give an empty colour range; show 0..1.
-    image = ax.imshow(shown, cmap="viridis", vmin=0, vmax=vmax or 1.0, interpolation="none")
+    image = ax.imshow(shown, cmap="viridis", vmin=0, vmax=vmax if informative else 1.0)
     fig.colorbar(image, ax=ax, label=r"$C_{ij}$  (nats$^2$)")
+    ticks = np.arange(0, len(order), max(1, int(np.ceil(len(order) / 8))))
+    ax.set_xticks(ticks, np.asarray(order)[ticks])  # the neuron index at each shown position
+    ax.set_yticks(ticks, np.asarray(order)[ticks])
     label = "neuron, by ring position" if kind == "ring" else "neuron, by index"
     ax.set(
         xlabel=label,
         ylabel=label,
-        title=f"hidden layer {layer + 1}: information overlap",
+        title=f"hidden layer {layer + 1}: information overlap"
+        + ("" if informative else " (no information)"),
     )
     return fig
 
 
-overlaps, orders = [], []
+views = [
+    tuning_view(RUN.net, RUN.dataset, layer, N_BINS, MIR_KIND, N_SHUFFLES, TRAIN_SEED)
+    for layer in range(RUN.net.L)
+]
+overlaps = [information_overlap(view.member_mi) for view in views]
+orders = []
 for layer in range(RUN.net.L):
-    rates = layer_rates(RUN.net, RUN.dataset.x, layer).cpu()
-    factors = {name: f.cpu() for name, f in RUN.dataset.factors.items()}
-    info = neuron_factor_information(
-        rates,
-        factors,
-        RUN.dataset.groups,
-        N_BINS,
-        "shuffle" if MIR_KIND == "corrected" else "none",
-        N_SHUFFLES,
-        TRAIN_SEED,
-    )
-    overlaps.append(information_overlap(info.member_mi))
     positions = SPACES[layer].post.embedding.positions
     orders.append(position_order(positions) if D == 1 else np.arange(len(positions)))
 vmax = max(float(C.max()) for C in overlaps)

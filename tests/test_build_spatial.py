@@ -316,10 +316,17 @@ def test_information_overlap_image_of_an_uninformative_layer_has_a_nonempty_scal
 
 def test_information_overlap_image_checks_sizes(notebook_functions):
     plot = notebook_functions["plot_information_overlap"]
-    with pytest.raises(ValueError, match="square"):
+    with pytest.raises(ValueError, match="square matrix"):
         plot(torch.zeros(3, 4), [0, 1, 2], 1.0, 0, "index")
-    with pytest.raises(ValueError, match="order"):
+    with pytest.raises(ValueError, match="one order entry"):
         plot(torch.zeros(3, 3), [0, 1], 1.0, 0, "index")
+
+
+def test_information_overlap_ticks_name_the_neuron_shown_there(notebook_functions):
+    order = [2, 0, 1]
+    ax = notebook_functions["plot_information_overlap"](torch.eye(3), order, 1.0, 0, "ring").axes[0]
+    for labels in (ax.get_xticklabels(), ax.get_yticklabels()):
+        assert [t.get_text() for t in labels] == ["2", "0", "1"]
 
 
 # ---------------------------------------------------------------- parameters and execution

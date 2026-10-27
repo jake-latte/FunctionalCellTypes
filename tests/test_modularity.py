@@ -512,20 +512,20 @@ def test_neuron_mir_needs_at_least_two_groups():
 # ---------------------------------------------------------------- information overlap
 
 
-def _copy_block_rates(n_copy=(4, 3), n_noise=5, P=4000, seed=0):
-    """Rates of 12 neurons to 2 latents: the first 4 copy z0, the next 3 copy z1, 5 are noise."""
+def _copy_block_rates(P=4000, seed=0):
+    """Rates of 12 neurons to 2 latents: neurons 0-3 copy z0, 4-6 copy z1, 7-11 are noise."""
     g = _gen(seed)
     z = torch.randn(P, 2, generator=g)
-    noise = torch.randn(P, sum(n_copy) + n_noise, generator=g)
+    noise = torch.randn(P, 12, generator=g)
     rates = noise.clone()
-    a, b = n_copy[0], n_copy[0] + n_copy[1]
-    rates[:, :a] = z[:, :1] + 0.1 * noise[:, :a]
-    rates[:, a:b] = z[:, 1:] + 0.1 * noise[:, a:b]
-    return rates, {"z0": z[:, 0], "z1": z[:, 1]}, a, b
+    rates[:, :4] = z[:, :1] + 0.1 * noise[:, :4]
+    rates[:, 4:7] = z[:, 1:] + 0.1 * noise[:, 4:7]
+    return rates, {"z0": z[:, 0], "z1": z[:, 1]}
 
 
 def test_information_overlap_is_block_diagonal_on_neurons_that_copy_a_latent():
-    rates, factors, a, b = _copy_block_rates()
+    rates, factors = _copy_block_rates()
+    a, b = 4, 7
     info = neuron_factor_information(rates, factors, n_bins=8, bias_correction="shuffle")
     C = information_overlap(info.member_mi)
     assert C.shape == (12, 12)
@@ -533,7 +533,9 @@ def test_information_overlap_is_block_diagonal_on_neurons_that_copy_a_latent():
     assert torch.allclose(C.diagonal(), (info.member_mi**2).sum(1) / 2)
     block = torch.zeros(12, 12, dtype=torch.bool)
     block[:a, :a] = block[a:b, a:b] = True
-    assert C[block].min() > 1.0  # copies carry ~2 nats each about their latent
+    assert (
+        C[block].min() > 1.0
+    )  # a copy carries ~1.5 nats about its latent (8 bins, noise 0.1): in-block C ~ 1.1
     assert C[~block].max() < 0.05  # across blocks and on the noise neurons: ~0
 
 

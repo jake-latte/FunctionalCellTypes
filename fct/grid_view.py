@@ -31,7 +31,7 @@ from fct.data import get_dataset
 from fct.draw import fig_mir_matrix, fig_mir_vs_ratio, fig_tuning
 from fct.grid_report import MirRecord, mir_grid
 from fct.model import MLP
-from fct.modularity import layer_mir, neuron_mir
+from fct.modularity import neuron_factor_information, neuron_mir, preference
 from fct.report import MIR_KINDS, Item, SettingResult, setting_label
 from fct.sweep import load_sweep, same_value, setting_config, setting_dir
 from fct.tasks import Dataset
@@ -255,6 +255,26 @@ def factor_matrix(factors: Mapping[str, Tensor]) -> tuple[list[str], Tensor]:
     return list(factors), torch.stack(list(factors.values()), dim=1)
 
 
+def neuron_information(
+    rates: Tensor,
+    factors: dict[str, Tensor],
+    groups: dict[str, list[str]] | None,
+    n_bins: int,
+    kind: str,
+    n_shuffles: int,
+    seed: int,
+) -> tuple[np.ndarray, Tensor]:
+    """(N,) MIR of each neuron of one layer, whose mean is the layer's MIR, and the (N, n_members)
+    mutual informations (nats) it is computed from: raw, or with the shuffle bias correction, with
+    the monitor's bins, shuffles and seed. `rates` and `factors` must be CPU tensors
+    (`tuning_view` moves them there)."""
+    _check_kind(kind)
+    bias = "shuffle" if kind == "corrected" else "none"
+    info = neuron_factor_information(rates, factors, groups, n_bins, bias, n_shuffles, seed)
+    r, _ = preference(info.group_mi)
+    return neuron_mir(r, len(info.group_names)).numpy(), info.member_mi
+
+
 def neuron_mir_values(
     rates: Tensor,
     factors: dict[str, Tensor],
@@ -264,27 +284,25 @@ def neuron_mir_values(
     n_shuffles: int,
     seed: int,
 ) -> np.ndarray:
-    """(N,) MIR of each neuron of one layer, whose mean is the layer's MIR: raw, or with the
-    shuffle bias correction, with the monitor's bins, shuffles and seed. `rates` and `factors` must
-    be CPU tensors (`tuning_view` moves them there)."""
-    _check_kind(kind)
-    bias = "shuffle" if kind == "corrected" else "none"
-    layer = layer_mir(rates, factors, groups, n_bins, bias, n_shuffles, seed)
-    return neuron_mir(layer.r, len(layer.group_names)).numpy()
+    """(N,) MIR of each neuron of one layer: the first output of `neuron_information`."""
+    return neuron_information(rates, factors, groups, n_bins, kind, n_shuffles, seed)[0]
 
 
 class TuningView(NamedTuple):
-    """Everything is on the host: CPU tensors in `curves`, a numpy array in `neuron_mir`."""
+    """Everything is on the host: CPU tensors in `curves` and `member_mi`, a numpy array in
+    `neuron_mir`."""
 
     curves: TuningCurves
     neuron_mir: np.ndarray  # (N,)
+    member_mi: Tensor  # (N, n_members) the informations I_if (nats) the MIR is computed from
     latent_names: list[str]
 
 
 def tuning_view(
     net: MLP, dataset: Dataset, layer: int, n_bins: int, kind: str, n_shuffles: int, seed: int
 ) -> TuningView:
-    """Tuning curves of every neuron of `layer` to each latent, with each neuron's MIR."""
+    """Tuning curves of every neuron of `layer` to each latent, with each neuron's MIR and the
+    informations it comes from."""
     if dataset.factors is None:
         raise ValueError("the dataset has no factors, so no latents to tune to")
     # The net runs wherever it lives; everything after is host analysis (and `.numpy()` needs
@@ -292,8 +310,10 @@ def tuning_view(
     rates = layer_rates(net, dataset.x, layer).cpu()
     factors = {name: f.cpu() for name, f in dataset.factors.items()}
     names, matrix = factor_matrix(factors)
-    mir = neuron_mir_values(rates, factors, dataset.groups, n_bins, kind, n_shuffles, seed)
-    return TuningView(tuning_curves(rates, matrix, n_bins), mir, names)
+    mir, member_mi = neuron_information(
+        rates, factors, dataset.groups, n_bins, kind, n_shuffles, seed
+    )
+    return TuningView(tuning_curves(rates, matrix, n_bins), mir, member_mi, names)
 
 
 # ---------------------------------------------------------------------------- I/O
