@@ -313,9 +313,7 @@ def tuning_view(
     rates = layer_rates(net, dataset.x, layer).cpu()
     factors = {name: f.cpu() for name, f in dataset.factors.items()}
     names, matrix = factor_matrix(factors)
-    mir, info = neuron_information(
-        rates, factors, dataset.groups, n_bins, kind, n_shuffles, seed
-    )
+    mir, info = neuron_information(rates, factors, dataset.groups, n_bins, kind, n_shuffles, seed)
     return TuningView(
         tuning_curves(rates, matrix, n_bins), mir, info.member_mi, info.raw_mi, info.null_mi, names
     )
