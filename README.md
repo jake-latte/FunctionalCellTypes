@@ -34,7 +34,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `sweep.py` | a grid of runs over any `Config` fields: `SweepConfig`, `expand`, `run_setting`, `setting_status`, presets |
 | `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
 | `grid_view.py` | from a sweep ROOT to the phase-transition figures: snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
-| `spatial_view.py`, `spatial_report.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels, and one list of text and figures per cell |
+| `spatial_view.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels (the notebook draws its own figures) |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
@@ -157,13 +157,17 @@ uv run python notebooks/build_exemplar.py --no-execute                   # rebui
 
 **Spatial-prior notebook.** One linear-teacher run under the spatial weight prior (`Config.spatial`):
 set the task, network, training (`OPTIMIZER = "sgld" | "adam"`, `BETA`, `LR`, `N_EPOCHS`) and the
-embedding and kernel of each population in the first cells; the notebook plots the kernels, trains
+embedding and kernel of each population in the first cells; the notebook tabulates the eigenvalue
+floor and the SGLD step-size condition, plots the prior kernels, trains
 through the normal cache (re-running reloads a finished run or resumes an interrupted one; the run
 directory under `CACHE_ROOT` is named by a hash of the settings), then shows the loss curves, example
 outputs, the first-layer weights sorted by ring position next to the prior's kernels, and the tuning of
 every neuron to every latent, one panel per neuron placed by its position (ring order for d = 1, lattice
 cell for d = 2). The default sizes are small so SGLD is stable and both optimisers take seconds on a CPU;
-the notebook text says why. Logic is in `fct/spatial_view.py` and `fct/spatial_report.py`; only the
+the notebook text says why. The library computes (`fct/spatial_view.py`, `fct/spatial.py`,
+`fct/grid_view.py`); every figure is drawn by a plotting function written out in the cell that shows
+it, after a markdown cell with the equation of what is plotted. The kernels shown are the weight
+prior and the weights' second moments over units, not the mean-field kernels over samples. Only the
 source notebook is committed.
 
 ```sh

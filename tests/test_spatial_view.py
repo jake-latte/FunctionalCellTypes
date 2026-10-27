@@ -1,13 +1,11 @@
 """Layout and wiring for the spatial-prior notebook, on synthetic inputs with known structure:
-a known permutation of ring positions gives a known panel layout and weight ordering, a known
-tuned neuron lands in the panel of its ring position, and the empirical kernel of weights drawn
-from a known covariance recovers it."""
+a known permutation of ring positions gives a known panel layout and weight ordering, and the
+empirical kernel of weights drawn from a known covariance recovers it. The figures built on them
+are drawn in the notebook and tested in test_build_spatial.py."""
 
-import numpy as np
 import pytest
 import torch
 
-from fct import draw
 from fct.cache import CACHE_ROOT_ENV, cache_root_from_env
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.spatial import KernelSpec, SpatialConfig, build_spaces
@@ -22,8 +20,6 @@ from fct.spatial_view import (
     position_order,
     train_run,
 )
-from fct.tuning import tuning_curves
-from tests.draw_helpers import assert_png
 
 # Ring positions of 6 units in a scrambled order: unit 0 is 3rd around the ring, and so on.
 RING = torch.tensor([[0.50], [0.00], [0.75], [0.25], [0.90], [0.10]], dtype=torch.float64)
@@ -87,49 +83,6 @@ def test_panel_grid_refuses_three_dimensions():
         panel_grid(torch.zeros(4, 3), n_cols=2)
 
 
-def _tuned_layer(tuned_unit: int):
-    """Rates of 6 units to 2 latents: `tuned_unit` rises with z0, all others are flat."""
-    gen = torch.Generator().manual_seed(0)
-    z = 2 * torch.rand(400, 2, generator=gen, dtype=torch.float64) - 1
-    rates = 0.1 * torch.randn(400, 6, generator=gen, dtype=torch.float64)
-    rates[:, tuned_unit] += 3 * z[:, 0]
-    return tuning_curves(rates, z, n_bins=8)
-
-
-def _panel_slope(ax) -> float:
-    """Rise of the first curve of a panel (the z0 curve) from its first to its last point."""
-    y = ax.lines[0].get_ydata()
-    return float(y[-1] - y[0])
-
-
-def test_the_tuned_neuron_has_its_panel_at_its_ring_position():
-    unit = 2  # ring position 0.75: rank 4 of 6, so (row 1, col 0) with 4 columns
-    fig = draw.fig_tuning_by_position(_tuned_layer(unit), np.zeros(6), ["z0", "z1"], RING, n_cols=4)
-    axes = np.array(fig.axes[:8]).reshape(2, 4)  # the 8 cells; the legend adds no axes
-    rank = RING_ORDER.index(unit)
-    panel = axes[rank // 4, rank % 4]
-    assert f"neuron {unit}" in panel.get_title() and "0.75" in panel.get_title()
-    assert _panel_slope(panel) > 4  # rises by about 3 * 2 across the latent's range
-    others = [
-        _panel_slope(ax) for ax in axes.ravel() if ax.get_visible() and ax is not panel and ax.lines
-    ]
-    assert len(others) == 5 and max(abs(s) for s in others) < 0.5
-    assert [ax.get_visible() for ax in axes.ravel()] == [True] * 6 + [False] * 2
-
-
-def test_the_figure_reuses_the_single_neuron_panel(tmp_path):
-    fig = draw.fig_tuning_by_position(_tuned_layer(0), np.zeros(6), ["z0", "z1"], RING, n_cols=3)
-    assert_png(fig, tmp_path)
-    # one error-bar curve per latent in every shown panel, drawn by plot_neuron_tuning
-    shown = [ax for ax in fig.axes if ax.get_visible()]
-    assert len(shown) == 6 and all(len(ax.lines) == 2 * 3 for ax in shown)  # line + 2 caps/latent
-
-
-def test_fig_tuning_by_position_checks_sizes():
-    with pytest.raises(ValueError, match="positions"):
-        draw.fig_tuning_by_position(_tuned_layer(0), np.zeros(6), ["z0", "z1"], RING[:4], n_cols=2)
-
-
 def test_empirical_kernels_recover_a_known_covariance():
     # the columns of W are iid N(0, C): W = A Z with Z iid and A A^T = C
     gen = torch.Generator().manual_seed(1)
@@ -160,34 +113,6 @@ def test_ordered_kernel_comparison_orders_theory_and_data_alike():
     assert torch.allclose(cmp.post_empirical, ordered @ ordered.T / 5)
     # a stationary kernel on the ring decays away from the diagonal once sorted by position
     assert cmp.post_theory[0, 0] > cmp.post_theory[0, 3]
-
-
-def test_weight_image_and_kernel_figures_render(tmp_path):
-    space = build_spaces(SpatialConfig(), m=6, N=8, L=1, n_out=2)[0]
-    W = torch.randn(8, 6, generator=torch.Generator().manual_seed(0), dtype=torch.float64)
-    assert_png(draw.fig_weights_over_embedding(W, space), tmp_path)
-    assert_png(draw.fig_empirical_kernels(ordered_kernel_comparison(space, W), space), tmp_path)
-
-
-def _plane_space():
-    spec = population_spec("grid", 0.1, shape=[2, 3])
-    out = population_spec("grid", 0.1, shape=[2, 1])
-    cfg = SpatialConfig(d=2, input=spec, hidden=spec, output=out)
-    return build_spaces(cfg, m=6, N=6, L=1, n_out=2)[0]
-
-
-def test_weight_image_needs_a_ring():
-    with pytest.raises(ValueError, match="d = 1"):
-        draw.fig_weights_over_embedding(torch.zeros(6, 6), _plane_space())
-
-
-def test_tuning_by_position_lays_a_plane_lattice_out_in_two_dimensions(tmp_path):
-    positions = _plane_space().post.embedding.positions
-    fig = draw.fig_tuning_by_position(
-        _tuned_layer(0), np.zeros(6), ["z0", "z1"], positions, n_cols=99
-    )
-    assert_png(fig, tmp_path)
-    assert np.array(fig.axes).size == 6 and len(fig.axes[0].get_figure().axes) == 6
 
 
 # ---------------------------------------------------------------- configuration and caching

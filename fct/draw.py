@@ -13,7 +13,6 @@ from typing import NamedTuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.colors import LogNorm
@@ -36,8 +35,6 @@ from fct.analyse import (
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
 from fct.grid_report import MirRecord, check_finite_mir, check_layer
-from fct.spatial import LayerSpace, Population, torus_distance, wrapped_gaussian_profile
-from fct.spatial_view import KernelComparison, order_weights, panel_grid
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 from fct.tuning import TuningCurves
 
@@ -67,11 +64,6 @@ _GREY = "#52514e"  # reference lines and the trained-network overlay
 FIG_WIDTH = 13.0  # inches; the width of the full-width results figures
 HEATMAP_WIDTH = FIG_WIDTH + 1  # the shared colourbar sits outside the panels
 ANNOTATION_SIZE = 12  # numbers written inside heatmap cells
-KERNEL_FIG_SIZE = (0.7 * FIG_WIDTH, 9)  # inches; fig_kernel's 2 x 2 panels
-KERNEL_CURVE_POINTS = 200  # samples of the analytic curve in the K-versus-distance panel
-KERNEL_MARKER_AREA = 6  # scatter marker area (points^2) for the K_ij cloud
-EMBEDDING_MARKER_AREA = 14  # scatter marker area for the unit positions
-RING_RADIUS_PRE, RING_RADIUS_POST = 1.0, 0.8  # d = 1: the pre ring outside, the post ring inside
 PROVISIONAL_COLOR = "#e69f00"  # orange: distinct from viridis and from the grey of missing cells
 PROVISIONAL_HATCH = "//"  # hatch pattern over the cells of a provisional heatmap row
 STYLE_RC = {
@@ -1278,97 +1270,6 @@ def fig_mir_heatmaps(
     return fig
 
 
-# --------------------------------------------------------------------------- spatial kernels
-
-
-def _population_color(population: Population, space: LayerSpace) -> str:
-    """The pre factor takes LAYER_COLORS[0], the post factor LAYER_COLORS[1]."""
-    return LAYER_COLORS[0] if population is space.pre else LAYER_COLORS[1]
-
-
-def plot_kernel_vs_distance(space: LayerSpace, ax: Axes | None = None) -> Axes:
-    """Every K_ij of the pre and post factors against its torus distance d_ij (points), with
-    the analytic wrapped Gaussian along one axis as a line for each factor (exactly K for d = 1;
-    for d = 2 the points scatter around it because K depends on both axis differences)."""
-    ax = _get_ax(ax)
-    for pop in (space.pre, space.post):
-        x = pop.embedding.positions
-        color = _population_color(pop, space)
-        dist = torus_distance(x, x, pop.embedding.box).ravel()
-        ax.scatter(
-            _np(dist),
-            _np(pop.K).ravel(),
-            s=KERNEL_MARKER_AREA,
-            alpha=0.4,
-            color=color,
-            rasterized=True,
-        )
-        # the profile is a function of the per-axis minimum-image distance, so the curve is only
-        # meaningful up to box / 2 (in d > 1 the Euclidean torus distance reaches box * sqrt(d) / 2)
-        d_max = min(dist.max().item(), pop.embedding.box / 2)
-        d_line = torch.linspace(0, d_max, KERNEL_CURVE_POINTS, dtype=x.dtype)
-        curve = wrapped_gaussian_profile(
-            d_line, pop.kernel.length_scale, pop.embedding.box, pop.kernel.amplitude
-        )
-        ax.plot(
-            _np(d_line),
-            _np(curve),
-            color=color,
-            label=f"{pop.name}: length_scale = {pop.kernel.length_scale:g}",
-        )
-    ax.set_xlabel("torus distance")
-    ax.set_ylabel("K_ij")
-    ax.legend(frameon=False)
-    return ax
-
-
-def _plot_ring(population: Population, radius: float, color: str, ax: Axes) -> None:
-    angle = 2 * np.pi * _np(population.embedding.positions)[:, 0] / population.embedding.box
-    ax.scatter(
-        radius * np.cos(angle),
-        radius * np.sin(angle),
-        s=EMBEDDING_MARKER_AREA,
-        color=color,
-        label=population.name,
-    )
-
-
-def _check_drawable_dimension(space: LayerSpace) -> int:
-    """The dimension d of the space, if it can be drawn (1 or 2)."""
-    d = space.pre.embedding.positions.shape[1]
-    if d > 2:
-        raise ValueError(f"can only draw embeddings for d = 1 or 2, got d = {d}")
-    return d
-
-
-def plot_embedding(space: LayerSpace, ax: Axes | None = None) -> Axes:
-    """Unit positions of the pre and post populations: on a ring (d = 1, pre outside, post
-    inside) or on the plane (d = 2). The legend sits outside the axis, to the right, so the
-    figure needs constrained layout (as `fig_kernel` uses) to leave room for it."""
-    d = _check_drawable_dimension(space)
-    ax = _get_ax(ax)
-    if d == 1:
-        _plot_ring(space.pre, RING_RADIUS_PRE, LAYER_COLORS[0], ax)
-        _plot_ring(space.post, RING_RADIUS_POST, LAYER_COLORS[1], ax)
-        ax.set_aspect("equal")
-        ax.set_axis_off()
-    elif d == 2:
-        for pop in (space.pre, space.post):
-            xy = _np(pop.embedding.positions)
-            ax.scatter(
-                xy[:, 0],
-                xy[:, 1],
-                s=EMBEDDING_MARKER_AREA,
-                color=_population_color(pop, space),
-                label=pop.name,
-            )
-        ax.set_xlim(0, space.pre.embedding.box)
-        ax.set_ylim(0, space.pre.embedding.box)
-        ax.set_aspect("equal")
-    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.0, 0.5))
-    return ax
-
-
 # --------------------------------------------------------------------------- tuning and grid MIR
 TUNING_N_COLS = 4  # tuning panels per row
 # One colour per latent, none of them in LAYER_COLORS: a page can show layer k and latent k.
@@ -1414,21 +1315,6 @@ def plot_neuron_tuning(
     ax.set_title(f"neuron {neuron}, MIR {mir:.2f}")
     ax.grid(alpha=0.25, lw=0.5)
     return ax
-
-
-@_styled
-def fig_kernel(space: LayerSpace) -> Figure:
-    """One layer's spatial prior: K_pre and K_post as matrices, K against torus distance with
-    the analytic curve, and the unit positions."""
-    _check_drawable_dimension(space)
-    fig, axes = plt.subplots(2, 2, figsize=KERNEL_FIG_SIZE, layout="constrained")
-    plot_kernel(space.pre.K, ax=axes[0, 0], title=f"K_pre ({space.pre.name})")
-    plot_kernel(space.post.K, ax=axes[0, 1], title=f"K_post ({space.post.name})")
-    plot_kernel_vs_distance(space, ax=axes[1, 0])
-    plot_embedding(space, ax=axes[1, 1])
-    axes[1, 1].set_title("positions")
-    fig.suptitle(f"layer {space.layer}: K = K_post (x) K_pre")
-    return fig
 
 
 @_styled
@@ -1584,105 +1470,4 @@ def fig_mir_vs_ratio(records: Iterable[MirRecord]) -> Figure:
     """`plot_mir_vs_ratio` on its own figure."""
     fig, ax = plt.subplots(figsize=(FIG_WIDTH * 0.6, 5), layout="constrained")
     plot_mir_vs_ratio(records, ax)
-    return fig
-
-
-# --------------------------------------------------------------------------- spatial-prior notebook
-# Figures that arrange units by their position in space (layout helpers: `fct.spatial_view`).
-POSITION_TICKS = 8  # at most this many position labels on a weight-image axis
-
-
-def _position_text(position: np.ndarray) -> str:
-    return "(" + ", ".join(f"{c:.2f}" for c in position) + ")"
-
-
-@_styled
-def fig_tuning_by_position(
-    curves: TuningCurves,
-    mir_per_neuron: ArrayLike,
-    latent_names: Sequence[str],
-    positions: Tensor,
-    n_cols: int = TUNING_N_COLS,
-) -> Figure:
-    """The tuning of every neuron, one `plot_neuron_tuning` panel each, placed by the neuron's
-    position: in ring order along rows of `n_cols` for d = 1, at its lattice cell for d = 2
-    (`spatial_view.panel_grid`). Each title gives the neuron index, its position and its MIR;
-    all panels share one rate axis."""
-    mir = _np(mir_per_neuron)
-    n_neurons = curves.mean.shape[0]
-    if len(positions) != n_neurons or len(mir) != n_neurons:
-        raise ValueError(
-            f"{n_neurons} neurons but {len(positions)} positions and {len(mir)} MIR values"
-        )
-    grid = panel_grid(positions, n_cols)
-    fig, axes = plt.subplots(
-        grid.n_rows,
-        grid.n_cols,
-        figsize=(FIG_WIDTH, 3.4 * grid.n_rows + 0.8),
-        sharey=True,
-        squeeze=False,
-        layout="constrained",
-    )
-    xy = _np(positions)
-    used = set(grid.cells)
-    for neuron, (row, col) in enumerate(grid.cells):
-        ax = axes[row, col]
-        plot_neuron_tuning(curves, neuron, mir[neuron], latent_names, ax)
-        ax.set_title(f"neuron {neuron} at {_position_text(xy[neuron])}\nMIR {mir[neuron]:.2f}")
-    for row, col in np.ndindex(axes.shape):
-        if (row, col) not in used:
-            axes[row, col].set_visible(False)
-    first_row, first_col = min(used)
-    axes[first_row, first_col].legend(loc="best", frameon=False)
-    for ax in axes[-1]:
-        ax.set_xlabel("latent value")
-    for ax in axes[:, 0]:
-        ax.set_ylabel("mean rate")
-    return fig
-
-
-@_styled
-def fig_weights_over_embedding(W: Tensor, space: LayerSpace, title: str = "") -> Figure:
-    """Layer weights `W` (post, pre) as an image, rows ordered by the post unit's ring position
-    and columns by the pre unit's, so a spatially smooth weight shows as smooth bands. The
-    colour scale is symmetric about zero. Needs d = 1."""
-    pos_post, pos_pre = space.post.embedding.positions, space.pre.embedding.positions
-    if pos_post.shape[1] != 1:
-        raise ValueError(
-            f"the weight image orders units around a ring, so d = 1 (got d = {pos_post.shape[1]})"
-        )
-    ordered = order_weights(W.detach().cpu(), pos_post.cpu(), pos_pre.cpu())
-    values = _np(ordered.W)
-    bound = np.abs(values).max()
-    fig, ax = plt.subplots(figsize=(0.6 * FIG_WIDTH, 6.5), layout="constrained")
-    image = ax.imshow(values, cmap="RdBu_r", vmin=-bound, vmax=bound, interpolation="none")
-    fig.colorbar(image, ax=ax, label="weight")
-    for axis_name, names, pos, order in (
-        ("x", space.pre.name, pos_pre, ordered.pre_order),
-        ("y", space.post.name, pos_post, ordered.post_order),
-    ):
-        step = max(1, math.ceil(len(order) / POSITION_TICKS))
-        ticks = np.arange(0, len(order), step)
-        labels = [f"{_np(pos)[order[t], 0]:.2f}" for t in ticks]
-        getattr(ax, f"set_{axis_name}ticks")(ticks, labels)
-        getattr(ax, f"set_{axis_name}label")(f"{names} unit, by ring position")
-    ax.set_title(title or f"layer {space.layer} weights over the embedding")
-    return fig
-
-
-@_styled
-def fig_empirical_kernels(comparison: KernelComparison, space: LayerSpace) -> Figure:
-    """Theory against the empirical kernels of a trained weight matrix: post units in the top
-    row, pre units in the bottom, all sorted around the ring. Each panel has its own colour
-    scale, since the trained weights need not have the prior's amplitude."""
-    fig, axes = plt.subplots(2, 2, figsize=KERNEL_FIG_SIZE, layout="constrained")
-    panels = (
-        (comparison.post_theory, f"K_post ({space.post.name}), prior"),
-        (comparison.post_empirical, f"{space.post.name}, from the weights"),
-        (comparison.pre_theory, f"K_pre ({space.pre.name}), prior"),
-        (comparison.pre_empirical, f"{space.pre.name}, from the weights"),
-    )
-    for ax, (kernel, title) in zip(axes.ravel(), panels, strict=True):
-        plot_kernel(kernel, ax=ax, title=title)
-    fig.suptitle(f"layer {space.layer}: prior kernels and the kernels of the trained weights")
     return fig
