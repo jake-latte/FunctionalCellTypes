@@ -8,6 +8,7 @@ Grid order of the phase-transition sweep (L slowest, then phi, then lambda_r, la
 indices 0..3 are L=1 tanh at (r0,w0) (r0,w1) (r1,w0) (r1,w1); 4..7 L=1 relu; 8..11 L=2 tanh.
 """
 
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,7 @@ from fct.grid_view import (
     choose_setting,
     factor_matrix,
     grid_selection,
+    layer_rates,
     load_setting_data,
     matrix_items,
     neuron_mir_values,
@@ -36,6 +38,7 @@ from fct.grid_view import (
 )
 from fct.report import SettingResult, load_results
 from fct.sweep import expand, run_setting, save_sweep, setting_dir
+from fct.tuning import TuningCurves
 from tests.report_helpers import QUIET, tiny_phase_sweep
 
 LAMBDAS = [1e-6, 1.0]  # phase_transition(2)
@@ -51,6 +54,23 @@ def history(raw: list[float], corrected: list[float]) -> dict:
         "monitor_mir_corrected": [first, corrected],
         "monitor_mir_chance": [first, [0.0] * len(raw)],
     }
+
+
+class FakeDeviceTensor(torch.Tensor):
+    """Stands in for a CUDA tensor on a CPU-only host: like one, `.numpy()` raises TypeError until
+    `.cpu()` is called. Subclass-ness survives arithmetic, so a value computed from one still
+    refuses `.numpy()`, as a value computed on the GPU would. `.cpu()` is its only escape: a
+    refactor to `.to("cpu")` or `.numpy(force=True)` turning a test red is this fake, not the code."""
+
+    def numpy(self, *args, **kwargs):
+        raise TypeError("can't convert cuda:0 device type tensor to numpy.")
+
+    def cpu(self, *args, **kwargs):
+        return self.as_subclass(torch.Tensor)
+
+
+def on_fake_device(t: torch.Tensor) -> FakeDeviceTensor:
+    return t.as_subclass(FakeDeviceTensor)
 
 
 def synthetic(status_by_index: dict[int, str]) -> list[SettingResult]:
@@ -316,3 +336,27 @@ def test_depth_is_coerced_to_an_int_and_a_fraction_is_rejected():
     assert grid_selection(results, 1.0, "tanh", "raw").n_layers == 1
     with pytest.raises(ValueError, match="whole number"):
         grid_selection(results, 1.5, "tanh", "raw")
+
+
+# ------------------------------------------------------------------ tuning of device tensors
+def test_tuning_view_of_device_tensors_returns_host_arrays_equal_to_the_cpu_ones(
+    root, results, monkeypatch
+):
+    loaded = load_setting_data(root, choice_for(results, 0).result)
+    tc = loaded.cfg.train
+    args = (0, tc.monitor_bins, "corrected", tc.monitor_shuffles, tc.seed)
+    expected = tuning_view(loaded.net, loaded.dataset, *args)
+
+    real_layer_rates = layer_rates
+    monkeypatch.setattr(
+        "fct.grid_view.layer_rates", lambda *a: on_fake_device(real_layer_rates(*a))
+    )
+    d = loaded.dataset
+    on_device = dataclasses.replace(d, factors={k: on_fake_device(v) for k, v in d.factors.items()})
+    view = tuning_view(loaded.net, on_device, *args)
+
+    assert type(view.neuron_mir) is np.ndarray
+    assert not any(isinstance(a, FakeDeviceTensor) for a in view.curves)
+    np.testing.assert_array_equal(view.neuron_mir, expected.neuron_mir)
+    for field in TuningCurves._fields:
+        np.testing.assert_array_equal(getattr(view.curves, field), getattr(expected.curves, field))

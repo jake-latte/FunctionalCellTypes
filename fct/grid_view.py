@@ -265,7 +265,8 @@ def neuron_mir_values(
     seed: int,
 ) -> np.ndarray:
     """(N,) MIR of each neuron of one layer, whose mean is the layer's MIR: raw, or with the
-    shuffle bias correction, with the monitor's bins, shuffles and seed."""
+    shuffle bias correction, with the monitor's bins, shuffles and seed. `rates` and `factors` must
+    be CPU tensors (`tuning_view` moves them there)."""
     _check_kind(kind)
     bias = "shuffle" if kind == "corrected" else "none"
     layer = layer_mir(rates, factors, groups, n_bins, bias, n_shuffles, seed)
@@ -273,6 +274,8 @@ def neuron_mir_values(
 
 
 class TuningView(NamedTuple):
+    """Everything is on the host: CPU tensors in `curves`, a numpy array in `neuron_mir`."""
+
     curves: TuningCurves
     neuron_mir: np.ndarray  # (N,)
     latent_names: list[str]
@@ -284,9 +287,12 @@ def tuning_view(
     """Tuning curves of every neuron of `layer` to each latent, with each neuron's MIR."""
     if dataset.factors is None:
         raise ValueError("the dataset has no factors, so no latents to tune to")
-    rates = layer_rates(net, dataset.x, layer)
-    names, matrix = factor_matrix(dataset.factors)
-    mir = neuron_mir_values(rates, dataset.factors, dataset.groups, n_bins, kind, n_shuffles, seed)
+    # The net runs wherever it lives; everything after is host analysis (and `.numpy()` needs
+    # host tensors), so the rates and latents cross to the CPU once, here.
+    rates = layer_rates(net, dataset.x, layer).cpu()
+    factors = {name: f.cpu() for name, f in dataset.factors.items()}
+    names, matrix = factor_matrix(factors)
+    mir = neuron_mir_values(rates, factors, dataset.groups, n_bins, kind, n_shuffles, seed)
     return TuningView(tuning_curves(rates, matrix, n_bins), mir, names)
 
 
