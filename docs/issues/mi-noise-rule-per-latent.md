@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: simple
-status: awaiting your confirmation
+status: todo
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -17,7 +17,7 @@ At P = 64, B = 8, k = 4 (the PI's run) the bias is about 0.38 nats per latent: a
 other neuron (256/256), so the corrected MIR is 0.00 for the whole layer while B = 4 gives 0.64.
 Reproduction: `tmp/pm/mi_repro.py`.
 
-**Proposed change (to confirm).** Compare each member separately: corrected I_if =
+**Change (confirmed by the PI 2026-10-27).** Compare each member separately: corrected I_if =
 max(raw_if - null_if, 0), and set I_if = 0 where raw_if <= NOISE_FACTOR x null_if. A neuron is dead
 when every member is zeroed (as before, through `preference`). The module docstring, the
 `TUNING_TEXT` in `notebooks/build_spatial.py`, `docs/design.md`, and `fct/explanations.py`

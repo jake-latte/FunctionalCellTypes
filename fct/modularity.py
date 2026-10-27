@@ -232,13 +232,37 @@ def neuron_factor_information(
     return FactorInformation(member_mi, group_mi, group_names, raw_mi, null)
 
 
+def _overlap(features: Tensor, n: int) -> Tensor:
+    """(N, N) inner products of the rows of `features` (N, F), divided by `n`."""
+    return features @ features.T / n
+
+
 def information_overlap(member_mi: Tensor) -> Tensor:
     """(N, N) overlap C_ij = (1/k) sum_f I_if I_jf of the neurons' informations about the k
     latents: large where two neurons carry information about the same latents. `member_mi` is
     (N, k), e.g. `FactorInformation.member_mi` (one column per latent)."""
     if member_mi.ndim != 2:
         raise ValueError(f"member_mi must be 2-D (N, k), got shape {tuple(member_mi.shape)}")
-    return member_mi @ member_mi.T / member_mi.shape[1]
+    return _overlap(member_mi, member_mi.shape[1])
+
+
+def rate_overlap(mean: Tensor) -> Tensor:
+    """(N, N) overlap C_ij = (1/n_valid) sum_{f,b} rbar_if(b) rbar_jf(b) of the neurons' tuning
+    curves. `mean` is (N, k, B), e.g. `TuningCurves.mean`: the mean rate of neuron i in bin b of
+    latent f, NaN where the bin is empty. The sum and n_valid run over the non-empty (f, b).
+
+    Signed (a rate can be negative): positive for neurons tuned alike, negative for opposite
+    tuning. A bin is empty for every neuron or for none (the bins come from the latents), so a
+    NaN pattern that differs between neurons is refused rather than silently dropped."""
+    if mean.ndim != 3:
+        raise ValueError(f"mean must be 3-D (N, k, B), got shape {tuple(mean.shape)}")
+    empty = mean.isnan()
+    if not (empty.all(0) == empty.any(0)).all():
+        raise ValueError("a bin must be empty for all neurons or for none")
+    valid = ~empty.all(0).flatten()
+    if not valid.any():
+        raise ValueError("every bin is empty")
+    return _overlap(mean.flatten(1)[:, valid], int(valid.sum()))
 
 
 def preference(group_mi: Tensor, tol: float = DEAD_TOL) -> tuple[Tensor, Tensor]:
