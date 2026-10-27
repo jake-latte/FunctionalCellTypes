@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: in progress
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -16,7 +16,9 @@ PI feedback 2026-10-27 on `notebooks/spatial.ipynb` (built by `notebooks/build_s
    eigenvalue-floor text; give equations that say exactly what each figure shows, and say whether
    the kernels shown are the Phi kernels of the mean-field theory (they are not).
 
-## Proposed plan
+Plan confirmed by the PI 2026-10-27.
+
+## Plan
 Rewrite `build_spatial.py` so that each figure's plotting function is defined in full in the
 code cell that uses it (plain matplotlib on arrays the library returns), and each figure is
 introduced by a markdown cell that defines the quantity with an equation. The library keeps the
