@@ -512,10 +512,16 @@ estimator is biased upward and max/sum has a positive floor for unrelated neuron
 Bias correction: `neuron_factor_information` / `layer_mir` / `network_mir` take
 `bias_correction="none"|"shuffle"`, `n_shuffles=5`, `seed=0`. With "shuffle", each member
 information (before the group sum) has its mean over `n_shuffles` joint label shuffles
-subtracted and is clamped at 0; a member whose raw information is not above twice its own null
-is zeroed, and a neuron with every member zeroed is dead (r = 1/K). The raw MIR has a cardinality-dependent floor: at
-P = 8192, 10 rate bins, noise neurons score ~0.89 with one 25-way plus two binary factors
-and ~0.10 with three five-way factors; corrected, both are ~0. The notebook plots the raw
+subtracted and is clamped at 0; a group whose raw information, summed over its members, is not
+above `NOISE_FACTOR` (2) times its summed null has all its members zeroed, and a neuron with
+every member zeroed is dead (r = 1/K). The test is per group (not the old row total, which
+zeroed every neuron at P = 64 with k = 4 latents; not per member, which let noise neurons
+through on object-action with a corrected MIR of 0.77). The raw MIR has a cardinality-dependent
+floor: at P = 8192, 10 rate bins, noise neurons score ~0.89 with one 25-way plus two binary
+factors and ~0.10 with three five-way factors; corrected, the five-way set and the grouped
+object-action set are ~0, while binary singletons leave a floor of ~0.1 (one of them passes the
+test by chance a few percent of the time). Caches written before 2026-10-27 hold corrected MIR
+values of the row rule; the sweep cache does not key on this rule. The notebook plots the raw
 MIR, the corrected MIR and the `shuffled_mir` baseline.
 
 Group edge cases: a factor in no group is ignored; a factor in two groups counts in both; a

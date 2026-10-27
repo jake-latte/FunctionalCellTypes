@@ -21,9 +21,12 @@ Conventions:
   factors' cardinalities: the plug-in information is biased upward by ~(B-1)(C-1)/(2P) nats
   and max/sum of positive numbers is never 1/K. At P = 8192 and 10 rate bins, noise neurons
   score MIR ~ 0.89 with one 25-way and two binary factors but ~ 0.10 with three five-way
-  factors. `bias_correction="shuffle"` removes this (corrected noise MIR ~ 0; each member
-  information is corrected and noise-tested on its own, see `_subtract_null`), and
-  `shuffled_mir` gives the raw chance level; plot raw, corrected and baseline together.
+  factors. `bias_correction="shuffle"` removes this: each member information is corrected by
+  its shuffled null, and a group whose summed raw information is not above NOISE_FACTOR times
+  its summed null is zeroed (see `_subtract_null`). Corrected noise MIR is ~0 for many-valued
+  or grouped factors; a binary factor that is a group on its own passes the test by chance a
+  few percent of the time, which leaves a floor of ~0.1 with one 25-way and two binary singleton
+  factors. `shuffled_mir` gives the raw chance level; plot raw, corrected and baseline together.
 """
 
 from typing import Literal, NamedTuple
@@ -32,7 +35,7 @@ import torch
 from torch import Tensor
 
 DEAD_TOL = 1e-12  # a neuron whose total information is at most this is dead
-NOISE_FACTOR = 2.0  # shuffle correction: a member with raw <= NOISE_FACTOR * null is noise
+NOISE_FACTOR = 2.0  # shuffle correction: a group with raw <= NOISE_FACTOR * null is noise
 
 
 def rank_bins(values: Tensor, n_bins: int) -> Tensor:
@@ -175,13 +178,25 @@ def _shuffled_member_information(
     return _member_information(bins, n_bins, [(labels[perm], C) for labels, C in encoded])
 
 
-def _subtract_null(raw_mi: Tensor, null: Tensor) -> Tensor:
+def _subtract_null(raw_mi: Tensor, null: Tensor, membership: Tensor) -> Tensor:
     """Bias-corrected member information: subtract the shuffled mean, clamp at 0, and zero every
-    member whose raw information is not above NOISE_FACTOR times its own null (indistinguishable
-    from noise). The test is per member, not on the row total: a row total sums k nulls, so a
-    neuron selective for one latent would be compared with k times the plug-in bias."""
+    member of a group whose raw information, summed over the group's members, is not above
+    NOISE_FACTOR times its summed null (indistinguishable from noise). `membership` is the
+    (n_members, K) matrix of `_membership`.
+
+    The test is per group because the preference is: a row total would sum K nulls, so a neuron
+    selective for one group is compared with K times the plug-in bias and zeroed at small P (the
+    PI's P = 64 case), while a per-member test lets a group of many low-cardinality members through
+    whenever one member passes by chance (noise MIR 0.77 on the object-action task). A member in
+    two groups is kept when either passes; a member in no group is tested on its own.
+    """
+    membership = membership.to(raw_mi.device, raw_mi.dtype)
+    group_passes = (raw_mi @ membership > NOISE_FACTOR * (null @ membership)).to(raw_mi.dtype)
+    kept_by_group = group_passes @ membership.T > 0  # (N, n_members)
+    kept_alone = raw_mi > NOISE_FACTOR * null
+    kept = torch.where(membership.sum(dim=1) > 0, kept_by_group, kept_alone)
     corrected = (raw_mi - null).clamp(min=0.0)
-    return corrected.masked_fill(raw_mi <= NOISE_FACTOR * null, 0.0)
+    return corrected.masked_fill(~kept, 0.0)
 
 
 def _mir_and_dead(member_mi: Tensor, membership: Tensor) -> tuple[float, int]:
@@ -206,11 +221,11 @@ def neuron_factor_information(
 
     bias_correction="shuffle" subtracts from every MEMBER information (before the group sum)
     its mean over `n_shuffles` joint label shuffles (one shared permutation for all factors,
-    from a seeded CPU generator) and clamps at 0. A member whose raw information is not above
-    twice its own shuffled null is indistinguishable from noise and is set to 0; a neuron with
-    every member zeroed is dead (r = 1/K). Without that step the leftover noise residuals, which
-    are mostly one-member, would give noise neurons a spuriously high preference. "none" is the
-    plain plug-in estimate.
+    from a seeded CPU generator) and clamps at 0. A group whose raw information (summed over its
+    members) is not above NOISE_FACTOR times its summed shuffled null is indistinguishable from
+    noise and all its members are set to 0; a neuron with every member zeroed is dead (r = 1/K).
+    Without that step the leftover noise residuals, which are mostly one-member, would give noise
+    neurons a spuriously high preference. "none" is the plain plug-in estimate.
     """
     if bias_correction not in ("none", "shuffle"):
         raise ValueError(f"bias_correction must be 'none' or 'shuffle', got {bias_correction!r}")
@@ -227,7 +242,7 @@ def neuron_factor_information(
         null = torch.zeros_like(raw_mi)
         for _ in range(n_shuffles):
             null += _shuffled_member_information(bins, n_bins, encoded, generator) / n_shuffles
-        member_mi = _subtract_null(raw_mi, null)
+        member_mi = _subtract_null(raw_mi, null, membership)
     group_names = list(factors) if groups is None else list(groups)
     group_mi = member_mi @ membership.to(member_mi.device)
     return FactorInformation(member_mi, group_mi, group_names, raw_mi, null)
@@ -391,7 +406,7 @@ def layer_mir_report(
         null += shuffled / n_shuffles
         chance.append(_mir_and_dead(shuffled, membership)[0])
     raw_mir, raw_dead = _mir_and_dead(member_mi, membership)
-    corrected_mir, corrected_dead = _mir_and_dead(_subtract_null(member_mi, null), membership)
+    corrected_mir, corrected_dead = _mir_and_dead(_subtract_null(member_mi, null, membership), membership)
     return LayerMIRReport(
         raw_mir, corrected_mir, sum(chance) / n_shuffles, raw_dead, corrected_dead
     )

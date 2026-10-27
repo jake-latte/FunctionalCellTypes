@@ -17,7 +17,15 @@ At P = 64, B = 8, k = 4 (the PI's run) the bias is about 0.38 nats per latent: a
 other neuron (256/256), so the corrected MIR is 0.00 for the whole layer while B = 4 gives 0.64.
 Reproduction: `tmp/pm/mi_repro.py`.
 
-**Change (confirmed by the PI 2026-10-27).** Compare each member separately: corrected I_if =
+**Outcome.** Implemented as a PER-GROUP rule (PI decision 2026-10-27 after review): a group's raw
+information summed over its members is compared with NOISE_FACTOR times its summed null, and all
+its members are zeroed when it fails. With one latent per group (the spatial notebook, the linear
+teacher) this is exactly the per-latent rule below; on the object-action task, whose groups hold
+25 and 5 binary members, the per-latent rule let one member pass by chance in almost every noise
+neuron (corrected noise MIR 0.77, reviewer's measurement), while the group rule gives 0.00.
+Binary factors that are singleton groups keep a floor of ~0.1.
+
+**Change as originally confirmed.** Compare each member separately: corrected I_if =
 max(raw_if - null_if, 0), and set I_if = 0 where raw_if <= NOISE_FACTOR x null_if. A neuron is dead
 when every member is zeroed (as before, through `preference`). The module docstring, the
 `TUNING_TEXT` in `notebooks/build_spatial.py`, `docs/design.md`, and `fct/explanations.py`

@@ -703,9 +703,10 @@ $$\bar r_{if}(b) = \frac{1}{|b|} \sum_{\mu \in b} r^{(l)}_{i\mu}, \qquad \bar z_
 with error bars of one standard error. Each title gives the neuron's position and its MIR:
 $I_{if}$ is the plug-in mutual information (nats) of the rank-binned rate with the rank-binned
 latent, both in $B$ bins. With `MIR_KIND = "corrected"`, $I_{if}$ is that minus its mean over
-`N_SHUFFLES` label shuffles, clamped at 0; and an $I_{if}$ whose raw value is not above twice its
-shuffled-null mean (`NOISE_FACTOR` in `fct/modularity.py`) counts as noise and is set to 0, each
-latent on its own. A neuron with every $I_{if} = 0$ gets $\rho_i = 1/k$. Then
+`N_SHUFFLES` label shuffles, clamped at 0; and an $I_{if}$ whose raw value is not above
+`NOISE_FACTOR` (2, in `fct/modularity.py`) times its shuffled-null mean counts as noise and is set
+to 0, each latent on its own (the library tests groups of factors on their summed information;
+here every latent is its own group). A neuron with every $I_{if} = 0$ gets $\rho_i = 1/k$. Then
 $$\rho_i = \frac{\max_f I_{if}}{\sum_f I_{if}}, \qquad \mathrm{MIR}_i = \frac{\rho_i - 1/k}{1 - 1/k},$$
 with $k$ the number of latents; the layer's MIR is the mean over its neurons. One panel per neuron,
 placed by its position (ring order along rows of `N_COLS` for $d = 1$, its lattice cell for
@@ -722,7 +723,7 @@ $$\mathbb{E}[\hat I] \approx \frac{(B-1)^2}{2P}\ \text{nats},$$
 with $P$ the number of samples. Before each layer's figure a line gives $P$, $B$, this bias and the
 mean shuffled null over neurons and latents. When the null marks are close to the raw bars, $B$ is
 too large for $P$: the informations are mostly bias, and a neuron none of whose latents has raw
-information above twice its null gets MIR 0."""
+information above `NOISE_FACTOR` times its null gets MIR 0."""
 
 TUNING = r"""N_BINS = 8  # B: rank bins of each latent and of the rates, as in the MIR
 N_SHUFFLES = 5  # label shuffles of the bias-corrected MIR

@@ -34,9 +34,9 @@ def test_quoted_dead_threshold_is_the_one_preference_uses():
 
 
 def test_quoted_noise_rule_factor_is_the_one_the_correction_applies():
-    quoted = re.search(r"\\le (\d+(?:\.\d+)?)\\,\\bar", MIR_EXPLANATION)
+    quoted = re.search(r"\\le (\d+(?:\.\d+)?)\\,\\sum", MIR_EXPLANATION)
     assert quoted and float(quoted.group(1)) == NOISE_FACTOR
-    # Neuron 0 is informative about the factor, neuron 1 is noise: the rule zeroes only neuron 1's member.
+    # Neuron 0 is informative about the factor, neuron 1 is noise: only neuron 1 is zeroed.
     g = torch.Generator().manual_seed(0)
     labels = torch.randint(0, 2, (P,), generator=g)
     informative = labels.double() + 0.1 * torch.randn(P, generator=g, dtype=torch.float64)
