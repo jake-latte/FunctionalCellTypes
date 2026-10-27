@@ -19,9 +19,10 @@ from notebooks.build_spatial import build_notebook, execute_notebook, set_parame
 from tests.draw_helpers import assert_png, on_fake_device
 
 # Hidden layers L = 1: prior figures of its L + 1 = 2 weight layers, loss curves, example
-# outputs, the two first-layer figures (empirical kernels, weights), the activity kernels Phi,
-# one tuning figure and one information-overlap figure.
-N_FIGURES = 2 + 1 + 1 + 2 + 1 + 1 + 1  # ... + Phi + tuning + overlap
+# outputs, the two first-layer figures (empirical kernels, weights), the data kernels A, the
+# latents of the chosen trials, L grids of spatial kernels Phi, one tuning figure and one
+# information-overlap figure.
+N_FIGURES = 2 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1  # ... + A + trials + Phi grids + tuning + overlap
 TINY = {"P": 32, "M_IN": 6, "K_LATENTS": 2, "N": 8, "N_EPOCHS": 40}
 # A code cell that calls one of these draws a figure.
 FIGURE_CALLS = ("plt.subplots(", "plt.figure(")
@@ -32,7 +33,9 @@ PLOTTING_FUNCTIONS = {
     "plot_example_outputs",
     "plot_kernel_comparison",
     "plot_weights_by_position",
-    "plot_activity_kernels",
+    "plot_data_kernels",
+    "plot_trial_latents",
+    "plot_spatial_kernel_pairs",
     "plot_tuning_by_position",
     "plot_information_overlap",
 }
@@ -242,17 +245,17 @@ def test_weight_image_needs_a_ring(notebook_functions):
         notebook_functions["plot_weights_by_position"](torch.zeros(8, 6), _space(2))
 
 
-def _block_phi() -> torch.Tensor:
-    """Two layers of 6 samples: layer 0 has two blocks of 3 (value 1 in, 0 across), layer 1 is
-    twice the identity, so its kernel scale tr(Phi) / P is 2."""
+def _block_kernels() -> torch.Tensor:
+    """Data kernels A of two layers of 6 samples: layer 0 has two blocks of 3 (value 1 in, 0
+    across), layer 1 is twice the identity, so its kernel scale tr(A) / P is 2."""
     block = torch.kron(torch.eye(2), torch.ones(3, 3))
     return torch.stack([block, 2 * torch.eye(6)]).to(torch.float64)
 
 
-def test_activity_kernels_one_panel_per_layer_titled_with_the_kernel_scale(
+def test_data_kernels_one_panel_per_layer_titled_with_the_kernel_scale(
     notebook_functions, tmp_path
 ):
-    fig = notebook_functions["plot_activity_kernels"](_block_phi(), np.arange(6), "", "h")
+    fig = notebook_functions["plot_data_kernels"](_block_kernels(), np.arange(6), "", "h")
     assert_png(fig, tmp_path)
     panels = [ax for ax in fig.axes if ax.images]
     assert len(panels) == 2
@@ -264,26 +267,26 @@ def test_activity_kernels_one_panel_per_layer_titled_with_the_kernel_scale(
     assert panels[1].images[0].get_clim() == (-2.0, 2.0)
 
 
-def test_activity_kernels_last_layer_is_phi_of_h_under_the_phi_readout(notebook_functions):
-    fig = notebook_functions["plot_activity_kernels"](_block_phi(), np.arange(6), "", "phi")
+def test_data_kernels_last_layer_is_phi_of_h_under_the_phi_readout(notebook_functions):
+    fig = notebook_functions["plot_data_kernels"](_block_kernels(), np.arange(6), "", "phi")
     assert all("phi" in ax.get_title() for ax in fig.axes if ax.images)
 
 
-def test_activity_kernels_sorting_permutes_rows_and_columns_together(notebook_functions):
+def test_data_kernels_sorting_permutes_rows_and_columns_together(notebook_functions):
     order = np.array([0, 3, 1, 4, 2, 5])  # interleaves the two blocks
-    fig = notebook_functions["plot_activity_kernels"](_block_phi(), order, "z0", "h")
+    fig = notebook_functions["plot_data_kernels"](_block_kernels(), order, "z0", "h")
     shown = next(ax for ax in fig.axes if ax.images).images[0].get_array()
-    phi = _block_phi()[0].numpy()
-    assert np.array_equal(shown, phi[np.ix_(order, order)])
+    A = _block_kernels()[0].numpy()
+    assert np.array_equal(shown, A[np.ix_(order, order)])
     assert np.array_equal(shown, shown.T)  # rows and columns moved together
     # the blocks, contiguous in dataset order, now alternate: neighbours are never in one block
     assert shown[0, 1] == 0.0 and shown[0, 2] == 1.0
 
 
-def test_activity_kernels_refuse_an_order_that_is_not_a_permutation(notebook_functions):
+def test_data_kernels_refuse_an_order_that_is_not_a_permutation(notebook_functions):
     with pytest.raises(ValueError, match="permutation"):
-        notebook_functions["plot_activity_kernels"](
-            _block_phi(), np.array([0, 0, 1, 2, 3, 4]), "", "h"
+        notebook_functions["plot_data_kernels"](
+            _block_kernels(), np.array([0, 0, 1, 2, 3, 4]), "", "h"
         )
 
 
@@ -295,14 +298,99 @@ def test_sample_order_sorts_by_the_latent_and_keeps_dataset_order_for_none(noteb
     assert order(factors, None, 4).tolist() == [0, 1, 2, 3]
 
 
+def test_spread_trials_span_the_sorted_order_from_first_to_last(notebook_functions):
+    spread = notebook_functions["spread_trials"]
+    order = np.array([4, 0, 3, 1, 2, 6, 5])  # 7 samples, sorted by some latent
+    assert spread(order, 4).tolist() == [4, 3, 2, 5]  # sorted ranks 0, 2, 4, 6
+    assert spread(order, 1).tolist() == [4]
+    assert spread(order, 7).tolist() == order.tolist()
+
+
+@pytest.mark.parametrize("n_trials", [0, 8])
+def test_spread_trials_refuse_more_trials_than_samples_or_none(notebook_functions, n_trials):
+    with pytest.raises(ValueError, match="trials"):
+        notebook_functions["spread_trials"](np.arange(7), n_trials)
+
+
+def test_trial_latents_one_bar_per_latent_and_trial_labelled_by_sample(
+    notebook_functions, tmp_path
+):
+    factors = {"z0": torch.tensor([0.3, -1.0, 0.9, 0.0]), "z1": torch.tensor([4.0, 3, 2, 1])}
+    fig = notebook_functions["plot_trial_latents"](factors, np.array([2, 0, 3]))
+    assert_png(fig, tmp_path)
+    (ax,) = fig.axes
+    assert len(ax.patches) == 3 * 2
+    heights = [bar.get_height() for container in ax.containers for bar in container]
+    assert heights == pytest.approx([0.9, 0.3, 0.0, 2.0, 4.0, 1.0])  # z0 of the trials, then z1
+    assert [t.get_text() for t in ax.get_xticklabels()] == [rf"$\mu$ = {m}" for m in (2, 0, 3)]
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["z0", "z1"]
+
+
+def _pairs() -> tuple[torch.Tensor, np.ndarray]:
+    """Phi blocks of 2 trials over 3 units: block [s, t] is (s - t + 0.5) times a matrix whose
+    entry (i, j) is 10 i + j, so every block is told apart and the units can be followed."""
+    units = 10 * torch.arange(3.0)[:, None] + torch.arange(3.0)
+    scale = torch.tensor([[0.5, -0.5], [1.5, 0.5]])
+    return (scale[:, :, None, None] * units).to(torch.float64), np.array([7, 2])
+
+
+def test_spatial_kernel_pairs_grid_shares_one_symmetric_colour_scale(notebook_functions, tmp_path):
+    pairs, trials = _pairs()
+    fig = notebook_functions["plot_spatial_kernel_pairs"](pairs, trials, np.arange(3), "layer")
+    assert_png(fig, tmp_path)
+    panels = [ax for ax in fig.axes if ax.images]
+    assert len(panels) == 4
+    bound = 1.5 * 22  # the largest |entry| over the whole grid
+    assert all(ax.images[0].get_clim() == (-bound, bound) for ax in panels)
+
+
+def test_spatial_kernel_pairs_grid_places_each_pair_and_orders_its_units(notebook_functions):
+    pairs, trials = _pairs()
+    unit_order = np.array([2, 0, 1])
+    fig = notebook_functions["plot_spatial_kernel_pairs"](pairs, trials, unit_order, "layer")
+    panels = np.array([ax for ax in fig.axes if ax.images]).reshape(2, 2)
+    for s in range(2):
+        for t in range(2):
+            want = pairs[s, t].numpy()[np.ix_(unit_order, unit_order)]
+            assert np.array_equal(panels[s, t].images[0].get_array(), want)
+    # the headers name the samples: nu along the top row, mu down the first column
+    assert [ax.get_title() for ax in panels[0]] == [r"$\nu$ = 7", r"$\nu$ = 2"]
+    assert [ax.get_ylabel() for ax in panels[:, 0]] == [r"$\mu$ = 7", r"$\mu$ = 2"]
+
+
+def test_spatial_kernel_pairs_grid_checks_sizes(notebook_functions):
+    pairs, trials = _pairs()
+    plot = notebook_functions["plot_spatial_kernel_pairs"]
+    with pytest.raises(ValueError, match="trials"):
+        plot(pairs, trials[:1], np.arange(3), "layer")
+    with pytest.raises(ValueError, match="unit order"):
+        plot(pairs, trials, np.arange(2), "layer")
+    with pytest.raises(ValueError, match="S, S, n, n"):
+        plot(pairs[0], trials, np.arange(3), "layer")
+
+
+def test_spatial_kernel_pairs_grid_of_zeros_has_a_nonempty_scale(notebook_functions):
+    pairs, trials = _pairs()
+    fig = notebook_functions["plot_spatial_kernel_pairs"](0 * pairs, trials, np.arange(3), "layer")
+    assert next(ax for ax in fig.axes if ax.images).images[0].get_clim() == (-1.0, 1.0)
+
+
 def test_the_phi_figure_inputs_may_live_on_the_training_device(notebook_functions):
-    """Latents and kernels on a GPU refuse `.numpy()`; the helper and the plot go through `.cpu()`."""
+    """Latents and kernels on a GPU refuse `.numpy()`; the helpers and plots go through `.cpu()`."""
     factors = {"z0": on_fake_device(torch.tensor([0.3, -1.0, 0.9, 0.0, 0.5, 2.0]))}
     order = notebook_functions["sample_order"](factors, "z0", 6)
-    fig = notebook_functions["plot_activity_kernels"](
-        on_fake_device(_block_phi()), order, "z0", "h"
+    fig = notebook_functions["plot_data_kernels"](
+        on_fake_device(_block_kernels()), order, "z0", "h"
     )
     assert len([ax for ax in fig.axes if ax.images]) == 2
+    trials = notebook_functions["spread_trials"](order, 2)
+    fig = notebook_functions["plot_trial_latents"](factors, trials)
+    assert len(fig.axes[0].patches) == 2
+    pairs, trials = _pairs()
+    fig = notebook_functions["plot_spatial_kernel_pairs"](
+        on_fake_device(pairs), trials, np.arange(3), "layer"
+    )
+    assert len([ax for ax in fig.axes if ax.images]) == 4
 
 
 def _tuned_layer(tuned_unit: int):
