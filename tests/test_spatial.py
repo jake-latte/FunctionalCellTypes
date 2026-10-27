@@ -13,9 +13,11 @@ from fct.spatial import (
     PopulationSpec,
     SpatialConfig,
     build_spaces,
+    data_kernel,
     make_embedding,
     penalty_matrix,
     periodic_gaussian_kernel,
+    spatial_kernel_pairs,
     torus_distance,
 )
 
@@ -346,3 +348,61 @@ def test_build_spaces_rejects_grid_shape_not_matching_population_size():
     hidden = PopulationSpec(embedding=EmbeddingSpec(shape=[5]))
     with pytest.raises(ValueError, match="multiply"):
         build_spaces(SpatialConfig(hidden=hidden), 4, 6, 2, 3)
+
+
+# ------------------------------------------------------------------ the spatially indexed kernels
+
+
+def _psi(P=5, n_pre=4, seed=0):
+    return torch.randn(P, n_pre, generator=torch.Generator().manual_seed(seed), dtype=DTYPE)
+
+
+def _kernel(n, length_scale=0.3):
+    x = _ring(n)
+    return periodic_gaussian_kernel(x, x, length_scale, 1.0, 1.0)
+
+
+def test_data_kernel_with_identity_prior_is_the_plain_activity_kernel():
+    psi = _psi()
+    torch.testing.assert_close(data_kernel(psi, torch.eye(4, dtype=DTYPE)), psi @ psi.T / 4)
+
+
+def test_data_kernel_and_pairs_match_the_four_index_definition():
+    """Phi^{mu nu}_ij = (1/N) sum_ab psi_mu,a K^post_ij K^pre_ab psi_nu,b, with K = K^post (x) K^pre."""
+    psi, K_pre, K_post = _psi(P=5, n_pre=4), _kernel(4), _kernel(3, length_scale=0.2)
+    full = torch.einsum("ma,ij,ab,nb->mnij", psi, K_post, K_pre, psi) / 4
+    trials = [3, 0, 4]
+    got = spatial_kernel_pairs(data_kernel(psi, K_pre), K_post, trials)
+    assert got.shape == (3, 3, 3, 3)
+    torch.testing.assert_close(got, full[trials][:, trials])
+
+
+def test_spatial_kernel_pairs_scale_k_post_by_the_data_kernel_entry():
+    A = torch.arange(16, dtype=DTYPE).reshape(4, 4)
+    K_post = _kernel(5)
+    got = spatial_kernel_pairs(A, K_post, [2, 1])
+    for s, mu in enumerate([2, 1]):
+        for t, nu in enumerate([2, 1]):
+            torch.testing.assert_close(got[s, t], A[mu, nu] * K_post)
+
+
+def test_data_kernel_rejects_mismatched_shapes():
+    with pytest.raises(ValueError, match="psi must be"):
+        data_kernel(torch.zeros(4, dtype=DTYPE), torch.eye(4, dtype=DTYPE))
+    with pytest.raises(ValueError, match="square"):
+        data_kernel(_psi(), torch.zeros(4, 3, dtype=DTYPE))
+    with pytest.raises(ValueError, match="4 pre-synaptic units"):
+        data_kernel(_psi(), torch.eye(3, dtype=DTYPE))
+
+
+def test_spatial_kernel_pairs_reject_non_square_matrices():
+    with pytest.raises(ValueError, match="A must be"):
+        spatial_kernel_pairs(torch.zeros(3, 4, dtype=DTYPE), torch.eye(2, dtype=DTYPE), [0])
+    with pytest.raises(ValueError, match="K_post must be"):
+        spatial_kernel_pairs(torch.zeros(3, 3, dtype=DTYPE), torch.zeros(2, 3, dtype=DTYPE), [0])
+
+
+@pytest.mark.parametrize("trials", [[0, 3], [-1], []])
+def test_spatial_kernel_pairs_reject_trials_outside_the_samples(trials):
+    with pytest.raises(ValueError, match="trial"):
+        spatial_kernel_pairs(torch.eye(3, dtype=DTYPE), torch.eye(2, dtype=DTYPE), trials)

@@ -41,6 +41,7 @@ training device.
 """
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Literal, Self
 
@@ -331,6 +332,45 @@ def weight_quadratic_form(
     Works in any dtype and on any device (the factors must match W's).
     """
     return ((M_rows @ W @ M_cols) * W).sum()
+
+
+# --------------------------------------------------------------------------- kernels over samples
+
+
+def _check_square(name: str, matrix: torch.Tensor) -> None:
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError(f"{name} must be a square matrix, got shape {tuple(matrix.shape)}")
+
+
+def data_kernel(psi: torch.Tensor, K_pre: torch.Tensor) -> torch.Tensor:
+    """A_{mu nu} = psi_mu^T K_pre psi_nu / n_pre for psi (P, n_pre): the (P, P) data factor of
+    the spatially indexed kernel Phi^{mu nu}_ij = K^post_ij A_{mu nu}, with the pre-synaptic
+    index summed out against its prior kernel. With K_pre = I it is the plain psi psi^T / n_pre.
+    psi and K_pre must share a dtype and a device."""
+    if psi.ndim != 2:
+        raise ValueError(f"psi must be (P, n_pre), got shape {tuple(psi.shape)}")
+    _check_square("K_pre", K_pre)
+    n_pre = psi.shape[1]
+    if K_pre.shape[0] != n_pre:
+        raise ValueError(f"psi has {n_pre} pre-synaptic units but K_pre is {tuple(K_pre.shape)}")
+    return psi @ K_pre @ psi.T / n_pre
+
+
+def spatial_kernel_pairs(
+    A: torch.Tensor, K_post: torch.Tensor, trials: Sequence[int]
+) -> torch.Tensor:
+    """Phi^{mu nu}_ij = A_{mu nu} K_post_ij for every pair of the S samples `trials`, as an
+    (S, S, n_post, n_post) tensor whose [s, t] block belongs to (trials[s], trials[t])."""
+    _check_square("A", A)
+    _check_square("K_post", K_post)
+    P = A.shape[0]
+    index = torch.as_tensor(list(trials), dtype=torch.long)
+    if index.ndim != 1 or len(index) == 0:
+        raise ValueError(f"need a non-empty sequence of trial indices, got {trials!r}")
+    if index.min() < 0 or index.max() >= P:
+        raise ValueError(f"trial indices must lie in 0 .. {P - 1}, got {index.tolist()}")
+    index = index.to(A.device)
+    return A[index][:, index][:, :, None, None] * K_post[None, None]
 
 
 def parameter_factors(spaces: list[LayerSpace]) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
