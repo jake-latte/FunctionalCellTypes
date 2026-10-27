@@ -512,13 +512,26 @@ estimator is biased upward and max/sum has a positive floor for unrelated neuron
 Bias correction: `neuron_factor_information` / `layer_mir` / `network_mir` take
 `bias_correction="none"|"shuffle"`, `n_shuffles=5`, `seed=0`. With "shuffle", each member
 information (before the group sum) has its mean over `n_shuffles` joint label shuffles
-subtracted and is clamped at 0; neurons whose raw total is not above twice their null total
-are zeroed, so they are dead (r = 1/K). The raw MIR has a cardinality-dependent floor: at
-P = 8192, 10 rate bins, noise neurons score ~0.89 with one 25-way plus two binary factors
-and ~0.10 with three five-way factors; corrected, both are ~0. The notebook plots the raw
-MIR, the corrected MIR and the `shuffled_mir` baseline.
+subtracted and is clamped at 0; a group whose raw information, summed over its members, is not
+above `NOISE_FACTOR` (2) times its summed null has all its members zeroed, and a neuron with
+every member zeroed is dead (r = 1/K). The test is per group, the unit the preference is formed
+on: a row total compares a neuron selective for one group with the bias of all K groups (at P = 64
+with k = 4 continuous latents and 8 bins that zeroes every neuron), and a per-member test lets a
+group of many binary members through whenever one passes by chance (noise neurons scored a
+corrected MIR of 0.77 on object-action). Its cost: within a group the comparison is with the sum of
+the members' biases, so a neuron selective for one of the 25 object bits survives only if its
+excess information exceeds ~112/P nats (0.03 at the sweeps' P = 4096; at P <= 512 every
+object-selective neuron is zeroed, so small-P runs on object-action have no usable corrected MIR).
+The raw MIR has a cardinality-dependent
+floor: at P = 8192, 10 rate bins, noise neurons score ~0.89 with one 25-way plus two binary
+factors and ~0.10 with three five-way factors; corrected, the five-way set and the grouped
+object-action set are ~0, while binary singletons leave a floor of ~0.1 (one of them passes the
+test by chance a few percent of the time). The caches key on the config, not on this rule, so a
+cached corrected MIR may come from the earlier row rule. The notebook plots the raw MIR, the
+corrected MIR and the `shuffled_mir` baseline.
 
-Group edge cases: a factor in no group is ignored; a factor in two groups counts in both; a
+Group edge cases: a factor in no group is ignored by the group sums and the MIR (its member
+information is still reported, corrected against its own null); a factor in two groups counts in both; a
 constant factor is accepted (zero information, but it still counts towards K, so datasets with
 a constant action bit work). Inputs are validated loudly (NaN rates or factors, mismatched
 lengths, bad dtypes, K < 2).

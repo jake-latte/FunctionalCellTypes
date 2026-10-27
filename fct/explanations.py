@@ -106,17 +106,27 @@ $\bar I^{0}_{im} = \frac1S\sum_s I^{\pi_s}_{im}$ and the corrected information i
 
 $$\tilde I_{im} = \max\big(I_{im} - \bar I^{0}_{im},\, 0\big) .$$
 
-A neuron whose raw total is not clearly above its null, $\sum_m I_{im} \le @NOISE@\sum_m \bar I^{0}_{im}$,
-is indistinguishable from noise and all its $\tilde I_{im}$ are set to 0, which makes it dead
-($\rho_i = 1/K$). (Without this step the leftover noise residuals, mostly in one factor, would
-give noise neurons a spuriously high preference.) The corrected informations are summed within
-groups, and $\rho_i$ and the MIR are computed exactly as above:
+A group $k$ whose raw information is not clearly above its null, summed over its members,
+$\sum_{m \in k} I_{im} \le @NOISE@\,\sum_{m \in k} \bar I^{0}_{im}$, is indistinguishable from
+noise and the $\tilde I_{im}$ of all its members are set to 0; a neuron with every member set
+to 0 is dead ($\rho_i = 1/K$). (Without this step the leftover noise residuals, mostly in one
+factor, would give noise neurons a spuriously high preference. The test is per group, the unit the
+preference is formed on: not on the row total, which would compare a neuron selective for one group
+with the bias of all $K$ groups, and not per member, which would let a group of many binary members
+through whenever one of them passes by chance. Within a group the comparison is still with the sum
+of its members' biases, so a neuron selective for one member of a large group is kept only if its
+excess information exceeds about $|k|(B-1)(C-1)/(2P)$ nats: 25 object bits at 10 bins give
+$112/P$, 0.03 nats at $P = 4096$.) The corrected informations are summed within groups, and
+$\rho_i$ and the MIR are computed exactly as above:
 
 $$\mathrm{MIR}_{\text{corrected}} = \frac{\bar{\tilde\rho} - 1/K}{1 - 1/K}.$$
 
-Neurons whose information is within @NOISE@ times the shuffled null are set to $1/K$; other
-noise neurons may leak a little preference by chance. The corrected MIR of an unrelated layer is
-therefore about 0 whatever the cardinalities, and no baseline has to be subtracted from it.
+Groups whose information is within @NOISE@ times their shuffled null are set to 0, so a neuron
+with none left is at $1/K$; other noise neurons may leak a little preference by chance. The
+corrected MIR of an unrelated layer is therefore about 0 for many-valued or grouped factors
+(measured 0.00 on the object-action and what-where tasks and on continuous latents), and no
+baseline has to be subtracted from it. A binary factor that is a group on its own passes the
+test by chance a few percent of the time, so a set of such singletons keeps a floor of ~0.1.
 Because $\rho_i \ge 1/K$, it cannot go below 0 (up to round-off); it is a modularity of the
 neurons that carry detectable information, diluted by those that do not.
 

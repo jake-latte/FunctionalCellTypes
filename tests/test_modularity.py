@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from fct.modularity import (
+    NOISE_FACTOR,
     factor_labels,
     information_overlap,
     layer_mir,
@@ -389,15 +390,50 @@ def _factor_sets(P: int = P_MID, seed: int = 20) -> dict[str, dict[str, torch.Te
     }
 
 
-@pytest.mark.parametrize("set_name", ["3x5", "25+binary"])
-def test_corrected_mir_of_noise_neurons_is_near_zero_for_any_cardinality(set_name):
-    factors = _factor_sets()[set_name]
-    noise = torch.randn(P_MID, 200, generator=_gen(21), dtype=torch.float64)
-    raw = layer_mir(noise, factors).mir
-    corrected = layer_mir(noise, factors, bias_correction="shuffle")
+def _object_action_like(P: int = P_MID, seed: int = 22):
+    """The grid task's factor set: a 25-way position and 30 binary bits, in three groups."""
+    g = _gen(seed)
+    factors = {"position": torch.randint(0, 25, (P,), generator=g)}
+    factors |= {f"object{i}": torch.randint(0, 2, (P,), generator=g) for i in range(25)}
+    factors |= {f"action{i}": torch.randint(0, 2, (P,), generator=g) for i in range(5)}
+    groups = {
+        "position": ["position"],
+        "object": [f"object{i}" for i in range(25)],
+        "action": [f"action{i}" for i in range(5)],
+    }
+    return factors, groups
+
+
+def _noise_layer(P: int = P_MID, N: int = 200) -> torch.Tensor:
+    return torch.randn(P, N, generator=_gen(21), dtype=torch.float64)
+
+
+@pytest.mark.parametrize("set_name", ["3x5", "object-action-like"])
+def test_corrected_mir_of_noise_neurons_is_near_zero_with_many_valued_or_grouped_factors(set_name):
+    # The noise test is per group: a group of 25 binary members is tested on its summed raw and
+    # null informations, so one member passing by chance does not let the neuron through (a
+    # per-member test gave noise neurons a corrected MIR of 0.77 on this factor set).
+    if set_name == "3x5":
+        factors, groups = _factor_sets()["3x5"], None
+    else:
+        factors, groups = _object_action_like()
+    noise = _noise_layer()
+    raw = layer_mir(noise, factors, groups).mir
+    corrected = layer_mir(noise, factors, groups, bias_correction="shuffle")
     assert abs(corrected.mir) < 0.03
     assert corrected.n_dead > 150  # almost all noise neurons are indistinguishable from chance
     assert raw > 0.05  # the uncorrected floor is what the correction removes
+
+
+def test_singleton_binary_members_leak_a_small_floor():
+    # A binary member that is its own group has (B-1)(C-1) = 9 degrees of freedom, so its plug-in
+    # estimate exceeds twice its null by chance a few percent of the time and that neuron gets
+    # r = 1. Measured over 20 noise seeds: corrected MIR 0.11 +- 0.02, at most 0.16 (the old row
+    # rule gave 0). The bound caps that floor; without any noise test the value is ~0.7.
+    factors = _factor_sets()["25+binary"]
+    corrected = layer_mir(_noise_layer(), factors, bias_correction="shuffle")
+    assert corrected.mir < 0.2
+    assert corrected.n_dead > 150
 
 
 def test_raw_noise_floor_depends_on_the_factor_set():
@@ -442,16 +478,86 @@ def test_the_null_of_independent_rates_is_the_plug_in_bias():
     assert abs(float((info.raw_mi - info.null_mi).mean())) < 0.02
 
 
-def test_member_mi_is_the_raw_minus_the_null_clamped_for_the_neurons_kept():
+def test_member_mi_is_the_raw_minus_the_null_clamped_for_the_members_kept():
     factors = _factors3(P=2000)
     rates = torch.randn(2000, 20, generator=_gen(25)) + 2 * factors["f0"][:, None] * (
         torch.arange(20) < 10
     )
     info = neuron_factor_information(rates, factors, n_bins=6, bias_correction="shuffle")
-    live = info.member_mi.sum(1) > 0
-    assert live.any() and not live.all()
+    kept = info.raw_mi > NOISE_FACTOR * info.null_mi
+    assert kept.any() and not kept.all()
     expected = (info.raw_mi - info.null_mi).clamp(min=0)
-    assert torch.equal(info.member_mi[live], expected[live])
+    assert torch.equal(info.member_mi[kept], expected[kept])
+    assert (info.member_mi[~kept] == 0).all()
+
+
+def _grouped_case(P: int = 4000, seed: int = 26, n_extra: int = 20):
+    """Binary factors a, b, c, e0..e{n_extra-1} in groups g = [a, b] and h = [c, e...]; neuron 0 is
+    driven by a and weakly by c, neuron 1 is noise."""
+    g = _gen(seed)
+    names = ["a", "b", "c"] + [f"e{i}" for i in range(n_extra)]
+    factors = {name: torch.randint(0, 2, (P,), generator=g) for name in names}
+    groups = {"g": ["a", "b"], "h": names[2:]}
+    drive = 3.0 * factors["a"] + 0.28 * factors["c"]
+    rates = torch.stack([drive + torch.randn(P, generator=g), torch.randn(P, generator=g)], dim=1)
+    return rates.double(), factors, groups
+
+
+def test_a_group_is_kept_or_zeroed_as_a_whole():
+    # g passes on its sum, so b is kept and its corrected value is the clamp (raw below null); c
+    # alone is above twice its null but h's sum is not, so every member of h is zeroed.
+    rates, factors, groups = _grouped_case()
+    info = neuron_factor_information(rates, factors, groups, n_bins=10, bias_correction="shuffle")
+    raw, null = info.raw_mi, info.null_mi
+    assert raw[0, 2] > NOISE_FACTOR * null[0, 2]  # c on its own would pass ...
+    assert raw[0, 2:].sum() <= NOISE_FACTOR * null[0, 2:].sum()  # ... but h as a group does not
+    assert raw[0, 1] < null[0, 1]  # b is below its null: the clamp, not the test, zeroes it
+    expected = (raw - null).clamp(min=0)
+    assert info.member_mi[0, 0] > 0.4  # nats about a
+    assert torch.equal(info.member_mi[0, :2], expected[0, :2])
+    assert (info.member_mi[0, 2:] == 0).all()
+    assert (info.member_mi[1] == 0).all()
+
+
+def test_a_member_in_no_group_is_tested_on_its_own():
+    # It counts towards no group's MIR, but its information is still reported (the overlap
+    # matrices use member_mi), corrected against its own null like a singleton group.
+    factors = _binary_factors(P=4000)
+    groups = {"g": ["a", "b"], "h": ["c"]}  # d is in no group
+    rates = torch.stack([factors["d"].double(), factors["a"].double()], dim=1)
+    info = neuron_factor_information(rates, factors, groups, n_bins=6, bias_correction="shuffle")
+    expected = (info.raw_mi - info.null_mi).clamp(min=0)
+    assert info.member_mi[0, 3] == expected[0, 3] > 0.5  # neuron 0 copies d: kept on its own
+    assert (info.member_mi[0, :3] == 0).all()
+    assert info.member_mi[1, 3] == 0  # neuron 1 carries nothing about d
+    assert info.group_mi.shape == (2, 2) and info.group_mi[0].sum() == 0
+
+
+def _single_latent_case(P: int = 64, B: int = 8, k: int = 4):
+    """k float latents; neuron 0 is a monotone function of z1 plus noise, neuron 1 is noise."""
+    g = _gen(31)
+    factors = {f"z{f}": torch.randn(P, generator=g) for f in range(k)}
+    signal = torch.tanh(factors["z1"]) + 0.05 * torch.randn(P, generator=g)
+    return torch.stack([signal, torch.randn(P, generator=g)], dim=1), factors, B
+
+
+def test_a_one_latent_neuron_keeps_that_latent_and_loses_the_others_at_small_P():
+    # The plug-in bias at P = 64, B = 8 is ~0.38 nats per latent, so the row total of a neuron
+    # selective for one of k = 4 latents is not above twice the total null; with one latent per
+    # group, each latent is tested against its own null instead.
+    rates, factors, B = _single_latent_case()
+    info = neuron_factor_information(rates, factors, n_bins=B, bias_correction="shuffle")
+    assert info.member_mi[0, 1] > 0
+    assert (info.member_mi[0, [0, 2, 3]] == 0).all()
+
+
+def test_a_pure_noise_neuron_ends_with_every_member_zero_and_is_dead():
+    rates, factors, B = _single_latent_case()
+    info = neuron_factor_information(rates, factors, n_bins=B, bias_correction="shuffle")
+    out = layer_mir(rates, factors, n_bins=B, bias_correction="shuffle")
+    assert (info.member_mi[1] == 0).all()
+    assert out.n_dead == 1
+    assert out.mir == pytest.approx(0.5)  # r = (1, 1/4): (5/8 - 1/4) / (1 - 1/4)
 
 
 def test_bias_correction_is_deterministic_for_a_seed_and_none_is_unchanged():
