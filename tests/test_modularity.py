@@ -417,6 +417,43 @@ def test_corrected_mir_keeps_the_modular_and_mixed_ground_truth():
     assert out.mir == pytest.approx(_expected_mir(0.5, K3), abs=0.02)
 
 
+def test_raw_mi_is_the_plug_in_estimate_and_null_mi_the_shuffled_mean():
+    factors = _factors3(P=2000)
+    rates = torch.randn(2000, 20, generator=_gen(23)).relu() + factors["f0"][:, None]
+    plain = neuron_factor_information(rates, factors, n_bins=6)
+    shuffled = neuron_factor_information(rates, factors, n_bins=6, bias_correction="shuffle")
+    assert plain.null_mi is None
+    assert torch.equal(plain.raw_mi, plain.member_mi)
+    assert torch.equal(shuffled.raw_mi, plain.member_mi)  # same rates, same factors
+    assert shuffled.null_mi.shape == plain.member_mi.shape
+    assert (shuffled.null_mi >= 0).all()
+
+
+def test_the_null_of_independent_rates_is_the_plug_in_bias():
+    # Float latents are rank-binned into B bins like the rates, so the plug-in bias is the full
+    # (B-1)^2 / (2P); a null of zeros, or one scaled by the number of shuffles, would miss it.
+    P, B = 4096, 10
+    g = _gen(24)
+    factors = {f"f{k}": torch.randn(P, generator=g) for k in range(3)}
+    rates = torch.randn(P, 30, generator=g)
+    info = neuron_factor_information(rates, factors, n_bins=B, bias_correction="shuffle")
+    bias = (B - 1) ** 2 / (2 * P)
+    assert float(info.null_mi.mean()) == pytest.approx(bias, rel=0.3)
+    assert abs(float((info.raw_mi - info.null_mi).mean())) < 0.02
+
+
+def test_member_mi_is_the_raw_minus_the_null_clamped_for_the_neurons_kept():
+    factors = _factors3(P=2000)
+    rates = torch.randn(2000, 20, generator=_gen(25)) + 2 * factors["f0"][:, None] * (
+        torch.arange(20) < 10
+    )
+    info = neuron_factor_information(rates, factors, n_bins=6, bias_correction="shuffle")
+    live = info.member_mi.sum(1) > 0
+    assert live.any() and not live.all()
+    expected = (info.raw_mi - info.null_mi).clamp(min=0)
+    assert torch.equal(info.member_mi[live], expected[live])
+
+
 def test_bias_correction_is_deterministic_for_a_seed_and_none_is_unchanged():
     factors = _factors3(P=2000)
     rates = torch.randn(2000, 20, generator=_gen(22)).relu()

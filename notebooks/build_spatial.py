@@ -565,40 +565,84 @@ positive. Then
 $$\rho_i = \frac{\max_f I_{if}}{\sum_f I_{if}}, \qquad \mathrm{MIR}_i = \frac{\rho_i - 1/k}{1 - 1/k},$$
 with $k$ the number of latents; the layer's MIR is the mean over its neurons. One panel per neuron,
 placed by its position (ring order along rows of `N_COLS` for $d = 1$, its lattice cell for
-$d = 2$), all on one rate axis: a modular neuron has one sloped curve and the others flat."""
+$d = 2$), all on one rate axis: a modular neuron has one sloped curve and the others flat.
+
+Beside each neuron's curves, a column chart gives its information with every latent: one bar per
+latent $f$ at $x = f$, in the colour of that latent's curve. The pale bar is the raw plug-in
+$I_{if}$, the full-colour bar is the estimate the MIR uses (the same for `"raw"`), and for
+`"corrected"` a black mark is the shuffled-null mean of that latent. All bar panels share one axis
+in nats.
+
+The plug-in estimate is biased upward even for a neuron independent of the latent: about
+$$\mathbb{E}[\hat I] \approx \frac{(B-1)^2}{2P}\ \text{nats},$$
+with $P$ the number of samples. Before each layer's figure a line gives $P$, $B$, this bias and the
+mean shuffled null over neurons and latents. When the null marks are close to the raw bars, $B$ is
+too large for $P$: the informations are mostly bias, and a neuron whose raw total is not above
+twice its null total gets MIR 0."""
 
 TUNING = r"""N_BINS = 8  # B: rank bins of each latent and of the rates, as in the MIR
 N_SHUFFLES = 5  # label shuffles of the bias-corrected MIR
 MIR_KIND = "corrected"  # "corrected" or "raw"
 N_COLS = 4  # panels per row on a ring; a plane lattice uses its own rows and columns
+BAR_WIDTH = 0.8  # width of the raw information bar of a latent (x spacing is 1)
 
 
-def plot_tuning_by_position(curves, mir, latent_names, positions, n_cols):
-    # One panel per neuron at its place in space, one curve per latent: the bin means of the
-    # rate against the bin means of the latent, +- one standard error.
+def _draw_information_bars(ax, raw, used, null, names, bar_width):
+    # One bar per latent at x = f: the raw plug-in information pale, the estimate the MIR uses
+    # (`used`) full colour and half as wide, and the shuffled null mean as a black mark spanning
+    # the raw bar (`null` is None when no null was computed).
+    x = np.arange(len(names))
+    colours = [f"C{f}" for f in x]
+    ax.bar(x, raw, width=bar_width, color=colours, alpha=0.35)
+    ax.bar(x, used, width=bar_width / 2, color=colours, alpha=1.0)
+    if null is not None:
+        ax.hlines(null, x - bar_width / 2, x + bar_width / 2, color="black", linewidth=2)
+    ax.set_xticks(x, names)
+    ax.grid(alpha=0.25, axis="y")
+
+
+def plot_tuning_by_position(view, positions, n_cols, bar_width):
+    # Two panels per neuron at its place in space. Left: one curve per latent, the bin means of
+    # the rate against the bin means of the latent, +- one standard error. Right: the neuron's
+    # information with each latent (`_draw_information_bars`). `view` is a `TuningView`.
+    curves, mir, names = view.curves, view.neuron_mir, view.latent_names
     mean = curves.mean.detach().cpu().numpy()  # (N, K, B)
     sem = curves.sem.detach().cpu().numpy()  # (N, K, B)
     centres = curves.centres.detach().cpu().numpy()  # (K, B)
     xy = positions.detach().cpu().numpy()  # (N, d)
+    raw = view.raw_mi.detach().cpu().numpy()  # (N, K) nats
+    used = view.member_mi.detach().cpu().numpy()  # (N, K)
+    null = None if view.null_mi is None else view.null_mi.detach().cpu().numpy()  # (N, K)
     if not len(mean) == len(xy) == len(mir):
         raise ValueError(f"{len(mean)} neurons but {len(xy)} positions and {len(mir)} MIR values")
-    if len(latent_names) != mean.shape[1]:
-        raise ValueError(f"{len(latent_names)} latent names for {mean.shape[1]} latents")
+    if len(names) != mean.shape[1]:
+        raise ValueError(f"{len(names)} latent names for {mean.shape[1]} latents")
+    informations = [raw, used] if null is None else [raw, used, null]
+    if any(m.shape != mean.shape[:2] for m in informations):
+        raise ValueError(
+            f"informations of shape {[m.shape for m in informations]}, need {mean.shape[:2]}"
+        )
     grid = panel_grid(positions, n_cols)
     fig, axes = plt.subplots(
         grid.n_rows,
-        grid.n_cols,
-        figsize=(12, 3.2 * grid.n_rows + 0.8),
-        sharey=True,
+        2 * grid.n_cols,
+        figsize=(15, 3.2 * grid.n_rows + 0.8),
         squeeze=False,
         layout="constrained",
     )
     for ax in axes.ravel():
         ax.set_visible(False)  # a ring of N units may leave the last row part empty
-    for neuron, cell in enumerate(grid.cells):
-        ax = axes[cell]
+    # The neuron at cell (row, col) has its curves at grid column 2 col and its bars next to them.
+    curve_axes = [axes[row, 2 * col] for row, col in grid.cells]
+    bar_axes = [axes[row, 2 * col + 1] for row, col in grid.cells]
+    for group in (curve_axes, bar_axes):  # one rate axis, and one information axis in nats
+        for ax in group[1:]:
+            ax.sharey(group[0])
+    for neuron, (row, col) in enumerate(grid.cells):
+        ax, bars = curve_axes[neuron], bar_axes[neuron]
         ax.set_visible(True)
-        for f, name in enumerate(latent_names):
+        bars.set_visible(True)
+        for f, name in enumerate(names):
             ax.errorbar(
                 centres[f],
                 mean[neuron, f],
@@ -608,23 +652,39 @@ def plot_tuning_by_position(curves, mir, latent_names, positions, n_cols):
                 capsize=2,
                 label=name,
             )
+        _draw_information_bars(
+            bars, raw[neuron], used[neuron], None if null is None else null[neuron], names, bar_width
+        )
         where = ", ".join(f"{c:.2f}" for c in xy[neuron])
         ax.set_title(f"neuron {neuron} at ({where})\nMIR {mir[neuron]:.2f}")
         ax.grid(alpha=0.25)
-    for ax in axes[-1]:
+        if col > 0:  # the shared y axes are labelled on the first neuron column only
+            ax.tick_params(labelleft=False)
+            bars.tick_params(labelleft=False)
+    for ax in axes[-1, ::2]:
         ax.set_xlabel(r"latent $\bar z_f(b)$")
     for ax in axes[:, 0]:
         ax.set_ylabel(r"rate $\bar r_{if}(b)$")
-    axes[min(grid.cells)].legend(frameon=False)
+    for ax in axes[:, 1]:
+        ax.set_ylabel(r"$I_{if}$ (nats)")
+    axes[min(grid.cells)[0], 2 * min(grid.cells)[1]].legend(frameon=False)
     return fig
 
 
 for layer in range(RUN.net.L):
     view = tuning_view(RUN.net, RUN.dataset, layer, N_BINS, MIR_KIND, N_SHUFFLES, TRAIN_SEED)
-    positions = SPACES[layer].post.embedding.positions
-    fig = plot_tuning_by_position(
-        view.curves, view.neuron_mir, view.latent_names, positions, N_COLS
+    n_samples = len(RUN.dataset.x)
+    null_note = (
+        ""
+        if view.null_mi is None
+        else f", mean shuffled null {view.null_mi.mean().item():.3f} nats"
     )
+    print(
+        f"layer {layer + 1}: P = {n_samples}, B = {N_BINS}, expected plug-in bias "
+        f"(B-1)^2 / (2P) = {(N_BINS - 1) ** 2 / (2 * n_samples):.3f} nats per latent{null_note}"
+    )
+    positions = SPACES[layer].post.embedding.positions
+    fig = plot_tuning_by_position(view, positions, N_COLS, BAR_WIDTH)
     fig.suptitle(
         f"hidden layer {layer + 1}: tuning of every neuron, by position "
         f"({MIR_KIND} MIR, layer mean {np.mean(view.neuron_mir):.3f})"
