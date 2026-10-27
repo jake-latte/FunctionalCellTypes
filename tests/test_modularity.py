@@ -15,6 +15,7 @@ from fct.modularity import (
     neuron_mir,
     preference,
     rank_bins,
+    rate_overlap,
     shuffle_factors,
     shuffled_mir,
 )
@@ -416,6 +417,43 @@ def test_corrected_mir_keeps_the_modular_and_mixed_ground_truth():
     assert out.mir == pytest.approx(_expected_mir(0.5, K3), abs=0.02)
 
 
+def test_raw_mi_is_the_plug_in_estimate_and_null_mi_the_shuffled_mean():
+    factors = _factors3(P=2000)
+    rates = torch.randn(2000, 20, generator=_gen(23)).relu() + factors["f0"][:, None]
+    plain = neuron_factor_information(rates, factors, n_bins=6)
+    shuffled = neuron_factor_information(rates, factors, n_bins=6, bias_correction="shuffle")
+    assert plain.null_mi is None
+    assert torch.equal(plain.raw_mi, plain.member_mi)
+    assert torch.equal(shuffled.raw_mi, plain.member_mi)  # same rates, same factors
+    assert shuffled.null_mi.shape == plain.member_mi.shape
+    assert (shuffled.null_mi >= 0).all()
+
+
+def test_the_null_of_independent_rates_is_the_plug_in_bias():
+    # Float latents are rank-binned into B bins like the rates, so the plug-in bias is the full
+    # (B-1)^2 / (2P); a null of zeros, or one scaled by the number of shuffles, would miss it.
+    P, B = 4096, 10
+    g = _gen(24)
+    factors = {f"f{k}": torch.randn(P, generator=g) for k in range(3)}
+    rates = torch.randn(P, 30, generator=g)
+    info = neuron_factor_information(rates, factors, n_bins=B, bias_correction="shuffle")
+    bias = (B - 1) ** 2 / (2 * P)
+    assert float(info.null_mi.mean()) == pytest.approx(bias, rel=0.3)
+    assert abs(float((info.raw_mi - info.null_mi).mean())) < 0.02
+
+
+def test_member_mi_is_the_raw_minus_the_null_clamped_for_the_neurons_kept():
+    factors = _factors3(P=2000)
+    rates = torch.randn(2000, 20, generator=_gen(25)) + 2 * factors["f0"][:, None] * (
+        torch.arange(20) < 10
+    )
+    info = neuron_factor_information(rates, factors, n_bins=6, bias_correction="shuffle")
+    live = info.member_mi.sum(1) > 0
+    assert live.any() and not live.all()
+    expected = (info.raw_mi - info.null_mi).clamp(min=0)
+    assert torch.equal(info.member_mi[live], expected[live])
+
+
 def test_bias_correction_is_deterministic_for_a_seed_and_none_is_unchanged():
     factors = _factors3(P=2000)
     rates = torch.randn(2000, 20, generator=_gen(22)).relu()
@@ -549,3 +587,57 @@ def test_information_overlap_is_the_scaled_gram_matrix_of_the_informations():
 def test_information_overlap_rejects_non_2d_input(shape):
     with pytest.raises(ValueError, match="2-D"):
         information_overlap(torch.zeros(shape))
+
+
+def _bin_means_with_an_empty_bin() -> torch.Tensor:
+    """(3, 2, 4) bin means whose (latent 0, bin 1) bin is empty for every neuron."""
+    mean = torch.tensor(
+        [
+            [[1.0, 0.0, 3.0, 4.0], [1.0, 0.0, 1.0, 0.0]],
+            [[0.0, 0.0, 0.0, 1.0], [2.0, 2.0, 2.0, 2.0]],
+            [[1.0, 0.0, 1.0, 1.0], [-1.0, 1.0, -1.0, 1.0]],
+        ]
+    )
+    mean[:, 0, 1] = torch.nan
+    return mean
+
+
+def test_rate_overlap_is_the_mean_product_over_the_non_empty_bins():
+    # 7 of the 8 (latent, bin) cells are non-empty; the sums below are over those 7
+    expected = torch.tensor([[28.0, 8.0, 6.0], [8.0, 17.0, 1.0], [6.0, 1.0, 7.0]]) / 7
+    assert torch.allclose(rate_overlap(_bin_means_with_an_empty_bin()), expected)
+
+
+def test_rate_overlap_of_a_copied_curve_equals_the_diagonal():
+    mean = _bin_means_with_an_empty_bin()
+    mean[1] = mean[0]
+    C = rate_overlap(mean)
+    assert torch.allclose(C[0, 1], C[0, 0]) and torch.allclose(C[1, 1], C[0, 0])
+
+
+def test_rate_overlap_is_signed():
+    mean = torch.tensor([[[1.0, 1.0]], [[-1.0, -1.0]]])
+    assert rate_overlap(mean)[0, 1] == -1.0
+
+
+def test_rate_overlap_rejects_bins_that_are_empty_for_only_some_neurons():
+    mean = _bin_means_with_an_empty_bin()
+    mean[0, 1, 2] = torch.nan
+    with pytest.raises(ValueError, match="empty"):
+        rate_overlap(mean)
+
+
+def test_rate_overlap_rejects_all_bins_empty():
+    with pytest.raises(ValueError, match="empty"):
+        rate_overlap(torch.full((2, 1, 3), torch.nan))
+
+
+def test_rate_overlap_rejects_no_neurons():
+    with pytest.raises(ValueError, match="empty"):
+        rate_overlap(torch.zeros(0, 2, 3))
+
+
+@pytest.mark.parametrize("shape", [(5,), (2, 3), (2, 3, 4, 5)])
+def test_rate_overlap_rejects_non_3d_input(shape):
+    with pytest.raises(ValueError, match="3-D"):
+        rate_overlap(torch.zeros(shape))

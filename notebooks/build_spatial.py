@@ -118,7 +118,8 @@ from IPython.display import Markdown, display
 from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.cache import cache_root_from_env
 from fct.grid_view import tuning_view
-from fct.modularity import information_overlap
+from fct.meanfield import readout_activities
+from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import (
     data_kernel,
     spatial_kernel_pairs,
@@ -503,14 +504,19 @@ $$\Phi^{(l)\,\mu\nu}_{ij} = \frac{1}{N} \sum_{a,b=1}^{N} \psi^{(l)}_{a\mu}\, K_{
 $K^{\mathrm{pre}}$ is the kernel of hidden layer $l$ and $K^{\mathrm{post}}$ that of hidden layer
 $l + 1$, or of the output for the last hidden layer. So $\psi$ is the rate $r$ above except on the
 last hidden layer under readout `"h"` (`cfg.meanfield.readout`, default `"h"`: the output is
-$V^\top h^{(L)} / N$), where it is the pre-activation, as in `fct.meanfield.empirical_kernels`;
-each panel title says which $\psi$ it shows. The post-synaptic kernel only multiplies: all the
+$V^\top h^{(L)} / N$), where it is the pre-activation, as in `fct.meanfield.empirical_kernels`
+(`fct.meanfield.readout_activities` gives these $\psi$); each panel title says which $\psi$ it
+shows. The paper's eq. kernel-def uses $\phi(h^{(L)})$ on every layer, since its readout is
+$W \phi(h^{(L)}) / N$, the library's `"phi"`: under the default `"h"` the last hidden layer's
+kernel is built from $h^{(L)}$ instead, so that panel and its grid match the paper only under
+readout `"phi"`. The post-synaptic kernel only multiplies: all the
 dependence on the data is in the $(P \times P)$ data kernel $A^{(l)}$, the pre-synaptic index
 summed out against its prior. Writing $K^{\mathrm{pre}} = \sum_q \lambda_q v_q v_q^\top$ and
 $\tilde\psi_{q\mu} = v_q^\top \psi_\mu$, $A_{\mu\nu} = \frac{1}{N} \sum_q \lambda_q \tilde\psi_{q\mu} \tilde\psi_{q\nu}$:
 each activity pattern is weighted by the prior variance of its spatial mode, so a smooth
 $K^{\mathrm{pre}}$ keeps the patterns that are smooth over the ring, and with
-$K^{\mathrm{pre}} = I$ it is the plain $\psi^\top \psi / N$. The input kernel $\Phi^{(0)}$
+$K^{\mathrm{pre}} = I$ it is the plain $\psi^\top \psi / N$ (in the code $\psi$ is stored
+$(P, N)$, samples by rows, so the same matrix is `psi @ psi.T / n_pre` there). The input kernel $\Phi^{(0)}$
 (with $1/m$, over the input units) is not drawn.
 
 One panel per hidden layer: $A^{(l)}$ over all $P$ training samples, with its own colour scale
@@ -532,6 +538,17 @@ def sample_order(factors, name, n_samples):
     if name is None:
         return np.arange(n_samples)
     return np.argsort(factors[name].detach().cpu().numpy(), kind="stable")
+
+
+def data_kernels(H, phi, spaces, readout):
+    # A^(l) (P, P) of every hidden layer l (0-based) from the pre-activations H (P, L, N): its psi
+    # against the K_pre of the weight layer it feeds, spaces[l + 1]. The K are float64 on the
+    # CPU, so psi is brought there from the training device.
+    psis = readout_activities(H, phi, readout)
+    kernels = [spaces[l + 1].pre.K for l in range(len(psis))]
+    return torch.stack(
+        [data_kernel(psi.detach().cpu().to(K.dtype), K) for psi, K in zip(psis, kernels)]
+    )
 
 
 def plot_data_kernels(A, order, sorted_by, readout):
@@ -563,18 +580,7 @@ def plot_data_kernels(A, order, sorted_by, readout):
 readout = CFG.meanfield.readout
 with torch.no_grad():
     H, _ = RUN.net(RUN.dataset.x.to(RUN.net.dtype))  # (P, L, N), on the training device
-last = RUN.net.L - 1
-psis = [
-    RUN.net.phi(H[:, l]) if l < last or readout == "phi" else H[:, l] for l in range(RUN.net.L)
-]
-# Hidden layer l (0-based) is the pre population of SPACES[l + 1]. The kernels are float64 on
-# the CPU, so psi is brought there.
-A = torch.stack(
-    [
-        data_kernel(psi.detach().cpu().to(SPACES[l + 1].pre.K.dtype), SPACES[l + 1].pre.K)
-        for l, psi in enumerate(psis)
-    ]
-)
+A = data_kernels(H, RUN.net.phi, SPACES, readout)
 by = None if PHI_SORT_LATENT is None else f"z{PHI_SORT_LATENT}"
 order = sample_order(RUN.dataset.factors, by, len(RUN.dataset.x))
 plot_data_kernels(A, order, by, readout)
@@ -586,7 +592,9 @@ The full $\Phi^{(l)}$ has $P^2$ blocks of $(n_\mathrm{post} \times n_\mathrm{pos
 to draw, so the grids below show the $S$ = `PHI_TRIALS` samples at evenly spaced ranks of the
 sorting latent, from its smallest value to its largest:
 $$\mu_s = \pi\big(\mathrm{round}(s\, (P - 1) / (S - 1))\big), \qquad s = 0, \dots, S - 1,$$
-with $\pi$ the sorting order of the figure above ($\mu_0 = \pi(0)$ for $S = 1$). The figure
+with $\pi$ the sorting order of the figure above ($\mu_0 = \pi(0)$ for $S = 1$). With
+`PHI_SORT_LATENT = None`, $\pi$ is the dataset order, so the picks are evenly spaced dataset
+indices and their latents follow no order from bar group to bar group. The figure
 shows the latents $z_{f\mu_s}$ of the chosen samples, one group of $k$ bars per sample, labelled
 by its index $\mu_s$."""
 
@@ -636,7 +644,14 @@ prior and the activity shape how it is spread *over data* ($\mu, \nu$). So the p
 panel never changes; its strength and sign from panel to panel read off $A^{(l)}$ at the chosen
 pairs, the diagonal panels being $A^{(l)}_{\mu\mu} \ge 0$ times $K^{\mathrm{post}}$."""
 
-PHI_PAIRS = r"""def plot_spatial_kernel_pairs(pairs, trials, unit_order, title):
+PHI_PAIRS = r"""def layer_kernel_pairs(A, spaces, layer, trials):
+    # The population that hidden layer `layer` (0-based) drives, the post side of spaces[layer + 1]
+    # (the output for the last hidden layer), and the (S, S, n, n) blocks A[mu, nu] K_post.
+    post = spaces[layer + 1].post
+    return post, spatial_kernel_pairs(A[layer], post.K, [int(t) for t in trials])
+
+
+def plot_spatial_kernel_pairs(pairs, trials, unit_order, title):
     # The S x S grid of (n, n) blocks Phi^{mu nu}_ij, units in `unit_order`, one colour scale
     # for the whole grid, symmetric about zero.
     values = pairs.detach().cpu().numpy()
@@ -669,9 +684,8 @@ PHI_PAIRS = r"""def plot_spatial_kernel_pairs(pairs, trials, unit_order, title):
 
 units = "ring position" if D == 1 else "index"
 for layer in range(RUN.net.L):
-    post = SPACES[layer + 1].post  # the population that hidden layer `layer` drives
+    post, pairs = layer_kernel_pairs(A, SPACES, layer, trials)
     unit_order = position_order(post.embedding.positions) if D == 1 else np.arange(len(post.K))
-    pairs = spatial_kernel_pairs(A[layer], post.K, trials.tolist())
     title = (
         rf"hidden layer {layer + 1} into {post.name}: $\Phi^{{({layer + 1})\,\mu\nu}}_{{ij}}$, "
         f"units $i, j$ of {post.name} by {units}"
@@ -696,40 +710,84 @@ positive. Then
 $$\rho_i = \frac{\max_f I_{if}}{\sum_f I_{if}}, \qquad \mathrm{MIR}_i = \frac{\rho_i - 1/k}{1 - 1/k},$$
 with $k$ the number of latents; the layer's MIR is the mean over its neurons. One panel per neuron,
 placed by its position (ring order along rows of `N_COLS` for $d = 1$, its lattice cell for
-$d = 2$), all on one rate axis: a modular neuron has one sloped curve and the others flat."""
+$d = 2$), all on one rate axis: a modular neuron has one sloped curve and the others flat.
+
+Beside each neuron's curves, a column chart gives its information with every latent: one bar per
+latent $f$ at $x = f$, in the colour of that latent's curve. The pale bar is the raw plug-in
+$I_{if}$, the full-colour bar is the estimate the MIR uses (the same for `"raw"`), and for
+`"corrected"` a black mark is the shuffled-null mean of that latent. All bar panels share one axis
+in nats.
+
+The plug-in estimate is biased upward even for a neuron independent of the latent: about
+$$\mathbb{E}[\hat I] \approx \frac{(B-1)^2}{2P}\ \text{nats},$$
+with $P$ the number of samples. Before each layer's figure a line gives $P$, $B$, this bias and the
+mean shuffled null over neurons and latents. When the null marks are close to the raw bars, $B$ is
+too large for $P$: the informations are mostly bias, and a neuron whose raw total is not above
+twice its null total gets MIR 0."""
 
 TUNING = r"""N_BINS = 8  # B: rank bins of each latent and of the rates, as in the MIR
 N_SHUFFLES = 5  # label shuffles of the bias-corrected MIR
 MIR_KIND = "corrected"  # "corrected" or "raw"
 N_COLS = 4  # panels per row on a ring; a plane lattice uses its own rows and columns
+BAR_WIDTH = 0.8  # width of the raw information bar of a latent (x spacing is 1)
 
 
-def plot_tuning_by_position(curves, mir, latent_names, positions, n_cols):
-    # One panel per neuron at its place in space, one curve per latent: the bin means of the
-    # rate against the bin means of the latent, +- one standard error.
+def _draw_information_bars(ax, raw, used, null, names, bar_width):
+    # One bar per latent at x = f: the raw plug-in information pale, the estimate the MIR uses
+    # (`used`) full colour and half as wide, and the shuffled null mean as a black mark spanning
+    # the raw bar (`null` is None when no null was computed).
+    x = np.arange(len(names))
+    colours = [f"C{f}" for f in x]
+    ax.bar(x, raw, width=bar_width, color=colours, alpha=0.35)
+    ax.bar(x, used, width=bar_width / 2, color=colours, alpha=1.0)
+    if null is not None:
+        ax.hlines(null, x - bar_width / 2, x + bar_width / 2, color="black", linewidth=2)
+    ax.set_xticks(x, names)
+    ax.grid(alpha=0.25, axis="y")
+
+
+def plot_tuning_by_position(view, positions, n_cols, bar_width):
+    # Two panels per neuron at its place in space. Left: one curve per latent, the bin means of
+    # the rate against the bin means of the latent, +- one standard error. Right: the neuron's
+    # information with each latent (`_draw_information_bars`). `view` is a `TuningView`.
+    curves, mir, names = view.curves, view.neuron_mir, view.latent_names
     mean = curves.mean.detach().cpu().numpy()  # (N, K, B)
     sem = curves.sem.detach().cpu().numpy()  # (N, K, B)
     centres = curves.centres.detach().cpu().numpy()  # (K, B)
     xy = positions.detach().cpu().numpy()  # (N, d)
+    raw = view.raw_mi.detach().cpu().numpy()  # (N, K) nats
+    used = view.member_mi.detach().cpu().numpy()  # (N, K)
+    null = None if view.null_mi is None else view.null_mi.detach().cpu().numpy()  # (N, K)
     if not len(mean) == len(xy) == len(mir):
         raise ValueError(f"{len(mean)} neurons but {len(xy)} positions and {len(mir)} MIR values")
-    if len(latent_names) != mean.shape[1]:
-        raise ValueError(f"{len(latent_names)} latent names for {mean.shape[1]} latents")
+    if len(names) != mean.shape[1]:
+        raise ValueError(f"{len(names)} latent names for {mean.shape[1]} latents")
+    informations = [raw, used] if null is None else [raw, used, null]
+    if any(m.shape != mean.shape[:2] for m in informations):
+        raise ValueError(
+            f"informations of shape {[m.shape for m in informations]}, need {mean.shape[:2]}"
+        )
     grid = panel_grid(positions, n_cols)
     fig, axes = plt.subplots(
         grid.n_rows,
-        grid.n_cols,
-        figsize=(12, 3.2 * grid.n_rows + 0.8),
-        sharey=True,
+        2 * grid.n_cols,
+        figsize=(15, 3.2 * grid.n_rows + 0.8),
         squeeze=False,
         layout="constrained",
     )
     for ax in axes.ravel():
         ax.set_visible(False)  # a ring of N units may leave the last row part empty
-    for neuron, cell in enumerate(grid.cells):
-        ax = axes[cell]
+    # The neuron at cell (row, col) has its curves at grid column 2 col and its bars next to them.
+    curve_axes = [axes[row, 2 * col] for row, col in grid.cells]
+    bar_axes = [axes[row, 2 * col + 1] for row, col in grid.cells]
+    for group in (curve_axes, bar_axes):  # one rate axis, and one information axis in nats
+        for ax in group[1:]:
+            ax.sharey(group[0])
+    for neuron, (row, col) in enumerate(grid.cells):
+        ax, bars = curve_axes[neuron], bar_axes[neuron]
         ax.set_visible(True)
-        for f, name in enumerate(latent_names):
+        bars.set_visible(True)
+        for f, name in enumerate(names):
             ax.errorbar(
                 centres[f],
                 mean[neuron, f],
@@ -739,23 +797,39 @@ def plot_tuning_by_position(curves, mir, latent_names, positions, n_cols):
                 capsize=2,
                 label=name,
             )
+        _draw_information_bars(
+            bars, raw[neuron], used[neuron], None if null is None else null[neuron], names, bar_width
+        )
         where = ", ".join(f"{c:.2f}" for c in xy[neuron])
         ax.set_title(f"neuron {neuron} at ({where})\nMIR {mir[neuron]:.2f}")
         ax.grid(alpha=0.25)
-    for ax in axes[-1]:
+        if col > 0:  # the shared y axes are labelled on the first neuron column only
+            ax.tick_params(labelleft=False)
+            bars.tick_params(labelleft=False)
+    for ax in axes[-1, ::2]:
         ax.set_xlabel(r"latent $\bar z_f(b)$")
     for ax in axes[:, 0]:
         ax.set_ylabel(r"rate $\bar r_{if}(b)$")
-    axes[min(grid.cells)].legend(frameon=False)
+    for ax in axes[:, 1]:
+        ax.set_ylabel(r"$I_{if}$ (nats)")
+    axes[min(grid.cells)[0], 2 * min(grid.cells)[1]].legend(frameon=False)
     return fig
 
 
 for layer in range(RUN.net.L):
     view = tuning_view(RUN.net, RUN.dataset, layer, N_BINS, MIR_KIND, N_SHUFFLES, TRAIN_SEED)
-    positions = SPACES[layer].post.embedding.positions
-    fig = plot_tuning_by_position(
-        view.curves, view.neuron_mir, view.latent_names, positions, N_COLS
+    n_samples = len(RUN.dataset.x)
+    null_note = (
+        ""
+        if view.null_mi is None
+        else f", mean shuffled null {view.null_mi.mean().item():.3f} nats"
     )
+    print(
+        f"layer {layer + 1}: P = {n_samples}, B = {N_BINS}, expected plug-in bias "
+        f"(B-1)^2 / (2P) = {(N_BINS - 1) ** 2 / (2 * n_samples):.3f} nats per latent{null_note}"
+    )
+    positions = SPACES[layer].post.embedding.positions
+    fig = plot_tuning_by_position(view, positions, N_COLS, BAR_WIDTH)
     fig.suptitle(
         f"hidden layer {layer + 1}: tuning of every neuron, by position "
         f"({MIR_KIND} MIR, layer mean {np.mean(view.neuron_mir):.3f})"
@@ -763,46 +837,67 @@ for layer in range(RUN.net.L):
 plt.show()"""
 
 
-OVERLAP_TEXT = r"""## Overlap of the neurons' information about the latents
+OVERLAP_TEXT = r"""## Overlap of the neurons' information and of their mean rates
 
-How much two neurons of a hidden layer carry information about the same latents. With $I_{if}$ the
-mutual information (nats) of neuron $i$ with latent $f$ exactly as in the tuning section (the
-`MIR_KIND` estimate with `N_BINS` and `N_SHUFFLES`, so shuffle-corrected for `"corrected"`), the
-overlap of neurons $i$ and $j$ of layer $l$ is
-$$C^{(l)}_{ij} = \frac{1}{k} \sum_{f=1}^{k} I^{(l)}_{if}\, I^{(l)}_{jf},$$
-with $k$ the number of latents, in nats$^2$. $C$ is symmetric; its diagonal
-$C_{ii} = \frac{1}{k} \sum_f I_{if}^2$ is large for a neuron that is informative about some latent,
-and an off-diagonal entry is large only when both neurons are informative about a common latent, so
-a modular layer shows blocks of neurons sharing a latent. A neuron the tuning section counts as
-noise has all $I_{if} = 0$ (for `"corrected"`), hence an all-zero row and column. One matrix per
-hidden layer, neurons in ring order for $d = 1$ and in index order otherwise (the ticks give the
-neuron index, as in the titles of the tuning panels), all on one colour scale starting at 0. If
-every $C$ is zero the scale is 0 to 1 and the title says "(no information)", so an empty matrix is
-not read as data."""
+How much two neurons of a hidden layer are tuned to the same latents, measured two ways. With
+$I_{if}$ the mutual information (nats) of neuron $i$ with latent $f$ exactly as in the tuning
+section (the `MIR_KIND` estimate with `N_BINS` and `N_SHUFFLES`, so shuffle-corrected for
+`"corrected"`), the information overlap of neurons $i$ and $j$ of layer $l$ is
+$$C^{I}_{ij} = \frac{1}{k} \sum_{f=1}^{k} I_{if}\, I_{jf},$$
+with $k$ the number of latents, in nats$^2$. With $\bar r_{if}(b)$ the mean rate of neuron $i$ in
+bin $b$ of latent $f$ (the tuning curves above), the rate overlap is
+$$C^{r}_{ij} = \frac{1}{n_\mathrm{valid}} \sum_{f,b} \bar r_{if}(b)\, \bar r_{jf}(b),$$
+summed over the $n_\mathrm{valid}$ pairs $(f, b)$ with a non-empty bin (all $kB$ of them for
+equal-count rank bins), in rate$^2$. Both are symmetric. $C^I_{ii}$ is large for a neuron that is
+informative about some latent, and an off-diagonal entry is large only when both neurons are
+informative about a common latent, so a modular layer shows blocks of neurons sharing a latent. A
+neuron the tuning section counts as noise has all $I_{if} = 0$ (for `"corrected"`), hence an
+all-zero row and column in $C^I$. $C^r$ does not use the information estimate: it is signed (tanh
+rates), positive for neurons tuned alike and negative for opposite tuning, and it also has weight
+where the tuning is a constant offset, since $\bar r$ is not centred. Compare the two: blocks that
+appear in $C^r$ but not in $C^I$ are neurons with similar tuning whose information the estimate did
+not resolve. One figure per hidden layer, $C^I$ left and $C^r$ right, neurons in ring order for
+$d = 1$ and in index order otherwise (the ticks give the neuron index, as in the titles of the
+tuning panels). $C^I$ is on one colour scale starting at 0, $C^r$ on one scale symmetric about 0,
+each shared by all layers. If every $C^I$ is zero its scale is 0 to 1 and the title says "(no
+information)", so an empty matrix is not read as data; if every $C^r$ is zero its scale is $-1$ to
+1."""
 
-OVERLAP = r"""def plot_information_overlap(C, order, vmax, layer, kind):
-    # One (N, N) overlap matrix with its neurons shown in `order`, on a colour scale from 0 to vmax.
-    values = C.detach().cpu().numpy()
-    if values.ndim != 2 or values.shape[0] != values.shape[1]:
-        raise ValueError(f"C must be a square matrix, got shape {values.shape}")
-    if len(order) != len(values):
-        raise ValueError(f"need one order entry per neuron: {len(order)} for {len(values)}")
-    shown = values[np.ix_(order, order)]
-    informative = vmax > 0
-    fig, ax = plt.subplots(figsize=(7, 6), layout="constrained")
-    # A layer with no information at all (all C = 0) would give an empty colour range; show 0..1.
-    image = ax.imshow(shown, cmap="viridis", vmin=0, vmax=vmax if informative else 1.0)
-    fig.colorbar(image, ax=ax, label=r"$C_{ij}$  (nats$^2$)")
+OVERLAP = r"""def plot_overlaps(C_info, C_rate, order, info_max, rate_max, layer, kind):
+    # The information overlap (viridis, 0 to info_max) and the rate overlap (diverging, +-rate_max)
+    # of one layer side by side, both (N, N) with their neurons shown in `order`.
+    info, rate = (C.detach().cpu().numpy() for C in (C_info, C_rate))
+    for values in (info, rate):
+        if values.ndim != 2 or values.shape[0] != values.shape[1]:
+            raise ValueError(f"C must be a square matrix, got shape {values.shape}")
+    if info.shape != rate.shape:
+        raise ValueError(
+            f"the two overlaps must be of the same neurons: {info.shape} vs {rate.shape}"
+        )
+    if len(order) != len(info):
+        raise ValueError(f"need one order entry per neuron: {len(order)} for {len(info)}")
+    informative = info_max > 0
+    # A layer with no information (all C = 0) would give an empty colour range; show 0..1.
+    info_top = info_max if informative else 1.0
+    # Likewise for a layer whose rate overlap is all zero: the scale is -1 to 1.
+    rate_top = rate_max if rate_max > 0 else 1.0
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6), layout="constrained")
+    shown = np.ix_(order, order)
+    left = axes[0].imshow(info[shown], cmap="viridis", vmin=0, vmax=info_top)
+    right = axes[1].imshow(rate[shown], cmap="RdBu_r", vmin=-rate_top, vmax=rate_top)
+    fig.colorbar(left, ax=axes[0], label=r"$C^I_{ij}$  (nats$^2$)")
+    fig.colorbar(right, ax=axes[1], label=r"$C^r_{ij}$  (rate$^2$)")
     ticks = np.arange(0, len(order), max(1, int(np.ceil(len(order) / 8))))
-    ax.set_xticks(ticks, np.asarray(order)[ticks])  # the neuron index at each shown position
-    ax.set_yticks(ticks, np.asarray(order)[ticks])
     label = "neuron, by ring position" if kind == "ring" else "neuron, by index"
-    ax.set(
-        xlabel=label,
-        ylabel=label,
-        title=f"hidden layer {layer + 1}: information overlap"
-        + ("" if informative else " (no information)"),
+    titles = (
+        "information overlap" + ("" if informative else " (no information)"),
+        "rate overlap",
     )
+    for ax, title in zip(axes, titles):
+        ax.set_xticks(ticks, np.asarray(order)[ticks])  # the neuron index at each shown position
+        ax.set_yticks(ticks, np.asarray(order)[ticks])
+        ax.set(xlabel=label, ylabel=label, title=title)
+    fig.suptitle(f"hidden layer {layer + 1}")
     return fig
 
 
@@ -810,14 +905,16 @@ views = [
     tuning_view(RUN.net, RUN.dataset, layer, N_BINS, MIR_KIND, N_SHUFFLES, TRAIN_SEED)
     for layer in range(RUN.net.L)
 ]
-overlaps = [information_overlap(view.member_mi) for view in views]
+info_overlaps = [information_overlap(view.member_mi) for view in views]
+rate_overlaps = [rate_overlap(view.curves.mean) for view in views]
 orders = []
 for layer in range(RUN.net.L):
     positions = SPACES[layer].post.embedding.positions
     orders.append(position_order(positions) if D == 1 else np.arange(len(positions)))
-vmax = max(float(C.max()) for C in overlaps)
-for layer, (C, order) in enumerate(zip(overlaps, orders)):
-    plot_information_overlap(C, order, vmax, layer, "ring" if D == 1 else "index")
+info_max = max(float(C.max()) for C in info_overlaps)
+rate_max = max(float(C.abs().max()) for C in rate_overlaps)
+for layer, (C_info, C_rate, order) in enumerate(zip(info_overlaps, rate_overlaps, orders)):
+    plot_overlaps(C_info, C_rate, order, info_max, rate_max, layer, "ring" if D == 1 else "index")
 plt.show()"""
 
 

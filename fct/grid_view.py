@@ -31,7 +31,7 @@ from fct.data import get_dataset
 from fct.draw import fig_mir_matrix, fig_mir_vs_ratio, fig_tuning
 from fct.grid_report import MirRecord, mir_grid
 from fct.model import MLP
-from fct.modularity import neuron_factor_information, neuron_mir, preference
+from fct.modularity import FactorInformation, neuron_factor_information, neuron_mir, preference
 from fct.report import MIR_KINDS, Item, SettingResult, setting_label
 from fct.sweep import load_sweep, same_value, setting_config, setting_dir
 from fct.tasks import Dataset
@@ -263,16 +263,17 @@ def neuron_information(
     kind: str,
     n_shuffles: int,
     seed: int,
-) -> tuple[np.ndarray, Tensor]:
-    """(N,) MIR of each neuron of one layer, whose mean is the layer's MIR, and the (N, n_members)
-    mutual informations (nats) it is computed from: raw, or with the shuffle bias correction, with
-    the monitor's bins, shuffles and seed. `rates` and `factors` must be CPU tensors
+) -> tuple[np.ndarray, FactorInformation]:
+    """(N,) MIR of each neuron of one layer, whose mean is the layer's MIR, and the
+    `FactorInformation` it is computed from: `member_mi` is raw, or with the shuffle bias
+    correction, with the monitor's bins, shuffles and seed; `raw_mi` and `null_mi` show what the
+    correction started from and subtracted. `rates` and `factors` must be CPU tensors
     (`tuning_view` moves them there)."""
     _check_kind(kind)
     bias = "shuffle" if kind == "corrected" else "none"
     info = neuron_factor_information(rates, factors, groups, n_bins, bias, n_shuffles, seed)
     r, _ = preference(info.group_mi)
-    return neuron_mir(r, len(info.group_names)).numpy(), info.member_mi
+    return neuron_mir(r, len(info.group_names)).numpy(), info
 
 
 def neuron_mir_values(
@@ -295,6 +296,8 @@ class TuningView(NamedTuple):
     curves: TuningCurves
     neuron_mir: np.ndarray  # (N,)
     member_mi: Tensor  # (N, n_members) the informations I_if (nats) the MIR is computed from
+    raw_mi: Tensor  # (N, n_members) their plain plug-in estimate (equal to member_mi for "raw")
+    null_mi: Tensor | None  # (N, n_members) shuffled-null mean; None for the "raw" kind
     latent_names: list[str]
 
 
@@ -310,10 +313,10 @@ def tuning_view(
     rates = layer_rates(net, dataset.x, layer).cpu()
     factors = {name: f.cpu() for name, f in dataset.factors.items()}
     names, matrix = factor_matrix(factors)
-    mir, member_mi = neuron_information(
-        rates, factors, dataset.groups, n_bins, kind, n_shuffles, seed
+    mir, info = neuron_information(rates, factors, dataset.groups, n_bins, kind, n_shuffles, seed)
+    return TuningView(
+        tuning_curves(rates, matrix, n_bins), mir, info.member_mi, info.raw_mi, info.null_mi, names
     )
-    return TuningView(tuning_curves(rates, matrix, n_bins), mir, member_mi, names)
 
 
 # ---------------------------------------------------------------------------- I/O

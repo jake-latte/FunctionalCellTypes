@@ -222,6 +222,19 @@ def test_tuning_view_member_mi_is_the_information_behind_its_mir(root, results):
     n_neurons, n_latents = view.member_mi.shape
     assert (n_neurons, n_latents) == (loaded.cfg.net.N, len(view.latent_names))
     torch.testing.assert_close(view.member_mi, direct.member_mi, rtol=0, atol=0)
+    torch.testing.assert_close(view.raw_mi, direct.raw_mi, rtol=0, atol=0)
+    torch.testing.assert_close(view.null_mi, direct.null_mi, rtol=0, atol=0)
+    assert view.raw_mi.shape == view.null_mi.shape == view.member_mi.shape
+
+
+def test_tuning_view_of_the_raw_kind_has_no_null(root, results):
+    loaded = load_setting_data(root, choice_for(results, 0).result)
+    tc = loaded.cfg.train
+    view = tuning_view(
+        loaded.net, loaded.dataset, 0, tc.monitor_bins, "raw", tc.monitor_shuffles, tc.seed
+    )
+    assert view.null_mi is None
+    torch.testing.assert_close(view.raw_mi, view.member_mi, rtol=0, atol=0)
 
 
 def test_neuron_mir_rejects_an_unknown_kind():
@@ -365,6 +378,10 @@ def test_tuning_view_of_device_tensors_returns_host_arrays_equal_to_the_cpu_ones
     assert type(view.neuron_mir) is np.ndarray
     assert not isinstance(view.member_mi, FakeDeviceTensor)
     torch.testing.assert_close(view.member_mi, expected.member_mi, rtol=0, atol=0)
+    for field in ("raw_mi", "null_mi"):
+        assert not isinstance(getattr(view, field), FakeDeviceTensor)
+        torch.testing.assert_close(getattr(view, field), getattr(expected, field), rtol=0, atol=0)
+        assert getattr(view, field).device.type == "cpu"
     assert not any(isinstance(a, FakeDeviceTensor) for a in view.curves)
     np.testing.assert_array_equal(view.neuron_mir, expected.neuron_mir)
     for field in TuningCurves._fields:

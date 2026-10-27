@@ -106,6 +106,8 @@ class FactorInformation(NamedTuple):
     member_mi: Tensor  # (N, n_members) one column per factor, in the order of `factors`
     group_mi: Tensor  # (N, K) sum of the member columns of each group
     group_names: list[str]
+    raw_mi: Tensor  # (N, n_members) plain plug-in estimate, before any bias correction
+    null_mi: Tensor | None  # (N, n_members) mean over the shuffles; None without correction
 
 
 class LayerMIR(NamedTuple):
@@ -172,11 +174,11 @@ def _shuffled_member_information(
     return _member_information(bins, n_bins, [(labels[perm], C) for labels, C in encoded])
 
 
-def _subtract_null(member_mi: Tensor, null: Tensor) -> Tensor:
+def _subtract_null(raw_mi: Tensor, null: Tensor) -> Tensor:
     """Bias-corrected member information: subtract the shuffled mean, clamp at 0, and zero
     the rows whose raw total is not above twice their null total (indistinguishable from noise)."""
-    noise_like = member_mi.sum(dim=1) <= NOISE_FACTOR * null.sum(dim=1)
-    corrected = (member_mi - null).clamp(min=0.0)
+    noise_like = raw_mi.sum(dim=1) <= NOISE_FACTOR * null.sum(dim=1)
+    corrected = (raw_mi - null).clamp(min=0.0)
     corrected[noise_like] = 0.0
     return corrected
 
@@ -217,15 +219,22 @@ def neuron_factor_information(
     membership = _membership(factors, groups)
     bins = rank_bins(rates, n_bins)
     encoded = _encode_factors(factors, n_bins, bins.device)
-    member_mi = _member_information(bins, n_bins, encoded)
+    raw_mi = member_mi = _member_information(bins, n_bins, encoded)
+    null = None
     if bias_correction == "shuffle":
         generator = torch.Generator().manual_seed(seed)
-        null = torch.zeros_like(member_mi)
+        null = torch.zeros_like(raw_mi)
         for _ in range(n_shuffles):
             null += _shuffled_member_information(bins, n_bins, encoded, generator) / n_shuffles
-        member_mi = _subtract_null(member_mi, null)
+        member_mi = _subtract_null(raw_mi, null)
     group_names = list(factors) if groups is None else list(groups)
-    return FactorInformation(member_mi, member_mi @ membership.to(member_mi.device), group_names)
+    group_mi = member_mi @ membership.to(member_mi.device)
+    return FactorInformation(member_mi, group_mi, group_names, raw_mi, null)
+
+
+def _overlap(features: Tensor, n: int) -> Tensor:
+    """(N, N) inner products of the rows of `features` (N, F), divided by `n`."""
+    return features @ features.T / n
 
 
 def information_overlap(member_mi: Tensor) -> Tensor:
@@ -234,7 +243,26 @@ def information_overlap(member_mi: Tensor) -> Tensor:
     (N, k), e.g. `FactorInformation.member_mi` (one column per latent)."""
     if member_mi.ndim != 2:
         raise ValueError(f"member_mi must be 2-D (N, k), got shape {tuple(member_mi.shape)}")
-    return member_mi @ member_mi.T / member_mi.shape[1]
+    return _overlap(member_mi, member_mi.shape[1])
+
+
+def rate_overlap(mean: Tensor) -> Tensor:
+    """(N, N) overlap C_ij = (1/n_valid) sum_{f,b} rbar_if(b) rbar_jf(b) of the neurons' tuning
+    curves. `mean` is (N, k, B), e.g. `TuningCurves.mean`: the mean rate of neuron i in bin b of
+    latent f, NaN where the bin is empty. The sum and n_valid run over the non-empty (f, b).
+
+    Signed (a rate can be negative): positive for neurons tuned alike, negative for opposite
+    tuning. A bin is empty for every neuron or for none (the bins come from the latents), so a
+    NaN pattern that differs between neurons is refused rather than silently dropped."""
+    if mean.ndim != 3:
+        raise ValueError(f"mean must be 3-D (N, k, B), got shape {tuple(mean.shape)}")
+    empty = mean.isnan()
+    if not (empty.all(0) == empty.any(0)).all():
+        raise ValueError("a bin must be empty for all neurons or for none")
+    valid = ~empty.all(0).flatten()
+    if not valid.any():
+        raise ValueError("every bin is empty")
+    return _overlap(mean.flatten(1)[:, valid], int(valid.sum()))
 
 
 def preference(group_mi: Tensor, tol: float = DEAD_TOL) -> tuple[Tensor, Tensor]:
