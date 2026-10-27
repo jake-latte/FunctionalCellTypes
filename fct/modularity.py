@@ -406,7 +406,9 @@ def layer_mir_report(
         null += shuffled / n_shuffles
         chance.append(_mir_and_dead(shuffled, membership)[0])
     raw_mir, raw_dead = _mir_and_dead(member_mi, membership)
-    corrected_mir, corrected_dead = _mir_and_dead(_subtract_null(member_mi, null, membership), membership)
+    corrected_mir, corrected_dead = _mir_and_dead(
+        _subtract_null(member_mi, null, membership), membership
+    )
     return LayerMIRReport(
         raw_mir, corrected_mir, sum(chance) / n_shuffles, raw_dead, corrected_dead
     )

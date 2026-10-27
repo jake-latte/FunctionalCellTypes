@@ -851,8 +851,8 @@ summed over the $n_\mathrm{valid}$ pairs $(f, b)$ with a non-empty bin (all $kB$
 equal-count rank bins), in rate$^2$. Both are symmetric. $C^I_{ii}$ is large for a neuron that is
 informative about some latent, and an off-diagonal entry is large only when both neurons are
 informative about a common latent, so a modular layer shows blocks of neurons sharing a latent. A
-neuron whose latents all count as noise in the tuning section has all $I_{if} = 0$ (for `"corrected"`), hence an
-all-zero row and column in $C^I$. $C^r$ does not use the information estimate: it is signed (tanh
+neuron whose latents all count as noise in the tuning section has all $I_{if} = 0$ (for
+`"corrected"`), hence an all-zero row and column in $C^I$. $C^r$ does not use the information estimate: it is signed (tanh
 rates), positive for neurons tuned alike and negative for opposite tuning, and it also has weight
 where the tuning is a constant offset, since $\bar r$ is not centred. Compare the two: blocks that
 appear in $C^r$ but not in $C^I$ are neurons with similar tuning whose information the estimate did
