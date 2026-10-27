@@ -834,8 +834,8 @@ bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct swe
 `FCT_MAX_CONCURRENT` (default 4) caps running tasks; `FCT_PYTHON` overrides `<project>/.venv/bin/python`. Each task runs
 `python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID --stage train` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
 `--index` applies to `--submit`/`--dry-run` only: `N` is one setting, `A:B` the half-open range of settings A .. B-1 (like a Python
-slice; `0:10` is 0 to 9), both read as base 10, capped by `FCT_MAX_CONCURRENT` like the full array; an empty range (A >= B) or one
-past the sweep size fails. A comma in the project or python path is rejected
+slice; `0:10` is 0 to 9), both read as base 10; a range is capped by `FCT_MAX_CONCURRENT` like the full array; an empty range
+(A >= B) or a range past the sweep size (B > count) fails. A comma in the project or python path is rejected
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
 

@@ -14,7 +14,7 @@
 #    bash jobs/fct_sweep.sh ROOT --submit --index N    # submit ONLY setting N
 #    bash jobs/fct_sweep.sh ROOT --submit --index A:B  # submit settings A .. B-1 (half-open, like
 #                                                      # a Python slice: 0:10 is 0, 1, ..., 9)
-#    bash jobs/fct_sweep.sh ROOT --dry-run [--index N|A:B]  # print the sbatch command, no run
+#    bash jobs/fct_sweep.sh ROOT --dry-run [--index X]  # print the sbatch command, run nothing
 #    bash jobs/fct_sweep.sh ROOT --list                # index -> setting directory
 #    bash jobs/fct_sweep.sh ROOT --status              # done / partial / missing / stale per setting
 #
@@ -96,17 +96,16 @@ done
 # The settings to submit are the half-open range [INDEX_FROM, INDEX_TO): one setting for
 # --index N, settings A .. B-1 for --index A:B (like a Python slice).
 if [[ -n "${INDEX_GIVEN}" ]]; then
-    if [[ "${INDEX}" =~ ^([0-9]+):([0-9]+)$ ]]; then
-        # base 10: '010' is setting 10, not octal 8; '08' is valid
-        INDEX_FROM=$((10#${BASH_REMATCH[1]}))
-        INDEX_TO=$((10#${BASH_REMATCH[2]}))
+    [[ "${INDEX}" =~ ^([0-9]+)(:([0-9]+))?$ ]] \
+        || die "--index needs a non-negative integer N or a range A:B (got '${INDEX}')."
+    # base 10: '010' is setting 10, not octal 8; '08' is valid
+    INDEX_FROM=$((10#${BASH_REMATCH[1]}))
+    if [[ -n "${BASH_REMATCH[2]}" ]]; then
+        INDEX_TO=$((10#${BASH_REMATCH[3]}))
         (( INDEX_FROM < INDEX_TO )) \
             || die "--index range '${INDEX}' is empty: A:B means settings A .. B-1 (needs A < B)."
-    elif [[ "${INDEX}" =~ ^[0-9]+$ ]]; then
-        INDEX_FROM=$((10#${INDEX}))
-        INDEX_TO=$((INDEX_FROM + 1))
     else
-        die "--index needs a non-negative integer N or a range A:B (got '${INDEX}')."
+        INDEX_TO=$((INDEX_FROM + 1))
     fi
     [[ "${ACTION}" == "--submit" || "${ACTION}" == "--dry-run" ]] \
         || die "--index only applies to --submit and --dry-run."
@@ -151,7 +150,7 @@ N_TOTAL=$(fct sweep count "${ROOT}") || die "could not read the sweep size from 
 
 if [[ -n "${INDEX_GIVEN}" ]]; then
     if (( INDEX_TO > N_TOTAL )); then
-        die "--index '${INDEX}' out of range [0, ${N_TOTAL})"
+        die "--index '${INDEX}' out of range: the sweep has ${N_TOTAL} settings, 0 .. $((N_TOTAL-1))."
     fi
     if (( INDEX_TO - INDEX_FROM == 1 )); then
         ARRAY_SPEC="${INDEX_FROM}"

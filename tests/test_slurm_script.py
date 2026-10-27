@@ -142,7 +142,8 @@ def test_index_is_normalised_to_base_ten(fake_sbatch, stub_python, root, given, 
         ("0:3", "0-2%4"),  # settings 0, 1, 2: a half-open range, like a Python slice
         (f"1:{STUB_COUNT}", f"1-{last_index()}%4"),
         ("2:3", "2"),  # a range of one setting is that setting
-        ("01:003", "1-2%4"),  # base 10, as for a single index
+        (f"{last_index()}:{STUB_COUNT}", str(last_index())),  # the last setting alone
+        ("01:003", "1-2%4"),  # leading zeros are allowed
     ],
 )
 def test_index_range_submits_the_half_open_range_with_the_concurrency_cap(
@@ -167,7 +168,11 @@ def test_index_range_uses_the_configured_concurrency_cap(fake_sbatch, stub_pytho
     assert "--array=0-3%2" in r.stdout.split()
 
 
-@pytest.mark.parametrize("given", [f"3:{STUB_COUNT + 1}", "0:99", f"{STUB_COUNT}:{STUB_COUNT + 1}"])
+# "0:08" is out of range only when read in base 10: as octal it would be an error that, without
+# `set -e`, falls through to a garbage array spec with exit code 0.
+@pytest.mark.parametrize(
+    "given", [f"3:{STUB_COUNT + 1}", "0:99", f"{STUB_COUNT}:{STUB_COUNT + 1}", "0:08", "08:09"]
+)
 def test_index_range_past_the_sweep_fails(fake_sbatch, stub_python, root, given):
     r = run_script(fake_sbatch, stub_python[0], str(root), "--dry-run", "--index", given)
     assert r.returncode != 0
