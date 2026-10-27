@@ -135,6 +135,76 @@ def test_index_is_normalised_to_base_ten(fake_sbatch, stub_python, root, given, 
     assert sbatch_calls(fake_sbatch) == []
 
 
+# ------------------------------------------------------------- --index A:B
+@pytest.mark.parametrize(
+    "given, array",
+    [
+        ("0:3", "0-2%4"),  # settings 0, 1, 2: a half-open range, like a Python slice
+        (f"1:{STUB_COUNT}", f"1-{last_index()}%4"),
+        ("2:3", "2"),  # a range of one setting is that setting
+        ("01:003", "1-2%4"),  # base 10, as for a single index
+    ],
+)
+def test_index_range_submits_the_half_open_range_with_the_concurrency_cap(
+    fake_sbatch, stub_python, root, given, array
+):
+    r = run_script(fake_sbatch, stub_python[0], str(root), "--dry-run", f"--index={given}")
+    assert r.returncode == 0, r.stderr
+    assert f"--array={array}" in r.stdout.split()
+    assert sbatch_calls(fake_sbatch) == []
+
+
+def test_index_range_uses_the_configured_concurrency_cap(fake_sbatch, stub_python, root):
+    r = run_script(
+        fake_sbatch,
+        stub_python[0],
+        str(root),
+        "--dry-run",
+        "--index",
+        "0:4",
+        env_extra={"FCT_MAX_CONCURRENT": "2"},
+    )
+    assert "--array=0-3%2" in r.stdout.split()
+
+
+@pytest.mark.parametrize("given", [f"3:{STUB_COUNT + 1}", "0:99", f"{STUB_COUNT}:{STUB_COUNT + 1}"])
+def test_index_range_past_the_sweep_fails(fake_sbatch, stub_python, root, given):
+    r = run_script(fake_sbatch, stub_python[0], str(root), "--dry-run", "--index", given)
+    assert r.returncode != 0
+    assert "out of range" in r.stderr
+    assert sbatch_calls(fake_sbatch) == []
+
+
+@pytest.mark.parametrize("given", ["2:2", "3:1"])
+def test_empty_index_range_fails(fake_sbatch, stub_python, root, given):
+    r = run_script(fake_sbatch, stub_python[0], str(root), "--dry-run", "--index", given)
+    assert r.returncode != 0
+    assert "empty" in r.stderr
+    assert sbatch_calls(fake_sbatch) == []
+
+
+@pytest.mark.parametrize("given", [":3", "1:", "1:2:3", "-1:3", "a:b", "1-3", "1 : 3"])
+def test_malformed_index_range_fails(fake_sbatch, stub_python, root, given):
+    r = run_script(fake_sbatch, stub_python[0], str(root), "--dry-run", "--index", given)
+    assert r.returncode != 0
+    assert "non-negative integer" in r.stderr and "A:B" in r.stderr
+    assert sbatch_calls(fake_sbatch) == []
+
+
+def test_submit_index_range(fake_sbatch, stub_python, root):
+    run_script(fake_sbatch, stub_python[0], str(root), "--submit", "--index", "1:4", sbatch_exit=0)
+    (line,) = sbatch_calls(fake_sbatch)
+    assert "--array=1-3%4" in line.split()
+
+
+def test_solve_submit_passes_an_index_range_through(fake_sbatch, stub_python, root):
+    r = run_solve(fake_sbatch, stub_python[0], str(root), "--submit", "--index=0:2", sbatch_exit=0)
+    assert r.returncode == 0, r.stderr
+    (line,) = sbatch_calls(fake_sbatch)
+    assert "--array=0-1%4" in line.split()
+    assert line.endswith(f"{SOLVE_SCRIPT} {root}")
+
+
 @pytest.mark.parametrize("given", [str(STUB_COUNT), "0099", "00" + str(STUB_COUNT)])
 def test_index_out_of_range_fails(fake_sbatch, stub_python, root, given):
     r = run_script(fake_sbatch, stub_python[0], str(root), "--dry-run", "--index", given)
