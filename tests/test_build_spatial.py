@@ -34,7 +34,7 @@ PLOTTING_FUNCTIONS = {
     "plot_weights_by_position",
     "plot_activity_kernels",
     "plot_tuning_by_position",
-    "plot_information_overlap",
+    "plot_overlaps",
 }
 
 # Ring positions of 6 units in a scrambled order: unit 0 is 4th around the ring, and so on.
@@ -360,38 +360,56 @@ def test_tuning_by_position_refuses_too_few_latent_names(notebook_functions):
         notebook_functions["plot_tuning_by_position"](_tuned_layer(0), np.zeros(6), ["z0"], RING, 2)
 
 
-def test_information_overlap_image_follows_the_given_order_on_the_shared_scale(notebook_functions):
-    C = torch.arange(9.0).reshape(3, 3)
+def _image_axes(fig):
+    return [ax for ax in fig.axes if ax.images]
+
+
+def test_overlaps_show_both_matrices_in_the_given_order_on_their_scales(notebook_functions):
+    C_info = torch.arange(9.0).reshape(3, 3)
+    C_rate = torch.arange(9.0).reshape(3, 3) - 4.0
     order = [2, 0, 1]
-    fig = notebook_functions["plot_information_overlap"](C, order, 10.0, 0, "ring")
-    image = fig.axes[0].images[0]
-    assert np.array_equal(image.get_array(), C.numpy()[np.ix_(order, order)])
-    assert image.get_clim() == (0, 10.0)
-    assert "nats" in fig.axes[1].get_ylabel() and "ring" in fig.axes[0].get_xlabel()
+    fig = notebook_functions["plot_overlaps"](C_info, C_rate, order, 10.0, 6.0, 0, "ring")
+    left, right = _image_axes(fig)
+    assert len(fig.axes) == 4  # two images and their colour bars
+    assert np.array_equal(left.images[0].get_array(), C_info.numpy()[np.ix_(order, order)])
+    assert np.array_equal(right.images[0].get_array(), C_rate.numpy()[np.ix_(order, order)])
+    assert left.images[0].get_clim() == (0, 10.0)
+    assert right.images[0].get_clim() == (-6.0, 6.0)  # symmetric about 0
+    assert right.images[0].get_cmap().name == "RdBu_r"
+    assert "ring" in left.get_xlabel() and "ring" in right.get_xlabel()
+    colour_bar_labels = [ax.get_ylabel() for ax in fig.axes if not ax.images]
+    assert "nats" in colour_bar_labels[0] and "rate" in colour_bar_labels[1]
 
 
-def test_information_overlap_image_of_an_uninformative_layer_has_a_nonempty_scale(
-    notebook_functions,
-):
-    fig = notebook_functions["plot_information_overlap"](
-        torch.zeros(3, 3), [0, 1, 2], 0.0, 0, "index"
-    )
-    assert fig.axes[0].images[0].get_clim() == (0, 1.0)
+def test_overlaps_of_an_uninformative_layer_have_nonempty_scales(notebook_functions):
+    zeros = torch.zeros(3, 3)
+    fig = notebook_functions["plot_overlaps"](zeros, zeros, [0, 1, 2], 0.0, 0.0, 0, "index")
+    left, right = _image_axes(fig)
+    assert left.images[0].get_clim() == (0, 1.0)
+    assert right.images[0].get_clim() == (-1.0, 1.0)
+    assert "no information" in left.get_title()
 
 
-def test_information_overlap_image_checks_sizes(notebook_functions):
-    plot = notebook_functions["plot_information_overlap"]
+def test_overlaps_check_sizes(notebook_functions):
+    plot = notebook_functions["plot_overlaps"]
+    ok = torch.zeros(3, 3)
     with pytest.raises(ValueError, match="square matrix"):
-        plot(torch.zeros(3, 4), [0, 1, 2], 1.0, 0, "index")
+        plot(torch.zeros(3, 4), ok, [0, 1, 2], 1.0, 1.0, 0, "index")
+    with pytest.raises(ValueError, match="square matrix"):
+        plot(ok, torch.zeros(3, 4), [0, 1, 2], 1.0, 1.0, 0, "index")
     with pytest.raises(ValueError, match="one order entry"):
-        plot(torch.zeros(3, 3), [0, 1], 1.0, 0, "index")
+        plot(ok, ok, [0, 1], 1.0, 1.0, 0, "index")
+    with pytest.raises(ValueError, match="same neurons"):
+        plot(ok, torch.zeros(4, 4), [0, 1, 2], 1.0, 1.0, 0, "index")
 
 
-def test_information_overlap_ticks_name_the_neuron_shown_there(notebook_functions):
+def test_overlap_ticks_name_the_neuron_shown_there(notebook_functions):
     order = [2, 0, 1]
-    ax = notebook_functions["plot_information_overlap"](torch.eye(3), order, 1.0, 0, "ring").axes[0]
-    for labels in (ax.get_xticklabels(), ax.get_yticklabels()):
-        assert [t.get_text() for t in labels] == ["2", "0", "1"]
+    eye = torch.eye(3)
+    fig = notebook_functions["plot_overlaps"](eye, eye, order, 1.0, 1.0, 0, "ring")
+    for ax in _image_axes(fig):
+        for labels in (ax.get_xticklabels(), ax.get_yticklabels()):
+            assert [t.get_text() for t in labels] == ["2", "0", "1"]
 
 
 # ---------------------------------------------------------------- parameters and execution
