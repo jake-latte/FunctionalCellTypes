@@ -335,7 +335,7 @@ def resample(
     return _REDEFINE[cfg.task](cfg, new, reference)
 
 
-def test_dataset(cfg: DataConfig, reference: Dataset) -> Dataset:
+def latent_lattice_dataset(cfg: DataConfig, reference: Dataset) -> Dataset:
     """One sample per point of the lattice {-a, 0, a}^k of a linear teacher's latents.
 
     k = cfg.n_latents and a = cfg.latent_range, giving 3^k rows. Row i is the i-th element of
@@ -346,7 +346,9 @@ def test_dataset(cfg: DataConfig, reference: Dataset) -> Dataset:
     follow `reference.x`. Pure: nothing is read or written on disk.
     """
     if cfg.task != "linear_teacher":
-        raise ValueError(f"test_dataset is defined for task 'linear_teacher', not {cfg.task!r}")
+        raise ValueError(
+            f"latent_lattice_dataset is defined for task 'linear_teacher', not {cfg.task!r}"
+        )
     missing = [key for key in ("W_X", "W_Y") if key not in reference.extras]
     if missing:
         raise ValueError(f"reference.extras lacks the teacher maps {missing}")

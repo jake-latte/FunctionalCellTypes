@@ -235,7 +235,7 @@ def make_dataset(cfg: DataConfig, device, dtype) -> Dataset       # TASKS[cfg.ta
 def embed(y_new: Tensor, dataset: Dataset, cfg: DataConfig) -> Tensor   # same embedding as the dataset (linear: y@Q.T; fourier: dataset.period); position task only (ValueError for other tasks)
 def grid_targets(half_width: float, n_grid: int, device, dtype) -> Tensor  # (n_grid**2, 2) meshgrid 'ij' flattened as in notebook cell 13
 def get_dataset(cache_dir: Path, cfg: Config) -> Dataset          # cache-or-compute at CACHE_DIR/data/dataset.pt, hash = section_hash("data"); persists x, y, Q, period, factors, groups, extras
-def get_test_dataset(cache_dir: Path, cfg: Config) -> Dataset   # tasks.test_dataset(cfg.data, get_dataset(cache_dir, cfg)); no cache file of its own
+def get_latent_lattice_dataset(cache_dir: Path, cfg: Config) -> Dataset   # tasks.latent_lattice_dataset(cfg.data, get_dataset(cache_dir, cfg)); no cache file of its own
 ```
 
 Every task draws from a CPU `torch.Generator` seeded with `cfg.seed` and moves the result to the device, so
@@ -279,7 +279,7 @@ def resample(cfg, reference: Dataset, seed, device, dtype) -> Dataset
     # a task that is not one of the three). The generators draw the task definition (linear teacher W_X, W_Y;
     # what-where motif set) from the same stream as the samples, so the new samples are re-expressed with the
     # definition in reference.extras (object_action has none: the new seed is enough). Generators are unchanged.
-def test_dataset(cfg, reference: Dataset) -> Dataset
+def latent_lattice_dataset(cfg, reference: Dataset) -> Dataset
     # linear_teacher only (ValueError naming the task otherwise; ValueError if reference.extras lacks W_X / W_Y): one
     # row per point of {-a, 0, a}^k, a = latent_range, 3^k rows, z0 slowest and the last latent fastest, values in
     # the order (-a, 0, a); x = z W_X^T, y = z W_Y^T with the reference's maps; factors z0..z{k-1}, singleton groups,
