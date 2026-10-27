@@ -558,10 +558,9 @@ $$\bar r_{if}(b) = \frac{1}{|b|} \sum_{\mu \in b} r^{(l)}_{i\mu}, \qquad \bar z_
 with error bars of one standard error. Each title gives the neuron's position and its MIR:
 $I_{if}$ is the plug-in mutual information (nats) of the rank-binned rate with the rank-binned
 latent, both in $B$ bins. With `MIR_KIND = "corrected"`, $I_{if}$ is that minus its mean over
-`N_SHUFFLES` label shuffles, clamped at 0; and a neuron whose raw total $\sum_f I_{if}$ is not above
-twice its shuffled-null total (`NOISE_FACTOR` in `fct/modularity.py`) counts as noise: all its
-$I_{if}$ are set to 0 and it gets $\rho_i = 1/k$, even when some of its corrected information is
-positive. Then
+`N_SHUFFLES` label shuffles, clamped at 0; and an $I_{if}$ whose raw value is not above twice its
+shuffled-null mean (`NOISE_FACTOR` in `fct/modularity.py`) counts as noise and is set to 0, each
+latent on its own. A neuron with every $I_{if} = 0$ gets $\rho_i = 1/k$. Then
 $$\rho_i = \frac{\max_f I_{if}}{\sum_f I_{if}}, \qquad \mathrm{MIR}_i = \frac{\rho_i - 1/k}{1 - 1/k},$$
 with $k$ the number of latents; the layer's MIR is the mean over its neurons. One panel per neuron,
 placed by its position (ring order along rows of `N_COLS` for $d = 1$, its lattice cell for
@@ -577,8 +576,8 @@ The plug-in estimate is biased upward even for a neuron independent of the laten
 $$\mathbb{E}[\hat I] \approx \frac{(B-1)^2}{2P}\ \text{nats},$$
 with $P$ the number of samples. Before each layer's figure a line gives $P$, $B$, this bias and the
 mean shuffled null over neurons and latents. When the null marks are close to the raw bars, $B$ is
-too large for $P$: the informations are mostly bias, and a neuron whose raw total is not above
-twice its null total gets MIR 0."""
+too large for $P$: the informations are mostly bias, and a neuron none of whose latents has raw
+information above twice its null gets MIR 0."""
 
 TUNING = r"""N_BINS = 8  # B: rank bins of each latent and of the rates, as in the MIR
 N_SHUFFLES = 5  # label shuffles of the bias-corrected MIR
@@ -706,7 +705,7 @@ summed over the $n_\mathrm{valid}$ pairs $(f, b)$ with a non-empty bin (all $kB$
 equal-count rank bins), in rate$^2$. Both are symmetric. $C^I_{ii}$ is large for a neuron that is
 informative about some latent, and an off-diagonal entry is large only when both neurons are
 informative about a common latent, so a modular layer shows blocks of neurons sharing a latent. A
-neuron the tuning section counts as noise has all $I_{if} = 0$ (for `"corrected"`), hence an
+neuron whose latents all count as noise in the tuning section has all $I_{if} = 0$ (for `"corrected"`), hence an
 all-zero row and column in $C^I$. $C^r$ does not use the information estimate: it is signed (tanh
 rates), positive for neurons tuned alike and negative for opposite tuning, and it also has weight
 where the tuning is a constant offset, since $\bar r$ is not centred. Compare the two: blocks that

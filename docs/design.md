@@ -511,8 +511,8 @@ estimator is biased upward and max/sum has a positive floor for unrelated neuron
 Bias correction: `neuron_factor_information` / `layer_mir` / `network_mir` take
 `bias_correction="none"|"shuffle"`, `n_shuffles=5`, `seed=0`. With "shuffle", each member
 information (before the group sum) has its mean over `n_shuffles` joint label shuffles
-subtracted and is clamped at 0; neurons whose raw total is not above twice their null total
-are zeroed, so they are dead (r = 1/K). The raw MIR has a cardinality-dependent floor: at
+subtracted and is clamped at 0; a member whose raw information is not above twice its own null
+is zeroed, and a neuron with every member zeroed is dead (r = 1/K). The raw MIR has a cardinality-dependent floor: at
 P = 8192, 10 rate bins, noise neurons score ~0.89 with one 25-way plus two binary factors
 and ~0.10 with three five-way factors; corrected, both are ~0. The notebook plots the raw
 MIR, the corrected MIR and the `shuffled_mir` baseline.
