@@ -3,6 +3,7 @@
 on a tiny configuration for each optimiser (CPU)."""
 
 import ast
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -15,11 +16,12 @@ from fct.spatial import EmbeddingSpec, PopulationSpec, SpatialConfig, build_spac
 from fct.spatial_view import ordered_kernel_comparison, population_spec
 from fct.tuning import tuning_curves
 from notebooks.build_spatial import build_notebook, execute_notebook, set_parameters
-from tests.draw_helpers import assert_png
+from tests.draw_helpers import assert_png, on_fake_device
 
 # Hidden layers L = 1: prior figures of its L + 1 = 2 weight layers, loss curves, example
-# outputs, the two first-layer figures (empirical kernels, weights) and one tuning figure.
-N_FIGURES = 2 + 1 + 1 + 2 + 1
+# outputs, the two first-layer figures (empirical kernels, weights), the activity kernels Phi
+# and one tuning figure.
+N_FIGURES = 2 + 1 + 1 + 2 + 1 + 1
 TINY = {"P": 32, "M_IN": 6, "K_LATENTS": 2, "N": 8, "N_EPOCHS": 40}
 # A code cell that calls one of these draws a figure.
 FIGURE_CALLS = ("plt.subplots(", "plt.figure(")
@@ -30,6 +32,7 @@ PLOTTING_FUNCTIONS = {
     "plot_example_outputs",
     "plot_kernel_comparison",
     "plot_weights_by_position",
+    "plot_activity_kernels",
     "plot_tuning_by_position",
 }
 
@@ -236,6 +239,69 @@ def test_weight_image_rows_follow_the_ring_order(notebook_functions):
 def test_weight_image_needs_a_ring(notebook_functions):
     with pytest.raises(ValueError, match="d = 1"):
         notebook_functions["plot_weights_by_position"](torch.zeros(8, 6), _space(2))
+
+
+def _block_phi() -> torch.Tensor:
+    """Two layers of 6 samples: layer 0 has two blocks of 3 (value 1 in, 0 across), layer 1 is
+    twice the identity, so its kernel scale tr(Phi) / P is 2."""
+    block = torch.kron(torch.eye(2), torch.ones(3, 3))
+    return torch.stack([block, 2 * torch.eye(6)]).to(torch.float64)
+
+
+def test_activity_kernels_one_panel_per_layer_titled_with_the_kernel_scale(
+    notebook_functions, tmp_path
+):
+    fig = notebook_functions["plot_activity_kernels"](_block_phi(), np.arange(6), "", "h")
+    assert_png(fig, tmp_path)
+    panels = [ax for ax in fig.axes if ax.images]
+    assert len(panels) == 2
+    # psi is phi(h) below the last layer and h on it under readout "h"
+    assert re.fullmatch(r"hidden layer 1, .*phi.*: .* = 1", panels[0].get_title())
+    assert re.fullmatch(r"hidden layer 2, .*psi = h.*: .* = 2", panels[1].get_title())
+    # each panel has its own scale, symmetric about zero: layer 0 spans 1, layer 1 spans 2
+    assert panels[0].images[0].get_clim() == (-1.0, 1.0)
+    assert panels[1].images[0].get_clim() == (-2.0, 2.0)
+
+
+def test_activity_kernels_last_layer_is_phi_of_h_under_the_phi_readout(notebook_functions):
+    fig = notebook_functions["plot_activity_kernels"](_block_phi(), np.arange(6), "", "phi")
+    assert all("phi" in ax.get_title() for ax in fig.axes if ax.images)
+
+
+def test_activity_kernels_sorting_permutes_rows_and_columns_together(notebook_functions):
+    order = np.array([0, 3, 1, 4, 2, 5])  # interleaves the two blocks
+    fig = notebook_functions["plot_activity_kernels"](_block_phi(), order, "z0", "h")
+    shown = next(ax for ax in fig.axes if ax.images).images[0].get_array()
+    phi = _block_phi()[0].numpy()
+    assert np.array_equal(shown, phi[np.ix_(order, order)])
+    assert np.array_equal(shown, shown.T)  # rows and columns moved together
+    # the blocks, contiguous in dataset order, now alternate: neighbours are never in one block
+    assert shown[0, 1] == 0.0 and shown[0, 2] == 1.0
+
+
+def test_activity_kernels_refuse_an_order_that_is_not_a_permutation(notebook_functions):
+    with pytest.raises(ValueError, match="permutation"):
+        notebook_functions["plot_activity_kernels"](
+            _block_phi(), np.array([0, 0, 1, 2, 3, 4]), "", "h"
+        )
+
+
+def test_sample_order_sorts_by_the_latent_and_keeps_dataset_order_for_none(notebook_functions):
+    factors = {"z0": torch.tensor([0.3, -1.0, 0.9, 0.0]), "z1": torch.tensor([4.0, 3, 2, 1])}
+    order = notebook_functions["sample_order"]
+    assert order(factors, "z0", 4).tolist() == [1, 3, 0, 2]
+    assert order(factors, "z1", 4).tolist() == [3, 2, 1, 0]
+    assert order(factors, None, 4).tolist() == [0, 1, 2, 3]
+
+
+def test_the_phi_figure_inputs_may_live_on_the_training_device(notebook_functions):
+    """Latents and kernels on a GPU refuse `.numpy()`; the helper and the plot go through `.cpu()`."""
+    factors = {"z0": on_fake_device(torch.tensor([0.3, -1.0, 0.9, 0.0, 0.5, 2.0]))}
+    order = notebook_functions["sample_order"](factors, "z0", 6)
+    fig = notebook_functions["plot_activity_kernels"](
+        on_fake_device(_block_phi()), order, "z0", "h"
+    )
+    assert len([ax for ax in fig.axes if ax.images]) == 2
 
 
 def _tuned_layer(tuned_unit: int):

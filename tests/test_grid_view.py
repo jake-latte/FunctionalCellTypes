@@ -39,6 +39,7 @@ from fct.grid_view import (
 from fct.report import SettingResult, load_results
 from fct.sweep import expand, run_setting, save_sweep, setting_dir
 from fct.tuning import TuningCurves
+from tests.draw_helpers import FakeDeviceTensor, on_fake_device
 from tests.report_helpers import QUIET, tiny_phase_sweep
 
 LAMBDAS = [1e-6, 1.0]  # phase_transition(2)
@@ -54,23 +55,6 @@ def history(raw: list[float], corrected: list[float]) -> dict:
         "monitor_mir_corrected": [first, corrected],
         "monitor_mir_chance": [first, [0.0] * len(raw)],
     }
-
-
-class FakeDeviceTensor(torch.Tensor):
-    """Stands in for a CUDA tensor on a CPU-only host: like one, `.numpy()` raises TypeError until
-    `.cpu()` is called. Subclass-ness survives arithmetic, so a value computed from one still
-    refuses `.numpy()`, as a value computed on the GPU would. `.cpu()` is its only escape: a
-    refactor to `.to("cpu")` or `.numpy(force=True)` turning a test red is this fake, not the code."""
-
-    def numpy(self, *args, **kwargs):
-        raise TypeError("can't convert cuda:0 device type tensor to numpy.")
-
-    def cpu(self, *args, **kwargs):
-        return self.as_subclass(torch.Tensor)
-
-
-def on_fake_device(t: torch.Tensor) -> FakeDeviceTensor:
-    return t.as_subclass(FakeDeviceTensor)
 
 
 def synthetic(status_by_index: dict[int, str]) -> list[SettingResult]:
