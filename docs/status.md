@@ -101,3 +101,22 @@ This was decided in `remove-rate-penalty-p-scaling`, not by the PI.
 - Linear-teacher weights W_X, W_Y are iid N(0, 1/k); inputs/targets m-dimensional with m = D_in > k.
 - Monitoring cost on the real runs: set `monitor_int` to keep it a small fraction of training time
   (see the cost lines in docs/design.md); GPU timing was not measured on the full-size runs.
+
+## 2026-10-27: PI feedback on the spatial notebook (all merged)
+Four items, each reviewed by a fresh reviewer with the record in its merge commit:
+`fix-tuning-view-cuda` (tuning_view moves rates and latents to the CPU once; fake-device regression test),
+`spatial-notebook-inline-plots-and-equations` (every figure's plotting function written out in the
+cell that draws it, a markdown cell with the equation before each; `fct/spatial_report.py` and the
+spatial-only figures of `fct/draw.py` deleted; the kernel cells say K and the weight second moments are
+over units, not the mean-field Phi over samples; the floor enters squared: eps = 1e-6 is 1e8 times
+stiffer than 1e-2, not 1e4), `phi-kernels-in-spatial-notebook` (empirical Phi^(l) of the trained net
+on all P samples, sorted by a latent, readout cases in the equation and titles), `mi-overlap-matrix`
+(`fct.modularity.information_overlap`, `TuningView.member_mi`, C = I I^T / k per layer). The notebook
+builds on CPU and on the T1000 with `DEVICE='cuda'` (9 figures). The PI's own parameter set (N 256,
+P 64, k 4, m 16, no rate penalty, 200k epochs, CUDA) is saved uncommitted in
+`tmp/pm/spatial_pi_edits.ipynb`; rerun it with
+`uv run python notebooks/build_spatial.py tmp/spatial_cache --set N=256 --set P=64 --set K_LATENTS=4 --set M_IN=16 --set RATE_LAMBDA=0 --set N_EPOCHS=200_000 --set "DEVICE='cuda'"`.
+Known and untouched: `ruff format --check notebooks` flags the generated `notebooks/modularity.ipynb`,
+which the committed-notebook test requires verbatim (fix the builder's output or exclude the file).
+Open for the PI: a theory Phi for a net under the spatial prior would need the mean-field solver to
+take the prior (new item); whether the PI's parameter set should become the notebook defaults.
