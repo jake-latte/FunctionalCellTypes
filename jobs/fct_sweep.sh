@@ -14,7 +14,7 @@
 #    bash jobs/fct_sweep.sh ROOT --submit --index N    # submit ONLY setting N
 #    bash jobs/fct_sweep.sh ROOT --submit --index A:B  # submit settings A .. B-1 (half-open, like
 #                                                      # a Python slice: 0:10 is 0, 1, ..., 9)
-#    bash jobs/fct_sweep.sh ROOT --dry-run [--index N|A:B]   # print the sbatch command, run nothing
+#    bash jobs/fct_sweep.sh ROOT --dry-run [--index N|A:B]  # print the sbatch command, no run
 #    bash jobs/fct_sweep.sh ROOT --list                # index -> setting directory
 #    bash jobs/fct_sweep.sh ROOT --status              # done / partial / missing / stale per setting
 #
