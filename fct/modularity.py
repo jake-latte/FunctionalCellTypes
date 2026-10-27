@@ -106,6 +106,8 @@ class FactorInformation(NamedTuple):
     member_mi: Tensor  # (N, n_members) one column per factor, in the order of `factors`
     group_mi: Tensor  # (N, K) sum of the member columns of each group
     group_names: list[str]
+    raw_mi: Tensor  # (N, n_members) plain plug-in estimate, before any bias correction
+    null_mi: Tensor | None  # (N, n_members) mean over the shuffles; None without correction
 
 
 class LayerMIR(NamedTuple):
@@ -217,15 +219,17 @@ def neuron_factor_information(
     membership = _membership(factors, groups)
     bins = rank_bins(rates, n_bins)
     encoded = _encode_factors(factors, n_bins, bins.device)
-    member_mi = _member_information(bins, n_bins, encoded)
+    raw_mi = member_mi = _member_information(bins, n_bins, encoded)
+    null = None
     if bias_correction == "shuffle":
         generator = torch.Generator().manual_seed(seed)
-        null = torch.zeros_like(member_mi)
+        null = torch.zeros_like(raw_mi)
         for _ in range(n_shuffles):
             null += _shuffled_member_information(bins, n_bins, encoded, generator) / n_shuffles
-        member_mi = _subtract_null(member_mi, null)
+        member_mi = _subtract_null(raw_mi, null)
     group_names = list(factors) if groups is None else list(groups)
-    return FactorInformation(member_mi, member_mi @ membership.to(member_mi.device), group_names)
+    group_mi = member_mi @ membership.to(member_mi.device)
+    return FactorInformation(member_mi, group_mi, group_names, raw_mi, null)
 
 
 def information_overlap(member_mi: Tensor) -> Tensor:

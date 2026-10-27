@@ -416,6 +416,27 @@ def test_corrected_mir_keeps_the_modular_and_mixed_ground_truth():
     assert out.mir == pytest.approx(_expected_mir(0.5, K3), abs=0.02)
 
 
+def test_raw_mi_is_the_plug_in_estimate_and_null_mi_the_shuffled_mean():
+    factors = _factors3(P=2000)
+    rates = torch.randn(2000, 20, generator=_gen(23)).relu() + factors["f0"][:, None]
+    plain = neuron_factor_information(rates, factors, n_bins=6)
+    shuffled = neuron_factor_information(rates, factors, n_bins=6, bias_correction="shuffle")
+    assert plain.null_mi is None
+    assert torch.equal(plain.raw_mi, plain.member_mi)
+    assert torch.equal(shuffled.raw_mi, plain.member_mi)  # same rates, same factors
+    assert shuffled.null_mi.shape == plain.member_mi.shape
+    assert (shuffled.null_mi >= 0).all()
+
+
+def test_raw_minus_null_is_near_zero_for_rates_independent_of_the_factors():
+    factors = _factors3(P=4096)
+    rates = torch.randn(4096, 30, generator=_gen(24))
+    info = neuron_factor_information(
+        rates, factors, n_bins=10, bias_correction="shuffle", n_shuffles=5
+    )
+    assert abs(float((info.raw_mi - info.null_mi).mean())) < 0.02
+
+
 def test_bias_correction_is_deterministic_for_a_seed_and_none_is_unchanged():
     factors = _factors3(P=2000)
     rates = torch.randn(2000, 20, generator=_gen(22)).relu()
