@@ -9,8 +9,8 @@
 #  checkpoint and a finished one is skipped, so resubmitting an array is safe.
 #
 #  Usage and environment overrides are those of jobs/fct_sweep.sh:
-#    bash jobs/fct_solve.sh ROOT --submit [--index N]
-#    bash jobs/fct_solve.sh ROOT --dry-run [--index N]
+#    bash jobs/fct_solve.sh ROOT --submit [--index X]   # X = N (one setting) or A:B (A .. B-1)
+#    bash jobs/fct_solve.sh ROOT --dry-run [--index X]
 #    bash jobs/fct_solve.sh ROOT --list | --status     # --status shows the solve stage
 #
 #  This file fixes the stage, its own job name and the log prefix, and hands everything else to

@@ -12,7 +12,9 @@
 #  Usage (ROOT = sweep root, as the first argument or in $FCT_SWEEP_ROOT):
 #    bash jobs/fct_sweep.sh ROOT --submit              # submit the full array
 #    bash jobs/fct_sweep.sh ROOT --submit --index N    # submit ONLY setting N
-#    bash jobs/fct_sweep.sh ROOT --dry-run [--index N] # print the sbatch command, run nothing
+#    bash jobs/fct_sweep.sh ROOT --submit --index A:B  # submit settings A .. B-1 (half-open, like
+#                                                      # a Python slice: 0:10 is 0, 1, ..., 9)
+#    bash jobs/fct_sweep.sh ROOT --dry-run [--index X]  # print the sbatch command, run nothing
 #    bash jobs/fct_sweep.sh ROOT --list                # index -> setting directory
 #    bash jobs/fct_sweep.sh ROOT --status              # done / partial / missing / stale per setting
 #
@@ -50,7 +52,8 @@ MAX_CONCURRENT="${FCT_MAX_CONCURRENT:-4}"
 STAGE="${FCT_STAGE:-train}"
 LOG_NAME="${FCT_LOG_NAME:-fct_sweep}"
 
-USAGE="Use: bash jobs/${LOG_NAME}.sh [ROOT] (--submit | --dry-run | --list | --status) [--index N]"
+USAGE="Use: bash jobs/${LOG_NAME}.sh [ROOT] (--submit | --dry-run | --list | --status)"
+USAGE+=" [--index N|A:B]"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -69,7 +72,7 @@ LOG_DIR="${PROJECT}/tmp/logs"
 # The script sbatch submits: this one, or the wrapper that selected the stage.
 ENTRY="${FCT_ENTRY:-${SELF_DIR}/$(basename "${BASH_SOURCE[0]}")}"
 
-# ── Parse CLI: ROOT, one action, optional --index N ───────────────────────────
+# ── Parse CLI: ROOT, one action, optional --index N or A:B ────────────────────
 ROOT="${FCT_SWEEP_ROOT:-}"
 ROOT_GIVEN=""
 ACTION=""
@@ -90,9 +93,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# The settings to submit are the half-open range [INDEX_FROM, INDEX_TO): one setting for
+# --index N, settings A .. B-1 for --index A:B (like a Python slice).
 if [[ -n "${INDEX_GIVEN}" ]]; then
-    [[ "${INDEX}" =~ ^[0-9]+$ ]] || die "--index needs a non-negative integer (got '${INDEX}')."
-    INDEX=$((10#${INDEX}))   # base 10: '010' is setting 10, not octal 8; '08' is valid
+    [[ "${INDEX}" =~ ^([0-9]+)(:([0-9]+))?$ ]] \
+        || die "--index needs a non-negative integer N or a range A:B (got '${INDEX}')."
+    # base 10: '010' is setting 10, not octal 8; '08' is valid
+    INDEX_FROM=$((10#${BASH_REMATCH[1]}))
+    if [[ -n "${BASH_REMATCH[2]}" ]]; then
+        INDEX_TO=$((10#${BASH_REMATCH[3]}))
+        (( INDEX_FROM < INDEX_TO )) \
+            || die "--index range '${INDEX}' is empty: A:B means settings A .. B-1 (needs A < B)."
+    else
+        INDEX_TO=$((INDEX_FROM + 1))
+    fi
     [[ "${ACTION}" == "--submit" || "${ACTION}" == "--dry-run" ]] \
         || die "--index only applies to --submit and --dry-run."
 fi
@@ -135,10 +149,14 @@ N_TOTAL=$(fct sweep count "${ROOT}") || die "could not read the sweep size from 
 [[ "${PROJECT}${PYTHON}" != *,* ]] || die "project or python path contains a comma; sbatch --export cannot carry it."
 
 if [[ -n "${INDEX_GIVEN}" ]]; then
-    if (( INDEX >= N_TOTAL )); then
-        die "--index '${INDEX}' out of range [0, ${N_TOTAL})"
+    if (( INDEX_TO > N_TOTAL )); then
+        die "--index '${INDEX}' out of range: the sweep has ${N_TOTAL} settings, 0 .. $((N_TOTAL-1))."
     fi
-    ARRAY_SPEC="${INDEX}"
+    if (( INDEX_TO - INDEX_FROM == 1 )); then
+        ARRAY_SPEC="${INDEX_FROM}"
+    else
+        ARRAY_SPEC="${INDEX_FROM}-$((INDEX_TO-1))%${MAX_CONCURRENT}"
+    fi
 else
     ARRAY_SPEC="0-$((N_TOTAL-1))%${MAX_CONCURRENT}"
 fi

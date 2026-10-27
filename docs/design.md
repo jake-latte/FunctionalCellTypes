@@ -825,15 +825,17 @@ a run of all settings it is reported like any other failure and the remaining se
 SLURM array over the sweep settings; written for the PI to submit. Tests exercise `--submit` only against a recording fake `sbatch` on PATH; agents never run it.
 
 ```
-bash jobs/fct_sweep.sh ROOT --submit [--index N]   # sbatch --array=0-35%4 (or =N), logs in <project>/tmp/logs/
-bash jobs/fct_sweep.sh ROOT --dry-run [--index N]  # print that sbatch command, run nothing
+bash jobs/fct_sweep.sh ROOT --submit [--index N|A:B]   # sbatch --array=0-35%4 (or =N, or =A-(B-1)%4), logs in <project>/tmp/logs/
+bash jobs/fct_sweep.sh ROOT --dry-run [--index N|A:B]  # print that sbatch command, run nothing
 bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct sweep status`
 ```
 
 `ROOT` is the first argument or `$FCT_SWEEP_ROOT`; it must exist and hold a `sweep.json`. Array size comes from `fct sweep count`.
 `FCT_MAX_CONCURRENT` (default 4) caps running tasks; `FCT_PYTHON` overrides `<project>/.venv/bin/python`. Each task runs
 `python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID --stage train` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
-`--index` (digits only, read as base 10) applies to `--submit`/`--dry-run` only; a comma in the project or python path is rejected
+`--index` applies to `--submit`/`--dry-run` only: `N` is one setting, `A:B` the half-open range of settings A .. B-1 (like a Python
+slice; `0:10` is 0 to 9), both read as base 10; a range is capped by `FCT_MAX_CONCURRENT` like the full array; an empty range
+(A >= B) or a range past the sweep size (B > count) fails. A comma in the project or python path is rejected
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
 
