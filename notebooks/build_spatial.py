@@ -3,9 +3,10 @@
 One linear-teacher run. The first cells set the task, the network, the training and the spatial
 prior (an embedding and a kernel per population); the notebook then shows the eigenvalue floor
 and the prior kernels, trains through the normal `fct` cache (a re-run reloads or resumes), and
-shows the loss curves, example outputs, the first-layer weights next to the prior, the activity
-kernels Phi of every hidden layer and the tuning of every neuron to the latents, one panel per
-neuron placed by its position.
+shows the loss curves, example outputs, the first-layer weights next to the prior, the
+spatially indexed activity kernels Phi of every hidden layer (their data factor over all samples
+and their blocks between a few chosen samples) and the tuning of every neuron to the latents,
+one panel per neuron placed by its position.
 
 The library computes (the kernels and penalty matrices, the training run, rates, tuning curves
 and MI); every figure is drawn by a plotting function written out in full in the code cell that
@@ -117,9 +118,14 @@ from IPython.display import Markdown, display
 from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.cache import cache_root_from_env
 from fct.grid_view import tuning_view
-from fct.meanfield import empirical_kernels
+from fct.meanfield import readout_activities
 from fct.modularity import information_overlap, rate_overlap
-from fct.spatial import torus_distance, wrapped_gaussian_profile
+from fct.spatial import (
+    data_kernel,
+    spatial_kernel_pairs,
+    torus_distance,
+    wrapped_gaussian_profile,
+)
 from fct.spatial_view import (
     layer_spaces,
     make_config,
@@ -151,7 +157,8 @@ prior alone
 $$\mathrm{vec}(W_l) \sim \mathcal{N}\big(0,\ (2 \beta \lambda_w)^{-1}\, K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l\big)$$
 up to the floor (exactly, with $K^p$ replaced by $(M^p)^{-1}$). These kernels are over *units*:
 they are a prior on the weights, not the mean-field kernels $\Phi^{(l)}$ over *samples* of
-`fct/meanfield.py`, which are shown in their own section below."""
+`fct/meanfield.py`. Under this prior those kernels gain a pair of unit indices; they are shown,
+built from the trained activity and these $K$, in their own section below."""
 
 SPATIAL = """from fct.spatial import SpatialConfig
 from fct.spatial_view import population_spec
@@ -414,7 +421,8 @@ $\mathbb{E}[\hat K^{\mathrm{pre}}] = c\, A_{\mathrm{post}}\, K^{\mathrm{pre}}$ (
 amplitude, the diagonal of $K$): the comparison holds up to that scale, so each panel has its own
 colour scale (Adam has no $\beta$, and only the shapes compare). These are second moments of the
 trained *weights* over *units*, not the mean-field kernels $\Phi^{(l)}$ of `fct/meanfield.py`, which
-are $(P \times P)$ activity kernels between *samples*, shown in their own section below.
+are activity kernels between *samples* (with a pair of unit indices under a spatial prior), shown
+in their own section below.
 A smooth prior shows as a band along the diagonal; one weight matrix is a single sample, so
 $\hat K$ is noisy, and the data term pulls it away from the prior. Drawn for $d = 1$ only, since
 sorting by position needs a ring."""
@@ -486,27 +494,43 @@ if D == 1:
 else:
     display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""
 
-PHI_TEXT = r"""## Activity kernels $\Phi^{(l)}$ of the trained network
+DATA_KERNEL_TEXT = r"""## Spatially indexed kernels $\Phi^{(l)}$ of the trained network
 
-The kernels the cells above say are *not* $K$ or the weight second moments: the $(P \times P)$
-activity kernel of each hidden layer $l$ over the training samples,
-$$\Phi^{(l)}_{\mu\nu} = \frac{1}{N} \sum_{i=1}^{N} \psi^{(l)}_{i\mu}\, \psi^{(l)}_{i\nu}, \qquad \psi^{(l)} = \begin{cases} \phi\big(h^{(l)}\big) & l < L, \\ h^{(L)} & l = L \text{ and readout } \texttt{"h"}, \\ \phi\big(h^{(L)}\big) & l = L \text{ and readout } \texttt{"phi"}. \end{cases}$$
-So $\psi$ is the rate $r$ above except on the last hidden layer under readout `"h"`, where it is
-the pre-activation itself. `fct.meanfield.empirical_kernels` computes it on all $P$ training
-samples, in the net's dtype (float64). The convention in force is `cfg.meanfield.readout`, whose
-default is `"h"` (the output is $V^\top h^{(L)} / N$), and each panel title says which $\psi$ it
-shows. One panel per hidden layer, each with its own colour scale (symmetric about zero, since
-$\Phi$ is signed) and titled with the kernel scale $\mathrm{tr}\,\Phi^{(l)} / P$. The samples are
-**sorted** by the latent $z_f$ with $f$ = `PHI_SORT_LATENT` (0-based; `None` keeps dataset order).
-How to read it: a first layer that is nearly linear in $x = W_X z$ gives a dot-product-like
-kernel, $\Phi_{\mu\nu} \propto z_\mu \cdot z_\nu$, which sorted by $z_0$ shows a rank-one
-$z_0 z_0^\top$ pattern: the same sign in the top-left and bottom-right quadrants, the opposite
-sign in the two off-diagonal ones. A band along the diagonal would instead mean that similarity
-falls with the distance $|z_{f\mu} - z_{f\nu}|$, as for localised tuning. This is the trained
-net's empirical $\Phi$ only: the library's solver has no spatial prior, so no theory $\Phi$ is
-computed here."""
+The kernel through which hidden layer $l$ drives the next layer carries two indices of each
+kind: samples $\mu, \nu$ and post-synaptic units $i, j$ (pre-synaptic units are $a, b$). For the
+weight layer $W_{l+1}$ that reads from hidden layer $l$, with the factorised prior
+$K_{iajb} = K^{\mathrm{post}}_{ij} K^{\mathrm{pre}}_{ab}$ of the section above,
+$$\Phi^{(l)\,\mu\nu}_{ij} = \frac{1}{N} \sum_{a,b=1}^{N} \psi^{(l)}_{a\mu}\, K_{iajb}\, \psi^{(l)}_{b\nu} = K^{\mathrm{post}}_{ij}\, A^{(l)}_{\mu\nu}, \qquad A^{(l)}_{\mu\nu} = \frac{1}{N} \sum_{a,b=1}^{N} \psi^{(l)}_{a\mu}\, K^{\mathrm{pre}}_{ab}\, \psi^{(l)}_{b\nu}, \qquad \psi^{(l)} = \begin{cases} \phi\big(h^{(l)}\big) & l < L, \\ h^{(L)} & l = L \text{ and readout } \texttt{"h"}, \\ \phi\big(h^{(L)}\big) & l = L \text{ and readout } \texttt{"phi"}. \end{cases}$$
+$K^{\mathrm{pre}}$ is the kernel of hidden layer $l$ and $K^{\mathrm{post}}$ that of hidden layer
+$l + 1$, or of the output for the last hidden layer. So $\psi$ is the rate $r$ above except on the
+last hidden layer under readout `"h"` (`cfg.meanfield.readout`, default `"h"`: the output is
+$V^\top h^{(L)} / N$), where it is the pre-activation, as in `fct.meanfield.empirical_kernels`
+(`fct.meanfield.readout_activities` gives these $\psi$); each panel title says which $\psi$ it
+shows. The paper's eq. kernel-def uses $\phi(h^{(L)})$ on every layer, since its readout is
+$W \phi(h^{(L)}) / N$, the library's `"phi"`: under the default `"h"` the last hidden layer's
+kernel is built from $h^{(L)}$ instead, so that panel and its grid match the paper only under
+readout `"phi"`. The post-synaptic kernel only multiplies: all the
+dependence on the data is in the $(P \times P)$ data kernel $A^{(l)}$, the pre-synaptic index
+summed out against its prior. Writing $K^{\mathrm{pre}} = \sum_q \lambda_q v_q v_q^\top$ and
+$\tilde\psi_{q\mu} = v_q^\top \psi_\mu$, $A_{\mu\nu} = \frac{1}{N} \sum_q \lambda_q \tilde\psi_{q\mu} \tilde\psi_{q\nu}$:
+each activity pattern is weighted by the prior variance of its spatial mode, so a smooth
+$K^{\mathrm{pre}}$ keeps the patterns that are smooth over the ring, and with
+$K^{\mathrm{pre}} = I$ it is the plain $\psi^\top \psi / N$ (in the code $\psi$ is stored
+$(P, N)$, samples by rows, so the same matrix is `psi @ psi.T / n_pre` there). The input kernel $\Phi^{(0)}$
+(with $1/m$, over the input units) is not drawn.
 
-PHI = r"""PHI_SORT_LATENT = 0  # 0-based index f of the latent z_f (z0 .. z{k-1}) that orders the samples; None: dataset order
+One panel per hidden layer: $A^{(l)}$ over all $P$ training samples, with its own colour scale
+(symmetric about zero, since $A$ is signed) and titled with the kernel scale
+$\mathrm{tr}\,A^{(l)} / P$. The samples are **sorted** by the latent $z_f$ with $f$ =
+`PHI_SORT_LATENT` (0-based; `None` keeps dataset order). How to read it: a first layer that is
+nearly linear in $x = W_X z$ gives a dot-product-like kernel, $A_{\mu\nu} \propto z_\mu \cdot z_\nu$,
+which sorted by $z_0$ shows a rank-one $z_0 z_0^\top$ pattern: the same sign in the top-left and
+bottom-right quadrants, the opposite sign in the two off-diagonal ones. A band along the diagonal
+would instead mean that similarity falls with the distance $|z_{f\mu} - z_{f\nu}|$, as for
+localised tuning. This is the trained net's empirical kernel only: the library's solver has no
+spatial prior, so no theory $\Phi$ is computed here."""
+
+DATA_KERNEL = r"""PHI_SORT_LATENT = 0  # 0-based index f of the latent z_f (z0 .. z{k-1}) that orders the samples; None: dataset order
 
 
 def sample_order(factors, name, n_samples):
@@ -516,38 +540,159 @@ def sample_order(factors, name, n_samples):
     return np.argsort(factors[name].detach().cpu().numpy(), kind="stable")
 
 
-def plot_activity_kernels(Phi, order, sorted_by, readout):
-    # One panel per hidden layer: the (P, P) kernel with samples reordered by `order`, its own
-    # colour scale symmetric about zero, titled with psi and the kernel scale tr(Phi) / P
+def data_kernels(H, phi, spaces, readout):
+    # A^(l) (P, P) of every hidden layer l (0-based) from the pre-activations H (P, L, N): its psi
+    # against the K_pre of the weight layer it feeds, spaces[l + 1]. The K are float64 on the
+    # CPU, so psi is brought there from the training device.
+    psis = readout_activities(H, phi, readout)
+    kernels = [spaces[l + 1].pre.K for l in range(len(psis))]
+    return torch.stack(
+        [data_kernel(psi.detach().cpu().to(K.dtype), K) for psi, K in zip(psis, kernels)]
+    )
+
+
+def plot_data_kernels(A, order, sorted_by, readout):
+    # One panel per hidden layer: the (P, P) data kernel with samples reordered by `order`, its
+    # own colour scale symmetric about zero, titled with psi and the kernel scale tr(A) / P
     # (unchanged by the reordering). The last layer's psi is h unless the readout is "phi".
-    Phi = Phi.detach().cpu().numpy()
-    n_layers, P = Phi.shape[0], Phi.shape[1]
+    A = A.detach().cpu().numpy()
+    n_layers, P = A.shape[0], A.shape[1]
     if sorted(order.tolist()) != list(range(P)):
         raise ValueError(f"order is not a permutation of the {P} samples")
     fig, axes = plt.subplots(
         1, n_layers, figsize=(5 * n_layers + 1, 5), squeeze=False, layout="constrained"
     )
     for layer, ax in enumerate(axes[0]):
-        shown = Phi[layer][np.ix_(order, order)]
+        shown = A[layer][np.ix_(order, order)]
         bound = np.abs(shown).max()
         image = ax.imshow(shown, cmap="RdBu_r", vmin=-bound, vmax=bound, interpolation="none")
         fig.colorbar(image, ax=ax, shrink=0.8)
         psi = "h" if layer == n_layers - 1 and readout != "phi" else r"\phi(h)"
-        scale = np.trace(Phi[layer]) / P
+        scale = np.trace(A[layer]) / P
         ax.set(
-            title=rf"hidden layer {layer + 1}, $\psi = {psi}$: $\mathrm{{tr}}\,\Phi / P$ = {scale:.3g}",
+            title=rf"hidden layer {layer + 1}, $\psi = {psi}$: $\mathrm{{tr}}\,A / P$ = {scale:.3g}",
             xlabel=rf"sample $\nu$, sorted by {sorted_by}" if sorted_by else r"sample $\nu$",
             ylabel=r"sample $\mu$",
         )
     return fig
 
 
+readout = CFG.meanfield.readout
 with torch.no_grad():
-    Phi, _ = empirical_kernels(RUN.net, RUN.dataset.x.to(RUN.net.dtype), CFG.meanfield.readout)
+    H, _ = RUN.net(RUN.dataset.x.to(RUN.net.dtype))  # (P, L, N), on the training device
+A = data_kernels(H, RUN.net.phi, SPACES, readout)
 by = None if PHI_SORT_LATENT is None else f"z{PHI_SORT_LATENT}"
 order = sample_order(RUN.dataset.factors, by, len(RUN.dataset.x))
-plot_activity_kernels(Phi, order, by, CFG.meanfield.readout)
+plot_data_kernels(A, order, by, readout)
 plt.show()"""
+
+TRIALS_TEXT = r"""### The trials whose kernels are drawn
+
+The full $\Phi^{(l)}$ has $P^2$ blocks of $(n_\mathrm{post} \times n_\mathrm{post})$, too many
+to draw, so the grids below show the $S$ = `PHI_TRIALS` samples at evenly spaced ranks of the
+sorting latent, from its smallest value to its largest:
+$$\mu_s = \pi\big(\mathrm{round}(s\, (P - 1) / (S - 1))\big), \qquad s = 0, \dots, S - 1,$$
+with $\pi$ the sorting order of the figure above ($\mu_0 = \pi(0)$ for $S = 1$). With
+`PHI_SORT_LATENT = None`, $\pi$ is the dataset order, so the picks are evenly spaced dataset
+indices and their latents follow no order from bar group to bar group. The figure
+shows the latents $z_{f\mu_s}$ of the chosen samples, one group of $k$ bars per sample, labelled
+by its index $\mu_s$."""
+
+TRIALS = r"""PHI_TRIALS = 4  # S: samples whose kernel pairs are drawn, spread over the sorted order
+
+
+def spread_trials(order, n_trials):
+    # n_trials sample indices at evenly spaced positions of `order`, its first and last included.
+    if not 1 <= n_trials <= len(order):
+        raise ValueError(f"need 1 to {len(order)} trials, got {n_trials}")
+    ranks = np.round(np.linspace(0, len(order) - 1, n_trials)).astype(int)
+    return np.asarray(order)[ranks]
+
+
+def plot_trial_latents(factors, trials):
+    # One group of bars per trial, one bar per latent: z_{f mu} of the chosen samples.
+    names = list(factors)
+    values = np.stack([factors[name].detach().cpu().numpy()[trials] for name in names], axis=1)
+    n_trials, k = values.shape
+    width = 0.8 / k
+    x = np.arange(n_trials)
+    fig, ax = plt.subplots(figsize=(1.5 * n_trials + 3, 3.2), layout="constrained")
+    for f, name in enumerate(names):
+        ax.bar(x + (f - (k - 1) / 2) * width, values[:, f], width, color=f"C{f}", label=name)
+    ax.axhline(0, color="grey", lw=1)
+    ax.set_xticks(x, [rf"$\mu$ = {mu}" for mu in trials])
+    ax.set(ylabel=r"latent $z_{f\mu}$", title="latents of the trials drawn below")
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
+    return fig
+
+
+trials = spread_trials(order, PHI_TRIALS)
+plot_trial_latents(RUN.dataset.factors, trials)
+plt.show()"""
+
+PHI_PAIRS_TEXT = r"""### $\Phi^{(l)}$ between pairs of trials
+
+One figure per hidden layer $l$: an $S \times S$ grid whose panel in row $s$ and column $t$ is
+the $(n_\mathrm{post} \times n_\mathrm{post})$ matrix over the post-synaptic units $i, j$,
+$$\big(\Phi^{(l)\,\mu_s \mu_t}_{ij}\big)_{ij} = A^{(l)}_{\mu_s \mu_t}\, K^{\mathrm{post}}_{ij},$$
+units in ring order for $d = 1$ and in index order otherwise, on **one** colour scale for the
+whole grid, symmetric about zero; the row and column headers give $\mu_s$ and $\mu_t$. Under a
+factorised prior every panel is the same $K^{\mathrm{post}}$ scaled by the number
+$A^{(l)}_{\mu_s \mu_t}$ (eq. phi-diagonalised of the paper): the prior on the post-synaptic
+weights shapes how the input to the next layer is spread *over space* ($i, j$), the pre-synaptic
+prior and the activity shape how it is spread *over data* ($\mu, \nu$). So the pattern inside a
+panel never changes; its strength and sign from panel to panel read off $A^{(l)}$ at the chosen
+pairs, the diagonal panels being $A^{(l)}_{\mu\mu} \ge 0$ times $K^{\mathrm{post}}$."""
+
+PHI_PAIRS = r"""def layer_kernel_pairs(A, spaces, layer, trials):
+    # The population that hidden layer `layer` (0-based) drives, the post side of spaces[layer + 1]
+    # (the output for the last hidden layer), and the (S, S, n, n) blocks A[mu, nu] K_post.
+    post = spaces[layer + 1].post
+    return post, spatial_kernel_pairs(A[layer], post.K, [int(t) for t in trials])
+
+
+def plot_spatial_kernel_pairs(pairs, trials, unit_order, title):
+    # The S x S grid of (n, n) blocks Phi^{mu nu}_ij, units in `unit_order`, one colour scale
+    # for the whole grid, symmetric about zero.
+    values = pairs.detach().cpu().numpy()
+    if values.ndim != 4 or values.shape[0] != values.shape[1] or values.shape[2] != values.shape[3]:
+        raise ValueError(f"pairs must be (S, S, n, n), got shape {values.shape}")
+    n_trials, n_units = values.shape[0], values.shape[2]
+    if len(trials) != n_trials:
+        raise ValueError(f"{len(trials)} trials for a {n_trials} x {n_trials} grid")
+    if len(unit_order) != n_units:
+        raise ValueError(f"the unit order has {len(unit_order)} entries for {n_units} units")
+    shown = values[:, :, unit_order][:, :, :, unit_order]
+    # An all-zero grid would give an empty colour range; show it on -1..1.
+    bound = np.abs(shown).max() or 1.0
+    size = 2.4 * n_trials
+    fig, axes = plt.subplots(
+        n_trials, n_trials, figsize=(size + 1.2, size), squeeze=False, layout="constrained"
+    )
+    for (s, t), ax in np.ndenumerate(axes):
+        image = ax.imshow(shown[s, t], cmap="RdBu_r", vmin=-bound, vmax=bound, interpolation="none")
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for t, ax in enumerate(axes[0]):
+        ax.set_title(rf"$\nu$ = {trials[t]}")
+    for s, ax in enumerate(axes[:, 0]):
+        ax.set_ylabel(rf"$\mu$ = {trials[s]}")
+    fig.colorbar(image, ax=axes, shrink=0.6, label=r"$\Phi^{\mu\nu}_{ij}$")
+    fig.suptitle(title)
+    return fig
+
+
+units = "ring position" if D == 1 else "index"
+for layer in range(RUN.net.L):
+    post, pairs = layer_kernel_pairs(A, SPACES, layer, trials)
+    unit_order = position_order(post.embedding.positions) if D == 1 else np.arange(len(post.K))
+    title = (
+        rf"hidden layer {layer + 1} into {post.name}: $\Phi^{{({layer + 1})\,\mu\nu}}_{{ij}}$, "
+        f"units $i, j$ of {post.name} by {units}"
+    )
+    plot_spatial_kernel_pairs(pairs, trials, unit_order, title)
+plt.show()"""
+
 
 TUNING_TEXT = r"""## Tuning of every neuron to the latents
 
@@ -805,8 +950,12 @@ def build_notebook() -> NotebookNode:
         new_code_cell(EMPIRICAL),
         new_markdown_cell(WEIGHTS_TEXT),
         new_code_cell(WEIGHTS),
-        new_markdown_cell(PHI_TEXT),
-        new_code_cell(PHI),
+        new_markdown_cell(DATA_KERNEL_TEXT),
+        new_code_cell(DATA_KERNEL),
+        new_markdown_cell(TRIALS_TEXT),
+        new_code_cell(TRIALS),
+        new_markdown_cell(PHI_PAIRS_TEXT),
+        new_code_cell(PHI_PAIRS),
         new_markdown_cell(TUNING_TEXT),
         new_code_cell(TUNING),
         new_markdown_cell(OVERLAP_TEXT),
