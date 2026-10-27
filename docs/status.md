@@ -148,3 +148,8 @@ The spatial notebook has 11 figures and builds on CPU and on the T1000. The PI's
 Open for the PI: N_BINS should respect P (B = 8 at P = 64 is one sample per joint cell; the printed
 bias line shows it; `N_BINS = min(8, sqrt(P)/2)` would be the mechanical default); small-P runs on
 object-action have no usable corrected MIR under the group rule; the earlier open items above.
+
+## 2026-10-27 (evening): jobs/fct_sweep.sh takes --index A:B (merged)
+`bash jobs/fct_sweep.sh ROOT --submit --index 0:10` submits settings 0 .. 9 as one array
+(`--array=0-9%FCT_MAX_CONCURRENT`); `--index N` unchanged; the solve wrapper inherits it. Written by
+the PM test-first, reviewed by a fresh reviewer (record in the merge commit). Still never submitted.
