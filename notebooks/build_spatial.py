@@ -502,6 +502,13 @@ with."""
 PHI = r"""PHI_SORT_LATENT = 0  # index f of the latent z_f that orders the samples; None: dataset order
 
 
+def sample_order(factors, latent, n_samples):
+    # Sample indices sorted by the latent z_<latent>; dataset order for None.
+    if latent is None:
+        return np.arange(n_samples)
+    return np.argsort(factors[f"z{latent}"].detach().cpu().numpy(), kind="stable")
+
+
 def plot_activity_kernels(Phi, order, sorted_by):
     # One panel per hidden layer: the (P, P) kernel with samples reordered by `order`, its own
     # colour scale, titled with the kernel scale tr(Phi) / P (unchanged by the reordering).
@@ -526,7 +533,7 @@ def plot_activity_kernels(Phi, order, sorted_by):
 
 Phi, _ = empirical_kernels(RUN.net, RUN.dataset.x.to(RUN.net.dtype), CFG.meanfield.readout)
 by = None if PHI_SORT_LATENT is None else f"z{PHI_SORT_LATENT}"
-order = np.arange(len(Phi[0])) if by is None else np.argsort(RUN.dataset.factors[by].numpy())
+order = sample_order(RUN.dataset.factors, PHI_SORT_LATENT, len(RUN.dataset.x))
 plot_activity_kernels(Phi, order, by)
 plt.show()"""
 

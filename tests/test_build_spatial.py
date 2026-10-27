@@ -15,7 +15,7 @@ from fct.spatial import EmbeddingSpec, PopulationSpec, SpatialConfig, build_spac
 from fct.spatial_view import ordered_kernel_comparison, population_spec
 from fct.tuning import tuning_curves
 from notebooks.build_spatial import build_notebook, execute_notebook, set_parameters
-from tests.draw_helpers import assert_png
+from tests.draw_helpers import assert_png, on_fake_device
 
 # Hidden layers L = 1: prior figures of its L + 1 = 2 weight layers, loss curves, example
 # outputs, the two first-layer figures (empirical kernels, weights), the activity kernels Phi
@@ -275,6 +275,22 @@ def test_activity_kernels_sorting_permutes_rows_and_columns_together(notebook_fu
 def test_activity_kernels_refuse_an_order_that_is_not_a_permutation(notebook_functions):
     with pytest.raises(ValueError, match="permutation"):
         notebook_functions["plot_activity_kernels"](_block_phi(), np.array([0, 0, 1, 2, 3, 4]), "")
+
+
+def test_sample_order_sorts_by_the_latent_and_keeps_dataset_order_for_none(notebook_functions):
+    factors = {"z0": torch.tensor([0.3, -1.0, 0.9, 0.0]), "z1": torch.tensor([4.0, 3, 2, 1])}
+    order = notebook_functions["sample_order"]
+    assert order(factors, 0, 4).tolist() == [1, 3, 0, 2]
+    assert order(factors, 1, 4).tolist() == [3, 2, 1, 0]
+    assert order(factors, None, 4).tolist() == [0, 1, 2, 3]
+
+
+def test_the_phi_figure_inputs_may_live_on_the_training_device(notebook_functions):
+    """Latents and kernels on a GPU refuse `.numpy()`; the helper and the plot go through `.cpu()`."""
+    factors = {"z0": on_fake_device(torch.tensor([0.3, -1.0, 0.9, 0.0, 0.5, 2.0]))}
+    order = notebook_functions["sample_order"](factors, 0, 6)
+    fig = notebook_functions["plot_activity_kernels"](on_fake_device(_block_phi()), order, "z0")
+    assert len([ax for ax in fig.axes if ax.images]) == 2
 
 
 def _tuned_layer(tuned_unit: int):
