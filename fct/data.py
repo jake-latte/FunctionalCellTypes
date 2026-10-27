@@ -15,7 +15,7 @@ from torch import Tensor
 
 from fct.cache import cache_paths, load_or_compute
 from fct.config import Config, DataConfig, resolve_device, resolve_dtype
-from fct.tasks import TASK_SPECS, Dataset, TaskSpec
+from fct.tasks import TASK_SPECS, Dataset, TaskSpec, latent_lattice_dataset
 
 
 def _canonical_lattice(d: int, K: int, device: torch.device) -> Tensor:
@@ -176,3 +176,13 @@ def get_dataset(cache_dir: Path, cfg: Config) -> Dataset:
     path = cache_paths(cache_dir).data / "dataset.pt"
     payload = load_or_compute(path, cfg.section_hash("data"), compute, device)
     return Dataset(**{f.name: payload[f.name] for f in dataclasses.fields(Dataset)})
+
+
+def get_latent_lattice_dataset(cache_dir: Path, cfg: Config) -> Dataset:
+    """The 3^k latent-lattice test set of the linear teacher whose training set is cached at
+    CACHE_DIR/data/dataset.pt.
+
+    Loads (or generates) the training dataset to get its teacher maps; the lattice itself is
+    cheap and is rebuilt on every call, so it has no cache file of its own.
+    """
+    return latent_lattice_dataset(cfg.data, get_dataset(cache_dir, cfg))
