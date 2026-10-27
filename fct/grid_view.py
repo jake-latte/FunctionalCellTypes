@@ -284,9 +284,12 @@ def tuning_view(
     """Tuning curves of every neuron of `layer` to each latent, with each neuron's MIR."""
     if dataset.factors is None:
         raise ValueError("the dataset has no factors, so no latents to tune to")
-    rates = layer_rates(net, dataset.x, layer)
-    names, matrix = factor_matrix(dataset.factors)
-    mir = neuron_mir_values(rates, dataset.factors, dataset.groups, n_bins, kind, n_shuffles, seed)
+    # The net runs wherever it lives; everything after is host analysis (and `.numpy()` needs
+    # host tensors), so the rates and latents cross to the CPU once, here.
+    rates = layer_rates(net, dataset.x, layer).cpu()
+    factors = {name: f.cpu() for name, f in dataset.factors.items()}
+    names, matrix = factor_matrix(factors)
+    mir = neuron_mir_values(rates, factors, dataset.groups, n_bins, kind, n_shuffles, seed)
     return TuningView(tuning_curves(rates, matrix, n_bins), mir, names)
 
 
