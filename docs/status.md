@@ -120,3 +120,31 @@ Known and untouched: `ruff format --check notebooks` flags the generated `notebo
 which the committed-notebook test requires verbatim (fix the builder's output or exclude the file).
 Open for the PI: a theory Phi for a net under the spatial prior would need the mean-field solver to
 take the prior (new item); whether the PI's parameter set should become the notebook defaults.
+
+## 2026-10-27 (later): MI = 0.00 on the PI's P = 64 run, and the paper's spatial Phi (all merged)
+The MI estimator was fine: at P = 64, B = 8 the plug-in bias (~0.38 nats per latent) made the
+shuffle noise rule, applied to each neuron's TOTAL over the k latents, zero every neuron. Four items,
+each reviewed by a fresh reviewer with the record in its merge commit:
+`tuning-panels-with-information-bars` (each neuron: curves plus a bar chart of I_if, raw pale, the
+MIR_KIND estimate full colour, the shuffled null as a black mark; `FactorInformation`/`TuningView`
+carry `raw_mi` and `null_mi`; a printed line per layer gives the bias (B-1)^2/(2P)),
+`overlap-of-informations-and-of-rates` (`fct.modularity.rate_overlap`; C^I and C^r side by side),
+`spatial-phi-kernels` (Latex eqs kernel-def / phi-diagonalised: Phi^(l){mu nu}_{ij} = K^post_ij A_{mu nu},
+A = psi^T K^pre psi / N; `fct.spatial.data_kernel`, `spatial_kernel_pairs`,
+`fct.meanfield.readout_activities`; cells: A per hidden layer, the latents of PHI_TRIALS = 4 trials
+at evenly spaced ranks, an S x S grid of n_post x n_post blocks per layer; the last hidden layer
+drives the OUTPUT population; under readout "h" its kernel uses h where the paper uses phi(h^L);
+Phi^(0) not drawn), `mi-noise-rule-per-latent` (final rule PER GROUP: a group's summed raw
+information against NOISE_FACTOR x its summed null, all members zeroed when it fails; a member in
+no group is tested alone; with one latent per group this is the per-latent rule the PI first
+confirmed; the per-member rule was rejected after review because noise neurons scored 0.77 on
+object-action). Measured corrected noise MIR under the group rule: 0.00 on object-action, what-where
+and the linear teacher; binary singleton factors keep a floor of ~0.11. Cost of the group rule: a
+neuron selective for one of 25 object bits survives only above ~112/P nats (fine at the sweeps'
+P = 4096, zeroed by P <= 512). Cached sweeps predate the rule (caches key on the config only).
+The spatial notebook has 11 figures and builds on CPU and on the T1000. The PI's run is
+`tmp/spatial_cache/spatial_0624b6833433` (100k epochs); rebuild with
+`uv run python notebooks/build_spatial.py tmp/spatial_cache --set N=256 --set P=64 --set K_LATENTS=4 --set M_IN=16 --set RATE_LAMBDA=0 --set N_EPOCHS=100_000 --set "DEVICE='cuda'"`.
+Open for the PI: N_BINS should respect P (B = 8 at P = 64 is one sample per joint cell; the printed
+bias line shows it; `N_BINS = min(8, sqrt(P)/2)` would be the mechanical default); small-P runs on
+object-action have no usable corrected MIR under the group rule; the earlier open items above.
