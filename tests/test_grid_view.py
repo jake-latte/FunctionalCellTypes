@@ -38,6 +38,7 @@ from fct.grid_view import (
 )
 from fct.report import SettingResult, load_results
 from fct.sweep import expand, run_setting, save_sweep, setting_dir
+from fct.tuning import TuningCurves
 from tests.report_helpers import QUIET, tiny_phase_sweep
 
 LAMBDAS = [1e-6, 1.0]  # phase_transition(2)
@@ -53,6 +54,23 @@ def history(raw: list[float], corrected: list[float]) -> dict:
         "monitor_mir_corrected": [first, corrected],
         "monitor_mir_chance": [first, [0.0] * len(raw)],
     }
+
+
+class FakeDeviceTensor(torch.Tensor):
+    """Stands in for a CUDA tensor on a CPU-only host: like one, `.numpy()` raises TypeError until
+    `.cpu()` is called. Subclass-ness survives arithmetic, so a value computed from one still
+    refuses `.numpy()`, as a value computed on the GPU would. `.cpu()` is its only escape: a
+    refactor to `.to("cpu")` or `.numpy(force=True)` turning a test red is this fake, not the code."""
+
+    def numpy(self, *args, **kwargs):
+        raise TypeError("can't convert cuda:0 device type tensor to numpy.")
+
+    def cpu(self, *args, **kwargs):
+        return self.as_subclass(torch.Tensor)
+
+
+def on_fake_device(t: torch.Tensor) -> FakeDeviceTensor:
+    return t.as_subclass(FakeDeviceTensor)
 
 
 def synthetic(status_by_index: dict[int, str]) -> list[SettingResult]:
@@ -320,22 +338,7 @@ def test_depth_is_coerced_to_an_int_and_a_fraction_is_rejected():
         grid_selection(results, 1.5, "tanh", "raw")
 
 
-class FakeDeviceTensor(torch.Tensor):
-    """Stands in for a CUDA tensor on a CPU-only host: like one, `.numpy()` raises TypeError until
-    `.cpu()` is called. Subclass-ness survives arithmetic, so a value computed from one still
-    refuses `.numpy()`, as a value computed on the GPU would."""
-
-    def numpy(self, *args, **kwargs):
-        raise TypeError("can't convert cuda:0 device type tensor to numpy.")
-
-    def cpu(self, *args, **kwargs):
-        return self.as_subclass(torch.Tensor)
-
-
-def on_fake_device(t: torch.Tensor) -> FakeDeviceTensor:
-    return t.as_subclass(FakeDeviceTensor)
-
-
+# ------------------------------------------------------------------ tuning of device tensors
 def test_tuning_view_of_device_tensors_returns_host_arrays_equal_to_the_cpu_ones(
     root, results, monkeypatch
 ):
@@ -355,4 +358,5 @@ def test_tuning_view_of_device_tensors_returns_host_arrays_equal_to_the_cpu_ones
     assert type(view.neuron_mir) is np.ndarray
     assert not any(isinstance(a, FakeDeviceTensor) for a in view.curves)
     np.testing.assert_array_equal(view.neuron_mir, expected.neuron_mir)
-    np.testing.assert_array_equal(view.curves.mean, expected.curves.mean)
+    for field in TuningCurves._fields:
+        np.testing.assert_array_equal(getattr(view.curves, field), getattr(expected.curves, field))

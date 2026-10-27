@@ -265,7 +265,8 @@ def neuron_mir_values(
     seed: int,
 ) -> np.ndarray:
     """(N,) MIR of each neuron of one layer, whose mean is the layer's MIR: raw, or with the
-    shuffle bias correction, with the monitor's bins, shuffles and seed."""
+    shuffle bias correction, with the monitor's bins, shuffles and seed. `rates` and `factors` must
+    be CPU tensors (`tuning_view` moves them there)."""
     _check_kind(kind)
     bias = "shuffle" if kind == "corrected" else "none"
     layer = layer_mir(rates, factors, groups, n_bins, bias, n_shuffles, seed)
@@ -273,6 +274,8 @@ def neuron_mir_values(
 
 
 class TuningView(NamedTuple):
+    """Everything is on the host: CPU tensors in `curves`, a numpy array in `neuron_mir`."""
+
     curves: TuningCurves
     neuron_mir: np.ndarray  # (N,)
     latent_names: list[str]
