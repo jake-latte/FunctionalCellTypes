@@ -335,6 +335,21 @@ def resample(
     return _REDEFINE[cfg.task](cfg, new, reference)
 
 
+def _teacher_maps(cfg: DataConfig, reference: Dataset) -> tuple[Tensor, Tensor]:
+    """W_X and W_Y of `reference`, each checked to be (D_in, n_latents)."""
+    extras = reference.extras or {}
+    missing = [key for key in ("W_X", "W_Y") if key not in extras]
+    if missing:
+        raise ValueError(f"reference.extras lacks the teacher maps {missing}")
+    expected = (cfg.D_in, cfg.n_latents)
+    shapes = {key: tuple(extras[key].shape) for key in ("W_X", "W_Y")}
+    if any(shape != expected for shape in shapes.values()):
+        raise ValueError(
+            f"teacher maps must have shape (D_in, n_latents) = {expected}; got {shapes}"
+        )
+    return extras["W_X"], extras["W_Y"]
+
+
 def latent_lattice_dataset(cfg: DataConfig, reference: Dataset) -> Dataset:
     """One sample per point of the lattice {-a, 0, a}^k of a linear teacher's latents.
 
@@ -342,23 +357,26 @@ def latent_lattice_dataset(cfg: DataConfig, reference: Dataset) -> Dataset:
     the Cartesian product of (-a, 0, a) taken k times: z0 varies slowest, the last latent
     fastest, so row i is reproducible from i alone (digit j of i in base 3, most significant
     first, selects latent j's value from (-a, 0, a)). x and y use the W_X and W_Y in
-    `reference.extras`, so the points are held-out data of the same teacher. Device and dtype
-    follow `reference.x`. Pure: nothing is read or written on disk.
+    `reference.extras`, so the points are held-out data of the same teacher. Pure: nothing is
+    read or written on disk.
+
+    `cfg` must be the DataConfig `reference` was generated from. Its D_in and n_latents are
+    checked against the shapes of the maps; `latent_range` cannot be verified from the
+    reference and is taken on trust. The maps are assumed to share `reference.x`'s dtype and
+    device, which the result inherits.
     """
     if cfg.task != "linear_teacher":
         raise ValueError(
             f"latent_lattice_dataset is defined for task 'linear_teacher', not {cfg.task!r}"
         )
-    missing = [key for key in ("W_X", "W_Y") if key not in reference.extras]
-    if missing:
-        raise ValueError(f"reference.extras lacks the teacher maps {missing}")
+    w_x, w_y = _teacher_maps(cfg, reference)
     k, a = cfg.n_latents, cfg.latent_range
-    values = a * torch.tensor([-1.0, 0.0, 1.0], dtype=reference.x.dtype, device=reference.x.device)
+    values = torch.tensor([-a, 0.0, a], dtype=reference.x.dtype, device=reference.x.device)
     z = torch.cartesian_prod(*[values] * k).reshape(-1, k)  # reshape: k = 1 yields a 1-D tensor
     names = [f"z{i}" for i in range(k)]
     return Dataset(
-        x=z @ reference.extras["W_X"].T,
-        y=z @ reference.extras["W_Y"].T,
+        x=z @ w_x.T,
+        y=z @ w_y.T,
         Q=None,
         period=None,
         factors={n: z[:, i].contiguous() for i, n in enumerate(names)},

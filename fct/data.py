@@ -179,7 +179,8 @@ def get_dataset(cache_dir: Path, cfg: Config) -> Dataset:
 
 
 def get_latent_lattice_dataset(cache_dir: Path, cfg: Config) -> Dataset:
-    """The 3^k latent-lattice test set of the linear teacher in CACHE_DIR/data/dataset.pt.
+    """The 3^k latent-lattice test set of the linear teacher whose training set is cached at
+    CACHE_DIR/data/dataset.pt.
 
     Loads (or generates) the training dataset to get its teacher maps; the lattice itself is
     cheap and is rebuilt on every call, so it has no cache file of its own.
