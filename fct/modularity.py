@@ -228,6 +228,15 @@ def neuron_factor_information(
     return FactorInformation(member_mi, member_mi @ membership.to(member_mi.device), group_names)
 
 
+def information_overlap(member_mi: Tensor) -> Tensor:
+    """(N, N) overlap C_ij = (1/k) sum_f I_if I_jf of the neurons' informations about the k
+    latents: large where two neurons carry information about the same latents. `member_mi` is
+    (N, k), e.g. `FactorInformation.member_mi` (one column per latent)."""
+    if member_mi.ndim != 2:
+        raise ValueError(f"member_mi must be 2-D (N, k), got shape {tuple(member_mi.shape)}")
+    return member_mi @ member_mi.T / member_mi.shape[1]
+
+
 def preference(group_mi: Tensor, tol: float = DEAD_TOL) -> tuple[Tensor, Tensor]:
     """Preference r = max / sum per neuron: (N, K) group informations -> r (N,), dead (N,) bool.
 
