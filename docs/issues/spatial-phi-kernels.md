@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: in progress
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -19,7 +19,7 @@ prior K_{iajb} = K^post_ij K^pre_ab,
                                                  spatial index is summed out).
 The post-synaptic kernel only multiplies.
 
-**Plan (to confirm).**
+**Plan (confirmed by the PI 2026-10-27).**
 1. Library, pure, in `fct/spatial.py` (next to `weight_quadratic_form`):
    `data_kernel(psi (P, n_pre), K_pre (n_pre, n_pre)) -> (P, P)` = psi K_pre psi^T / n_pre, and
    `spatial_kernel_pairs(A (P, P), K_post (n_post, n_post), trials: sequence of sample indices)
