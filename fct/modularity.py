@@ -184,17 +184,23 @@ def _subtract_null(raw_mi: Tensor, null: Tensor, membership: Tensor) -> Tensor:
     NOISE_FACTOR times its summed null (indistinguishable from noise). `membership` is the
     (n_members, K) matrix of `_membership`.
 
-    The test is per group because the preference is: a row total would sum K nulls, so a neuron
-    selective for one group is compared with K times the plug-in bias and zeroed at small P (the
-    PI's P = 64 case), while a per-member test lets a group of many low-cardinality members through
-    whenever one member passes by chance (noise MIR 0.77 on the object-action task). A member in
-    two groups is kept when either passes; a member in no group is tested on its own.
+    The test is per group, the unit the preference is formed on. A row total would sum the nulls
+    of all K groups, so a neuron selective for one group is compared with K times the plug-in bias
+    and zeroed at small P; a per-member test lets a group of many low-cardinality members through
+    whenever one of them passes by chance. The cost: within a group the comparison is still with
+    the group's n_members times the bias, so a neuron selective for one member of a large group
+    survives only if its excess information exceeds about n_members (B-1)(C-1) / (2P) nats (on
+    object-action, 25 binary object bits at 10 bins: ~112 / P nats, 0.03 at P = 4096 but the
+    whole entropy of an object bit by P = 512). A member in two groups is kept when either
+    passes; a member in no group is tested on its own.
     """
     membership = membership.to(raw_mi.device, raw_mi.dtype)
-    group_passes = (raw_mi @ membership > NOISE_FACTOR * (null @ membership)).to(raw_mi.dtype)
-    kept_by_group = group_passes @ membership.T > 0  # (N, n_members)
+    group_passes = raw_mi @ membership > NOISE_FACTOR * (null @ membership)  # (N, K)
+    in_a_group = membership.sum(dim=1) > 0  # (n_members,)
+    # A member is kept when one of its groups passes (any over the groups it belongs to).
+    kept_by_group = (group_passes[:, None, :] & (membership > 0)[None]).any(dim=2)
     kept_alone = raw_mi > NOISE_FACTOR * null
-    kept = torch.where(membership.sum(dim=1) > 0, kept_by_group, kept_alone)
+    kept = torch.where(in_a_group, kept_by_group, kept_alone)
     corrected = (raw_mi - null).clamp(min=0.0)
     return corrected.masked_fill(~kept, 0.0)
 

@@ -43,6 +43,8 @@ table has B^2 cells, so B = 8 at P = 64 is one sample per cell. A guard line in 
 `N_BINS = min(8, int(sqrt(P) / 2))` would be the mechanical alternative.
 
 ## Acceptance criteria
-- `tests/test_modularity.py`: the member rule as described; the P = 64, B = 8 synthetic case; the
-  existing row-rule tests replaced.
+- `tests/test_modularity.py`: the group rule of the Outcome paragraph (a group kept or zeroed as a
+  whole, a member in no group tested on its own, the object-action-like noise set near zero, the
+  measured floor of binary singletons bounded); the P = 64, B = 8 synthetic case; the existing
+  row-rule tests replaced.
 - Lint and the full suite pass.

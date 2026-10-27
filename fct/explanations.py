@@ -110,11 +110,14 @@ A group $k$ whose raw information is not clearly above its null, summed over its
 $\sum_{m \in k} I_{im} \le @NOISE@\,\sum_{m \in k} \bar I^{0}_{im}$, is indistinguishable from
 noise and the $\tilde I_{im}$ of all its members are set to 0; a neuron with every member set
 to 0 is dead ($\rho_i = 1/K$). (Without this step the leftover noise residuals, mostly in one
-factor, would give noise neurons a spuriously high preference. The test is per group, not on the
-row total, so a neuron selective for one group is not compared with $K$ times the bias; and not
-per member, so a group of many binary members is not let through by one of them passing by
-chance.) The corrected informations are summed within groups, and $\rho_i$ and the MIR are
-computed exactly as above:
+factor, would give noise neurons a spuriously high preference. The test is per group, the unit the
+preference is formed on: not on the row total, which would compare a neuron selective for one group
+with the bias of all $K$ groups, and not per member, which would let a group of many binary members
+through whenever one of them passes by chance. Within a group the comparison is still with the sum
+of its members' biases, so a neuron selective for one member of a large group is kept only if its
+excess information exceeds about $|k|(B-1)(C-1)/(2P)$ nats: 25 object bits at 10 bins give
+$112/P$, 0.03 nats at $P = 4096$.) The corrected informations are summed within groups, and
+$\rho_i$ and the MIR are computed exactly as above:
 
 $$\mathrm{MIR}_{\text{corrected}} = \frac{\bar{\tilde\rho} - 1/K}{1 - 1/K}.$$
 
