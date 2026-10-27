@@ -15,6 +15,7 @@ from fct.modularity import (
     neuron_mir,
     preference,
     rank_bins,
+    rate_overlap,
     shuffle_factors,
     shuffled_mir,
 )
@@ -549,3 +550,52 @@ def test_information_overlap_is_the_scaled_gram_matrix_of_the_informations():
 def test_information_overlap_rejects_non_2d_input(shape):
     with pytest.raises(ValueError, match="2-D"):
         information_overlap(torch.zeros(shape))
+
+
+def _bin_means_with_an_empty_bin() -> torch.Tensor:
+    """(3, 2, 4) bin means whose (latent 0, bin 1) bin is empty for every neuron."""
+    mean = torch.tensor(
+        [
+            [[1.0, 0.0, 3.0, 4.0], [1.0, 0.0, 1.0, 0.0]],
+            [[0.0, 0.0, 0.0, 1.0], [2.0, 2.0, 2.0, 2.0]],
+            [[1.0, 0.0, 1.0, 1.0], [-1.0, 1.0, -1.0, 1.0]],
+        ]
+    )
+    mean[:, 0, 1] = torch.nan
+    return mean
+
+
+def test_rate_overlap_is_the_mean_product_over_the_non_empty_bins():
+    # 7 of the 8 (latent, bin) cells are non-empty; the sums below are over those 7
+    expected = torch.tensor([[28.0, 8.0, 6.0], [8.0, 17.0, 1.0], [6.0, 1.0, 7.0]]) / 7
+    assert torch.allclose(rate_overlap(_bin_means_with_an_empty_bin()), expected)
+
+
+def test_rate_overlap_of_a_copied_curve_equals_the_diagonal():
+    mean = _bin_means_with_an_empty_bin()
+    mean[1] = mean[0]
+    C = rate_overlap(mean)
+    assert torch.allclose(C[0, 1], C[0, 0]) and torch.allclose(C[1, 1], C[0, 0])
+
+
+def test_rate_overlap_is_signed():
+    mean = torch.tensor([[[1.0, 1.0]], [[-1.0, -1.0]]])
+    assert rate_overlap(mean)[0, 1] == -1.0
+
+
+def test_rate_overlap_rejects_bins_that_are_empty_for_only_some_neurons():
+    mean = _bin_means_with_an_empty_bin()
+    mean[0, 1, 2] = torch.nan
+    with pytest.raises(ValueError, match="empty"):
+        rate_overlap(mean)
+
+
+def test_rate_overlap_rejects_all_bins_empty():
+    with pytest.raises(ValueError, match="empty"):
+        rate_overlap(torch.full((2, 1, 3), torch.nan))
+
+
+@pytest.mark.parametrize("shape", [(5,), (2, 3), (2, 3, 4, 5)])
+def test_rate_overlap_rejects_non_3d_input(shape):
+    with pytest.raises(ValueError, match="3-D"):
+        rate_overlap(torch.zeros(shape))
