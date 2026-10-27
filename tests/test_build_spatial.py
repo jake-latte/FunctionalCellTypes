@@ -18,8 +18,9 @@ from notebooks.build_spatial import build_notebook, execute_notebook, set_parame
 from tests.draw_helpers import assert_png
 
 # Hidden layers L = 1: prior figures of its L + 1 = 2 weight layers, loss curves, example
-# outputs, the two first-layer figures (empirical kernels, weights) and one tuning figure.
-N_FIGURES = 2 + 1 + 1 + 2 + 1
+# outputs, the two first-layer figures (empirical kernels, weights), the activity kernels Phi
+# and one tuning figure.
+N_FIGURES = 2 + 1 + 1 + 2 + 1 + 1
 TINY = {"P": 32, "M_IN": 6, "K_LATENTS": 2, "N": 8, "N_EPOCHS": 40}
 # A code cell that calls one of these draws a figure.
 FIGURE_CALLS = ("plt.subplots(", "plt.figure(")
@@ -30,6 +31,7 @@ PLOTTING_FUNCTIONS = {
     "plot_example_outputs",
     "plot_kernel_comparison",
     "plot_weights_by_position",
+    "plot_activity_kernels",
     "plot_tuning_by_position",
 }
 
@@ -236,6 +238,43 @@ def test_weight_image_rows_follow_the_ring_order(notebook_functions):
 def test_weight_image_needs_a_ring(notebook_functions):
     with pytest.raises(ValueError, match="d = 1"):
         notebook_functions["plot_weights_by_position"](torch.zeros(8, 6), _space(2))
+
+
+def _block_phi() -> torch.Tensor:
+    """Two layers of 6 samples: layer 0 has two blocks of 3 (value 1 in, 0 across), layer 1 is
+    twice the identity, so its kernel scale tr(Phi) / P is 2."""
+    block = torch.kron(torch.eye(2), torch.ones(3, 3))
+    return torch.stack([block, 2 * torch.eye(6)]).to(torch.float64)
+
+
+def test_activity_kernels_one_panel_per_layer_titled_with_the_kernel_scale(
+    notebook_functions, tmp_path
+):
+    fig = notebook_functions["plot_activity_kernels"](_block_phi(), np.arange(6), "")
+    assert_png(fig, tmp_path)
+    panels = [ax for ax in fig.axes if ax.images]
+    assert len(panels) == 2
+    assert "hidden layer 1" in panels[0].get_title() and "= 1" in panels[0].get_title()
+    assert "hidden layer 2" in panels[1].get_title() and "= 2" in panels[1].get_title()
+    # each panel has its own colour scale: layer 0 spans 0 to 1, layer 1 spans 0 to 2
+    assert panels[0].images[0].get_clim() == (0.0, 1.0)
+    assert panels[1].images[0].get_clim() == (0.0, 2.0)
+
+
+def test_activity_kernels_sorting_permutes_rows_and_columns_together(notebook_functions):
+    order = np.array([0, 3, 1, 4, 2, 5])  # interleaves the two blocks
+    fig = notebook_functions["plot_activity_kernels"](_block_phi(), order, "z0")
+    shown = next(ax for ax in fig.axes if ax.images).images[0].get_array()
+    phi = _block_phi()[0].numpy()
+    assert np.array_equal(shown, phi[np.ix_(order, order)])
+    assert np.array_equal(shown, shown.T)  # rows and columns moved together
+    # the blocks, contiguous in dataset order, now alternate: neighbours are never in one block
+    assert shown[0, 1] == 0.0 and shown[0, 2] == 1.0
+
+
+def test_activity_kernels_refuse_an_order_that_is_not_a_permutation(notebook_functions):
+    with pytest.raises(ValueError, match="permutation"):
+        notebook_functions["plot_activity_kernels"](_block_phi(), np.array([0, 0, 1, 2, 3, 4]), "")
 
 
 def _tuned_layer(tuned_unit: int):

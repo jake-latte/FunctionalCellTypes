@@ -116,6 +116,7 @@ from IPython.display import Markdown, display
 from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.cache import cache_root_from_env
 from fct.grid_view import tuning_view
+from fct.meanfield import empirical_kernels
 from fct.spatial import torus_distance, wrapped_gaussian_profile
 from fct.spatial_view import (
     layer_spaces,
@@ -482,6 +483,53 @@ if D == 1:
 else:
     display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""
 
+PHI_TEXT = r"""## Activity kernels $\Phi^{(l)}$ of the trained network
+
+The kernels the cells above say are *not* $K$ or the weight second moments: the $(P \times P)$
+activity kernel of each hidden layer $l$ over the training samples,
+$$\Phi^{(l)}_{\mu\nu} = \frac{1}{N} \sum_{i=1}^{N} \psi^{(l)}_{i\mu}\, \psi^{(l)}_{i\nu}, \qquad \psi^{(l)}_{i\mu} = \phi\big(h^{(l)}_{i\mu}\big),$$
+computed by `fct.meanfield.empirical_kernels` on all $P$ training samples, in float64. The
+readout convention of `cfg.meanfield.readout` decides $\psi$ on the last hidden layer: with
+`"phi"` it is $\phi(h^{(L)})$ as above, with `"h"` (the default, and the one in force here, since
+the output is $V^\top h^{(L)} / N$) it is $\psi^{(L)} = h^{(L)}$ itself. One panel per hidden
+layer, each with its own colour scale and titled with the kernel scale
+$\mathrm{tr}\,\Phi^{(l)} / P$. The samples are **sorted** by the latent $z_f$ with
+$f$ = `PHI_SORT_LATENT` (`None` keeps dataset order), so a kernel that depends on that latent
+shows as a band along the diagonal. This is the trained net's empirical $\Phi$ only: the
+mean-field solver has no spatial prior, so there is no theory $\Phi$ for this net to compare
+with."""
+
+PHI = r"""PHI_SORT_LATENT = 0  # index f of the latent z_f that orders the samples; None: dataset order
+
+
+def plot_activity_kernels(Phi, order, sorted_by):
+    # One panel per hidden layer: the (P, P) kernel with samples reordered by `order`, its own
+    # colour scale, titled with the kernel scale tr(Phi) / P (unchanged by the reordering).
+    Phi = Phi.detach().cpu().numpy()
+    n_layers, P = Phi.shape[0], Phi.shape[1]
+    if sorted(order.tolist()) != list(range(P)):
+        raise ValueError(f"order is not a permutation of the {P} samples")
+    fig, axes = plt.subplots(
+        1, n_layers, figsize=(5 * n_layers + 1, 5), squeeze=False, layout="constrained"
+    )
+    for layer, ax in enumerate(axes[0]):
+        image = ax.imshow(Phi[layer][np.ix_(order, order)], cmap="viridis", interpolation="none")
+        fig.colorbar(image, ax=ax, shrink=0.8)
+        scale = np.trace(Phi[layer]) / P
+        ax.set(
+            title=rf"hidden layer {layer + 1}: $\mathrm{{tr}}\,\Phi / P$ = {scale:.3g}",
+            xlabel=rf"sample $\nu$, sorted by {sorted_by}" if sorted_by else r"sample $\nu$",
+            ylabel=r"sample $\mu$",
+        )
+    return fig
+
+
+Phi, _ = empirical_kernels(RUN.net, RUN.dataset.x.to(RUN.net.dtype), CFG.meanfield.readout)
+by = None if PHI_SORT_LATENT is None else f"z{PHI_SORT_LATENT}"
+order = np.arange(len(Phi[0])) if by is None else np.argsort(RUN.dataset.factors[by].numpy())
+plot_activity_kernels(Phi, order, by)
+plt.show()"""
+
 TUNING_TEXT = r"""## Tuning of every neuron to the latents
 
 For hidden layer $l$, neuron $i$ and latent $f$, the samples are split into $B$ = `N_BINS`
@@ -597,6 +645,8 @@ def build_notebook() -> NotebookNode:
         new_code_cell(EMPIRICAL),
         new_markdown_cell(WEIGHTS_TEXT),
         new_code_cell(WEIGHTS),
+        new_markdown_cell(PHI_TEXT),
+        new_code_cell(PHI),
         new_markdown_cell(TUNING_TEXT),
         new_code_cell(TUNING),
     ]
