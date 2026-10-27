@@ -19,9 +19,9 @@ from notebooks.build_spatial import build_notebook, execute_notebook, set_parame
 from tests.draw_helpers import assert_png, on_fake_device
 
 # Hidden layers L = 1: prior figures of its L + 1 = 2 weight layers, loss curves, example
-# outputs, the two first-layer figures (empirical kernels, weights), the activity kernels Phi
-# and one tuning figure.
-N_FIGURES = 2 + 1 + 1 + 2 + 1 + 1
+# outputs, the two first-layer figures (empirical kernels, weights), the activity kernels Phi,
+# one tuning figure and one information-overlap figure.
+N_FIGURES = 2 + 1 + 1 + 2 + 1 + 1 + 1  # ... + Phi + tuning + overlap
 TINY = {"P": 32, "M_IN": 6, "K_LATENTS": 2, "N": 8, "N_EPOCHS": 40}
 # A code cell that calls one of these draws a figure.
 FIGURE_CALLS = ("plt.subplots(", "plt.figure(")
@@ -34,6 +34,7 @@ PLOTTING_FUNCTIONS = {
     "plot_weights_by_position",
     "plot_activity_kernels",
     "plot_tuning_by_position",
+    "plot_information_overlap",
 }
 
 # Ring positions of 6 units in a scrambled order: unit 0 is 4th around the ring, and so on.
@@ -357,6 +358,40 @@ def test_tuning_by_position_checks_sizes(notebook_functions):
 def test_tuning_by_position_refuses_too_few_latent_names(notebook_functions):
     with pytest.raises(ValueError, match="latent names"):
         notebook_functions["plot_tuning_by_position"](_tuned_layer(0), np.zeros(6), ["z0"], RING, 2)
+
+
+def test_information_overlap_image_follows_the_given_order_on_the_shared_scale(notebook_functions):
+    C = torch.arange(9.0).reshape(3, 3)
+    order = [2, 0, 1]
+    fig = notebook_functions["plot_information_overlap"](C, order, 10.0, 0, "ring")
+    image = fig.axes[0].images[0]
+    assert np.array_equal(image.get_array(), C.numpy()[np.ix_(order, order)])
+    assert image.get_clim() == (0, 10.0)
+    assert "nats" in fig.axes[1].get_ylabel() and "ring" in fig.axes[0].get_xlabel()
+
+
+def test_information_overlap_image_of_an_uninformative_layer_has_a_nonempty_scale(
+    notebook_functions,
+):
+    fig = notebook_functions["plot_information_overlap"](
+        torch.zeros(3, 3), [0, 1, 2], 0.0, 0, "index"
+    )
+    assert fig.axes[0].images[0].get_clim() == (0, 1.0)
+
+
+def test_information_overlap_image_checks_sizes(notebook_functions):
+    plot = notebook_functions["plot_information_overlap"]
+    with pytest.raises(ValueError, match="square matrix"):
+        plot(torch.zeros(3, 4), [0, 1, 2], 1.0, 0, "index")
+    with pytest.raises(ValueError, match="one order entry"):
+        plot(torch.zeros(3, 3), [0, 1], 1.0, 0, "index")
+
+
+def test_information_overlap_ticks_name_the_neuron_shown_there(notebook_functions):
+    order = [2, 0, 1]
+    ax = notebook_functions["plot_information_overlap"](torch.eye(3), order, 1.0, 0, "ring").axes[0]
+    for labels in (ax.get_xticklabels(), ax.get_yticklabels()):
+        assert [t.get_text() for t in labels] == ["2", "0", "1"]
 
 
 # ---------------------------------------------------------------- parameters and execution

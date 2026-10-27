@@ -6,6 +6,7 @@ import torch
 
 from fct.modularity import (
     factor_labels,
+    information_overlap,
     layer_mir,
     mir,
     mutual_information,
@@ -506,3 +507,45 @@ def test_neuron_mir_mean_is_the_layer_mir_with_a_dead_neuron(bias_correction):
 def test_neuron_mir_needs_at_least_two_groups():
     with pytest.raises(ValueError, match="K >= 2"):
         neuron_mir(torch.tensor([1.0]), 1)
+
+
+# ---------------------------------------------------------------- information overlap
+
+
+def _copy_block_rates(P=4000, seed=0):
+    """Rates of 12 neurons to 2 latents: neurons 0-3 copy z0, 4-6 copy z1, 7-11 are noise."""
+    g = _gen(seed)
+    z = torch.randn(P, 2, generator=g)
+    noise = torch.randn(P, 12, generator=g)
+    rates = noise.clone()
+    rates[:, :4] = z[:, :1] + 0.1 * noise[:, :4]
+    rates[:, 4:7] = z[:, 1:] + 0.1 * noise[:, 4:7]
+    return rates, {"z0": z[:, 0], "z1": z[:, 1]}
+
+
+def test_information_overlap_is_block_diagonal_on_neurons_that_copy_a_latent():
+    rates, factors = _copy_block_rates()
+    a, b = 4, 7
+    info = neuron_factor_information(rates, factors, n_bins=8, bias_correction="shuffle")
+    C = information_overlap(info.member_mi)
+    assert C.shape == (12, 12)
+    assert torch.allclose(C, C.T)
+    assert torch.allclose(C.diagonal(), (info.member_mi**2).sum(1) / 2)
+    block = torch.zeros(12, 12, dtype=torch.bool)
+    block[:a, :a] = block[a:b, a:b] = True
+    assert (
+        C[block].min() > 1.0
+    )  # a copy carries ~1.5 nats about its latent (8 bins, noise 0.1): in-block C ~ 1.1
+    assert C[~block].max() < 0.05  # across blocks and on the noise neurons: ~0
+
+
+def test_information_overlap_is_the_scaled_gram_matrix_of_the_informations():
+    mi = torch.tensor([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]])
+    expected = torch.tensor([[1.0, 0.0, 1.0], [0.0, 4.0, 2.0], [1.0, 2.0, 2.0]]) / 2
+    assert torch.equal(information_overlap(mi), expected)
+
+
+@pytest.mark.parametrize("shape", [(5,), (2, 3, 4)])
+def test_information_overlap_rejects_non_2d_input(shape):
+    with pytest.raises(ValueError, match="2-D"):
+        information_overlap(torch.zeros(shape))

@@ -36,6 +36,7 @@ from fct.grid_view import (
     tuning_items,
     tuning_view,
 )
+from fct.modularity import neuron_factor_information
 from fct.report import SettingResult, load_results
 from fct.sweep import expand, run_setting, save_sweep, setting_dir
 from fct.tuning import TuningCurves
@@ -201,6 +202,28 @@ def test_neuron_mir_is_high_for_neurons_each_driven_by_one_latent():
     assert values.shape == (3,) and np.all(values > 0.9)
 
 
+def test_tuning_view_member_mi_is_the_information_behind_its_mir(root, results):
+    loaded = load_setting_data(root, choice_for(results, 0).result)
+    tc = loaded.cfg.train
+    view = tuning_view(
+        loaded.net, loaded.dataset, 0, tc.monitor_bins, "corrected", tc.monitor_shuffles, tc.seed
+    )
+    rates = layer_rates(loaded.net, loaded.dataset.x, 0).cpu()
+    factors = {k: f.cpu() for k, f in loaded.dataset.factors.items()}
+    direct = neuron_factor_information(
+        rates,
+        factors,
+        loaded.dataset.groups,
+        tc.monitor_bins,
+        "shuffle",
+        tc.monitor_shuffles,
+        tc.seed,
+    )
+    n_neurons, n_latents = view.member_mi.shape
+    assert (n_neurons, n_latents) == (loaded.cfg.net.N, len(view.latent_names))
+    torch.testing.assert_close(view.member_mi, direct.member_mi, rtol=0, atol=0)
+
+
 def test_neuron_mir_rejects_an_unknown_kind():
     factors = {"z0": torch.randn(50), "z1": torch.randn(50)}
     with pytest.raises(ValueError, match="kind"):
@@ -340,6 +363,8 @@ def test_tuning_view_of_device_tensors_returns_host_arrays_equal_to_the_cpu_ones
     view = tuning_view(loaded.net, on_device, *args)
 
     assert type(view.neuron_mir) is np.ndarray
+    assert not isinstance(view.member_mi, FakeDeviceTensor)
+    torch.testing.assert_close(view.member_mi, expected.member_mi, rtol=0, atol=0)
     assert not any(isinstance(a, FakeDeviceTensor) for a in view.curves)
     np.testing.assert_array_equal(view.neuron_mir, expected.neuron_mir)
     for field in TuningCurves._fields:
