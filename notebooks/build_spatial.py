@@ -1,11 +1,17 @@
 """Build and execute `spatial.ipynb`: train a net under a spatial weight prior and look at it.
 
 One linear-teacher run. The first cells set the task, the network, the training and the spatial
-prior (an embedding and a kernel per population); the notebook then plots those kernels, trains
-through the normal `fct` cache (a re-run reloads or resumes), and shows the loss curves, example
-outputs, the first-layer weights over the embedding and the tuning of every neuron to the
-latents, one panel per neuron placed by its position. All logic is in `fct.spatial_view` and
-`fct.spatial_report`; each cell only calls it. Run
+prior (an embedding and a kernel per population); the notebook then shows the eigenvalue floor
+and the prior kernels, trains through the normal `fct` cache (a re-run reloads or resumes), and
+shows the loss curves, example outputs, the first-layer weights next to the prior and the tuning
+of every neuron to the latents, one panel per neuron placed by its position.
+
+The library computes (the kernels and penalty matrices, the training run, rates, tuning curves
+and MI); every figure is drawn by a plotting function written out in full in the code cell that
+draws it, so a reader sees exactly what is plotted. Each figure cell is preceded by a markdown
+cell that defines the plotted quantity with an equation. A new figure is one more such pair
+in `build_notebook`: the markdown first, then a code cell with any settings, the plotting
+function, and the call at the bottom. Run
 
     python notebooks/build_spatial.py CACHE_ROOT                  # execute, write tmp/spatial.ipynb
     python notebooks/build_spatial.py CACHE_ROOT --set "OPTIMIZER='adam'" --set N_EPOCHS=200   # Python literals
@@ -33,27 +39,38 @@ from notebooks.build_modularity import EXECUTE_TIMEOUT_S, write_notebook
 SOURCE_OUT = Path(__file__).with_name("spatial.ipynb")
 EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "spatial.ipynb"
 
-INTRO = """# A spatial weight prior: kernels, training, and the tuning of every cell
+# Cell sources are raw strings: a backslash in them (LaTeX in the markdown, an escape inside a
+# string in the code) reaches the notebook unchanged.
+
+INTRO = r"""# A spatial weight prior: kernels, training, and the tuning of every cell
 
 Every unit of the input, the hidden layer(s) and the output sits at a position on a ring (or a
 torus); the weight prior of each layer is a Gaussian kernel over those positions, so units that
 are close in space get similar weights. The notebook sets the prior, trains a net under it on a
-linear teacher ($x = Z W_X^\\top$, $y = Z W_Y^\\top$, $k$ latents $Z$), and looks at what
-training produced: the tuning of each neuron to each latent, laid out by the neuron's position.
+linear teacher, and looks at what training produced: the weights next to the prior, and the
+tuning of each neuron to each latent, laid out by the neuron's position. Every figure is drawn by
+a function written out in the cell that draws it; the markdown before it gives the equation of
+what is plotted.
+
+**Notation.**
+- Task (`fct/tasks.py`, linear teacher): latents $z_\mu \in \mathbb{R}^k$ with i.i.d. entries
+  uniform on $[-1, 1]$, inputs $x_\mu = W_X z_\mu \in \mathbb{R}^m$ and targets
+  $y_\mu = W_Y z_\mu \in \mathbb{R}^m$, $\mu = 1, \dots, P$; $W_X$ and $W_Y$ are $(m, k)$ with
+  i.i.d. $\mathcal{N}(0, 1/k)$ entries fixed by `DATA_SEED`.
+- Network (`fct/model.py`), $L$ hidden layers of $N$ units with activation $\phi$:
+  $h^{(1)}_\mu = U x_\mu / \sqrt{m}$, $h^{(l)}_\mu = (g / \sqrt{N})\, J_{l-1}\, \phi(h^{(l-1)}_\mu)$
+  for $l = 2, \dots, L$, output $\hat y_\mu = V^\top h^{(L)}_\mu / N$. The weight layers, each
+  stored (post, pre), are $W_1 = U$ of shape $(N, m)$, $W_l = J_{l-1}$, and $W_{L+1} = V^\top$.
+  The rates are $r^{(l)}_{i\mu} = \phi(h^{(l)}_{i\mu})$.
+- Loss (`fct/train.py`):
+  $L = \frac{N}{2}\,\mathrm{mse} + \lambda_w \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \lambda_r \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
+  with $\mathrm{mse} = \frac{1}{P m} \sum_\mu \lVert y_\mu - \hat y_\mu \rVert^2$,
+  $\lambda_w$ = `WEIGHT_LAMBDA`, $\lambda_r$ = `RATE_LAMBDA`; the penalty matrices $M$ are
+  defined in the spatial prior section.
 
 Set `CACHE_ROOT` in the first cell. The run is cached under it in a directory named by a hash of
 the task, net, training and spatial settings, so re-running reloads a finished run, resumes an
-interrupted one, and changing any setting starts a new one.
-
-**Why the default sizes are small.** The prior's penalty matrix is the inverse of the kernel with
-its eigenvalues floored at `MIN_REL_EIG` times the largest. A smooth kernel has eigenvalues down to
-round-off, so the library default floor of 1e-6 gives a prior term of order 1e9 at the start, and
-SGLD refuses to run unless `LR * WEIGHT_LAMBDA * lambda_max(M) < 1` for the stiffest direction of
-the prior. With 16 hidden units on a ring, kernel length scales of 0.15 (about 2.4 neighbour
-spacings) and a floor of 1e-2, that product is about 0.01 at `LR = 1e-2`, both optimisers are stable,
-and 2000 epochs take seconds on a CPU. SGLD takes plain gradient steps plus noise, so in the same
-number of epochs it fits the teacher less closely than Adam does. A larger network or a lower floor needs a smaller `LR`
-(for SGLD) or `WEIGHT_LAMBDA`."""
+interrupted one, and changing any setting starts a new one."""
 
 TASK_AND_NET = """CACHE_ROOT = None  # directory for the cached runs; None reads $FCT_CACHE_ROOT
 # task: a linear teacher with m features and k latents
@@ -72,11 +89,65 @@ WEIGHT_LAMBDA = 3e-3  # multiplies the spatial weight penalty
 RATE_LAMBDA = 1e-4  # multiplies the rate penalty
 DEVICE = "cpu"  # "cpu", "cuda" or "auto"; these nets are tiny"""
 
+TRAINING_TEXT = r"""## Training
+
+With `OPTIMIZER = "sgld"` every epoch is one full-batch Langevin step on all weights $\theta$,
+$$\theta \leftarrow \theta - \mathrm{lr}\, \nabla_\theta L + \sqrt{2\, \mathrm{lr} / \beta}\; \xi, \qquad \xi \sim \mathcal{N}(0, I),$$
+whose stationary law for a small step is $p(\theta) \propto e^{-\beta L(\theta)}$, with $\beta$ =
+`BETA`. With `"adam"` the net minimises $L$ and $\beta$ is unused. SGLD takes plain gradient steps
+plus noise, so in the same number of epochs it fits the teacher less closely than Adam does."""
+
 TRAINING = """OPTIMIZER = "sgld"  # "sgld" (Langevin noise of variance 2 * LR / BETA per step) or "adam"
 BETA = 1e4  # inverse temperature, read by SGLD only
 LR = 1e-2
 N_EPOCHS = 2000
 TRAIN_SEED = 0"""
+
+SETUP_TEXT = """## Setup
+
+The library computes; the cells below only draw, with plain matplotlib on the arrays it returns."""
+
+SETUP = """import matplotlib as mpl
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from IPython.display import Markdown, display
+
+from fct.analyse import example_outputs, pick_examples, r_squared
+from fct.cache import cache_root_from_env
+from fct.grid_view import tuning_view
+from fct.spatial import torus_distance, wrapped_gaussian_profile
+from fct.spatial_view import (
+    layer_spaces,
+    make_config,
+    order_weights,
+    ordered_kernel_comparison,
+    panel_grid,
+    train_run,
+)
+
+mpl.rcParams.update({"figure.dpi": 100, "font.size": 12, "axes.titlesize": 12})
+RUNS_ROOT = CACHE_ROOT or cache_root_from_env()"""
+
+PRIOR_TEXT = r"""## Spatial prior
+
+Every unit $i$ of population $p$ (the input, hidden layer $l$, the output) has a position
+$x^p_i$ on the torus $[0, \mathrm{box})^d$ (`D`, `BOX`), placed on a grid or uniformly at random.
+The population's kernel is the wrapped Gaussian of `fct/spatial.py`, with amplitude $A_p$ and
+length scale $\ell_p$ set by `population_spec`:
+$$K^p_{ij} = A_p \prod_{a=1}^{d} \frac{W(\delta_a)}{W(0)}, \qquad W(\delta) = \sum_{|n| \le n_\mathrm{img}} e^{-(\delta + n\, \mathrm{box})^2 / 2 \ell_p^2},$$
+where $\delta = x^p_i - x^p_j$ reduced to $[-\mathrm{box}/2, \mathrm{box}/2]$ on every axis $a$.
+Weight layer $l$ maps population pre to population post, and its prior covariance is
+$K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l$. The penalty uses the inverse with floored
+eigenvalues: from $K^p = \sum_j \lambda_j v_j v_j^\top$,
+$$M^p = \sum_j \max(\lambda_j,\, \epsilon\, \lambda_{\max})^{-1}\, v_j v_j^\top, \qquad \epsilon = \texttt{MIN\_REL\_EIG},$$
+and the loss term is $\lambda_w \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top)$.
+Under SGLD at inverse temperature $\beta$ the stationary law $\propto e^{-\beta L}$ makes the
+prior alone
+$$\mathrm{vec}(W_l) \sim \mathcal{N}\big(0,\ (2 \beta \lambda_w)^{-1}\, K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l\big)$$
+up to the floor (exactly, with $K^p$ replaced by $(M^p)^{-1}$). These kernels are over *units*:
+they are a prior on the weights, not the mean-field kernels $\Phi_l$ over *samples* of
+`fct/meanfield.py`, which this notebook does not compute."""
 
 SPATIAL = """from fct.spatial import SpatialConfig
 from fct.spatial_view import population_spec
@@ -112,41 +183,384 @@ CFG = make_config(
     spatial=SPATIAL,
     device=DEVICE,
 )
-SPACES = layer_spaces(CFG)
-show(kernel_items(SPACES))"""
+SPACES = layer_spaces(CFG)  # weight layer l = 1 .. L + 1 is SPACES[l - 1]"""
 
-SETUP = """import matplotlib as mpl
+FLOOR_TEXT = r"""### The eigenvalue floor and the SGLD step size
 
-from fct.cache import cache_root_from_env
-from fct.report import show
-from fct.spatial_report import (
-    kernel_items,
-    training_items,
-    tuning_by_position_items,
-    weight_items,
-)
-from fct.spatial_view import layer_spaces, make_config, train_run
+A smooth kernel has eigenvalues down to round-off, so the floor $\epsilon$ is what keeps $M^p$
+finite. It sets the largest penalty eigenvalue of a population, and that of a layer is the
+product of its two factors':
+$$\lambda_{\max}(M^p) = \frac{1}{\epsilon\, \lambda_{\max}(K^p)}, \qquad \lambda_{\max}(M_l) = \lambda_{\max}(M^{\mathrm{post}}_l)\, \lambda_{\max}(M^{\mathrm{pre}}_l).$$
+The prior term has curvature $2 \lambda_w \lambda_{\max}(M_l)$ along its stiffest direction, and
+an Euler step of size lr on a quadratic diverges once lr times its curvature reaches 2, so SGLD
+needs (and `fct.train` refuses to start otherwise)
+$$\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l) < 1 \quad \text{for every layer } l.$$
+At the defaults (rings of 12 input, 16 hidden and 12 output units, $\ell = 0.15$, $A = 1$,
+$\epsilon = 10^{-2}$), $\lambda_{\max}(K) \approx 4.51$ for 12 units and $6.02$ for 16, so
+$\lambda_{\max}(M_l) \approx 1 / (10^{-4} \cdot 4.51 \cdot 6.02) \approx 368$ and
+$\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l) \approx 10^{-2} \cdot 3 \cdot 10^{-3} \cdot 368 \approx 0.011$:
+both optimisers are stable and 2000 epochs take seconds on a CPU. The library default
+$\epsilon = 10^{-6}$ would make it $10^4$ times larger; a larger network or a lower floor needs a
+smaller `LR` or `WEIGHT_LAMBDA`. The tables give the numbers for the current settings."""
 
-mpl.rcParams["figure.dpi"] = 100
-RUNS_ROOT = CACHE_ROOT or cache_root_from_env()"""
+FLOOR = r"""def top_eigenvalue(matrix):
+    return torch.linalg.eigvalsh(matrix)[-1].item()
+
+
+def stiffness(space):
+    # lambda_max(M_l): the Kronecker product's largest eigenvalue is the product of its factors'
+    return top_eigenvalue(space.M_post) * top_eigenvalue(space.M_pre)
+
+
+populations = [SPACES[0].pre, *(space.post for space in SPACES)]
+population_table = [
+    r"| population | eigenvalues floored | $\lambda_{\max}(K^p)$ | $\lambda_{\max}(M^p)$ |",
+    "|---|---|---|---|",
+    *(
+        f"| {p.name} | {p.report.n_floored} of {len(p.K)} | {top_eigenvalue(p.K):.3g} "
+        f"| {top_eigenvalue(p.M):.3g} |"
+        for p in populations
+    ),
+]
+layer_table = [
+    (
+        r"| layer $l$ | $\lambda_{\max}(M_l)$ "
+        r"| $\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l)$ (SGLD needs < 1) |"
+    ),
+    "|---|---|---|",
+    *(
+        f"| {s.layer + 1} ({s.pre.name} to {s.post.name}) | {stiffness(s):.3g} "
+        f"| {LR * WEIGHT_LAMBDA * stiffness(s):.3g} |"
+        for s in SPACES
+    ),
+]
+display(Markdown("\n".join(population_table) + "\n\n" + "\n".join(layer_table)))"""
+
+KERNELS_TEXT = r"""### The prior kernels of each weight layer
+
+One figure per weight layer $l$, showing the two factors of its prior covariance
+$K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l$. Top: $K^{\mathrm{pre}}_l$ and
+$K^{\mathrm{post}}_l$ as matrices, units in index order. Bottom left: every entry $K^p_{ij}$
+against the torus distance $\lVert x^p_i - x^p_j \rVert$ (points), with the kernel along one axis
+$$k_p(\delta) = A_p\, \frac{W(\delta)}{W(0)}, \qquad 0 \le \delta \le \mathrm{box} / 2,$$
+as a line. Bottom right: the unit positions (for $d = 1$ the pre ring outside, the post ring
+inside). For $d = 1$ the points lie on the line; for $d = 2$ they scatter around it, because
+$K$ depends on both axis differences, not only on the distance."""
+
+KERNELS = r"""def plot_layer_prior(space):
+    # The prior of one weight layer: K_pre and K_post as matrices, K_ij against torus distance
+    # with the profile k(delta), and the unit positions.
+    d = space.pre.embedding.positions.shape[1]
+    if d > 2:
+        raise ValueError(f"can only draw positions for d = 1 or 2, got d = {d}")
+    factors = [("pre", space.pre, "C0", 1.0), ("post", space.post, "C1", 0.8)]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 9), layout="constrained")
+    for ax, (which, pop, _, _) in zip(axes[0], factors):
+        image = ax.imshow(pop.K.numpy(), cmap="viridis", interpolation="none")
+        fig.colorbar(image, ax=ax, shrink=0.8)
+        ax.set(title=rf"$K^{{\rm {which}}}$ ({pop.name})", xlabel="unit $j$", ylabel="unit $i$")
+
+    ax = axes[1, 0]
+    for which, pop, color, _ in factors:
+        x, box = pop.embedding.positions, pop.embedding.box
+        dist = torus_distance(x, x, box).ravel()
+        ax.scatter(dist.numpy(), pop.K.ravel().numpy(), s=6, alpha=0.4, color=color)
+        # k(delta) is a function of one axis difference, defined up to box / 2
+        delta = torch.linspace(0, min(dist.max().item(), box / 2), 200, dtype=x.dtype)
+        k = wrapped_gaussian_profile(delta, pop.kernel.length_scale, box, pop.kernel.amplitude)
+        label = rf"{which}: {pop.name}, $\ell$ = {pop.kernel.length_scale:g}"
+        ax.plot(delta.numpy(), k.numpy(), color=color, label=label)
+    ax.set(xlabel=r"torus distance $\Vert x_i - x_j \Vert$", ylabel="$K_{ij}$")
+    ax.legend(frameon=False)
+
+    ax = axes[1, 1]
+    for which, pop, color, radius in factors:
+        xy = pop.embedding.positions.numpy()
+        if d == 1:  # around a ring of the given radius
+            angle = 2 * np.pi * xy[:, 0] / pop.embedding.box
+            xy = radius * np.stack([np.cos(angle), np.sin(angle)], axis=1)
+        ax.scatter(xy[:, 0], xy[:, 1], s=14, color=color, label=f"{which}: {pop.name}")
+    if d == 1:
+        ax.set_axis_off()
+    else:
+        ax.set(xlim=(0, space.pre.embedding.box), ylim=(0, space.pre.embedding.box))
+    ax.set_aspect("equal")
+    ax.set_title("positions")
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    layer = space.layer + 1
+    kron = rf"$K^{{\rm post}}_{layer} \otimes K^{{\rm pre}}_{layer}$"
+    fig.suptitle(f"weight layer {layer}: prior covariance {kron}")
+    return fig
+
+
+for space in SPACES:
+    plot_layer_prior(space)
+plt.show()"""
 
 TRAIN = """RUN = train_run(CFG, RUNS_ROOT, log=print)
-show([f"Run cached in `{RUN.cache_dir.name}`."])"""
+tc = CFG.train
+sampler = f"SGLD, beta = {tc.beta:g}" if tc.optimizer == "sgld" else "Adam"
+last = {key: RUN.history[key][-1] for key in ("epoch", "loss", "mse", "weight_l2", "rate_l2")}
+display(
+    Markdown(
+        f"**Trained with {sampler}**, lr = {tc.lr:g}, {tc.n_epochs} epochs; run cached in "
+        f"`{RUN.cache_dir.name}`. At the last logged epoch ({last['epoch']}): loss "
+        f"{last['loss']:.4g}, mse {last['mse']:.4g}, weight penalty {last['weight_l2']:.4g}, "
+        f"rate penalty {last['rate_l2']:.4g}."
+    )
+)"""
 
-RESULTS = """show(training_items(RUN, CFG))"""
+LOSS_TEXT = r"""## Loss curves
 
-WEIGHTS = """show(weight_items(RUN.net, SPACES))"""
+The loss and its three raw terms, as logged during training, against epoch on a log axis:
+$$L = \frac{N}{2}\, \mathrm{mse} + \lambda_w\, \Omega_w + \lambda_r\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
+The terms are drawn unweighted, so they do not add up to the $L$ curve; a term that is zero at
+every epoch has no point on a log axis and is marked "(zero)" in the legend. Under SGLD the
+curves settle to a noisy stationary level rather than to a minimum."""
 
-TUNING = """N_BINS = 8  # rank bins of each latent and of the rates, as in the MIR
-N_SHUFFLES = 5  # shuffles for the bias-corrected MIR in each title
+LOSS = r"""def plot_loss_curves(history, title):
+    # The logged loss L and its raw terms against epoch, on a log axis.
+    terms = {
+        "loss": "loss $L$",
+        "mse": "mse",
+        "weight_l2": r"weight penalty $\Omega_w$",
+        "rate_l2": r"rate penalty $\Omega_r$",
+    }
+    fig, ax = plt.subplots(figsize=(11, 4.5), layout="constrained")
+    for key, label in terms.items():
+        values = np.asarray(history[key], dtype=float)
+        if not np.any(values > 0):
+            label += " (zero)"
+        ax.plot(history["epoch"], values, label=label)
+    ax.set(xlabel="epoch", ylabel="logged value", yscale="log", title=title)
+    ax.grid(alpha=0.25)
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
+    return fig
+
+
+plot_loss_curves(RUN.history, f"{OPTIMIZER}: training")
+plt.show()"""
+
+EXAMPLES_TEXT = r"""## Example outputs
+
+The trained network's output $\hat y_\mu = V^\top h^{(L)}_\mu / N$ against the target
+$y_\mu = W_Y z_\mu$ for `N_EXAMPLES` samples $\mu$ drawn at random. Left: one panel per sample
+with $y_{\mu a}$ (ring on a stem) and $\hat y_{\mu a}$ (diamond) for every output $a = 1, \dots, m$.
+Right: every shown entry $\hat y_{\mu a}$ against $y_{\mu a}$, with the identity line and the
+pooled
+$$R^2 = 1 - \frac{\sum_{\mu a} (y_{\mu a} - \hat y_{\mu a})^2}{\sum_{\mu a} (y_{\mu a} - \bar y)^2}$$
+over the shown entries, $\bar y$ their mean. A good fit puts every diamond inside its ring and
+every point on the identity line."""
+
+EXAMPLES = r"""N_EXAMPLES = 4  # samples shown
+
+
+def plot_example_outputs(outputs, title):
+    # True and predicted output vector of each example, then all entries against each other.
+    y_true, y_pred = outputs.y_true.numpy(), outputs.y_pred.numpy()
+    n, m = y_true.shape
+    fig = plt.figure(figsize=(12, 2.2 * n + 1.5), layout="constrained")
+    left, right = fig.add_gridspec(1, 2, width_ratios=[2, 1])
+    rows = left.subgridspec(n, 1)
+    index = np.arange(m)
+    first = None
+    for row, (mu, true, pred) in enumerate(zip(outputs.indices.tolist(), y_true, y_pred)):
+        ax = fig.add_subplot(rows[row], sharex=first, sharey=first)
+        first = ax if first is None else first
+        ax.vlines(index, 0, true, color="C0")
+        ax.plot(index, true, "o", ms=12, mfc="none", mec="C0", label=r"true $y_{\mu a}$")
+        ax.plot(index, pred, "D", color="C1", label=r"predicted $\hat y_{\mu a}$")
+        ax.axhline(0, color="grey", lw=1)
+        ax.set_title(f"example {mu}", loc="left")
+        ax.set_ylabel("output")
+        ax.margins(y=0.25)
+    ax.set_xlabel("output index $a$")
+    ax.set_xticks(index)
+    first.legend(frameon=False, loc="upper right", ncol=2)
+
+    ax = fig.add_subplot(right)
+    r2 = r_squared(outputs.y_true, outputs.y_pred)
+    lim = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
+    ax.plot(lim, lim, "--", color="grey", label=f"identity; $R^2$ = {r2:.2f}")
+    ax.scatter(y_true.ravel(), y_pred.ravel(), s=30, alpha=0.7, color="C1")
+    ax.set(xlabel=r"true $y_{\mu a}$", ylabel=r"predicted $\hat y_{\mu a}$", aspect="equal")
+    ax.legend(frameon=False, loc="upper left")
+    fig.suptitle(title)
+    return fig
+
+
+n_samples = len(RUN.dataset.x)
+picks = pick_examples(n_samples, min(N_EXAMPLES, n_samples), seed=0)
+plot_example_outputs(example_outputs(RUN.net, RUN.dataset, picks), "trained network")
+plt.show()"""
+
+EMPIRICAL_TEXT = r"""## First-layer weights: their kernels next to the prior
+
+The trained first-layer weight $U$, of shape $(N, m)$ (hidden unit $i$, input unit $a$), has a
+second-moment matrix over its hidden units and one over its input units,
+$$\hat K^{\mathrm{post}} = U U^\top / m, \qquad \hat K^{\mathrm{pre}} = U^\top U / N,$$
+shown next to the prior's $K^{\mathrm{post}}$ and $K^{\mathrm{pre}}$, every matrix with its units
+sorted by ring position. Under the prior alone (SGLD, ignoring the floor)
+$\mathrm{vec}(U) \sim \mathcal{N}(0, c\, K^{\mathrm{post}} \otimes K^{\mathrm{pre}})$ with
+$c = (2 \beta \lambda_w)^{-1}$, so
+$\mathbb{E}[\hat K^{\mathrm{post}}] = c\, A_{\mathrm{pre}}\, K^{\mathrm{post}}$ and
+$\mathbb{E}[\hat K^{\mathrm{pre}}] = c\, A_{\mathrm{post}}\, K^{\mathrm{pre}}$ ($A$ the kernel
+amplitude, the diagonal of $K$): the comparison holds up to that scale, so each panel has its own
+colour scale (Adam has no $\beta$, and only the shapes compare). These are second moments of the
+trained *weights* over *units*, not the mean-field kernels $\Phi_l$ of `fct/meanfield.py`, which
+are $(P \times P)$ activity kernels between *samples*; this notebook does not compute $\Phi_l$.
+A smooth prior shows as a band along the diagonal; one weight matrix is a single sample, so
+$\hat K$ is noisy, and the data term pulls it away from the prior. Drawn for $d = 1$ only, since
+sorting by position needs a ring."""
+
+EMPIRICAL = r"""def plot_kernel_comparison(comparison, space):
+    # Prior K_post and K_pre beside the second moments of the weights, all sorted around the
+    # ring; each panel has its own colour scale.
+    panels = [
+        (comparison.post_theory, rf"prior $K^{{\rm post}}$ ({space.post.name})"),
+        (comparison.post_empirical, r"weights $\hat K^{\rm post}$"),
+        (comparison.pre_theory, rf"prior $K^{{\rm pre}}$ ({space.pre.name})"),
+        (comparison.pre_empirical, r"weights $\hat K^{\rm pre}$"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 9), layout="constrained")
+    for ax, (kernel, title) in zip(axes.ravel(), panels, strict=True):
+        image = ax.imshow(kernel.cpu().numpy(), cmap="viridis", interpolation="none")
+        fig.colorbar(image, ax=ax, shrink=0.8)
+        ax.set(title=title, xlabel="unit, by ring position", ylabel="unit, by ring position")
+    fig.suptitle(f"weight layer {space.layer + 1}: prior kernels and those of the trained weights")
+    return fig
+
+
+if D == 1:
+    plot_kernel_comparison(ordered_kernel_comparison(SPACES[0], RUN.net.U), SPACES[0])
+    plt.show()
+else:
+    display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""
+
+WEIGHTS_TEXT = r"""## First-layer weights $U$, sorted by position
+
+The trained $U$ itself as an image, its rows (hidden units) and columns (input units) sorted
+around their rings:
+$$\text{pixel } (r, c) = U_{\pi(r)\, \sigma(c)}, \qquad x^{\mathrm{hidden}}_{\pi(1)} \le x^{\mathrm{hidden}}_{\pi(2)} \le \dots, \qquad x^{\mathrm{input}}_{\sigma(1)} \le x^{\mathrm{input}}_{\sigma(2)} \le \dots,$$
+on a colour scale symmetric about zero, the ticks giving the ring positions. Under the prior,
+neighbouring rows are correlated by $K^{\mathrm{post}}$ and neighbouring columns by
+$K^{\mathrm{pre}}$, so a long length scale shows as smooth bands. Drawn for $d = 1$ only."""
+
+WEIGHTS = r"""def ring_ticks(pop, order, n_ticks=8):
+    # At most n_ticks ticks along a sorted axis, labelled by the ring position of the unit.
+    ticks = np.arange(0, len(order), max(1, int(np.ceil(len(order) / n_ticks))))
+    positions = pop.embedding.positions[:, 0].numpy()
+    return ticks, [f"{positions[order[t]]:.2f}" for t in ticks]
+
+
+def plot_weights_by_position(W, space):
+    # A (post, pre) weight matrix with rows and columns sorted around their rings.
+    pos_post, pos_pre = space.post.embedding.positions, space.pre.embedding.positions
+    if pos_post.shape[1] != 1:
+        raise ValueError(f"sorting units around a ring needs d = 1, got d = {pos_post.shape[1]}")
+    ordered = order_weights(W.detach().cpu(), pos_post, pos_pre)
+    values = ordered.W.numpy()
+    bound = np.abs(values).max()
+    fig, ax = plt.subplots(figsize=(8, 6.5), layout="constrained")
+    image = ax.imshow(values, cmap="RdBu_r", vmin=-bound, vmax=bound, interpolation="none")
+    fig.colorbar(image, ax=ax, label="weight")
+    ax.set_xticks(*ring_ticks(space.pre, ordered.pre_order))
+    ax.set_yticks(*ring_ticks(space.post, ordered.post_order))
+    ax.set(
+        xlabel=f"{space.pre.name} unit, by ring position",
+        ylabel=f"{space.post.name} unit, by ring position",
+        title=f"weight layer {space.layer + 1}, sorted by position",
+    )
+    return fig
+
+
+if D == 1:
+    plot_weights_by_position(RUN.net.U, SPACES[0])
+    plt.show()
+else:
+    display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""
+
+TUNING_TEXT = r"""## Tuning of every neuron to the latents
+
+For hidden layer $l$, neuron $i$ and latent $f$, the samples are split into $B$ = `N_BINS`
+equal-count bins $b$ by the rank of $z_{f\mu}$, and the curve is the bin mean of the rate against
+the bin mean of the latent, the other latents averaged out:
+$$\bar r_{if}(b) = \frac{1}{|b|} \sum_{\mu \in b} r^{(l)}_{i\mu}, \qquad \bar z_f(b) = \frac{1}{|b|} \sum_{\mu \in b} z_{f\mu},$$
+with error bars of one standard error. Each title gives the neuron's position and its MIR:
+$I_{if}$ is the plug-in mutual information (nats) of the rank-binned rate with the rank-binned
+latent, both in $B$ bins (with `MIR_KIND = "corrected"`, minus its mean over `N_SHUFFLES` label
+shuffles and clamped at 0; a neuron with no information above that null gets $\rho_i = 1/K$), and
+$$\rho_i = \frac{\max_f I_{if}}{\sum_f I_{if}}, \qquad \mathrm{MIR}_i = \frac{\rho_i - 1/K}{1 - 1/K},$$
+with $K$ the number of latents; the layer's MIR is the mean over its neurons. One panel per neuron,
+placed by its position (ring order along rows of `N_COLS` for $d = 1$, its lattice cell for
+$d = 2$), all on one rate axis: a modular neuron has one sloped curve and the others flat."""
+
+TUNING = r"""N_BINS = 8  # B: rank bins of each latent and of the rates, as in the MIR
+N_SHUFFLES = 5  # label shuffles of the bias-corrected MIR
 MIR_KIND = "corrected"  # "corrected" or "raw"
 N_COLS = 4  # panels per row on a ring; a plane lattice uses its own rows and columns
 
-show(tuning_by_position_items(RUN, SPACES, N_BINS, MIR_KIND, N_SHUFFLES, TRAIN_SEED, N_COLS))"""
+
+def plot_tuning_by_position(curves, mir, latent_names, positions, n_cols):
+    # One panel per neuron at its place in space, one curve per latent: the bin means of the
+    # rate against the bin means of the latent, +- one standard error.
+    mean = curves.mean.detach().cpu().numpy()  # (N, K, B)
+    sem = curves.sem.detach().cpu().numpy()  # (N, K, B)
+    centres = curves.centres.detach().cpu().numpy()  # (K, B)
+    xy = positions.detach().cpu().numpy()  # (N, d)
+    if not len(mean) == len(xy) == len(mir):
+        raise ValueError(f"{len(mean)} neurons but {len(xy)} positions and {len(mir)} MIR values")
+    grid = panel_grid(positions, n_cols)
+    fig, axes = plt.subplots(
+        grid.n_rows,
+        grid.n_cols,
+        figsize=(12, 3.2 * grid.n_rows + 0.8),
+        sharey=True,
+        squeeze=False,
+        layout="constrained",
+    )
+    for ax in axes.ravel():
+        ax.set_visible(False)  # a ring of N units may leave the last row part empty
+    for neuron, cell in enumerate(grid.cells):
+        ax = axes[cell]
+        ax.set_visible(True)
+        for f, name in enumerate(latent_names):
+            ax.errorbar(
+                centres[f],
+                mean[neuron, f],
+                yerr=sem[neuron, f],
+                color=f"C{f}",
+                marker="o",
+                capsize=2,
+                label=name,
+            )
+        where = ", ".join(f"{c:.2f}" for c in xy[neuron])
+        ax.set_title(f"neuron {neuron} at ({where})\nMIR {mir[neuron]:.2f}")
+        ax.grid(alpha=0.25)
+    for ax in axes[-1]:
+        ax.set_xlabel(r"latent $\bar z_f(b)$")
+    for ax in axes[:, 0]:
+        ax.set_ylabel(r"rate $\bar r_{if}(b)$")
+    axes[min(grid.cells)].legend(frameon=False)
+    return fig
+
+
+for layer in range(RUN.net.L):
+    view = tuning_view(RUN.net, RUN.dataset, layer, N_BINS, MIR_KIND, N_SHUFFLES, TRAIN_SEED)
+    positions = SPACES[layer].post.embedding.positions
+    fig = plot_tuning_by_position(
+        view.curves, view.neuron_mir, view.latent_names, positions, N_COLS
+    )
+    fig.suptitle(
+        f"hidden layer {layer + 1}: tuning of every neuron, by position "
+        f"({MIR_KIND} MIR, layer mean {np.mean(view.neuron_mir):.3f})"
+    )
+plt.show()"""
 
 
 def build_notebook() -> NotebookNode:
-    """The notebook without outputs."""
+    """The notebook without outputs: settings, the prior, training, then one markdown cell with
+    the equation and one code cell with the plotting function per figure."""
     nb = new_notebook(
         metadata={
             "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}
@@ -156,26 +570,27 @@ def build_notebook() -> NotebookNode:
         new_markdown_cell(INTRO),
         new_markdown_cell("## Task and network"),
         new_code_cell(TASK_AND_NET, metadata={"tags": ["parameters"]}),
-        new_markdown_cell("## Training"),
+        new_markdown_cell(TRAINING_TEXT),
         new_code_cell(TRAINING),
-        new_markdown_cell(
-            "## Spatial prior\n\nEmbedding and kernel of each population, then the kernels and "
-            "positions of every weight layer (`K_post (x) K_pre`)."
-        ),
+        new_markdown_cell(SETUP_TEXT),
         new_code_cell(SETUP),
+        new_markdown_cell(PRIOR_TEXT),
         new_code_cell(SPATIAL),
+        new_markdown_cell(FLOOR_TEXT),
+        new_code_cell(FLOOR),
+        new_markdown_cell(KERNELS_TEXT),
+        new_code_cell(KERNELS),
         new_markdown_cell("## Train"),
         new_code_cell(TRAIN),
-        new_markdown_cell("## Loss, and the trained network's outputs"),
-        new_code_cell(RESULTS),
-        new_markdown_cell("## First-layer weights over the embedding"),
+        new_markdown_cell(LOSS_TEXT),
+        new_code_cell(LOSS),
+        new_markdown_cell(EXAMPLES_TEXT),
+        new_code_cell(EXAMPLES),
+        new_markdown_cell(EMPIRICAL_TEXT),
+        new_code_cell(EMPIRICAL),
+        new_markdown_cell(WEIGHTS_TEXT),
         new_code_cell(WEIGHTS),
-        new_markdown_cell(
-            "## Tuning of every neuron to the latents\n\nOne panel per neuron, placed by its "
-            "position in space (ring order along the rows for d = 1, its lattice cell for d = 2), "
-            "one curve per latent: the neuron's mean rate against that latent, the other latents "
-            "averaged out."
-        ),
+        new_markdown_cell(TUNING_TEXT),
         new_code_cell(TUNING),
     ]
     # Fixed ids, so rebuilding the notebook does not churn the diff.
