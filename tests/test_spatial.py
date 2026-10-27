@@ -406,3 +406,9 @@ def test_spatial_kernel_pairs_reject_non_square_matrices():
 def test_spatial_kernel_pairs_reject_trials_outside_the_samples(trials):
     with pytest.raises(ValueError, match="trial"):
         spatial_kernel_pairs(torch.eye(3, dtype=DTYPE), torch.eye(2, dtype=DTYPE), trials)
+
+
+@pytest.mark.parametrize("trials", [[0.7, 1], [True, 0], [1.0]])
+def test_spatial_kernel_pairs_reject_non_integer_trial_indices(trials):
+    with pytest.raises(ValueError, match="integer"):
+        spatial_kernel_pairs(torch.eye(3, dtype=DTYPE), torch.eye(2, dtype=DTYPE), trials)

@@ -41,6 +41,7 @@ training device.
 """
 
 import math
+import numbers
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Literal, Self
@@ -364,9 +365,13 @@ def spatial_kernel_pairs(
     _check_square("A", A)
     _check_square("K_post", K_post)
     P = A.shape[0]
-    index = torch.as_tensor(list(trials), dtype=torch.long)
-    if index.ndim != 1 or len(index) == 0:
-        raise ValueError(f"need a non-empty sequence of trial indices, got {trials!r}")
+    trials = list(trials)
+    if not trials:
+        raise ValueError("need a non-empty sequence of trial indices")
+    # bool is an Integral too, but True as a sample index is a bug, not sample 1
+    if any(isinstance(t, bool) or not isinstance(t, numbers.Integral) for t in trials):
+        raise ValueError(f"trial indices must be integers, got {trials!r}")
+    index = torch.as_tensor(trials, dtype=torch.long)
     if index.min() < 0 or index.max() >= P:
         raise ValueError(f"trial indices must lie in 0 .. {P - 1}, got {index.tolist()}")
     index = index.to(A.device)
