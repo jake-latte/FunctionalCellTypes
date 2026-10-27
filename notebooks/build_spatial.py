@@ -118,7 +118,7 @@ from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.cache import cache_root_from_env
 from fct.grid_view import tuning_view
 from fct.meanfield import empirical_kernels
-from fct.modularity import information_overlap
+from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import torus_distance, wrapped_gaussian_profile
 from fct.spatial_view import (
     layer_spaces,
@@ -632,46 +632,67 @@ for layer in range(RUN.net.L):
 plt.show()"""
 
 
-OVERLAP_TEXT = r"""## Overlap of the neurons' information about the latents
+OVERLAP_TEXT = r"""## Overlap of the neurons' information and of their mean rates
 
-How much two neurons of a hidden layer carry information about the same latents. With $I_{if}$ the
-mutual information (nats) of neuron $i$ with latent $f$ exactly as in the tuning section (the
-`MIR_KIND` estimate with `N_BINS` and `N_SHUFFLES`, so shuffle-corrected for `"corrected"`), the
-overlap of neurons $i$ and $j$ of layer $l$ is
-$$C^{(l)}_{ij} = \frac{1}{k} \sum_{f=1}^{k} I^{(l)}_{if}\, I^{(l)}_{jf},$$
-with $k$ the number of latents, in nats$^2$. $C$ is symmetric; its diagonal
-$C_{ii} = \frac{1}{k} \sum_f I_{if}^2$ is large for a neuron that is informative about some latent,
-and an off-diagonal entry is large only when both neurons are informative about a common latent, so
-a modular layer shows blocks of neurons sharing a latent. A neuron the tuning section counts as
-noise has all $I_{if} = 0$ (for `"corrected"`), hence an all-zero row and column. One matrix per
-hidden layer, neurons in ring order for $d = 1$ and in index order otherwise (the ticks give the
-neuron index, as in the titles of the tuning panels), all on one colour scale starting at 0. If
-every $C$ is zero the scale is 0 to 1 and the title says "(no information)", so an empty matrix is
-not read as data."""
+How much two neurons of a hidden layer are tuned to the same latents, measured two ways. With
+$I_{if}$ the mutual information (nats) of neuron $i$ with latent $f$ exactly as in the tuning
+section (the `MIR_KIND` estimate with `N_BINS` and `N_SHUFFLES`, so shuffle-corrected for
+`"corrected"`), the information overlap of neurons $i$ and $j$ of layer $l$ is
+$$C^{I}_{ij} = \frac{1}{k} \sum_{f=1}^{k} I_{if}\, I_{jf},$$
+with $k$ the number of latents, in nats$^2$. With $\bar r_{if}(b)$ the mean rate of neuron $i$ in
+bin $b$ of latent $f$ (the tuning curves above), the rate overlap is
+$$C^{r}_{ij} = \frac{1}{n_\mathrm{valid}} \sum_{f,b} \bar r_{if}(b)\, \bar r_{jf}(b),$$
+summed over the $n_\mathrm{valid}$ pairs $(f, b)$ with a non-empty bin (all $kB$ of them for
+equal-count rank bins), in rate$^2$. Both are symmetric. $C^I_{ii}$ is large for a neuron that is
+informative about some latent, and an off-diagonal entry is large only when both neurons are
+informative about a common latent, so a modular layer shows blocks of neurons sharing a latent. A
+neuron the tuning section counts as noise has all $I_{if} = 0$ (for `"corrected"`), hence an
+all-zero row and column in $C^I$. $C^r$ does not use the information estimate: it is signed (tanh
+rates), positive for neurons tuned alike and negative for opposite tuning, and it also has weight
+where the tuning is a constant offset, since $\bar r$ is not centred. Compare the two: blocks that
+appear in $C^r$ but not in $C^I$ are neurons with similar tuning whose information the estimate did
+not resolve. One figure per hidden layer, $C^I$ left and $C^r$ right, neurons in ring order for
+$d = 1$ and in index order otherwise (the ticks give the neuron index, as in the titles of the
+tuning panels). $C^I$ is on one colour scale starting at 0, $C^r$ on one scale symmetric about 0,
+each shared by all layers. If every $C^I$ is zero its scale is 0 to 1 and the title says "(no
+information)", so an empty matrix is not read as data; if every $C^r$ is zero its scale is $-1$ to
+1."""
 
-OVERLAP = r"""def plot_information_overlap(C, order, vmax, layer, kind):
-    # One (N, N) overlap matrix with its neurons shown in `order`, on a colour scale from 0 to vmax.
-    values = C.detach().cpu().numpy()
-    if values.ndim != 2 or values.shape[0] != values.shape[1]:
-        raise ValueError(f"C must be a square matrix, got shape {values.shape}")
-    if len(order) != len(values):
-        raise ValueError(f"need one order entry per neuron: {len(order)} for {len(values)}")
-    shown = values[np.ix_(order, order)]
-    informative = vmax > 0
-    fig, ax = plt.subplots(figsize=(7, 6), layout="constrained")
-    # A layer with no information at all (all C = 0) would give an empty colour range; show 0..1.
-    image = ax.imshow(shown, cmap="viridis", vmin=0, vmax=vmax if informative else 1.0)
-    fig.colorbar(image, ax=ax, label=r"$C_{ij}$  (nats$^2$)")
+OVERLAP = r"""def plot_overlaps(C_info, C_rate, order, info_max, rate_max, layer, kind):
+    # The information overlap (viridis, 0 to info_max) and the rate overlap (diverging, +-rate_max)
+    # of one layer side by side, both (N, N) with their neurons shown in `order`.
+    info, rate = (C.detach().cpu().numpy() for C in (C_info, C_rate))
+    for values in (info, rate):
+        if values.ndim != 2 or values.shape[0] != values.shape[1]:
+            raise ValueError(f"C must be a square matrix, got shape {values.shape}")
+    if info.shape != rate.shape:
+        raise ValueError(
+            f"the two overlaps must be of the same neurons: {info.shape} vs {rate.shape}"
+        )
+    if len(order) != len(info):
+        raise ValueError(f"need one order entry per neuron: {len(order)} for {len(info)}")
+    informative = info_max > 0
+    # A layer with no information (all C = 0) would give an empty colour range; show 0..1.
+    info_top = info_max if informative else 1.0
+    # Likewise for a layer whose rate overlap is all zero: the scale is -1 to 1.
+    rate_top = rate_max if rate_max > 0 else 1.0
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6), layout="constrained")
+    shown = np.ix_(order, order)
+    left = axes[0].imshow(info[shown], cmap="viridis", vmin=0, vmax=info_top)
+    right = axes[1].imshow(rate[shown], cmap="RdBu_r", vmin=-rate_top, vmax=rate_top)
+    fig.colorbar(left, ax=axes[0], label=r"$C^I_{ij}$  (nats$^2$)")
+    fig.colorbar(right, ax=axes[1], label=r"$C^r_{ij}$  (rate$^2$)")
     ticks = np.arange(0, len(order), max(1, int(np.ceil(len(order) / 8))))
-    ax.set_xticks(ticks, np.asarray(order)[ticks])  # the neuron index at each shown position
-    ax.set_yticks(ticks, np.asarray(order)[ticks])
     label = "neuron, by ring position" if kind == "ring" else "neuron, by index"
-    ax.set(
-        xlabel=label,
-        ylabel=label,
-        title=f"hidden layer {layer + 1}: information overlap"
-        + ("" if informative else " (no information)"),
+    titles = (
+        "information overlap" + ("" if informative else " (no information)"),
+        "rate overlap",
     )
+    for ax, title in zip(axes, titles):
+        ax.set_xticks(ticks, np.asarray(order)[ticks])  # the neuron index at each shown position
+        ax.set_yticks(ticks, np.asarray(order)[ticks])
+        ax.set(xlabel=label, ylabel=label, title=title)
+    fig.suptitle(f"hidden layer {layer + 1}")
     return fig
 
 
@@ -679,14 +700,16 @@ views = [
     tuning_view(RUN.net, RUN.dataset, layer, N_BINS, MIR_KIND, N_SHUFFLES, TRAIN_SEED)
     for layer in range(RUN.net.L)
 ]
-overlaps = [information_overlap(view.member_mi) for view in views]
+info_overlaps = [information_overlap(view.member_mi) for view in views]
+rate_overlaps = [rate_overlap(view.curves.mean) for view in views]
 orders = []
 for layer in range(RUN.net.L):
     positions = SPACES[layer].post.embedding.positions
     orders.append(position_order(positions) if D == 1 else np.arange(len(positions)))
-vmax = max(float(C.max()) for C in overlaps)
-for layer, (C, order) in enumerate(zip(overlaps, orders)):
-    plot_information_overlap(C, order, vmax, layer, "ring" if D == 1 else "index")
+info_max = max(float(C.max()) for C in info_overlaps)
+rate_max = max(float(C.abs().max()) for C in rate_overlaps)
+for layer, (C_info, C_rate, order) in enumerate(zip(info_overlaps, rate_overlaps, orders)):
+    plot_overlaps(C_info, C_rate, order, info_max, rate_max, layer, "ring" if D == 1 else "index")
 plt.show()"""
 
 
