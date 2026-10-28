@@ -140,10 +140,14 @@ class SolverConfig(StrictModel):
     project_tilt: bool = True
     tilt_floor: Annotated[float, Field(ge=0, lt=1)] = 0.05
     max_rel_step: PosFloat = 0.1
-    # `solve` raises UnconvergedSolveError instead of returning (and writing final.pt) when a
-    # layer's Stein fixed-point residual of Phi_hat at the last outer step is >= this. A residual
-    # of 1 means Phi_hat holds none of its fixed point (e.g. a tilt projected to 0).
-    max_final_resid: PosFloat = 0.9
+    # A tripwire for a lost tilt, not a convergence test: `solve` raises UnconvergedSolveError
+    # instead of returning (and writing final.pt) when, in some layer, the largest Stein
+    # fixed-point residual of Phi_hat over the last tilt_tripwire_steps outer steps is >=
+    # tilt_tripwire_resid. A tilt near 0 (e.g. projected away) has a residual near 1; an
+    # unconverged solve with a residual below the tripwire passes, so judge convergence from the
+    # history.
+    tilt_tripwire_resid: PosFloat = 0.9
+    tilt_tripwire_steps: PosInt = 3
     pd_floor_rel: PosFloat = 1e-8
     inv_floor_rel: PosFloat = 1e-4
     # Sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition)
@@ -199,7 +203,7 @@ IMPORTANCE_FIELDS = (
 
 
 # Solver fields left out of every hash: they check a result and never change a number of it.
-UNHASHED_SOLVER_FIELDS = ("max_final_resid",)
+UNHASHED_SOLVER_FIELDS = ("tilt_tripwire_resid", "tilt_tripwire_steps")
 
 
 class MeanFieldConfig(StrictModel):

@@ -1,13 +1,15 @@
 """A sweep.json without `grid` is the modularity grid, and keeps its meaning.
 
-The fixtures were generated from the code of commit e1492ca (the last before the grid became
-configurable), extracted with `git archive e1492ca fct | tar -x -C tmp/old` and run with
-`PYTHONPATH=tmp/old`: `modularity_sweep.json` is its `tiny` preset as serialised, and
-`modularity_settings.json` holds, for each of the 36 settings it expanded to (in order), the
-directory, the swept values and `train_hash`, the `section_hash("data", "net", "train")` of the
-setting's config. The hashes were re-derived at LOSS_VERSION 3 and MODEL_VERSION 2 (the hash test
-pins both versions, so a later change of either does not make it fail); the configs themselves
-are still checked against the pre-grid code by `test_it_builds_the_same_configs`.
+`modularity_sweep.json` is the `tiny` preset of commit e1492ca (the last before the grid became
+configurable) as serialised, and `modularity_settings.json` holds, for each of the 36 settings it
+expanded to (in order), the directory and the swept values that code produced (extracted with
+`git archive e1492ca fct | tar -x -C tmp/old`, run with `PYTHONPATH=tmp/old`). Those, and
+`test_it_builds_the_same_configs`, are the independent check against the pre-grid code.
+
+Each row's `train_hash` is NOT from that code: it is the `section_hash("data", "net", "train")`
+of the setting's config computed by the current code (LOSS_VERSION 3, MODEL_VERSION 2), a pin
+that catches an unintended hash change. The hash test sets both versions, so a deliberate
+version change does not make it fail.
 """
 
 import json
@@ -84,7 +86,7 @@ def test_it_builds_the_same_configs(tmp_path):
         assert setting_config(sweep, setting) == expected
 
 
-def test_its_train_hashes_are_those_of_the_pre_grid_code(tmp_path, monkeypatch):
+def test_its_train_hashes_are_pinned(tmp_path, monkeypatch):
     monkeypatch.setattr(fct.config, "LOSS_VERSION", FIXTURE_LOSS_VERSION)
     monkeypatch.setattr(fct.config, "MODEL_VERSION", FIXTURE_MODEL_VERSION)
     sweep = _sweep(tmp_path)

@@ -76,9 +76,14 @@ _TILT_CLASS: dict[Activation, TiltClass] = {
 }
 
 
+def known_tilt_class(phi: Activation) -> TiltClass | None:
+    """The normalisability class of phi, None for an activation without a known rule."""
+    return _TILT_CLASS.get(phi)
+
+
 def tilt_class(phi: Activation) -> TiltClass:
     """The normalisability class of phi; ValueError for an activation without a known rule."""
-    if phi not in _TILT_CLASS:
+    if known_tilt_class(phi) is None:
         raise ValueError(
             f"no normalisability rule for the activation {phi!r}; known: tanh, sigmoid, relu "
             "and fct.activations.identity"

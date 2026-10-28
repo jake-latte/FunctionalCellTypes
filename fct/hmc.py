@@ -22,7 +22,7 @@ from typing import Any, Literal
 import numpy as np
 import torch
 
-from fct.activations import Activation, phi_prime, tilt_class
+from fct.activations import Activation, known_tilt_class, phi_prime, tilt_class
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -129,7 +129,8 @@ def tilt_rule(phi: Activation, psi_is_phi: bool) -> TiltRule:
 
 def _quadratic_tilt(M: torch.Tensor, lambda_r: float, psi_is_phi: bool) -> torch.Tensor:
     """The quadratic form of the "gaussian" rule: M, plus λ_r I when ψ = φ is linear (the rate
-    tilt is then ½ λ_r hᵀh)."""
+    tilt is then ½ λ_r hᵀh). Under ψ = h, λ_r I is left out whatever φ is, also a linear one:
+    the rate tilt ½ λ_r φᵀφ is ≥ 0, so leaving it out only makes the condition conservative."""
     if not psi_is_phi:
         return M
     return M + lambda_r * torch.eye(M.shape[0], device=M.device, dtype=M.dtype)
@@ -192,7 +193,10 @@ def normalisability_margin(
     """How far the tilted density is inside the normalisable region of `tilt_rule`; positive
     means normalisable. "gaussian": λ_min(Σ⁻¹ + Q), exact. "bounded": λ_min(Σ⁻¹), the prior's
     own (any M is fine). "relu": λ_min(Σ⁻¹) + min(0, λ_min(M + λ_r I)), the sufficient
-    certificate of `relu_tilt_spectrum`: a negative value is a warning, not a proof."""
+    certificate of `relu_tilt_spectrum`: a negative value is a warning, not a proof. NaN for
+    ψ = φ with an activation that has no rule (allowed when the solver does not project)."""
+    if psi_is_phi and known_tilt_class(phi) is None:
+        return float("nan")
     rule = tilt_rule(phi, psi_is_phi)
     if rule == "bounded":
         return torch.linalg.eigvalsh(Sigma_inv).min().item()

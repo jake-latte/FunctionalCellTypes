@@ -41,7 +41,7 @@ from typing import Any, NamedTuple
 import numpy as np
 import torch
 
-from fct.activations import Activation, get_phi, phi_prime
+from fct.activations import Activation, get_phi, known_tilt_class, phi_prime
 from fct.cache import (
     cache_paths,
     latest_checkpoint,
@@ -120,7 +120,9 @@ class InadequateSamplerError(RuntimeError):
 
 
 class UnconvergedSolveError(RuntimeError):
-    """The solve ended with a fixed-point residual of order one: Φ̂ is not a saddle point."""
+    """The tilt tripwire fired: over the last outer steps Φ̂ stayed at a fixed-point residual of
+    order one (it has lost its tilt, e.g. to the projection), so the result is certainly not a
+    saddle point. Not raising this does not mean the solve converged."""
 
 
 # ----------------------------------------------------------------------------- public results
@@ -767,8 +769,14 @@ def _record(
         "hmc_h2_ratio": np.array([d["h2_mean"] / d["prior_h2"] for d in diags]),
         "is_max_weight": np.array([d.get("max_weight", np.nan) for d in diags]),
         "phi_change_rel": np.array([relative_fro(Phi[l], Phi_prev[l]) for l in range(L)]),
+        # nan, not a ratio against 1e-300, when the tilt was 0 before the step (lazy init)
         "phihat_change_rel": np.array(
-            [relative_fro(Phi_hat[l], Phi_hat_prev[l]) for l in range(L)]
+            [
+                relative_fro(Phi_hat[l], Phi_hat_prev[l])
+                if Phi_hat_prev[l].norm().item() > 0
+                else float("nan")
+                for l in range(L)
+            ]
         ),
         "tilt_projected_rel": inner.projected_rel.copy(),
     }
@@ -779,8 +787,12 @@ def _record(
 
 
 def _format_step(
-    rec: dict, inner: _InnerResult, step: _OuterStep, st: _SolverState, sampler: str
+    rec: dict, inner: _InnerResult, step: _OuterStep, st: _SolverState, prob: _Problem
 ) -> str:
+    sampler = prob.solver.sampler
+    # A bounded phi is normalisable for any tilt: its margin is only lambda_min(Sigma^-1).
+    margin = "n/a" if known_tilt_class(prob.phi) == "bounded" else None
+
     def fmt(a):
         return "[" + " ".join(f"{v:.2e}" for v in a) + "]"
 
@@ -801,7 +813,7 @@ def _format_step(
         )
         + f"mcerr={fmt(rec['hmc_mc_err'])} "
         f"stein={fmt(rec['hmc_stein_mismatch'])} h2/prior={fmt(rec['hmc_h2_ratio'])} "
-        f"margin={fmt(rec['norm_margin'])} projected={fmt(rec['tilt_projected_rel'])}"
+        f"margin={margin or fmt(rec['norm_margin'])} projected={fmt(rec['tilt_projected_rel'])}"
     )
     if "align_net" in rec:
         msg += f" | align={fmt(rec['align_net'])}"
@@ -824,7 +836,7 @@ def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> N
     for k in st.history:
         st.history[k].append(rec[k])
     if outer % prob.solver.log_int == 0:
-        log(_format_step(rec, inner, step, st, prob.solver.sampler))
+        log(_format_step(rec, inner, step, st, prob))
     st.outer = outer + 1
 
 
@@ -963,8 +975,10 @@ def solve(
 
     phi is a callable: any elementwise activation without tilt projection; with it (the
     default) one whose normalisability rule is known (`fct.hmc.tilt_rule`: tanh, sigmoid,
-    relu, `fct.activations.identity`), else ValueError. A solve whose last outer step has a
-    Φ̂ fixed-point residual >= cfg.solver.max_final_resid raises UnconvergedSolveError.  All
+    relu, `fct.activations.identity`), else ValueError. The tilt tripwire: a solve whose Φ̂
+    fixed-point residual stays >= cfg.solver.tilt_tripwire_resid over the last
+    cfg.solver.tilt_tripwire_steps outer steps (in some layer, at their largest) raises
+    UnconvergedSolveError; it catches a lost tilt and is not a convergence test.  All
     randomness comes from one torch.Generator seeded with cfg.solver.seed on X's device.
 
     With checkpoint_dir (requires config_hash): return its final.pt if present, else resume
@@ -1007,25 +1021,29 @@ def solve(
             write_checkpoint(
                 checkpoint_dir, CKPT_PREFIX, st.outer, _to_payload(st, cfg), config_hash, CKPT_WIDTH
             )
-    _check_converged(st.history, cfg.solver.max_final_resid)
+    _check_tilt_tripwire(st.history, cfg.solver.tilt_tripwire_resid, cfg.solver.tilt_tripwire_steps)
     if checkpoint_dir is not None:
         _save_final(Path(checkpoint_dir), _to_payload(st, cfg), config_hash)
     return SolveResult(st.Phi, st.Phi_hat, st.history, st.samplers)
 
 
-def _check_converged(history: History, max_final_resid: float) -> None:
-    """UnconvergedSolveError if a layer's Stein fixed-point residual of Φ̂ at the last outer
-    step is >= max_final_resid: the result is not a saddle point and must not stand in for
-    one (no final.pt is written; the checkpoints stay for inspection)."""
-    resid = np.asarray(history["phihat_fp_resid_stein"][-1], dtype=float)
-    if not (resid < max_final_resid).all():
+def _check_tilt_tripwire(history: History, resid_max: float, n_steps: int) -> None:
+    """UnconvergedSolveError if, in some layer, the largest Stein fixed-point residual of Φ̂
+    over the last n_steps outer steps is >= resid_max: a tilt lost (near 0, residual near 1) or
+    far off its fixed point, which must not stand in for a saddle point (no final.pt is written;
+    the checkpoints stay for inspection). The largest, so a residual oscillating around the
+    tripwire trips it. Passing is not evidence of convergence."""
+    last = np.asarray(history["phihat_fp_resid_stein"][-n_steps:], dtype=float)  # (k, L)
+    resid = last.max(axis=0)
+    if not (resid < resid_max).all():
         projected = history.get("tilt_projected_rel", [None])[-1]
         raise UnconvergedSolveError(
-            f"the solve ended unconverged: Stein fixed-point residual of Phi_hat per layer "
-            f"{np.array2string(resid, precision=3)} (max_final_resid={max_final_resid:g}); "
-            f"the tilt projection changed Phi_hat by {projected} (relative, per layer) in the "
-            "last step. Run more outer steps, check the sampler diagnostics, or raise "
-            "solver.max_final_resid to accept it"
+            f"tilt tripwire: the largest Stein fixed-point residual of Phi_hat over the last "
+            f"{len(last)} outer steps is {np.array2string(resid, precision=3)} per layer "
+            f"(tilt_tripwire_resid={resid_max:g}), so Phi_hat has lost its tilt or is far from "
+            f"its fixed point; the tilt projection changed Phi_hat by {projected} (relative, per "
+            "layer) in the last step. Check the sampler and step-size diagnostics, run more "
+            "outer steps, or raise solver.tilt_tripwire_resid to accept the result"
         )
 
 

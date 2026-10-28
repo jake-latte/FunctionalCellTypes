@@ -45,6 +45,7 @@ from fct.draw import (
 from fct.meanfield import (
     InadequateSamplerError,
     SpatialPriorUnsupportedError,
+    UnconvergedSolveError,
     load_meanfield,
     net_kernels,
     run_meanfield,
@@ -184,6 +185,15 @@ def cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
+# Errors the user fixes by changing a config or the sweep: reported as one line, no traceback.
+USER_FIXABLE_ERRORS = (
+    SweepError,
+    InadequateSamplerError,
+    SpatialPriorUnsupportedError,
+    UnconvergedSolveError,
+)
+
+
 def cmd_solve(args: argparse.Namespace) -> int:
     cfg, dataset = _load_inputs(args.cache_dir)
     n_points, P = cfg.meanfield.n_points, dataset.x.shape[0]
@@ -192,7 +202,7 @@ def cmd_solve(args: argparse.Namespace) -> int:
     net, _ = _load_net(args.cache_dir, cfg)
     try:
         run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
-    except SpatialPriorUnsupportedError as err:  # fixable by the user, no traceback
+    except USER_FIXABLE_ERRORS as err:  # fixable by the user, no traceback
         raise CliError(str(err)) from err
     return 0
 
@@ -404,10 +414,6 @@ def cmd_sweep_status(args: argparse.Namespace) -> int:
     return 0
 
 
-# Errors the user fixes by changing a config or the sweep: reported as one line, no traceback.
-USER_FIXABLE_ERRORS = (SweepError, InadequateSamplerError, SpatialPriorUnsupportedError)
-
-
 def _run_all(sweep: SweepConfig, root: Path, stage: Stage) -> None:
     """Run every setting, continuing past failures; raise CliError listing the failed indices.
 
@@ -431,7 +437,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> int:
     """One setting with --index (a SLURM array task), else every setting in order.
 
     Only the USER_FIXABLE_ERRORS (bad index or config mismatch, an inadequate sampler, a spatial
-    config the solver refuses) become CliError; anything else raised by training or solving keeps
+    config the solver refuses, a tripped tilt tripwire) become CliError; anything else raised by training or solving keeps
     its traceback.
     """
     sweep = _load_sweep(args.root)
@@ -440,11 +446,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> int:
         return 0
     try:
         run_setting(sweep, args.index, args.root, log=print, stage=args.stage)
-    except (
-        SweepError,
-        InadequateSamplerError,
-        SpatialPriorUnsupportedError,
-    ) as err:  # fixable by the user, no traceback
+    except USER_FIXABLE_ERRORS as err:  # fixable by the user, no traceback
         raise CliError(str(err)) from err
     return 0
 

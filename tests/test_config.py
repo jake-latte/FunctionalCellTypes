@@ -226,7 +226,7 @@ def test_every_solver_field_has_a_hash_rule():
 
 def test_the_final_residual_check_does_not_enter_the_hash():
     a, b = default_config(), default_config()
-    b.meanfield.solver.max_final_resid = 0.5
+    b.meanfield.solver.tilt_tripwire_resid = 0.5
     assert a.section_hash("meanfield") == b.section_hash("meanfield")
 
 

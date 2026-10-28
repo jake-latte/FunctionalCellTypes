@@ -155,12 +155,45 @@ def test_relu_projection_keeps_part_of_a_learning_tilt():
 
 def test_a_solve_ending_unconverged_raises_and_writes_no_final(linear_problem, tmp_path):
     X, Y = linear_problem
-    cfg = linear_cfg(n_outer=2, save_int=1, max_final_resid=1e-12)
+    cfg = linear_cfg(n_outer=2, save_int=1, tilt_tripwire_resid=1e-12)
     with pytest.raises(mf.UnconvergedSolveError, match="residual"):
         solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent, checkpoint_dir=tmp_path,
               config_hash="h0")  # fmt: skip
     assert not (tmp_path / "final.pt").exists()
     assert list(tmp_path.glob("ckpt_*.pt"))  # kept for inspection
+
+
+def _resid_history(*rows):
+    return {"phihat_fp_resid_stein": [np.array(r) for r in rows], "tilt_projected_rel": [None]}
+
+
+def test_the_tripwire_reads_the_largest_residual_of_the_last_steps():
+    # oscillating around the tripwire (as a relu run did) trips it, though the last step is below
+    with pytest.raises(mf.UnconvergedSolveError, match="last 3 outer steps"):
+        mf._check_tilt_tripwire(_resid_history([0.1], [0.96], [1.04], [0.89]), 0.9, 3)
+    # steps before the last k do not count; a steady unconverged 0.76 passes (not a convergence test)
+    mf._check_tilt_tripwire(_resid_history([5.0], [0.76], [0.76], [0.76]), 0.9, 3)
+    # fewer steps than k: all of them
+    with pytest.raises(mf.UnconvergedSolveError):
+        mf._check_tilt_tripwire(_resid_history([0.1, 0.95]), 0.9, 3)
+
+
+def test_phihat_change_is_nan_after_a_step_from_a_zero_tilt(linear_problem):
+    X, Y = linear_problem
+    cfg = linear_cfg(n_outer=1, init="lazy", tilt_tripwire_resid=ANY_RESID)
+    h = solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent).history
+    assert np.isnan(h["phihat_change_rel"][0]).all()
+
+
+def test_the_log_has_no_margin_for_a_bounded_phi():
+    X, Y = relu_problem(6, 8, seed=58)
+    cfg = MeanFieldConfig(
+        beta=1e3, n_chains=16, n_outer=1, warmup_trans=5, n_inner_max=2, log_int=1,
+        tilt_tripwire_resid=ANY_RESID,
+    )  # fmt: skip
+    lines = []
+    solve(X, Y, 1, 1e-3, 0.0, torch.tanh, 1.0, cfg, log=lines.append)
+    assert any("margin=n/a" in line for line in lines)
 
 
 def test_a_projection_needs_a_known_activation():
@@ -205,7 +238,7 @@ def test_solve_without_checkpoint_dir_never_writes(linear_problem, monkeypatch):
     X, Y = linear_problem
     cfg = linear_cfg(
         n_outer=2, warmup_trans=10, n_trans=2, n_trans_outer=2, n_inner_max=2,
-        max_final_resid=ANY_RESID,
+        tilt_tripwire_resid=ANY_RESID,
     )  # fmt: skip
     result = solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent)
     assert len(result.history["outer_step"]) == 2
@@ -236,7 +269,7 @@ def test_smoke_relu_two_layers_with_net_is_fast_and_complete():
     net = small_net(8)
     cfg = MeanFieldConfig(
         beta=1e3, n_chains=128, n_outer=3, warmup_trans=20, log_int=1, seed=1,
-        max_final_resid=ANY_RESID,
+        tilt_tripwire_resid=ANY_RESID,
     )  # fmt: skip
     lines = []
     start = time.perf_counter()
@@ -302,7 +335,7 @@ def test_init_net_runs():
     X, Y = relu_problem(8, 8, seed=41)
     cfg = MeanFieldConfig(
         beta=1e3, init="net", n_chains=32, n_outer=1, warmup_trans=5, n_inner_max=2, seed=0,
-        max_final_resid=ANY_RESID,
+        tilt_tripwire_resid=ANY_RESID,
     )  # fmt: skip
     result = solve(X, Y, 2, 1e-3, 1e-3, torch.relu, 1.0, cfg, net=small_net(8), log=silent)
     assert torch.isfinite(result.Phi).all()
@@ -330,7 +363,7 @@ def resume_cfg(sample_dtype="float64"):
         sample_dtype=sample_dtype,
         log_int=1,
         seed=5,
-        max_final_resid=ANY_RESID,
+        tilt_tripwire_resid=ANY_RESID,
     )
 
 
@@ -412,7 +445,7 @@ def small_config(beta=1e3):
             warmup_trans=10,
             n_inner_max=3,
             seed=0,
-            max_final_resid=ANY_RESID,
+            tilt_tripwire_resid=ANY_RESID,
         ),
         device="cpu",
     )

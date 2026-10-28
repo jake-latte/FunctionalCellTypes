@@ -8,9 +8,9 @@ They pin behaviour that must not change: `sampler="hmc"` reproduces those solves
 and a config.json in the flat layout still loads and hashes to the same cache keys. Regenerate
 them only when that behaviour is meant to change, and say so in the commit.
 
-Provenance: the solves `hmc_solve_*.pt` are written by the code of the readout-post-activations
-branch (output V^T phi(h^L) / N, activation-aware tilt projection); `meanfield_hashes.json` by
-the same code. `legacy_config.json` is the flat layout of the code before the solver
+Provenance: the solves `hmc_solve_*.pt` and `meanfield_hashes.json` are written by code whose
+net reads its output as V^T phi(h^L) / N (MODEL_VERSION 2) and whose tilt projection follows
+`fct.hmc.tilt_rule`. `legacy_config.json` is the flat layout of the code before the solver
 sub-section (commit d1d3091) with the `readout` key deleted by hand: `write_fixtures` would save
 it in the current nested layout, so restore it from git after running it.
 
@@ -86,7 +86,9 @@ def pinned_solve(name: str, **meanfield_overrides):
         net = make_net(NetConfig(N=8, L=2, phi="relu", seed=3), D_IN_PIN, 2, "cpu", torch.float64)
     # Three outer steps are far from converged: the final-residual check, which changes no
     # number, is switched off.
-    cfg = MeanFieldConfig(**{"max_final_resid": 1e9, **spec["meanfield"], **meanfield_overrides})
+    cfg = MeanFieldConfig(
+        **{"tilt_tripwire_resid": 1e9, **spec["meanfield"], **meanfield_overrides}
+    )
     return solve(X, Y, 2, LAMBDA_W, LAMBDA_R, torch.relu, 1.0, cfg, net=net, log=lambda _m: None)
 
 
