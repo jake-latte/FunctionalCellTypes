@@ -153,3 +153,22 @@ object-action have no usable corrected MIR under the group rule; the earlier ope
 `bash jobs/fct_sweep.sh ROOT --submit --index 0:10` submits settings 0 .. 9 as one array
 (`--array=0-9%FCT_MAX_CONCURRENT`); `--index N` unchanged; the solve wrapper inherits it. Written by
 the PM test-first, reviewed by a fresh reviewer (record in the merge commit). Still never submitted.
+
+## 2026-10-28: spatial grid search program (todo.md of 2026-10-27), first two items merged
+The PI's brief asks for a structured test set, a grid search over spatially embedded networks
+(a SPATIAL_PRIOR switch; the solver refusing spatial configs), a notebook over that grid with the Phi
+kernels on the test set, the readout always phi(h^L), and presets (`--tiny`, an N scan). Work items are
+in `docs/issues/` with their statuses. Merged (each reviewed by a fresh reviewer, record in the merge
+commit): `linear-teacher-test-dataset` (`fct.tasks.latent_lattice_dataset`, 3^k sign patterns of the
+latents; `fct.data.get_latent_lattice_dataset`) and `meanfield-rejects-spatial`
+(`SpatialPriorUnsupportedError`; `fct solve` and `sweep run` report it in one line;
+`fct.cli.USER_FIXABLE_ERRORS`). Awaiting the PI's confirmation of the plans: `spatial-sweep`,
+`spatial-grid-notebook`, `readout-post-activations`.
+
+**Hazard while SLURM array 3847945 (root `pt_sweep_big`) runs:** its tasks import `fct` from this
+tree's `.venv` as they start, so every merge into main must leave non-spatial code paths and hashes
+identical (the two merges above are additive). `readout-post-activations` changes the model and must
+not be merged while that array runs. Known: a dict-valued grid axis (`grid={"spatial": [...]}`) makes
+a directory name longer than NAME_MAX; the spatial-sweep item gives the sweep a `spatial` field and
+short labels. The three committed-notebook tests fail in the shared tree only because the PI's
+uncommitted notebook edits differ from the builders' output (green in a clean checkout: 1426 passed).
