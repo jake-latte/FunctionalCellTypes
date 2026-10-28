@@ -8,7 +8,6 @@ import torch
 from fct.cli import main
 from fct.config import Config, NetConfig, TrainConfig
 from fct.spatial import SpatialConfig
-from fct.train import load_trained
 from fct.sweep import (
     SweepConfig,
     _label_part,
@@ -24,6 +23,7 @@ from fct.sweep import (
     setting_status,
     with_grid,
 )
+from fct.train import load_trained
 
 LENGTH_AXIS = "spatial.hidden.kernel.length_scale"
 
