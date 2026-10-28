@@ -294,7 +294,9 @@ _SPATIAL_PRIOR = SpatialConfig(
 
 def spatial_tiny() -> SweepConfig:
     """Seconds per setting on a CPU, for checking the spatial pipeline (not for results): a
-    linear teacher, one hidden layer of N in {4, 8} units under the spatial prior, SGLD."""
+    linear teacher, one hidden layer of N in {4, 8} units under the spatial prior, SGLD.
+
+    weight_lambda 0.2 is under the lambda_w / (2 beta) convention: 2 beta x 1e-4 at beta 1e3."""
     return SweepConfig(
         N=8,
         P=16,
@@ -311,6 +313,7 @@ def spatial_tiny() -> SweepConfig:
         L=1,
         phi="tanh",
         optimizer="sgld",
+        weight_lambda=0.2,
         beta=1e3,
         meanfield=MeanFieldConfig(n_points=16),  # at most P, so a solve reaches the solver
         spatial=_SPATIAL_PRIOR,
@@ -321,7 +324,10 @@ def spatial_tiny() -> SweepConfig:
 
 def spatial_n_scan() -> SweepConfig:
     """Width scan of a spatially embedded linear-teacher net: N in {64, ..., 1024}, one hidden
-    layer, SGLD, float64, with the MIR monitor."""
+    layer, SGLD, float64, with the MIR monitor.
+
+    weight_lambda 60 is under the lambda_w / (2 beta) convention: 2 beta x 3e-3 at beta 1e4, the
+    same effective prior as lambda_w = 3e-3 when the loss is lambda_w times the prior form."""
     return SweepConfig(
         N=64,
         P=164,
@@ -338,7 +344,7 @@ def spatial_n_scan() -> SweepConfig:
         L=1,
         g=1.0,
         phi="tanh",
-        weight_lambda=3e-3,
+        weight_lambda=60.0,
         rate_lambda=0.0,
         optimizer="sgld",
         beta=1e4,

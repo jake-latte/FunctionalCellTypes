@@ -89,7 +89,7 @@ setting trains under the plain weight L2. The grid may then vary any field of th
 fields the spatial presets set (`L`, `g`, `phi`, `weight_lambda`, `rate_lambda`, `optimizer`, `beta`) default to the
 library values, and an axis of the same name wins. Presets: `spatial_tiny` (N in {4, 8}, P 16, one hidden layer,
 SGLD, 6 epochs: a CPU pipeline check) and `spatial_n_scan` (the width scan N in {64, 128, 256, 512, 1024}: linear
-teacher P 164, m 64, k 2, tanh, SGLD beta 1e4, weight_lambda 3e-3, 250 000 epochs, float64, grid embeddings of
+teacher P 164, m 64, k 2, tanh, SGLD beta 1e4, weight_lambda 60 (= 2 beta x 3e-3: the prior term is lambda_w / (2 beta) times the prior form), 250 000 epochs, float64, grid embeddings of
 length scale 0.15 in d = 1, MIR monitor every 5000 epochs). A directory name shows a dict-valued axis value as a short
 hash. The mean-field solver knows only the iid prior, so `sweep run --stage solve` on a spatial setting fails with its
 one-line message.

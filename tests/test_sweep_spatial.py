@@ -158,7 +158,7 @@ def test_spatial_n_scan_expands_to_five_spatial_settings(tmp_path):
     assert (c.data.P, c.data.D_in, c.data.n_latents) == (164, 64, 2)
     assert (c.net.L, c.net.phi, c.net.g, c.dtype) == (1, "tanh", 1.0, "float64")
     t = c.train
-    assert (t.weight_lambda, t.rate_lambda, t.optimizer, t.beta) == (3e-3, 0.0, "sgld", 1e4)
+    assert (t.weight_lambda, t.rate_lambda, t.optimizer, t.beta) == (60.0, 0.0, "sgld", 1e4)
     assert (t.lr, t.n_epochs) == (1e-2, 250_000)
     assert (t.monitor_int, t.monitor_bins, t.monitor_shuffles) == (5000, 8, 5)
 
