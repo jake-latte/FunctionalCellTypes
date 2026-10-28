@@ -48,10 +48,13 @@ _PROBLEMS = {
         },
     },
 }  # fmt: skip
-# The step control of the solver before inner steps were validated on progress
-# (`fct.config.SolverConfig`): the `*_legacy_steps` fixtures were written by that solver, and
-# these settings still reproduce them bit for bit.
-LEGACY_STEP_CONTROL = {"inner_step_control": "health", "eta_max_phihat": 1.0}
+# The step control of the solver before inner steps were validated on progress and the outer
+# step scaled by the kernel (`fct.config.SolverConfig`): the `*_legacy_steps` fixtures were
+# written by that solver, and these settings still reproduce them bit for bit.
+LEGACY_STEP_CONTROL = {
+    "inner_step_control": "health", "phi_step_scale": "trace", "eta_max": 1.0,
+    "eta_max_phihat": 1.0,
+}  # fmt: skip
 PINNED_SOLVES = _PROBLEMS | {
     f"{name}_legacy_steps": spec | {"meanfield": spec["meanfield"] | LEGACY_STEP_CONTROL}
     for name, spec in _PROBLEMS.items()
@@ -59,7 +62,8 @@ PINNED_SOLVES = _PROBLEMS | {
 LAMBDA_W, LAMBDA_R, P_PIN, D_IN_PIN = 1e-3, 1e-3, 6, 4
 
 # A config.json in the flat pre-split layout, with non-default values in both the problem
-# and the solver fields of the meanfield section.
+# and the solver fields of the meanfield section. The file is a full dump, so it also holds
+# the defaults of its time: eta_max = 1 is one, set here so that the two stay the same config.
 LEGACY_CONFIG_FILE = FIXTURES / "legacy_config.json"
 LEGACY_OVERRIDES = {
     "data": {"P": 64, "D_in": 8},
@@ -68,7 +72,7 @@ LEGACY_OVERRIDES = {
     "meanfield": {
         "n_points": 20, "beta": 1e3, "rate_tilt": 1e-4, "alpha": 0.3, "learning_prefactor": 0.5,
         "n_chains": 64, "eps0": 0.1, "init": "gaussian", "log_int": 1, "save_int": 3,
-        "precondition": False, "seed": 4,
+        "precondition": False, "seed": 4, "eta_max": 1.0,
     },
     "device": "cpu",
 }  # fmt: skip

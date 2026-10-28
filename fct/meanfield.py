@@ -738,15 +738,40 @@ class _OuterStep:
     n_backtrack: int
 
 
+def _phi_step(
+    cfg: SolverConfig, eta: float, grad: torch.Tensor, Phi_at: torch.Tensor, Phi_now: torch.Tensor
+) -> torch.Tensor:
+    """The descent step of Φ_l, before clipping, from ∂S/∂Φ_l (units of Φ̂, i.e. 1/Φ) at Φ_at.
+    "kernel": η Φ_at ∂S/∂Φ_l Φ_at, the Newton direction of a Gaussian layer (its tilt follows
+    the kernel as dΦ̂ = -Φ⁻¹ dΦ Φ⁻¹, so η = 2 is a full Newton step), which moves every
+    eigendirection of Φ at its own rate; "trace": η ∂S/∂Φ_l c_l² with c_l = tr(Φ_now)/P, the
+    same step when Φ = c I, and far too small along the top eigenvectors of a low-rank kernel.
+    Φ_now is the current Φ_l (the last attempted step when backtracking), which "trace" reads."""
+    if cfg.phi_step_scale == "trace":
+        return eta * grad * _c2(Phi_now)
+    return eta * sym(Phi_at @ grad @ Phi_at)
+
+
+def _phi_step_rel(
+    cfg: SolverConfig, grad: torch.Tensor, Phi_prev: torch.Tensor, Phi_now: torch.Tensor
+) -> float:
+    """||ΔΦ_l|| / ||Φ_l|| per unit η before clipping (history["outer_grad_rel"])."""
+    if cfg.phi_step_scale == "trace":
+        size = grad.norm().item() * _c2(Phi_now)
+    else:
+        size = _phi_step(cfg, 1.0, grad, Phi_prev, Phi_now).norm().item()
+    return size / max(Phi_prev.norm().item(), 1e-300)
+
+
 def _trust_region_step(
     prob: _Problem, st: _SolverState, grads: list[torch.Tensor], Phi_prev: torch.Tensor
 ) -> tuple[list[int], list[float], list[bool]]:
-    """Φ_l ← Π_PD(Φ_l^prev - η ∂S/∂Φ_l c_l²), the step clipped to max_rel_step ||Φ_l^prev||.
-    c_l is read from the current Φ_l, i.e. the last attempted step when backtracking."""
+    """Φ_l ← Π_PD(Φ_l^prev - ΔΦ_l) with ΔΦ_l = `_phi_step` at Φ_l^prev, clipped to
+    max_rel_step ||Φ_l^prev||."""
     cfg = prob.solver
     n_clamped, lam_min, clipped = [], [], []
     for l in range(prob.L):
-        step = st.eta * grads[l] * _c2(st.Phi[l])
+        step = _phi_step(cfg, st.eta, grads[l], Phi_prev[l], st.Phi[l])
         cap = cfg.max_rel_step * Phi_prev[l].norm().item()
         sn = step.norm().item()
         clipped.append(sn > cap)
@@ -830,10 +855,7 @@ def _record(
         "n_accepted_inner": inner.n_accepted.copy(),
         "n_rejected_inner": inner.n_rejected.copy(),
         "outer_grad_rel": np.array(
-            [
-                og.grads[l].norm().item() * _c2(Phi[l]) / max(Phi_prev[l].norm().item(), 1e-300)
-                for l in range(L)
-            ]
+            [_phi_step_rel(prob.solver, og.grads[l], Phi_prev[l], Phi[l]) for l in range(L)]
         ),
         "phihat_fp_resid_stein": np.array(og.fp_stein),
         "phihat_fp_resid_direct": np.array(og.fp_direct),
@@ -1048,16 +1070,17 @@ def solve(
 
     Step sizes are dimensionless: with c_l = tr(Φ_l)/P,
         Φ̂_l += eta_phihat_l · ∂S/∂Φ̂_l / c_l²      (Φ̂ has units of 1/Φ)
-        Φ_l  -= eta_phi      · ∂S/∂Φ_l  · c_l²     (clipped to ||ΔΦ_l|| ≤ max_rel_step ||Φ_l||)
-    and are adapted: every sampler run also validates the step taken before it.  If the
-    HMC chains show divergences (> max_div_frac of transitions) or resets, the importance
-    ESS fraction drops below min_ess_drop times that of the point before, or the sample scale
-    ||h||²/P jumps by more than max_h2_growth, the step is reverted (kernel and chain state)
-    and its step size halved; so is an inner step that raised the layer's inner residual by
-    more than the convergence tolerance of the point before it (inner_step_control=
-    "progress"; not below eta_min_rel · eta_phihat). Otherwise the step size grows by
-    eta_grow up to eta_max (outer) or eta_max_phihat (inner).  This keeps the iteration on
-    the normalisable side of the tilt.  The settings are cfg.solver's.
+        Φ_l  -= eta_phi      · Φ_l ∂S/∂Φ_l Φ_l      (clipped to ||ΔΦ_l|| ≤ max_rel_step ||Φ_l||)
+    (solver.phi_step_scale="trace": Φ_l -= eta_phi · ∂S/∂Φ_l · c_l², the same step when
+    Φ_l = c_l I), and are adapted: every sampler run also validates the step taken before it.
+    If the HMC chains show divergences (> max_div_frac of transitions) or resets, the
+    importance ESS fraction drops below min_ess_drop times that of the point before, or the
+    sample scale ||h||²/P jumps by more than max_h2_growth, the step is reverted (kernel and
+    chain state) and its step size halved; so is an inner step that raised the layer's inner
+    residual by more than the convergence tolerance of the point before it
+    (inner_step_control="progress"; not below eta_min_rel · eta_phihat). Otherwise the step
+    size grows by eta_grow up to eta_max (outer) or eta_max_phihat (inner).  This keeps the
+    iteration on the normalisable side of the tilt.  The settings are cfg.solver's.
     Under importance sampling every accepted point (the initial one, each validated inner
     step, each outer-gradient run) must have ESS fraction >= min_ess_frac, else
     InadequateSamplerError: the prior proposal does not suit the problem.

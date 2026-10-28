@@ -136,7 +136,7 @@ class SolverConfig(StrictModel):
     inner_tol_mc: PosFloat = 2.0
     eta_phi: PosFloat = 0.05
     eta_phihat: PosFloat = 0.05
-    eta_max: PosFloat = 1.0
+    eta_max: PosFloat = 0.25
     eta_grow: PosFloat = 1.1
     max_backtrack: PosInt = 8
     eta_min_rel: NonNegFloat = 1e-3
@@ -150,10 +150,14 @@ class SolverConfig(StrictModel):
     # Step control (`fct.meanfield`). inner_step_control "progress" also rejects an inner step
     # that raised a layer's inner residual by more than the convergence tolerance of the point
     # before it; "health" validates a step on sampler health alone. eta_max caps the outer
-    # step size, eta_max_phihat each layer's inner one. "health" with eta_max_phihat = 1 is
-    # the solver before step control.
+    # step size, eta_max_phihat each layer's inner one. phi_step_scale "kernel" steps Phi_l
+    # along Phi_l dS/dPhi_l Phi_l, the Newton direction of a Gaussian layer (eta = 2 is a full
+    # Newton step there; a bounded phi responds several times more weakly, hence the cap of
+    # 0.25), "trace" along c_l^2 dS/dPhi_l with c_l = tr(Phi_l)/P. "health" and "trace" with
+    # eta_max = eta_max_phihat = 1 is the solver before step control.
     inner_step_control: Literal["health", "progress"] = "progress"
     eta_max_phihat: PosFloat = 0.25
+    phi_step_scale: Literal["trace", "kernel"] = "kernel"
     # A tripwire for a lost tilt, not a convergence test: `solve` raises UnconvergedSolveError
     # instead of returning (and writing final.pt) when, in some layer, the largest Stein
     # fixed-point residual of Phi_hat over the last tilt_tripwire_steps outer steps is >=
@@ -219,7 +223,7 @@ IMPORTANCE_FIELDS = (
 # Solver fields left out of every hash: they check a result and never change a number of it.
 UNHASHED_SOLVER_FIELDS = ("tilt_tripwire_resid", "tilt_tripwire_steps")
 # The step-control fields change the iteration and so the result: they enter every hash.
-STEP_CONTROL_FIELDS = ("inner_step_control", "eta_max_phihat")
+STEP_CONTROL_FIELDS = ("inner_step_control", "eta_max_phihat", "phi_step_scale")
 
 
 class MeanFieldConfig(StrictModel):

@@ -1,5 +1,5 @@
 """Step control of the mean-field solver: the inner ascent on Φ̂ accepts a step only if the inner
-residual does not rise (beyond its tolerance).
+residual does not rise (beyond its tolerance), and the outer step on Φ is scaled by the kernel.
 
 The inner-step tests drive `_inner_layer_step` with a stand-in sampler that returns the exact
 moments of a tilted Gaussian, so every residual is known in closed form:
@@ -142,3 +142,39 @@ def test_the_step_size_floor_stops_the_halving():
         mf._inner_layer_step(prob, st, 0, inner, pending, res)
     assert res.n_rejected[0] == 1 and res.n_accepted[0] == 1
     assert st.eta_hat[0] == pytest.approx(90.0 * prob.solver.eta_grow)
+
+
+# ----------------------------------------------------------------------------- outer step
+def random_pd(seed: int, scale: torch.Tensor) -> torch.Tensor:
+    g = torch.Generator().manual_seed(seed)
+    Q, _ = torch.linalg.qr(torch.randn(P, P, generator=g, **F64))
+    return (Q * scale) @ Q.T
+
+
+def test_the_kernel_step_scale_is_the_trace_scale_for_an_isotropic_kernel():
+    grad = random_pd(1, torch.tensor([1.0, -0.5, 0.2], **F64))
+    Phi = 0.7 * EYE
+    kernel = mf._phi_step(MeanFieldConfig().solver, 1.0, grad, Phi, Phi)
+    trace = mf._phi_step(MeanFieldConfig(phi_step_scale="trace").solver, 1.0, grad, Phi, Phi)
+    torch.testing.assert_close(kernel, trace, rtol=1e-14, atol=1e-14)
+
+
+def test_the_kernel_step_is_the_newton_step_of_a_gaussian_layer():
+    """At Φ = (Σ⁻¹ + Φ̂)⁻¹, a Gaussian layer's tilt follows its kernel as Φ̂(Φ) = Φ⁻¹ - Σ⁻¹.
+    For a target tilt T a little away, the step Φ - η Φ ∂S/∂Φ Φ with η = 2 and
+    ∂S/∂Φ = ½(T - Φ̂) lands where Φ̂(Φ) = T up to second order; the trace scale, on a kernel
+    with a spread of eigenvalues, does not."""
+    Sigma = random_pd(2, torch.tensor([4.0, 1.0, 0.1], **F64))
+    Sigma_inv = torch.linalg.inv(Sigma)
+    hat = -0.2 * random_pd(3, torch.tensor([1.0, 0.5, 0.1], **F64))
+    Phi = torch.linalg.inv(Sigma_inv + hat)
+    T = hat + 1e-3 * random_pd(4, torch.tensor([1.0, -1.0, 0.5], **F64))
+    grad = -0.5 * hat + 0.5 * T
+
+    def tilt_error(scale: str) -> float:
+        cfg = MeanFieldConfig(phi_step_scale=scale).solver
+        new = Phi - mf._phi_step(cfg, 2.0, grad, Phi, Phi)
+        return (torch.linalg.inv(new) - Sigma_inv - T).norm().item() / (T - hat).norm().item()
+
+    assert tilt_error("kernel") < 1e-2
+    assert tilt_error("trace") > 0.5

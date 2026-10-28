@@ -22,7 +22,7 @@ CPU, F64 = torch.device("cpu"), torch.float64
 # control (`config.STEP_CONTROL_FIELDS`); at MODEL_VERSION 1 the train hash is the one
 # written before the optimiser fields existed (test_spatial_prior pins it).
 DEFAULT_TRAIN_HASH = "542a8cb8b9da"
-DEFAULT_TRAIN_MEANFIELD_HASH = "96d3c6c68fb5"
+DEFAULT_TRAIN_MEANFIELD_HASH = "08bec3f22ea7"
 
 
 # ---------------------------------------------------------------- the optimiser itself
