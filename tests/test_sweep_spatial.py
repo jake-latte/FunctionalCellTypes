@@ -1,11 +1,14 @@
 """Spatial sweeps: the `spatial` section, spatial axes, the two spatial presets, short labels
 for dict-valued axes, and that sweeps without a spatial section are unchanged (CPU only)."""
 
+import numpy as np
 import pytest
+import torch
 
 from fct.cli import main
 from fct.config import Config, NetConfig, TrainConfig
 from fct.spatial import SpatialConfig
+from fct.train import load_trained
 from fct.sweep import (
     SweepConfig,
     _label_part,
@@ -281,3 +284,68 @@ def test_sweep_run_stage_solve_on_a_spatial_setting_is_a_one_line_error(tmp_path
     assert main(["sweep", "run", root, "--index", "0", "--stage", "solve"]) == 1
     err = capsys.readouterr().err.strip()
     assert err.startswith("error:") and "no spatial prior" in err and "\n" not in err
+
+
+# ---------------------------------------------------------------- spatial_grid
+PHIS = ["id", "tanh", "relu"]
+LATENTS = [2, 4]
+LENGTHS = [0.05, 0.1, 0.15, 0.2]
+
+
+def test_spatial_grid_expands_to_every_phi_latent_length_combination_once(tmp_path):
+    sweep = preset("spatial_grid")
+    settings = expand(sweep)
+    configs = [setting_config(sweep, s) for s in settings]
+    seen = [(c.net.phi, c.data.n_latents, c.spatial.hidden.kernel.length_scale) for c in configs]
+    assert len(settings) == 24
+    assert sorted(seen) == sorted((p, k, ell) for p in PHIS for k in LATENTS for ell in LENGTHS)
+    names = [setting_dir(tmp_path, s).name for s in settings]
+    assert len(set(names)) == 24 and all(len(n) < 60 for n in names)
+
+
+def test_spatial_grid_fixed_values():
+    sweep = preset("spatial_grid")
+    for c in (setting_config(sweep, s) for s in expand(sweep)):
+        assert c.spatial.input.kernel.length_scale == 0.15
+        assert c.spatial.output.kernel.length_scale == 0.15
+        assert c.spatial.min_rel_eig == 1e-2
+        assert (c.net.N, c.data.P, c.net.L, c.net.g, c.dtype) == (512, 128, 1, 1.0, "float64")
+        assert (c.data.D_in, c.data.latent_range) == (64, 1.0)
+        t = c.train
+        assert (t.rate_lambda, t.weight_lambda, t.optimizer, t.beta) == (0.0, 20.0, "sgld", 1e4)
+        assert (t.lr, t.n_epochs) == (1e-2, 250_000)
+        assert (t.monitor_int, t.monitor_bins, t.monitor_shuffles) == (5000, 8, 5)
+
+
+def test_spatial_grid_counts_24_from_the_cli(tmp_path, capsys):
+    assert main(["sweep", "init", str(tmp_path), "--preset", "spatial_grid"]) == 0
+    capsys.readouterr()
+    assert main(["sweep", "count", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == "24"
+
+
+def test_spatial_grid_trains_id_tanh_relu_at_the_smallest_length_scale(tmp_path):
+    """The preset shrunk to seconds: finite losses for each activation."""
+    shrink = {
+        "N": 16,
+        "P": 32,
+        "n_epochs": 6,
+        "log_int": 2,
+        "save_int": 2,
+        "monitor_int": 2,
+        "monitor_bins": 4,
+        "monitor_shuffles": 2,
+        "linear_teacher": preset("spatial_tiny").linear_teacher,
+        "device": "cpu",
+    }
+    small = preset("spatial_grid").model_copy(update=shrink)
+    settings = expand(small)
+    # axes in order: phi slowest, then n_latents, then length; index 0 of a phi block is 0.05
+    for block, phi in enumerate(PHIS):
+        index = block * len(LATENTS) * len(LENGTHS)
+        config = setting_config(small, settings[index])
+        assert (config.net.phi, config.spatial.hidden.kernel.length_scale) == (phi, 0.05)
+        run_setting(small, index, tmp_path, log=lambda line: None)
+        cache = setting_dir(tmp_path, settings[index])
+        _, history = load_trained(cache, config, torch.device("cpu"), torch.float64)
+        assert np.isfinite(history["loss"]).all()

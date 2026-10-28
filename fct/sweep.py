@@ -354,10 +354,36 @@ def spatial_n_scan() -> SweepConfig:
     )
 
 
+def spatial_grid() -> SweepConfig:
+    """Grid of spatially embedded linear-teacher nets, N = 512, one hidden layer, SGLD, float64,
+    with the MIR monitor: phi in {id, tanh, relu} x teacher latents in {2, 4} x hidden length
+    scale in {0.05, 0.1, 0.15, 0.2} (24 settings).
+
+    With L = 1 the one hidden kernel is both K^1_post and K^2_pre, so a single length-scale axis
+    ties them; the input and output kernels stay at 0.15.
+
+    weight_lambda 20 is under the lambda_w / (2 beta) convention: 2 beta x 1e-3 at beta 1e4, the
+    same effective prior as lambda_w = 1e-3 when the loss is lambda_w times the prior form."""
+    return spatial_n_scan().model_copy(
+        update={
+            "N": 512,
+            "P": 128,
+            "phi": "tanh",  # each setting's phi comes from the axis; this is only the base value
+            "weight_lambda": 20.0,
+            "grid": {
+                "net.phi": ["id", "tanh", "relu"],
+                "data.n_latents": [2, 4],
+                "spatial.hidden.kernel.length_scale": [0.05, 0.1, 0.15, 0.2],
+            },
+        }
+    )
+
+
 # Presets with their own grid and no lambda axes, by name; each takes no argument.
 FIXED_GRID_PRESETS: dict[str, Callable[[], SweepConfig]] = {
     "spatial_tiny": spatial_tiny,
     "spatial_n_scan": spatial_n_scan,
+    "spatial_grid": spatial_grid,
 }
 
 
