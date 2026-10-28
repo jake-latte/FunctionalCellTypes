@@ -17,6 +17,7 @@ the Stein identity <h h^T> = Sigma - Sigma <u h^T> holds in equilibrium and is r
 """
 
 import math
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
@@ -119,7 +120,13 @@ def tilt_rule(phi: Activation, psi_is_phi: bool) -> TiltRule:
         (the rate tilt of a nonlinear φ under ψ = h is ≥ 0 and only helps).
     "bounded": ψ = φ with a bounded φ (tanh, sigmoid); the tilt is bounded, so the density is
         normalisable whatever M is.
-    "relu": ψ = φ = relu; the tilt grows quadratically on the orthant of active units.
+    "relu": ψ = φ = relu; the tilt grows quadratically on the orthant of active units. The rule
+        enforces positive definiteness of Σ⁻¹ + T, T = M + λ_r I: exactly the condition for the
+        Gaussian density that equals the relu one on the all-active orthant. It is neither
+        necessary nor sufficient for the relu density: the all-active orthant itself needs only
+        strict copositivity of Σ⁻¹ + T, so the rule over-cuts tilts whose offending direction
+        has mixed signs; the other orthants are not checked, so it under-cuts, and admits
+        non-normalisable tilts (`relu_orthant_check` is the per-orthant oracle).
     ValueError (from `tilt_class`) for an activation without a known rule."""
     if not psi_is_phi:
         return "gaussian"
@@ -128,25 +135,13 @@ def tilt_rule(phi: Activation, psi_is_phi: bool) -> TiltRule:
 
 
 def _quadratic_tilt(M: torch.Tensor, lambda_r: float, psi_is_phi: bool) -> torch.Tensor:
-    """The quadratic form of the "gaussian" rule: M, plus λ_r I when ψ = φ is linear (the rate
-    tilt is then ½ λ_r hᵀh). Under ψ = h, λ_r I is left out whatever φ is, also a linear one:
-    the rate tilt ½ λ_r φᵀφ is ≥ 0, so leaving it out only makes the condition conservative."""
+    """The quadratic form Q of the condition Σ⁻¹ + Q ≻ 0: M, plus λ_r I when ψ = φ (for a linear
+    φ the rate tilt is then ½ λ_r hᵀh; for relu, on the all-active orthant). Under ψ = h, λ_r I
+    is left out whatever φ is, also a linear one: the rate tilt ½ λ_r φᵀφ is ≥ 0, so leaving it
+    out only makes the condition conservative."""
     if not psi_is_phi:
         return M
     return M + lambda_r * torch.eye(M.shape[0], device=M.device, dtype=M.dtype)
-
-
-def relu_tilt_spectrum(
-    M: torch.Tensor, lambda_r: float, Sigma_inv: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor, float]:
-    """The pieces of the relu certificate: eigen-decomposition (w, V) of T = M + λ_r I and
-    s = λ_min(Σ⁻¹). On every orthant the exponent is ½ hᵀΣ⁻¹h + ½ φᵀTφ ≥ ½ (s + min(0, λ_min(T)))
-    |h|² (φ = relu, |φ| ≤ |h|; the restriction of Σ⁻¹ to the active units has λ_min ≥ s by
-    interlacing), so λ_min(T) > -s suffices for normalisability. It is not necessary: the exact
-    condition is a copositivity check per orthant (2^P of them)."""
-    eye = torch.eye(M.shape[0], device=M.device, dtype=torch.float64)
-    w, V = torch.linalg.eigh(sym(M.to(torch.float64)) + lambda_r * eye)
-    return w, V, torch.linalg.eigvalsh(Sigma_inv).min().item()
 
 
 def project_tilt(
@@ -161,21 +156,14 @@ def project_tilt(
     """Project a tilt matrix onto a normalisable region, by `tilt_rule`:
     "gaussian": Σ⁻¹ + Q ≻ 0 (Q = `_quadratic_tilt`), necessary and sufficient, enforced as
         Σ^{1/2} Q Σ^{1/2} ⪰ -(1-δ) I (Σ = Sigma_chol Sigma_cholᵀ);
-    "bounded": none needed, M is returned (symmetrised);
-    "relu": λ(M + λ_r I) ≥ -(1-δ) λ_min(Σ⁻¹), the certificate of `relu_tilt_spectrum`, which
-        `normalisability_margin` then reports as ≥ δ λ_min(Σ⁻¹).
-    An admissible M is returned unchanged."""
+    "relu": the same condition with Q = M + λ_r I, the all-active orthant's (see `tilt_rule`);
+    "bounded": none needed, M is returned (symmetrised).
+    An admissible M is returned unchanged. Sigma_inv is unused: the signature is the samplers'
+    (`project_tilt` methods) and stays the same for every rule."""
+    del Sigma_inv
     M = sym(M.to(torch.float64))
-    rule = tilt_rule(phi, psi_is_phi)
-    if rule == "bounded":
+    if tilt_rule(phi, psi_is_phi) == "bounded":
         return M
-    if rule == "relu":
-        w, V, s = relu_tilt_spectrum(M, lambda_r, Sigma_inv)
-        floor = -(1 - delta) * s
-        if w.min().item() >= floor:
-            return M
-        eye = torch.eye(M.shape[0], device=M.device, dtype=torch.float64)
-        return sym((V * torch.clamp(w, min=floor)) @ V.T) - lambda_r * eye
     Q = _quadratic_tilt(M, lambda_r, psi_is_phi)
     Lp = Sigma_chol
     w, V = torch.linalg.eigh(sym(Lp.T @ Q @ Lp))
@@ -190,22 +178,96 @@ def project_tilt(
 def normalisability_margin(
     M64: torch.Tensor, Sigma_inv: torch.Tensor, lambda_r: float, phi: Activation, psi_is_phi: bool
 ) -> float:
-    """How far the tilted density is inside the normalisable region of `tilt_rule`; positive
-    means normalisable. "gaussian": λ_min(Σ⁻¹ + Q), exact. "bounded": λ_min(Σ⁻¹), the prior's
-    own (any M is fine). "relu": λ_min(Σ⁻¹) + min(0, λ_min(M + λ_r I)), the sufficient
-    certificate of `relu_tilt_spectrum`: a negative value is a warning, not a proof. NaN for
-    ψ = φ with an activation that has no rule (allowed when the solver does not project)."""
+    """How far the tilted density is inside the region of `tilt_rule`; positive means inside.
+    "gaussian": λ_min(Σ⁻¹ + Q), exact. "relu": λ_min(Σ⁻¹ + M + λ_r I), the margin of the
+    all-active orthant's Gaussian condition, neither necessary nor sufficient (see `tilt_rule`):
+    a positive value does not prove normalisability, a negative one does not disprove it. "bounded": λ_min(Σ⁻¹), the prior's own (any M is fine). NaN for ψ = φ with an
+    activation that has no rule (allowed when the solver does not project)."""
     if psi_is_phi and known_tilt_class(phi) is None:
         return float("nan")
-    rule = tilt_rule(phi, psi_is_phi)
-    if rule == "bounded":
+    if tilt_rule(phi, psi_is_phi) == "bounded":
         return torch.linalg.eigvalsh(Sigma_inv).min().item()
-    if rule == "relu":
-        w, _, s = relu_tilt_spectrum(M64, lambda_r, Sigma_inv)
-        return s + min(0.0, w.min().item())
     return (
         torch.linalg.eigvalsh(Sigma_inv + _quadratic_tilt(M64, lambda_r, psi_is_phi)).min().item()
     )
+
+
+@dataclass(frozen=True)
+class OrthantCheck:
+    """`relu_orthant_check`'s result over the 2^P orthants (sign patterns) of h."""
+
+    n_orthants: int  # 2^P, the all-inactive one (the prior alone, always fine) included
+    n_violated: int  # orthants whose eigenvalue condition fails (λ_min ≤ 0)
+    worst_min_eig: float  # the smallest λ_min over the orthants with an active unit
+
+    @property
+    def fraction_violated(self) -> float:
+        return self.n_violated / self.n_orthants
+
+
+def relu_orthant_check(
+    Sigma_inv: torch.Tensor,
+    M: torch.Tensor,
+    lambda_r: float,
+    max_P: int = 20,
+    chunk: int = 1 << 14,
+) -> OrthantCheck:
+    """Per-orthant normalisability check of the relu tilt (ψ = φ = relu), a diagnostic and test
+    oracle that the solver never calls. On the orthant whose active set is S the exponent is
+    hᵀΣ⁻¹h + h_Sᵀ T_SS h_S (T = M + λ_r I); its minimum over the inactive coordinates is
+    h_Sᵀ K_S h_S with K_S = (Σ_SS)⁻¹ + T_SS. The check is K_S ≻ 0 for every S ≠ ∅.
+
+    Passing every orthant proves normalisability. A violated orthant is a warning, not a proof:
+    the minimum over h_{S^c} and the sign of h_S are not constrained to the orthant, so a
+    copositive but indefinite K_S (positive on the orthant itself) is also flagged. The
+    all-active orthant's check, S = all units, is the condition `project_tilt` enforces for relu.
+
+    Cost: 2^P eigen-decompositions of P x P matrices, batched `chunk` at a time (each K_S is
+    padded to P x P by a diagonal larger than any of its eigenvalues); about 15 s at P = 20 on
+    a CPU, doubling with every unit, so P > max_P raises ValueError."""
+    P = M.shape[0]
+    if P > max_P:
+        raise ValueError(
+            f"relu_orthant_check: P={P} has 2^{P} orthants; the check is limited to "
+            f"P <= max_P={max_P} (raise max_P knowingly: the cost doubles with every unit)"
+        )
+    Sigma_inv = sym(Sigma_inv.to(torch.float64))
+    T = sym(M.to(torch.float64)) + lambda_r * torch.eye(P, device=M.device, dtype=torch.float64)
+    Sigma = torch.cholesky_inverse(torch.linalg.cholesky(Sigma_inv))
+    # (Σ_SS)⁻¹ ⪯ λ_max(Σ⁻¹) I by interlacing, so `pad` exceeds every eigenvalue of every K_S and
+    # the padding never sets λ_min of a non-empty S.
+    pad = (
+        torch.linalg.eigvalsh(Sigma_inv).max().item()
+        + torch.linalg.matrix_norm(T, ord=2).item()
+        + 1.0
+    )
+    bits = 1 << torch.arange(P, device=M.device)
+    min_eigs = [
+        _padded_orthant_min_eigs(Sigma, T, pad, bits, start, min(start + chunk, 1 << P))
+        for start in range(1, 1 << P, chunk)
+    ]
+    min_eig = torch.cat(min_eigs)
+    return OrthantCheck(
+        n_orthants=1 << P,
+        n_violated=int((min_eig <= 0).sum().item()),
+        worst_min_eig=min_eig.min().item(),
+    )
+
+
+def _padded_orthant_min_eigs(
+    Sigma: torch.Tensor, T: torch.Tensor, pad: float, bits: torch.Tensor, start: int, stop: int
+) -> torch.Tensor:
+    """λ_min(K_S) for the active sets S whose bit masks are start..stop-1 (see
+    `relu_orthant_check`): with D the 0/1 mask, D Σ D + (I - D) inverts to (Σ_SS)⁻¹ on S and I
+    off it, so blockdiag(K_S, pad I) is built without gathering sub-matrices."""
+    masks = torch.arange(start, stop, device=Sigma.device)
+    D = ((masks[:, None] & bits) != 0).to(torch.float64)  # (n, P)
+    DD = D[:, :, None] * D[:, None, :]
+    B = DD * Sigma + torch.diag_embed(1.0 - D)
+    K = DD * (torch.cholesky_inverse(torch.linalg.cholesky(B)) + T) + torch.diag_embed(
+        (1.0 - D) * pad
+    )
+    return torch.linalg.eigvalsh(K)[:, 0]
 
 
 # ----------------------------------------------------------------------------- HMC

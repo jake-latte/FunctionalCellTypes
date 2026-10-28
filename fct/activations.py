@@ -61,7 +61,7 @@ _ANALYTIC_PRIME = {
 
 
 # How the tilt -1/2 phi(h)^T M phi(h) behaves for large h, which decides when the single-site
-# density is normalisable (see `fct.hmc.normalisable_tilt_floor`): "bounded" phi keeps the tilt
+# density is normalisable (see `fct.hmc.tilt_rule`): "bounded" phi keeps the tilt
 # bounded, "linear" makes the density Gaussian, "relu" is positively 1-homogeneous (the tilt
 # grows quadratically, but only on the orthant where units are active).
 TiltClass = Literal["bounded", "linear", "relu"]
