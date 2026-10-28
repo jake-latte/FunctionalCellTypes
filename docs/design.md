@@ -426,7 +426,7 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # replaces the checkpoints; every checkpoint stores cfg.model_dump() as "meanfield_config" for provenance
 def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print, on_outer=None) -> SolveResult
     # raises SpatialPriorUnsupportedError (a ValueError) when cfg.spatial is set, before touching the cache: the solver knows only the iid prior;
-    # `python -m fct solve` and `sweep run` report it as a one-line CliError
+    # `python -m fct solve` and `python -m fct sweep run` (with or without --index) report it as a one-line error
     # rate tilt: the solver's tilt is a per-sample coefficient of phi^T phi summed over the n_points solved points, and the
     # trained loss sums the penalty over samples, so its per-sample coefficient is exactly rate_lambda: rate_tilt=None
     # defaults to train.rate_lambda, and an explicit meanfield.rate_tilt overrides it.

@@ -34,7 +34,6 @@ from fct.meanfield import (
 )
 from fct.model import make_net
 from fct.spatial import SpatialConfig
-from fct.spatial_view import make_config
 
 F64 = {"device": "cpu", "dtype": torch.float64}
 
@@ -683,11 +682,7 @@ def test_load_meanfield_ignores_importance_settings_of_an_hmc_result(cached_run)
 
 
 def test_run_meanfield_refuses_a_spatial_config_before_writing_anything(tmp_path):
-    cfg = make_config(
-        P=16, m=6, k=2, N=8, L=1, phi="tanh", g=1.0, data_seed=0, net_seed=0,
-        weight_lambda=1e-2, rate_lambda=1e-3, optimizer="adam", beta=1.0, lr=1e-2,
-        n_epochs=2, train_seed=0, spatial=SpatialConfig(), device="cpu",
-    )  # fmt: skip
+    cfg = small_config().model_copy(update={"spatial": SpatialConfig()})
     net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
     with pytest.raises(SpatialPriorUnsupportedError, match="no spatial prior"):
         run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
