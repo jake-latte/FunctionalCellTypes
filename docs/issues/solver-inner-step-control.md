@@ -115,3 +115,19 @@ Unresolved, for the PI:
   Frobenius one was 1 to 3). Not changed here (the tripwire reads the Frobenius one).
 - A Gaussian layer is slower to converge under the 0.25 outer cap; `eta_max = 1` restores the
   legacy speed for Gaussian problems if that matters.
+
+## Where it stopped (PM, end of session 2026-10-30)
+Branch `solver-inner-step-control`, worktree `.claude/worktrees/agent-ad58bab09b794cd54`, tip
+after b3c4b99 plus one WIP commit. Review found no numerical fault; it asked for:
+- B1 merge with main: DONE (6696884; legacy-steps fixtures = main's blobs, default fixtures
+  regenerated, relu incident test replays with LEGACY_STEP_CONTROL and eta_max_phihat 0.1).
+- S4 conditional hashing of step-control fields: DONE (7c9c98c).
+- S2 noise-tolerance cap and S6 progress against the best residual: DONE (8f13c92).
+- S1 last layer's residual at its Stein target, Picard wording: DONE (b3c4b99).
+- NOT DONE: S5 (one line in design.md and the config comment: eta_max now caps only the outer
+  step); nits (floor on health backtracks documented; Picard reference script committed as
+  WIP and its test unrun; design.md weak-test numbers 0.042-0.046 / 0.110-0.119; history
+  wording in comments; over-long line in tests/pinned_runs.py:13).
+- NOT RUN: the full suite after these commits.
+Next: finish S5 and the nits, run the suite, a confirmation review pass, merge, then start
+`outer-run-health-guard`.

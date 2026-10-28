@@ -111,3 +111,25 @@ not be merged while that array runs. Known: a dict-valued grid axis (`grid={"spa
 a directory name longer than NAME_MAX; the spatial-sweep item gives the sweep a `spatial` field and
 short labels. The three committed-notebook tests fail in the shared tree only because the PI's
 uncommitted notebook edits differ from the builders' output (green in a clean checkout: 1426 passed).
+
+## RESUME HERE (end of session 2026-10-30)
+Programs of 2026-10-28/29 (spatial grid search; phi readout; prior convention) are merged:
+linear-teacher-test-dataset, meanfield-rejects-spatial, readout-post-activations,
+spatial-sweep, prior-scaling-convention, spatial-grid-notebook (records in docs/issues/archive/).
+Conventions now in force: the readout is V^T phi(h^L)/N; the prior term is lambda_w / (2 beta)
+x its form (beta = 1 under Adam), LOSS_VERSION 4, MODEL_VERSION 2; old weight_lambda values map
+x 2 beta (SGLD) or x 2 (Adam); the mean-field solver's constants follow the network. EVERY cache
+made before these merges is stale. Spatial presets (spatial_tiny 0.2, spatial_n_scan 60) are
+safe to run.
+
+Open:
+1. `solver-inner-step-control` (in review): see "Where it stopped" in its issue file. The
+   exemplar at its defaults converges on that branch, NOT yet on main.
+2. `outer-run-health-guard` (todo, after 1): health-check the outer-gradient run and bound
+   h2/prior absolutely; this is the hole behind the relu incident.
+3. `relu-tilt-rule` (blocked on the PI): the all-active rule is merged; it is neither necessary
+   nor sufficient (exact condition: strict copositivity per orthant). PM recommendation: keep
+   the rule and add the guard of item 2; fallback: restore the sufficient floor. Under the new
+   step control a relu solve's residual sits ~0.75, just under the 0.9 tripwire.
+Known failing case outside any item: L >= 2 with a bounded phi (the hidden layer's Stein target
+inverts a nearly rank-2 kernel); needs its own item once 1 and 2 land.
