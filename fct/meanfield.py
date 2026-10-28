@@ -570,6 +570,7 @@ class _InnerResult:
     n_backtrack: np.ndarray  # steps reverted because they broke the sampler, per layer
     n_accepted: np.ndarray  # steps validated and kept, per layer
     n_rejected: np.ndarray  # steps reverted because they raised the residual, per layer
+    best_residual: np.ndarray  # smallest residual accepted so far in this ascent, per layer
     projected_rel: np.ndarray  # largest relative change by the tilt projection, per layer
     converged: bool
     n_steps: int
@@ -581,34 +582,53 @@ class _PendingStep(NamedTuple):
     state: Any  # sampler state before the step
     hat: torch.Tensor  # Φ̂_l before the step
     grad: torch.Tensor  # ∂S/∂Φ̂_l measured there
-    residual: float  # inner residual measured there
-    tol: float  # its convergence tolerance (`_inner_tol`)
+    tol: float  # the convergence tolerance there (`_inner_tol`)
+
+
+# Under inner_step_control="progress", the Monte Carlo part of the inner tolerance is capped at
+# this: a kernel off by half its size is not converged however noisy its estimate, and a run
+# whose MC error is that large cannot resolve the residual, so the ascent runs on and reports
+# the layer unconverged instead of calling a pure-noise layer converged.
+INNER_TOL_MC_CAP = 0.5
 
 
 def _inner_tol(cfg: SolverConfig, diag: dict) -> float:
     """The inner residual below which a layer counts as converged: below
-    inner_tol_mc × its own Monte Carlo error the residual is noise."""
-    return max(cfg.inner_tol, cfg.inner_tol_mc * diag["psi_psi_rel_mc_err"])
+    inner_tol_mc × its own Monte Carlo error the residual is noise (that part capped at
+    INNER_TOL_MC_CAP under inner_step_control="progress")."""
+    mc = cfg.inner_tol_mc * diag["psi_psi_rel_mc_err"]
+    if cfg.inner_step_control == "progress":
+        mc = min(mc, INNER_TOL_MC_CAP)
+    return max(cfg.inner_tol, mc)
 
 
-def _no_progress(cfg: SolverConfig, residual: float, step: _PendingStep, eta: float) -> bool:
+def _eta_hat_floor(cfg: SolverConfig) -> float:
+    """The smallest inner step size inner_step_control="progress" halves down to."""
+    return cfg.eta_min_rel * cfg.eta_phihat
+
+
+def _no_progress(
+    cfg: SolverConfig, residual: float, best: float, step: _PendingStep, eta: float
+) -> bool:
     """Whether inner_step_control="progress" rejects a step after which the residual is
-    `residual`: it rose by more than the convergence tolerance of the point before the step.
-    The tolerance is the margin because the residual before the step is itself a Monte Carlo
-    estimate (and, among repeated retries, a lucky low one), so a strict "did not rise" would
-    reject sound steps on noise alone. A step already at the floor eta_min_rel · eta_phihat is
-    never rejected, so noise cannot stall the ascent."""
-    floor = cfg.eta_min_rel * cfg.eta_phihat
-    rose = residual > step.residual + step.tol
-    return cfg.inner_step_control == "progress" and rose and eta > floor
+    `residual`: it exceeds `best`, the smallest residual accepted so far in this ascent, by
+    more than the convergence tolerance of the point before the step. Against the smallest,
+    not the last, so a run of small accepted rises cannot let the residual creep up. The
+    tolerance is the margin because the residuals are Monte Carlo estimates (and `best` a
+    lucky low one), so a strict "did not rise" would reject sound steps on noise alone. A step
+    already at the floor `_eta_hat_floor` is never rejected, so noise cannot stall the ascent."""
+    rose = residual > best + step.tol
+    return cfg.inner_step_control == "progress" and rose and eta > _eta_hat_floor(cfg)
 
 
 def _retry_half_step(prob: _Problem, st: _SolverState, l: int, step: _PendingStep, res) -> None:
     """Revert layer l's pending inner step (tilt and chain state) and take it again from the
-    same point with half the step size (not below eta_min_rel · eta_phihat under
-    inner_step_control="progress")."""
+    same point with half the step size. Under inner_step_control="progress" the halving stops
+    at `_eta_hat_floor`, for a step reverted for sampler health as for one reverted for lack
+    of progress: a step that still breaks the sampler at the floor is retried there until
+    max_backtrack raises."""
     cfg, s = prob.solver, st.samplers[l]
-    floor = cfg.eta_min_rel * cfg.eta_phihat if cfg.inner_step_control == "progress" else 0.0
+    floor = _eta_hat_floor(cfg) if cfg.inner_step_control == "progress" else 0.0
     st.eta_hat[l] = max(st.eta_hat[l] * 0.5, floor)
     st.Phi_hat[l], rel = _tilt_step(prob, st, l, step.hat, step.grad, st.eta_hat[l])
     res.projected_rel[l] = max(res.projected_rel[l], rel)
@@ -636,7 +656,7 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
                     f"(eta_phihat={st.eta_hat[l]:.2e})"
                 )
             return diag
-        if _no_progress(cfg, residual, step, st.eta_hat[l]):
+        if _no_progress(cfg, residual, res.best_residual[l], step, st.eta_hat[l]):
             res.n_rejected[l] += 1
             _retry_half_step(prob, st, l, step, res)
             return diag
@@ -646,10 +666,9 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
         st.eta_hat[l] = min(st.eta_hat[l] * cfg.eta_grow, cfg.eta_max_phihat)
     grad_hat = 0.5 * (moments["psi_psi"] - st.Phi[l])
     res.residual[l] = residual
+    res.best_residual[l] = min(res.best_residual[l], residual)
     res.grad_rel[l] = grad_hat.norm().item() / max(st.Phi[l].norm().item(), 1e-300)
-    pending[l] = _PendingStep(
-        s.get_state(), st.Phi_hat[l].clone(), grad_hat, residual, _inner_tol(cfg, diag)
-    )
+    pending[l] = _PendingStep(s.get_state(), st.Phi_hat[l].clone(), grad_hat, _inner_tol(cfg, diag))
     st.Phi_hat[l], rel = _tilt_step(prob, st, l, st.Phi_hat[l], grad_hat, st.eta_hat[l])
     res.projected_rel[l] = max(res.projected_rel[l], rel)
     s.set_tilt(st.Phi_hat[l])
@@ -664,6 +683,7 @@ def _new_inner_result(L: int) -> _InnerResult:
         n_backtrack=np.zeros(L, dtype=int),
         n_accepted=np.zeros(L, dtype=int),
         n_rejected=np.zeros(L, dtype=int),
+        best_residual=np.full(L, np.inf),
         projected_rel=np.zeros(L),
         converged=False,
         n_steps=0,
@@ -932,6 +952,10 @@ def _format_step(
         msg += f" | PD-clamped={step.n_clamped}"
     if any(step.clipped):
         msg += f" | step-clipped={[int(c) for c in step.clipped]}"
+    if prob.solver.inner_step_control == "progress":
+        at_floor = [l for l, e in enumerate(st.eta_hat) if e <= _eta_hat_floor(prob.solver)]
+        if at_floor:
+            msg += f" | eta_phihat at its floor in layers {at_floor}"
     return msg
 
 

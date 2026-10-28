@@ -112,7 +112,7 @@ def test_a_step_that_raises_the_inner_residual_is_rejected_and_its_step_size_hal
     # retried from the point before the step, with the chain state of that point
     assert tilt(st) == pytest.approx(tilt_after_step(0.8, 50.0), rel=1e-12)
     assert sampler.state == 1
-    assert pending[0] is not None and pending[0].residual == pytest.approx(residual_at(0.8))
+    assert pending[0] is not None and pending[0].tol == pytest.approx(1e-2)
     assert res.residual[0] == pytest.approx(residual_at(0.8))  # the accepted point's
 
 
@@ -139,6 +139,46 @@ def test_a_rise_within_the_tolerance_of_the_point_before_is_noise(mc_err, reject
     prob, st, _ = layer(0.8, eta=eta, mc_err=mc_err)
     _, res = two_steps(prob, st)
     assert res.n_rejected[0] == rejected
+
+
+def test_small_accepted_rises_cannot_add_up():
+    """Tolerance 0.04 (MC error 0.02), a fixed step size: from x = 0.8 the residual goes 0.111,
+    0.126 (a rise of 0.015, accepted), 0.152: within the tolerance of the last accepted
+    residual, beyond that of the smallest, so it is rejected."""
+    eta, x0 = 4.39, 0.8
+    x1 = tilt_after_step(x0, eta)
+    x2 = tilt_after_step(x1, eta)
+    r0, r1, r2 = residual_at(x0), residual_at(x1), residual_at(x2)
+    assert r0 < r1 < r0 + 0.04 < r2 < r1 + 0.04  # the creep the rule must stop
+    prob, st, _ = layer(x0, eta=eta, mc_err=0.02, eta_grow=1.0, eta_max_phihat=1e3)
+    pending, res = [None], mf._new_inner_result(1)
+    for inner in range(3):
+        mf._inner_layer_step(prob, st, 0, inner, pending, res)
+    assert res.n_accepted[0] == 1 and res.n_rejected[0] == 1
+    assert res.best_residual[0] == pytest.approx(r0) and res.residual[0] == pytest.approx(r1)
+
+
+def test_the_monte_carlo_part_of_the_tolerance_is_capped():
+    """A run whose MC error is 0.98 (pure noise) cannot call a residual of 0.9 converged."""
+    diag = {"psi_psi_rel_mc_err": 0.98}
+    progress, health = MeanFieldConfig().solver, MeanFieldConfig(inner_step_control="health").solver
+    assert mf._inner_tol(progress, diag) == mf.INNER_TOL_MC_CAP == 0.5
+    assert mf._inner_tol(health, diag) == pytest.approx(1.96)  # unchanged without step control
+    assert mf._inner_tol(progress, {"psi_psi_rel_mc_err": 1e-3}) == progress.inner_tol
+
+
+def test_the_log_says_when_an_inner_step_size_sits_at_its_floor():
+    prob, st, _ = layer(0.8, eta=100.0, eta_min_rel=0.9, eta_max_phihat=1e3)  # floor 90
+    st.eta_hat[0] = 90.0
+    assert mf._eta_hat_floor(prob.solver) == 90.0
+    rec = {"outer_step": 0, "time": 0.0, "train_mse_net": None, "train_mse_theory": 0.1}
+    rec |= {k: np.zeros(1) for k in ("inner_residual", "outer_grad_rel", "phihat_fp_resid_stein",
+            "hmc_accept", "hmc_eps", "hmc_rho1", "hmc_mc_err", "hmc_stein_mismatch",
+            "hmc_h2_ratio", "norm_margin", "tilt_projected_rel")}  # fmt: skip
+    rec["hmc_div"] = np.zeros(1, dtype=int)
+    inner, step = mf._new_inner_result(1), mf._OuterStep([0], [1.0], [False], 0)
+    line = mf._format_step(rec, inner, step, st, prob)
+    assert "eta_phihat at its floor in layers [0]" in line
 
 
 def test_the_step_size_floor_stops_the_halving():
