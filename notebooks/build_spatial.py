@@ -119,8 +119,6 @@ import torch
 from IPython.display import Markdown, display
 
 from fct.analyse import example_outputs, pick_examples, r_squared
-from fct.cache import cache_root_from_env
-from fct.data import get_latent_lattice_dataset
 from fct.grid_view import tuning_view
 from fct.meanfield import readout_activities
 from fct.modularity import information_overlap, rate_overlap
@@ -133,18 +131,20 @@ from fct.spatial import (
 )
 from fct.spatial_view import (
     layer_spaces,
-    make_config,
     order_weights,
     ordered_kernel_comparison,
     panel_grid,
     position_order,
-    train_run,
 )
-"""
 
-STYLE = """mpl.rcParams.update({"figure.dpi": 100, "font.size": 12, "axes.titlesize": 12})"""
+mpl.rcParams.update({"figure.dpi": 100, "font.size": 12, "axes.titlesize": 12})"""
 
-SETUP = f"{IMPORTS}\n\n{STYLE}\nRUNS_ROOT = CACHE_ROOT or cache_root_from_env()"
+# What only the notebook that trains its own run needs; the grid notebook has its own extras.
+TRAIN_IMPORTS = """from fct.cache import cache_root_from_env
+from fct.data import get_latent_lattice_dataset
+from fct.spatial_view import make_config, train_run
+
+RUNS_ROOT = CACHE_ROOT or cache_root_from_env()"""
 
 PRIOR_TEXT = r"""## Spatial prior
 
@@ -370,17 +370,19 @@ points of the latent lattice $z \in \{-a, 0, a\}^k$ ($a$ the latent range, one p
 of the latents, with inputs and targets from the training samples' own $W_X$ and $W_Y$), which the
 net was not trained on. Left: one panel per sample
 with $y_{\mu a}$ (ring on a stem) and $\hat y_{\mu a}$ (diamond) for every output $a = 1, \dots, m$.
-Right: every shown entry $\hat y_{\mu a}$ against $y_{\mu a}$, with the identity line and the
-pooled
+Right: every entry $\hat y_{\mu a}$ against $y_{\mu a}$ of **all** $3^k$ test points (the examples
+are only a subset of them), with the identity line and the pooled
 $$R^2 = 1 - \frac{\sum_{\mu a} (y_{\mu a} - \hat y_{\mu a})^2}{\sum_{\mu a} (y_{\mu a} - \bar y)^2}$$
-over the shown entries, $\bar y$ their mean. A good fit puts every diamond inside its ring and
-every point on the identity line."""
+over all test points and outputs, $\bar y$ their mean. A good fit puts every diamond inside its ring
+and every point on the identity line."""
 
 EXAMPLES = r"""N_EXAMPLES = 4  # samples shown
 
 
-def plot_example_outputs(outputs, title):
-    # True and predicted output vector of each example, then all entries against each other.
+def plot_example_outputs(outputs, title, everything=None):
+    # True and predicted output vector of each example (`outputs`), then the entries of
+    # `everything` (default: the examples) against each other with their pooled R^2.
+    everything = outputs if everything is None else everything
     y_true, y_pred = outputs.y_true.numpy(), outputs.y_pred.numpy()
     n, m = y_true.shape
     fig = plt.figure(figsize=(12, 2.2 * n + 1.5), layout="constrained")
@@ -404,10 +406,11 @@ def plot_example_outputs(outputs, title):
     first.legend(frameon=False, loc="upper right", ncol=2)
 
     ax = fig.add_subplot(right)
-    r2 = r_squared(outputs.y_true, outputs.y_pred)
-    lim = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
+    all_true, all_pred = everything.y_true.numpy(), everything.y_pred.numpy()
+    r2 = r_squared(everything.y_true, everything.y_pred)
+    lim = [min(all_true.min(), all_pred.min()), max(all_true.max(), all_pred.max())]
     ax.plot(lim, lim, "--", color="grey", label=f"identity; $R^2$ = {r2:.2f}")
-    ax.scatter(y_true.ravel(), y_pred.ravel(), s=30, alpha=0.7, color="C1")
+    ax.scatter(all_true.ravel(), all_pred.ravel(), s=30, alpha=0.7, color="C1")
     ax.set(xlabel=r"true $y_{\mu a}$", ylabel=r"predicted $\hat y_{\mu a}$", aspect="equal")
     ax.legend(frameon=False, loc="upper left")
     fig.suptitle(title)
@@ -416,7 +419,9 @@ def plot_example_outputs(outputs, title):
 
 n_samples = len(TEST_DATASET.x)
 picks = pick_examples(n_samples, min(N_EXAMPLES, n_samples), seed=0)
-plot_example_outputs(example_outputs(RUN.net, TEST_DATASET, picks), "trained network, test set")
+test_outputs = example_outputs(RUN.net, TEST_DATASET, list(range(n_samples)))
+shown = example_outputs(RUN.net, TEST_DATASET, picks)
+plot_example_outputs(shown, f"trained network, test set ({n_samples} points)", test_outputs)
 plt.show()"""
 
 EMPIRICAL_TEXT = r"""## First-layer weights: their kernels next to the prior
@@ -963,7 +968,8 @@ def build_notebook() -> NotebookNode:
         new_markdown_cell(TRAINING_TEXT),
         new_code_cell(TRAINING),
         new_markdown_cell(SETUP_TEXT),
-        new_code_cell(SETUP),
+        new_code_cell(IMPORTS),
+        new_code_cell(TRAIN_IMPORTS),
         new_markdown_cell(PRIOR_TEXT),
         new_code_cell(SPATIAL),
         new_markdown_cell(FLOOR_TEXT),

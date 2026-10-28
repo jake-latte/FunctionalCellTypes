@@ -46,14 +46,14 @@ are merged (it needs the spatial presets, the phi(h^L) readout and the final los
 
 ## Implementation (branch `spatial-grid-notebook`)
 - `fct/spatial_grid.py`: `select_setting` (through `find_setting_dir`; a grid setting that was never run
-  is status "missing", a value outside the grid is a `LookupError`), `settings_table`, `load_grid_run`
-  (net, history, training set and the 3^k test set), `prior_coeff`. `fct.spatial.latent_kernel` is B = Z Z^T / k.
+  is status "missing"; a value outside the grid, or an ambiguous request, is a `LookupError`), `settings_table`, `load_grid_run`
+  (net, history, training set and the 3^k test set); the loader uses `fct.train.prior_coefficient`. `fct.spatial.latent_kernel` is B = Z Z^T / k.
 - `notebooks/build_spatial_grid.py` builds `notebooks/spatial_grid.ipynb`; its cells are `build_spatial.py`'s
   module constants. Cells that need the trained net keep their plotting function at the top level and run
   the rest under `if TRAINED:`, else they repeat the "not trained" note; the prior kernels and floor
   tables need only the config and are always drawn.
 - `build_spatial.py` (and so `spatial.ipynb`): `TEST_DATASET` in the train cell; A^(l), the trial picks, the pair
-  grids and the example outputs (with R^2) read it; `plot_data_kernels` draws B first. `execute_notebook` and
+  grids and the example outputs read it (the R^2 and scatter are over all 3^k test points, the panels show a few); `plot_data_kernels` draws B first. `execute_notebook` and
   `build_main` take the name of the root parameter (`ROOT` here).
 - Decisions to confirm: the example outputs of `spatial.ipynb` also moved to the test set (the cell is shared;
   the issue only asked for it in the grid notebook); the tuning, overlaps, weights and kernel comparison stay

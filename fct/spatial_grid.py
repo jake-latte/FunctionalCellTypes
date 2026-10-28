@@ -10,13 +10,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from fct.config import Config, TrainConfig, resolve_device, resolve_dtype
+from fct.config import Config, resolve_device, resolve_dtype
 from fct.data import Dataset, get_dataset, get_latent_lattice_dataset
 from fct.spatial_view import TrainRun
 from fct.sweep import (
     SETTING_FILE,
     Setting,
     Status,
+    SweepConfig,
     expand,
     find_setting_dir,
     grid_of,
@@ -25,11 +26,9 @@ from fct.sweep import (
     setting_config,
     setting_dir,
     setting_status,
+    setting_statuses,
 )
 from fct.train import load_trained
-
-# The test set has one point per element of {-a, 0, a}^k (`latent_lattice_dataset`).
-TEST_POINTS_BASE = 3
 
 
 class GridSetting(NamedTuple):
@@ -39,32 +38,33 @@ class GridSetting(NamedTuple):
     status: Status  # "done" is the only status with a trained net to show
 
 
-def _unrun_matches(root: Path, values: Mapping[str, Any]) -> list[Setting]:
-    """Settings of the grid whose axes equal `values` and that have never been run."""
-    return [
-        s
-        for s in expand(load_sweep(root))
-        if all(a in s.axes and same_value(s.axes[a], v) for a, v in values.items())
-        and not (setting_dir(root, s) / SETTING_FILE).exists()
-    ]
+def _matching_settings(sweep: SweepConfig, values: Mapping[str, Any]) -> list[Setting]:
+    """The settings of the grid whose axes equal `values`, run or not."""
+    if unknown := sorted(set(values) - set(grid_of(sweep))):
+        raise LookupError(f"unknown axis {unknown}; the grid has axes {list(grid_of(sweep))}")
+    return [s for s in expand(sweep) if all(same_value(s.axes[a], v) for a, v in values.items())]
 
 
 def select_setting(root: Path, values: Mapping[str, Any], device: str = "cpu") -> GridSetting:
-    """The setting of the sweep at `root` whose axes equal `values` (a subset is enough when it
-    is unambiguous), with its status. Found through `find_setting_dir`; a setting of the grid
-    that was never run is returned with status "missing". LookupError for values or axes that
-    are not in the grid, or that match several settings."""
+    """The one setting of the sweep at `root` whose axes equal `values` (a subset of the axes is
+    enough when it picks one), with its status. LookupError for an axis that is not in the grid
+    and for no match or several, whether or not they were run, so an ambiguous request never
+    resolves to a setting the caller did not name. A setting of the grid that was never run is
+    returned with status "missing". A run setting's directory is confirmed by `find_setting_dir`
+    (SweepError if it was written under another grid)."""
     root = Path(root)
     sweep = load_sweep(root)
-    try:
-        directory = find_setting_dir(root, sweep, values)
-    except LookupError:
-        unrun = _unrun_matches(root, values)
-        if len(unrun) != 1:
-            raise
-        directory = setting_dir(root, unrun[0])
-    (setting,) = (s for s in expand(sweep) if setting_dir(root, s) == directory)
-    cfg = setting_config(sweep, setting).model_copy(update={"device": device})
+    matches = _matching_settings(sweep, values)
+    if len(matches) != 1:
+        raise LookupError(
+            f"{len(matches)} settings of the grid match {dict(values)}; give axes that pick one"
+        )
+    (setting,) = matches
+    directory = setting_dir(root, setting)
+    if (directory / SETTING_FILE).exists():
+        directory = find_setting_dir(root, sweep, setting.axes)
+    # Config validates the device name, unlike a model_copy update.
+    cfg = Config.model_validate({**setting_config(sweep, setting).model_dump(), "device": device})
     return GridSetting(setting, directory, cfg, setting_status(root, sweep, setting))
 
 
@@ -77,8 +77,8 @@ def settings_table(root: Path) -> str:
         "| " + " | ".join(["index", *axes, "status"]) + " |",
         "|" + "---|" * (len(axes) + 2),
     ]
-    for i, s in enumerate(expand(sweep)):
-        cells = [str(i), *(str(s.axes[a]) for a in axes), setting_status(root, sweep, s)]
+    for i, setting, status in setting_statuses(root, sweep):
+        cells = [str(i), *(str(setting.axes[a]) for a in axes), status]
         rows.append("| " + " | ".join(cells) + " |")
     return "\n".join(rows)
 
@@ -93,11 +93,7 @@ def load_grid_run(chosen: GridSetting) -> tuple[TrainRun, Dataset]:
         chosen.directory, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype)
     )
     run = TrainRun(chosen.directory, get_dataset(chosen.directory, cfg), net, history)
-    return run, get_latent_lattice_dataset(chosen.directory, cfg)
-
-
-def prior_coeff(train: TrainConfig) -> float:
-    """The loss coefficient of the weight prior, lambda_w / (2 beta): beta is `train.beta`
-    under SGLD and 1 under Adam. The spatial notebook's `PRIOR_COEFF`."""
-    beta = train.beta if train.optimizer == "sgld" else 1.0
-    return train.weight_lambda / (2 * beta)
+    test = get_latent_lattice_dataset(chosen.directory, cfg)
+    if len(test.x) != 3**cfg.data.n_latents:  # one point per sign pattern
+        raise ValueError(f"the test set has {len(test.x)} points, not 3^{cfg.data.n_latents}")
+    return run, test

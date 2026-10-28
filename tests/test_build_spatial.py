@@ -75,6 +75,10 @@ def _text_outputs(nb) -> str:
     return "\n".join(chunks)
 
 
+def _n_figures_in(nb) -> int:
+    return sum(_n_figures(cell) for cell in nb.cells)
+
+
 def _n_figures(cell) -> int:
     return sum("image/png" in out.get("data", {}) for out in cell.get("outputs", []))
 
@@ -229,6 +233,22 @@ def test_example_outputs_show_each_example_and_a_scatter(notebook_functions, tmp
     first, last = fig.axes[0], fig.axes[1]
     assert not first.xaxis.get_tick_params()["labelbottom"]
     assert last.xaxis.get_tick_params()["labelbottom"]
+
+
+def test_example_outputs_take_their_r2_from_everything_when_given(notebook_functions):
+    from fct.analyse import ExampleOutputs
+
+    y = torch.tensor([[1.0, -1.0], [0.0, 2.0], [3.0, 0.5], [-2.0, 1.0]])
+    shown = ExampleOutputs(torch.tensor([0, 1]), torch.zeros(2, 4), y[:2], y[:2])  # perfect
+    everything = ExampleOutputs(torch.arange(4), torch.zeros(4, 4), y, torch.zeros_like(y))
+    fig = notebook_functions["plot_example_outputs"](shown, "t", everything)
+    scatter = fig.axes[-1]
+    assert len(scatter.collections[0].get_offsets()) == y.numel()  # every test entry
+    assert (
+        "$R^2$ = -0.14" in scatter.get_legend_handles_labels()[1][0]
+    )  # predicting 0 everywhere: 1 - 20.25 / 17.72
+    default = notebook_functions["plot_example_outputs"](shown, "t")
+    assert "$R^2$ = 1.00" in default.axes[-1].get_legend_handles_labels()[1][0]
 
 
 def test_kernel_comparison_and_weights_render_on_a_ring(notebook_functions, tmp_path):

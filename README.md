@@ -195,14 +195,14 @@ uv run python notebooks/build_spatial.py --no-execute                     # rebu
 ```
 
 The spatial-prior notebook draws its spatially indexed kernels Phi^(l) (the data kernels A^(l) next to the latent
-kernel B = Z Z^T / k, the chosen trials, the pair grids) and its example outputs from the held-out test set, the
-3^k points of the latent lattice (one per sign pattern), not from the training samples.
+kernel B = Z Z^T / k, the chosen trials, the pair grids) and its example outputs (a few test points drawn as panels, the R^2 and the scatter over all of them) from the
+held-out test set, the 3^k points of the latent lattice (one per sign pattern), not from the training samples.
 
 **Spatial-grid notebook.** The same figures for one setting of an already-run spatial sweep (for instance
 `python -m fct sweep init ROOT --preset spatial_n_scan`, then `sweep run`): give the sweep ROOT and the axis values
 of the setting, `SETTING = {"net.N": 256}` (a subset of the axes is enough when it picks one). The notebook lists the
 grid with each setting's status, loads the setting's trained net, and shows the spatial notebook's figures with
-the Phi kernels and example outputs computed on the test set. A setting of the grid that is not trained is reported in
+the Phi kernels and example outputs (and their R^2, over all 3^k test points) computed on the test set. A setting of the grid that is not trained is reported in
 the cells and only its prior is drawn; a setting that is not in the grid is an error. The cells are the spatial
 notebook's (`build_spatial_grid.py` imports them), so both build the same figures. Only the source notebook is committed.
 
@@ -259,7 +259,7 @@ interface contract between modules.
 
 ```sh
 uv run pytest         # tests (CPU only, synthetic data)
-uv run ruff check fct tests            # lint
+uv run ruff check fct tests notebooks  # lint (notebooks: the generated cells' imports)
 uv run ruff format --check fct tests   # formatting
 ```
 

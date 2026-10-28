@@ -6,14 +6,11 @@ import torch
 
 from fct.spatial import latent_kernel
 from fct.spatial_grid import (
-    TEST_POINTS_BASE,
     load_grid_run,
-    prior_coeff,
     select_setting,
     settings_table,
 )
-from fct.spatial_view import make_config
-from fct.sweep import preset, run_setting, save_sweep
+from fct.sweep import preset, run_setting, save_sweep, with_grid
 
 
 @pytest.fixture(scope="module")
@@ -68,7 +65,7 @@ def test_load_grid_run_gives_the_net_history_and_a_lattice_test_set(root):
     chosen = select_setting(root, {"net.N": 8})
     run, test = load_grid_run(chosen)
     k = chosen.cfg.data.n_latents
-    assert len(test.x) == TEST_POINTS_BASE**k  # one point per sign pattern
+    assert len(test.x) == 3**k  # one point per sign pattern
     assert len(run.dataset.x) == chosen.cfg.data.P  # the training samples are kept apart
     assert run.net.U.shape[0] == 8
     assert len(run.history["loss"]) > 0
@@ -85,20 +82,26 @@ def test_load_grid_run_refuses_a_setting_that_is_not_trained(root):
         load_grid_run(select_setting(root, {"net.N": 4}))
 
 
-@pytest.mark.parametrize("optimizer", ["sgld", "adam"])
-def test_prior_coeff_inverts_the_spatial_notebooks_weight_lambda(optimizer):
-    """The spatial notebook sets weight_lambda = 2 beta PRIOR_COEFF (beta = 1 for Adam)."""
-    beta, coeff = 1e3, 3e-3
-    cfg = make_config(
-        P=8, m=4, k=2, N=4, L=1, phi="tanh", g=1.0, data_seed=0, net_seed=0,
-        weight_lambda=coeff * 2 * (beta if optimizer == "sgld" else 1.0),
-        rate_lambda=0.0, optimizer=optimizer, beta=beta, lr=1e-3, n_epochs=2, train_seed=0,
-        spatial=None, device="cpu",
-    )  # fmt: skip
-    assert prior_coeff(cfg.train) == pytest.approx(coeff)
-
-
 def test_latent_kernel_is_the_gram_matrix_of_the_latents_over_k():
     factors = {"z0": torch.tensor([1.0, 0.0, -1.0]), "z1": torch.tensor([1.0, 1.0, 0.0])}
     expected = torch.tensor([[2.0, 1.0, -1.0], [1.0, 1.0, 0.0], [-1.0, 0.0, 1.0]]) / 2
     assert torch.allclose(latent_kernel(factors), expected)
+
+
+def test_select_refuses_an_ambiguous_request_whatever_was_run(tmp_path):
+    """net.N [8] x train.lr [1e-2, 5e-3]: with the first trained, {"net.N": 8} names both settings
+    and must not resolve to either; naming the lr picks one, run or not."""
+    sweep = preset("spatial_tiny")
+    sweep = with_grid(sweep, {"net.N": [8], "train.lr": [1e-2, 5e-3]})
+    save_sweep(sweep, tmp_path)
+    run_setting(sweep, 0, tmp_path, log=lambda _: None)
+    for values in ({"net.N": 8}, {}):
+        with pytest.raises(LookupError, match="2 settings"):
+            select_setting(tmp_path, values)
+    assert select_setting(tmp_path, {"train.lr": 1e-2}).status == "done"
+    assert select_setting(tmp_path, {"train.lr": 5e-3}).status == "missing"
+
+
+def test_select_refuses_a_device_name_that_is_not_one(root):
+    with pytest.raises(ValueError, match="device"):
+        select_setting(root, {"net.N": 8}, device="tpu")

@@ -9,6 +9,7 @@ import nbformat
 import numpy as np
 import pytest
 import torch
+from nbclient.exceptions import CellExecutionError
 
 from fct.config import DataConfig
 from fct.data import Dataset
@@ -17,7 +18,13 @@ from fct.tasks import latent_lattice_dataset
 from notebooks import build_spatial as sp
 from notebooks.build_spatial import execute_notebook
 from notebooks.build_spatial_grid import build_notebook, when_trained
-from tests.test_build_spatial import N_FIGURES, PLOTTING_FUNCTIONS
+from tests.test_build_spatial import (
+    N_FIGURES,
+    PLOTTING_FUNCTIONS,
+    _code,
+    _n_figures_in,
+    _text_outputs,
+)
 
 # Weight layers 1 and 2 of the one-hidden-layer net: the only figures that need no trained net.
 N_PRIOR_FIGURES = 2
@@ -33,29 +40,6 @@ RUN_CELLS = (
     sp.TUNING,
     sp.OVERLAP,
 )
-
-
-def _code(nb) -> str:
-    return "\n".join(c.source for c in nb.cells if c.cell_type == "code")
-
-
-def _text_outputs(nb) -> str:
-    chunks = []
-    for cell in nb.cells:
-        for out in cell.get("outputs", []):
-            if out.output_type == "error":
-                chunks.append(f"ERROR {out.ename}: {out.evalue}")
-            elif out.output_type == "display_data":
-                chunks.append(out.data.get("text/markdown", ""))
-            elif out.output_type == "stream":
-                chunks.append(out.text)
-    return "\n".join(chunks)
-
-
-def _n_figures(nb) -> int:
-    return sum(
-        "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
-    )
 
 
 # ---------------------------------------------------------------- the source notebook
@@ -211,7 +195,7 @@ def test_executes_on_a_trained_setting_and_draws_every_figure(root):
     nb = _execute(root, {"net.N": 8})
     text = _text_outputs(nb)
     assert "ERROR" not in text
-    assert _n_figures(nb) == N_FIGURES
+    assert _n_figures_in(nb) == N_FIGURES
     assert "| 0 | 4 | missing |" in text and "| 1 | 8 | done |" in text  # the grid
     assert "**Setting 1** (net.N = 8)" in text
     assert "Test set: 9 latent-lattice points" in text  # 3^k, k = 2
@@ -227,12 +211,12 @@ def test_a_setting_that_is_not_trained_is_reported_and_only_its_prior_is_drawn(r
     assert "ERROR" not in text
     assert "is not trained** (status: missing)" in text
     assert text.count("is not trained") == 1 + len(RUN_CELLS)  # the loader and every skipped cell
-    assert _n_figures(nb) == N_PRIOR_FIGURES  # the prior kernels need no trained net
+    assert _n_figures_in(nb) == N_PRIOR_FIGURES  # the prior kernels need no trained net
     assert "SGLD needs < 1" in text  # the floor tables are there
 
 
 def test_a_setting_outside_the_grid_fails_loudly(root):
-    with pytest.raises(Exception, match="net.N"):
+    with pytest.raises(CellExecutionError, match="net.N"):
         _execute(root, {"net.N": 5})
 
 

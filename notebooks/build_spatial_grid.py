@@ -65,9 +65,10 @@ SETTING = {"net.N": 8}  # axis values of the setting to show: a subset of the gr
 DEVICE = "cpu"  # "cpu", "cuda" or "auto": where the net and the test activities are computed"""
 
 GRID_IMPORTS = """from fct.report import sweep_root_from_env
-from fct.spatial_grid import load_grid_run, prior_coeff, select_setting, settings_table"""
+from fct.spatial_grid import load_grid_run, select_setting, settings_table
+from fct.train import prior_coefficient
 
-SETUP = f"{sp.IMPORTS}\n{GRID_IMPORTS}\n\n{sp.STYLE}\nSWEEP_ROOT = ROOT or sweep_root_from_env()"
+SWEEP_ROOT = ROOT or sweep_root_from_env()"""
 
 GRID_TEXT = """## The grid
 
@@ -80,7 +81,9 @@ SETTING_TEXT = """## The chosen setting
 
 The setting's config gives the spatial prior (`SPACES`, as in the spatial notebook) whether or not
 it is trained; its trained net, training samples, training history and test set are loaded only
-when it is done."""
+when it is done. The notation and training text above tell the reader to set `PRIOR_COEFF`,
+`DATA_SEED`, `RATE_LAMBDA`, `BETA` and `OPTIMIZER`; in this notebook they are read from the setting's
+config instead."""
 
 LOADER = r"""CHOSEN = select_setting(SWEEP_ROOT, SETTING, DEVICE)
 CFG = CHOSEN.cfg
@@ -88,7 +91,7 @@ SPACES = layer_spaces(CFG)  # weight layer l = 1 .. L + 1 is SPACES[l - 1]
 tc = CFG.train
 # the names the spatial notebook's cells read
 OPTIMIZER, BETA, LR, TRAIN_SEED = tc.optimizer, tc.beta, tc.lr, tc.seed
-PRIOR_COEFF = prior_coeff(tc)
+PRIOR_COEFF = prior_coefficient(tc)
 D, BOX, MIN_REL_EIG = CFG.spatial.d, CFG.spatial.box, CFG.spatial.min_rel_eig
 TRAINED = CHOSEN.status == "done"
 where = ", ".join(f"{axis} = {value}" for axis, value in CHOSEN.setting.axes.items())
@@ -145,7 +148,8 @@ def build_notebook() -> NotebookNode:
         new_markdown_cell(INTRO),
         new_code_cell(PARAMETERS, metadata={"tags": ["parameters"]}),
         new_markdown_cell(sp.SETUP_TEXT),
-        new_code_cell(SETUP),
+        new_code_cell(sp.IMPORTS),
+        new_code_cell(GRID_IMPORTS),
         new_markdown_cell(GRID_TEXT),
         new_code_cell(GRID),
         new_markdown_cell(SETTING_TEXT),
