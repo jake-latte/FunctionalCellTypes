@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -73,3 +73,8 @@ which lands after `readout-post-activations`; this item does not touch the loss.
 same configs as before" criterion is tested as equality of the expanded `Config` objects against the
 previous `SweepConfig` expansion (or a dump made at the branch base), NOT against pinned hash strings.
 The SLURM hazard is gone (the PI cancelled the arrays), so this branch may change anything it needs.
+
+## Sequencing note (PM, 2026-10-29)
+`spatial_tiny` / `spatial_n_scan` state `weight_lambda` under the `lambda_w / (2 beta)` convention
+(0.2 and 60). That convention lands with `prior-scaling-convention`; until it is merged the loss
+is still `lambda_w x form` and these presets must not be run (the prior would be 2 beta too strong).
