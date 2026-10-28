@@ -403,32 +403,44 @@ def relu_orthant_check(Sigma_inv, M, lambda_r, max_P=20, chunk=2**14) -> Orthant
 ```
 
 **The relu tilt rule.** With psi = phi = relu the exponent on the orthant whose active set is S is
-h^T Sigma^-1 h + h_S^T T_SS h_S (T = M + lambda_r I). `project_tilt` enforces, like the Gaussian rule, Sigma^-1 + T > 0: the
-condition of the all-active orthant (S = every unit), delta-scaled as Sigma^1/2 T Sigma^1/2 >= -(1 - delta) I. What it is:
-- not sufficient: another orthant can fail (hand-built example in `tests/test_hmc.py`: Sigma^-1 = [[1, .8], [.8, 1]],
-  M = diag(-.5, 10) passes the rule, and the exponent is negative along h = (1, -.8)). The backstops are the samplers' Stein
-  mismatch and ESS checks, the step validation (h^2 blow-up, divergences) and the tilt tripwire;
-- necessary only when the negative direction of Sigma^-1 + T can be taken inside the positive orthant. On the orthant itself
-  normalisability needs Sigma^-1 + T to be (strictly) copositive, which positive definiteness over-asks: a tilt whose offending
-  direction has mixed signs is normalisable and is still cut. This is what happens to learning tilts -2c A Y Y^T A with
-  centred targets.
+h^T Sigma^-1 h + h_S^T T_SS h_S (T = M + lambda_r I). `project_tilt` enforces positive definiteness of Sigma^-1 + T, like
+the Gaussian rule and delta-scaled as Sigma^1/2 T Sigma^1/2 >= -(1 - delta) I. Its exact content: the Gaussian density that
+equals the relu one on the all-active orthant is normalisable. For the relu density it is neither necessary nor sufficient:
+- it over-cuts: on the all-active orthant normalisability needs only strict copositivity of Sigma^-1 + T, so a tilt whose
+  offending direction has mixed signs is normalisable and still cut. Learning tilts -2c A Y Y^T A with centred targets are
+  of this kind;
+- it under-cuts: the other orthants are not checked, so non-normalisable tilts are admitted (hand-built example in
+  `tests/test_hmc.py`: Sigma^-1 = [[1, .8], [.8, 1]], M = diag(-.5, 10) passes the rule and the exponent is negative along
+  h = (1, -.8); and on the exemplar, below). The samplers' Stein mismatch and ESS checks, the step validation (h^2 blow-up,
+  divergences) and the tilt tripwire are meant to catch those, and on the exemplar they did not.
 Measured on the exemplar's relu problem (`tests/test_relu_tilt.py`; P = 20, prior_scale 5, rate_tilt 0.02; the prior has rank
-2, so a scan over the plane it spans decides normalisability exactly): the learning tilt at the untilted prior's arc-cosine
-kernel (leading eigenvalue -0.93) is not normalisable, and the rule cuts it to a normalisable one keeping 25 % of the leading
-eigenvalue (the orthant floor it replaced, lambda(T) >= -(1 - delta) lambda_min(Sigma^-1), kept 12 %); 0.4 x that tilt
-(-0.37, where the floor kept 31 %, the review's 33 %) is normalisable and the rule keeps 59 %; along 40 outer steps of solves
-from the lazy and from the net start every Phi_hat the rule admitted was normalisable by the plane scan. Those solves do not
-converge (residuals 5 to 200 with the projection idle): solver step control, not the rule. Regime: the rule is the exact
-Gaussian condition on the active units; expect it to cut part of a strong, mixed-sign relu tilt and to admit nothing that the
-all-active orthant forbids, with the other orthants left to the backstops.
+2, so a scan over the plane it spans decides normalisability, given a bound on the off-plane jitter that the test asserts):
+- the learning tilt at the untilted prior's arc-cosine kernel (leading eigenvalue -0.93) is not normalisable; the rule cuts
+  it to a normalisable one keeping 25 % of the leading eigenvalue (the orthant floor it replaced,
+  lambda(T) >= -(1 - delta) lambda_min(Sigma^-1), kept 12 %). 0.4 x that tilt (-0.37, where the floor kept 31 %, the
+  review's 33 %) is normalisable, and the rule keeps 59 % of it;
+- with solver.eta_max = 0.1 (lazy start, HMC at the notebook's sizes) the rule admits non-normalisable tilts. At outer step
+  5 the margin is +0.19 and the plane minimum -0.007; the chains escape (h^2/prior 3e3), the next step backtracks 21 times,
+  the Stein mismatch jumps to 1.14 and the residual goes 1.3, 4.5, 16, 63, 92 over the following steps. From step 55 to 79
+  the margin rides the delta floor (+0.005), the projection fires every step, and 17 of those 25 admitted densities are not
+  normalisable while the Stein mismatch (0.05 to 0.6), h^2/prior (2 to 3.4) and the step validation flag nothing. A tilt on
+  the floor leaves the all-active direction a precision of about 0.005 (standard deviation about 14 against the prior's
+  about 3), on which HMC diverges. This runaway is driven by the rule;
+- the default-step solves (lazy and net start) admitted only normalisable tilts over the 40 outer steps scanned, and so did
+  the eta_phi 0.01 (lazy) and eta_max 0.1 (net start) runs at their ends; those runaways have the step-control signature
+  (Stein mismatch near 1 with a normalisable density, residual climbing to 30 to 200), though the projection still fires on
+  about half the steps from 18 to 60 of the default net-start solve. They are `solver-inner-step-control`'s.
+Regime: positive definiteness on the active units; expect it to cut part of a strong, mixed-sign relu tilt, and to admit,
+once the iteration pushes a tilt to the delta floor, densities that another orthant makes non-normalisable.
 
 `relu_orthant_check` is the per-orthant oracle: K_S = (Sigma_SS)^-1 + T_SS > 0 for every non-empty S (the minimum of the
 exponent over the inactive coordinates is h_S^T K_S h_S). A pass proves normalisability; a violated orthant only flags,
 because neither the inactive coordinates' minimiser nor h_S is held to the orthant's signs (an indefinite copositive K_S is
-flagged too). On the exemplar it flags 20 of the 2^20 orthants of the projected analytic tilt (worst eigenvalue -0.003) and
-2 % of a late solve's Phi_hat, where the plane scan proves both normalisable: false alarms. Cost: 2^P eigen-decompositions of
-P x P matrices, batched by padding each K_S to P x P; about 15 s at P = 20 on a CPU, doubling per unit, so P > max_P (20)
-raises ValueError. It is a diagnostic, not part of the solver loop.
+flagged too). The size of a flag says nothing either way: on the exemplar it flags 20 of the 2^20 orthants of the projected
+analytic tilt (worst eigenvalue -0.003) and 2 % (worst -0.38) of a late net-start solve's Phi_hat, both normalisable by the
+plane scan, and 619367 of 2^20 (worst -1.9) of the eta_max 0.1 solve's final Phi_hat, which is not. Cost: 2^P
+eigen-decompositions of P x P matrices, batched by padding each K_S to P x P; about 15 s at P = 20 on a CPU, doubling per
+unit, so P > max_P (20) raises ValueError. It is a diagnostic, not part of the solver loop.
 
 ## importance.py
 
