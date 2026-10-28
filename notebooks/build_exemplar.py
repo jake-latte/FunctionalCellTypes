@@ -53,13 +53,14 @@ $\\lambda_w / 2$ (one half only for unit prior scale). The solver's defaults are
 the theory is that of the distribution the net was sampled from.
 
 **Is the solve converged?** Judge it by the numbers printed under the final figures, not by the
-figures alone: the residual of the $\\hat\\Phi$ fixed point (it should fall towards its Monte
-Carlo floor, which it has not reached at the default length: it is of order 0.1 to 0.5, not
-0.01), the sampler's effective sample size, and the kernel scales of the theory and the net. The
-default `INIT = "net"` starts the iteration at the net's own kernels, so the agreement of scale
-at the end is partly inherited from the start; with `INIT = "lazy"` the same 40 steps end with
-the theory's kernels about a quarter smaller than the net's and a residual still near 0.76. The
-train MSE of the theory is that of the mean predictor, which is below that of one sampled net,
+figures alone: the residual of the $\\hat\\Phi$ fixed point over the last outer steps, whether the
+inner loop converged at every outer step (the solver-health panels), the sampler's effective sample
+size, and the kernel scales of the theory and the net. At the defaults the residual settles at 0.06
+to 0.2 under HMC and mostly below 0.1 under importance sampling (with isolated rises to 0.3 or 0.4),
+after a transient in the first steps while the iteration leaves the net's kernels; that is its Monte
+Carlo floor with 512 chains, not 0.01. The default `INIT = "net"` starts at the net's own kernels,
+but `INIT = "lazy"` ends at the same point: the agreement of scale is not inherited from the start.
+The train MSE of the theory is that of the mean predictor, which is below that of one sampled net,
 whose weights fluctuate at temperature $1/\\beta$.
 
 **Sizes.** The defaults are tiny, so that training and a solve each take seconds on a CPU: $P = 20$
@@ -67,9 +68,9 @@ points, 6 features, 2 latents, one hidden layer of 128 units, $\\beta = 10$. The
 sampler (`SAMPLER = "importance"`) draws from the prior, which makes it a small-$P$, mild-tilt
 tool: its effective sample size falls as the solve moves the kernels away from the prior, and
 the solver raises `InadequateSamplerError` when it drops below its floor instead of continuing on
-a degenerate estimate. With these settings it stays above the floor for the 40 outer steps of its
-default; it is not run longer (it raised at step 45 of an 80-step run), and at $P = 24$ it does
-not complete. HMC (`SAMPLER = "hmc"`) does not draw from the prior and has no such floor."""
+a degenerate estimate. With these settings, and at $P = 24$, it stays far above the floor for
+its 80 outer steps (an effective sample size of at least 70 % of the draws). HMC
+(`SAMPLER = "hmc"`) does not draw from the prior and has no such floor."""
 
 TASK_AND_NET = """CACHE_ROOT = None  # directory for the cached runs; None reads $FCT_CACHE_ROOT
 # task: a linear teacher with m features and k latents
@@ -147,7 +148,7 @@ TRAIN_PLOTS = """show(
 SOLVER = """SAMPLER = "hmc"  # "hmc" (persistent chains) or "importance" (draws from the prior)
 INIT = "net"  # initial kernels: "net" (the trained net's), "lazy" or "gaussian"
 N_OUTER_HMC = 80  # outer descent steps on the kernels
-N_OUTER_IMPORTANCE = 40  # it raised InadequateSamplerError at step 45 of an 80-step run
+N_OUTER_IMPORTANCE = 80  # outer descent steps under importance sampling
 PLOT_EVERY = 5  # refresh the live figures every this many outer steps
 SOLVER_SEED = 0
 SOLVE_LOG_INT = 1  # outer steps between log lines

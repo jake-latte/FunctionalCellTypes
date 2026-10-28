@@ -99,10 +99,14 @@ enters the hash by value.
 
 The meanfield section enters every hash as `MeanFieldConfig.hash_payload()`, not as its nested dump: the problem fields
 and the solver fields that existed before the sampler choice (`config.LEGACY_SOLVER_FIELDS`, `log_int` and `save_int`
-included) in one flat dict, which is exactly how the section was hashed before it was split, so every existing meanfield
-result keeps its hash. `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
+included) in one flat dict, which is how the section was hashed before it was split. The step-control fields
+(`config.STEP_CONTROL_FIELDS`: `inner_step_control`, `eta_max_phihat`, `phi_step_scale`, `inner_start`) are added each
+only when it differs from its value in `config.STEP_CONTROL_LEGACY` (`health`, 1, `trace`, `previous`: with
+`eta_max = 1` the plain Algorithm 1): a config that sets those values explicitly keeps the hash it had before the
+fields existed (`tests/fixtures/legacy_config.json` does), while one that leaves them unset gets the new defaults, a
+different iteration, and a new hash, as does every config with the new default `eta_max` (0.25). `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
 `sampler="importance"`: switching sampler makes a result stale, importance settings never touch an HMC result. Every
-solver field is in exactly one of the two lists or in `config.UNHASHED_SOLVER_FIELDS` (`tilt_tripwire_resid`, `tilt_tripwire_steps`, a check on
+solver field is in exactly one of the three lists or in `config.UNHASHED_SOLVER_FIELDS` (`tilt_tripwire_resid`, `tilt_tripwire_steps`, a check on
 the result that changes no number of it; a test enforces it), so a new field has to be given a hash rule explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
 cache stale.
 
@@ -156,10 +160,17 @@ class SolverConfig(BaseModel):        # how it is solved
     sampler: Literal["hmc", "importance"] = "hmc"
     # Algorithm 1 (defaults = notebook cell 25 / solve() signature)
     n_outer: int = 300; n_inner_max: int = 30; inner_tol: float = 1e-2; inner_tol_mc: float = 2.0
-    eta_phi: float = 0.05; eta_phihat: float = 0.05; eta_max: float = 1.0; eta_grow: float = 1.1
+    eta_phi: float = 0.05; eta_phihat: float = 0.05; eta_max: float = 0.25; eta_grow: float = 1.1
     max_backtrack: int = 8; eta_min_rel: float = 1e-3; max_div_frac: float = 0.02
     max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
+    # step control (STEP_CONTROL_FIELDS, hashed when not at STEP_CONTROL_LEGACY; see meanfield.py "Step control").
+    # eta_max caps only the outer step size; the inner one is capped by eta_max_phihat, so a smaller inner step is set
+    # there, not through eta_max
+    inner_step_control: Literal["health", "progress"] = "progress"; eta_max_phihat: float = 0.25
+    phi_step_scale: Literal["trace", "kernel"] = "kernel"; inner_start: Literal["previous", "target"] = "target"
+    # STEP_CONTROL_LEGACY ("health", 1, "trace", "previous") with eta_max = 1 is the plain Algorithm 1
+    # (tests/pinned_runs.LEGACY_STEP_CONTROL reproduces its pinned solves bit for bit)
     tilt_tripwire_resid: float = 0.9; tilt_tripwire_steps: int = 3   # not hashed: the tilt tripwire (see solve), not a convergence test
     pd_floor_rel: float = 1e-8; inv_floor_rel: float = 1e-4
     # sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition; also max_div_frac, eps_collapse)
@@ -420,7 +431,9 @@ Measured on the exemplar's relu problem (`tests/test_relu_tilt.py`; P = 20, prio
   it to a normalisable one keeping 25 % of the leading eigenvalue (the orthant floor it replaced,
   lambda(T) >= -(1 - delta) lambda_min(Sigma^-1), kept 12 %). 0.4 x that tilt (-0.37, where the floor kept 31 %, the
   review's 33 %) is normalisable, and the rule keeps 59 % of it;
-- with solver.eta_max = 0.1 (lazy start, HMC at the notebook's sizes) the rule admits non-normalisable tilts. At outer step
+- with solver.eta_max = 0.1 (lazy start, HMC at the notebook's sizes; measured under the legacy step control, which
+  `tests/pinned_runs.LEGACY_STEP_CONTROL` with eta_max = eta_max_phihat = 0.1 replays exactly) the rule admits
+  non-normalisable tilts. At outer step
   5 the margin is +0.19 and the plane minimum -0.007; the chains escape (h^2/prior 3e3), the next step backtracks 21 times,
   the Stein mismatch jumps to 1.14 and the residual goes 1.3, 4.5, 16, 63, 92 over the following steps. From step 55 to 79
   the margin rides the delta floor (+0.005), the projection fires every step, and 17 of those 25 admitted densities are not
@@ -520,9 +533,64 @@ def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor
     # FileNotFoundError if there is no result, StaleCacheError if the config (or MODEL_VERSION / LOSS_VERSION) changed
 ```
 
+Step control (`SolverConfig` defaults; each part can be switched back, see the config section):
+- Inner step (`inner_step_control="progress"`): a sampler run validates the inner step before it on sampler health
+  and, in addition, on progress: a step after which the layer's inner residual ||<psi psi^T> - Phi|| / ||Phi|| exceeds
+  the smallest residual accepted so far in that ascent by more than the convergence tolerance of the point before the
+  step, max(inner_tol, min(inner_tol_mc x MC error, 0.5)), is reverted (tilt and chain state) and retried with half
+  the step size, not below eta_min_rel x eta_phihat (a step at the floor is accepted, so Monte Carlo noise cannot
+  stall the ascent; the floor also bounds halvings after a health revert, so a step that still breaks the sampler at
+  the floor is retried there until max_backtrack raises; under "health" halving has no floor; the log says when a
+  layer sits at it). The reference is the smallest accepted residual, not the last, so a run of small accepted rises
+  cannot let the residual creep up; the margin is the tolerance because the residuals are noisy estimates (the
+  smallest a lucky low one), and a strict "did not rise" ratchets eta_phihat down to its floor. The Monte Carlo part
+  of the tolerance is capped at 0.5 (`meanfield.INNER_TOL_MC_CAP`): a kernel off by half its size is not converged
+  however noisy its estimate, and uncapped, a pure-noise layer (MC error 0.98, residual 0.999) was reported converged.
+  The step size grows by eta_grow only after an accepted step, up to `eta_max_phihat` (0.25) per layer. Without the
+  progress test a step that took the residual from 0.04 to 0.42 was accepted, the chains lagged the tilt and the
+  exemplar diverged.
+- Outer step (`phi_step_scale="kernel"`): Phi_l -= eta Phi_l dS/dPhi_l Phi_l instead of eta c_l^2 dS/dPhi_l
+  (c_l = tr Phi_l / P). For a Gaussian layer the tilt follows the kernel as dPhi_hat = -Phi^-1 dPhi Phi^-1, so this is
+  the Newton direction for Phi_hat(Phi) = T at fixed T (eta = 2 a full Newton step; a test checks it), and the two scales
+  coincide exactly when Phi_l = c_l I (a test checks that too). The trace scale was far too small along the top
+  eigenvectors of a low-rank kernel (the exemplar's tanh kernel: eigenvalues 4.4 and 2.1, the rest below 0.07,
+  c^2 = 0.1). `eta_max`, which caps only the outer step size (`eta_max_phihat` caps the inner one), defaults to 0.25: a
+  bounded phi responds to the tilt several times more weakly than a Gaussian (0.3 of it at the exemplar's kernel,
+  measured), so its Newton step is near eta = 0.6, and at eta = 1 the exemplar's kernel wandered by up to 13 %.
+- Last-layer start (`inner_start="target"`): every inner ascent of the last layer restarts at T = Pi(-2c A Y Y^T A),
+  its Stein target at the current Phi_L (exact, a function of Phi_L only; Pi the tilt projection, whose change enters
+  `tilt_projected_rel`). The inner residual pins Phi_hat_L only along directions the kernel responds to; along the
+  others every inner step adds Monte Carlo noise that nothing removes, and continued across outer steps it grew the
+  exemplar's ||Phi_hat_L|| from 0.44 to 0.8-1.4 against a fixed point of 0.41 (Frobenius fixed-point residual 1 to 3)
+  while Phi itself sat within 2 to 4 % of an independent reference. Restarted at T it cannot pile up. What the iteration
+  then is: steps are validated at the next run, so the ascent always ends with at least one step past its last
+  measurement, and the outer gradient run sees Phi_hat_L = T + D, D the inner steps from T; on most outer steps the
+  residual at T is already below tolerance and D is the single step eta_hat (<psi psi^T>_T - Phi_L) / (2 c^2). The outer
+  step (eta / 2) Phi_L D Phi_L is then a damped stochastic Picard step of Phi_L towards <psi psi^T> under T (for a
+  Gaussian layer, Phi <- Phi + (eta eta_hat / 4) (<psi psi^T>_T - Phi) up to the c^2 factor). So the recorded
+  fixed-point residual ||Phi_hat_L - T|| / ||T|| of the last layer measures D and scales with eta_hat: it is not that
+  layer's convergence measure. `history["picard_resid"]` is: ||<psi psi^T>_T - Phi_L|| / ||Phi_L||, the inner
+  residual of the ascent's first run (the log prints it as `picard=`, the solver-health figure and the exemplar's
+  summary show it). Near convergence it matches the exact value to its Monte Carlo error; after a large move of T it
+  reads low for a step or two, because the chains, equilibrated under the previous tilt, lag the restart (the
+  weak-response test measures both). Hidden layers continue from their previous tilt (their target is itself a Monte
+  Carlo estimate). Not solved by any of this: a bounded phi at L >= 2. The exemplar at L = 2 ends in
+  `UnconvergedSolveError` under the legacy and the new control alike; the hidden layer's Stein target
+  sym(<u h^T>_{l+1} Phi_l^-1) inverts a nearly rank-two kernel (eigenvalues floored only at inv_floor_rel x lambda_max),
+  and its fixed-point residual is about 1200 already at the net's kernels.
+- What it costs a Gaussian layer: with eta capped at 0.25 the L = 1 linear test problem approaches its analytic saddle
+  more slowly than with the legacy control (distance 0.054 after 10 outer steps against 0.019) and ends as close (0.015
+  against 0.013 after 40; `tests/test_meanfield_step_control.py` pins a lag below 0.1 at every step and the end points
+  within 0.01). A weak-response tanh layer with a quadrature reference (same file) ends 0.042 to 0.046 from it after 30
+  outer steps (five seeds), where the legacy control stays 0.110 to 0.119 away.
+
 History values are stored per outer step; arrays become lists for saving. The
-history keys are those of the notebook's `keys` list plus `is_max_weight` and `tilt_projected_rel` (per layer, the largest
-relative change ||Pi(x) - x|| / ||x|| the tilt projection made to an inner step of that outer step; 0 without projection)
+history keys are those of the notebook's `keys` list plus `is_max_weight`, `picard_resid` (a scalar: the last
+layer's residual at its Stein target, NaN unless `inner_start="target"`; see Step control), `n_accepted_inner` / `n_rejected_inner` (per
+layer, the inner steps of that outer step accepted, and reverted because the residual rose; `n_backtrack_inner` counts
+those reverted for sampler health) and `tilt_projected_rel` (per layer, the largest
+relative change ||Pi(x) - x|| / ||x|| the tilt projection made to an inner step of that outer step, or to the last layer's
+start; 0 without projection)
 (`meanfield.HISTORY_KEYS`),
 except that `align_net` / `dist_net` are omitted when `solve` is given no net (instead of
 lists of `None`). Both samplers fill every key: under importance sampling `hmc_ess_frac` is the Kish ESS fraction,
@@ -640,7 +708,9 @@ fig_solver_history(history) -> Figure                 # the notebook's plot_hist
                                                       # "eigenvalues raised to the PD floor" (n_backtrack_inner/outer, n_pd_clamped) joined the dashboard with the live view; layers are labelled from 0 here
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
 fig_solver_health(history); fig_sampler_health(history)   # the live view's two groups of solver_history panels, layers labelled from 1 like fig_layer_kernels (SOLVER_HEALTH_KEYS: residuals, outer step size,
-                                                      # fixed-point residual, train MSE theory vs net, step sizes, backtracking, alignment; SAMPLER_HEALTH_KEYS: HMC acceptance /
+                                                      # fixed-point residual, last layer at its Stein target (picard_resid), train MSE theory vs net, step sizes,
+                                                      # backtracking, rejected inner steps (n_rejected_inner),
+                                                      # PD clamping, normalisability margin, alignment; SAMPLER_HEALTH_KEYS: HMC acceptance /
                                                       # eps / divergences, ESS, importance max weight, MC error); panels the sampler does not record are omitted; ValueError if none are
 fig_layer_kernels({name: (L,P,P) stack}, title="")    # one row per name (e.g. Φ, Φ̂), one column per layer, each panel its own colour scale
 plot_kernel(Phi_l, ax=None, title=""); fig_kernels(Phi_theory, Phi_net, shared_scale=True) -> Figure   # theory vs net kernels per layer; shared_scale=False gives each panel its own colour scale
@@ -1047,7 +1117,7 @@ Limits: the viewer needs positive lambdas. A grid containing lambda = 0 cannot b
 
 Notebook cells, in order: intro, task and net (the `parameters` cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `DATA_SEED`, `N`, `L`, `PHI`, `G`, `NET_SEED`, `PRIOR_COEFF`, `RATE_LAMBDA`), training settings (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup, train, loss / outputs / empirical kernels, solver settings (`SAMPLER`, `INIT`, `N_OUTER_HMC`, `N_OUTER_IMPORTANCE`, `PLOT_EVERY`, `SOLVER_SEED`, `SOLVE_LOG_INT`; HMC: `N_CHAINS`, `WARMUP_TRANS`, `N_TRANS`, `N_TRANS_OUTER`; importance: `N_IMPORTANCE_SAMPLES`; only the chosen sampler's are passed), the live solve and its printed summary, the kernel comparison. The builder reuses `build_spatial.build_main`, `set_parameters` (rewrites one-line `NAME = value` assignments; a name not assigned exactly once is an error) and `execute_notebook`, which is how the tests run it tiny with each sampler.
 
-Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD epochs; HMC 512 chains, 5 / 10 transitions per run, 80 outer steps; importance sampling 40) run the whole notebook in about 20 to 45 s on a CPU (training about 7 s, a solve 3 to 9 s, the rest figures and kernel start-up). Measured (before the tilt tripwire existed, so the solves does raise `UnconvergedSolveError` at the defaults (tilt tripwire; not re-measured, see solver-inner-step-control); not re-measured) at these defaults (seed 0, `init = "net"`): HMC's fixed-point residual of Φ̂ goes 0.225 to 0.17 over 80 steps (0.45 / 0.49 / 0.48 / 0.51 at steps 10 / 20 / 30 / 40, 0.15 at step 60), importance sampling's 0.446 to 0.352 over 40; neither has reached its Monte Carlo floor, so the default solves are **not converged** (the printed summary says "fell" or "rose" from the measured values). The smallest ESS fraction is 0.028 (HMC, step 3) and 0.126 (importance, floor 0.01). The top kernel eigenvalue is 14.4 (HMC) and 13.2 (importance) against 13.2 (net), mean diagonal 0.94 / 0.895 against 0.912; because `init = "net"` starts at the net's kernels this agreement is partly inherited. From `init = "lazy"` the same HMC solve after 40 steps has residual 0.76 and kernels about a quarter too small (10.1 against 13.2, diagonal 0.68 against 0.91), with an ESS fraction down to 0.004. The theory's train MSE (0.031) is that of the mean predictor; the net's kernel-GP mean predictor gives 0.029, one sampled net 0.051. Importance sampling draws from the prior, a small-P, mild-tilt tool: it raised `InadequateSamplerError` at step 45 of an 80-step run from `init = "net"`, and does not complete at P = 24 (hence `N_OUTER_IMPORTANCE = 40`).
+Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD epochs; HMC 512 chains, 5 / 10 transitions per run, 80 outer steps; importance sampling 80) run the whole notebook in about 45 s on a CPU. Measured with the step-controlled solver at these defaults (seed 0, `init = "net"`): every solve finishes under the tilt tripwire with the inner loop converged at every outer step. HMC: the Stein fixed-point residual of Φ̂ is 0.33 at step 0 and 0.91 at step 1 (the inner loop takes 13 steps to fit the tilt to the net's kernel), then 0.05 to 0.31, and 0.06 to 0.20 over the last 30 steps; the largest over the last three is 0.196, its Monte Carlo floor at 512 chains (3 inner steps rejected for progress in 80 outer steps, no sampler-health backtracks, smallest ESS fraction 0.11; the last layer's Picard residual `picard_resid` 0.03 to 0.07 over the last three). Importance sampling: 0.61 at step 0, at most 0.77, then mostly 0.04 to 0.1 (median 0.07 over the last 30 steps, 3 of them above 0.2, up to 0.42; last three at most 0.092), smallest ESS fraction 0.73. From `init = "lazy"` (HMC): transients up to 1.2 in the first 20 steps, then 0.09 to 0.80 (median 0.20 over the last 30 steps; last three at most 0.392, 12 inner steps rejected). The reference `notebooks/exemplar_reference.py` (a damped Picard iteration Phi <- <psi psi^T> under the Stein target of Phi, 8192 chains, run as `python notebooks/exemplar_reference.py CACHE_ROOT`) puts the fixed point 6.4 % from the net's kernel; the solves end 2.1 % (HMC), 2.7 % (HMC from `lazy`) and 1.6 % (importance) from it, so the agreement is not inherited from the start. Top kernel eigenvalue 4.43 / 4.43 / 4.42 against 4.42 (reference), mean diagonal 0.318 to 0.319 against 0.317. The theory's train MSE (0.108) is that of the mean predictor; one sampled net's is 0.110. Importance sampling draws from the prior, a small-P, mild-tilt tool; here, and at P = 24 (smallest ESS fraction 0.91), it stays far above its floor for 80 outer steps. Under `STEP_CONTROL_LEGACY` with eta_max = 1 the default HMC solve diverges (measured: residual 0.33, 0.49, then 32 at step 2 and 20 to 140 after) and ends in `UnconvergedSolveError` (`docs/issues/solver-inner-step-control.md`).
 
 ## spatial_view.py and the spatial-prior notebook
 

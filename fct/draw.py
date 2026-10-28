@@ -108,6 +108,7 @@ SOLVER_PANELS: list[SolverPanel] = [
     SolverPanel("inner_residual", "inner residual  ||⟨ψψᵀ⟩-Φ||/||Φ||", "log"),
     SolverPanel("outer_grad_rel", "outer step size  ||ΔΦ||/||Φ|| (before clipping)", "log"),
     SolverPanel("phihat_fp_resid_stein", "fixed-point residual of Φ̂  (Eq. 31b/c)", "log"),
+    SolverPanel("picard_resid", "last layer at its Stein target  ||⟨ψψᵀ⟩-Φ||/||Φ||", "log"),
     SolverPanel("stein_vs_direct", "Stein vs direct estimate of Φ̂  (sampler equilibrium)", "log"),
     SolverPanel(
         "train_mse_theory", "train MSE: theory (lines) vs net (dashed)", "log", None, _NET_OVERLAY
@@ -122,6 +123,7 @@ SOLVER_PANELS: list[SolverPanel] = [
         None,
         _BACKTRACK_OVERLAY,
     ),
+    SolverPanel("n_rejected_inner", "inner steps rejected: the residual rose", "symlog"),
     SolverPanel("hmc_accept", "HMC acceptance", "linear", 0.75),
     SolverPanel("hmc_eps", "HMC step size ε", "log"),
     SolverPanel("hmc_div", "divergent transitions per run", "symlog"),
@@ -141,8 +143,9 @@ SOLVER_N_COLS = 4
 # converging, and is the sampler under it trustworthy. Panels a sampler does not record
 # (all-NaN columns) are left out, so one list serves both samplers.
 SOLVER_HEALTH_KEYS = (
-    "inner_residual", "outer_grad_rel", "phihat_fp_resid_stein", "train_mse_theory",
-    "eta_phihat", "n_backtrack_inner", "n_pd_clamped", "norm_margin", "align_net",
+    "inner_residual", "outer_grad_rel", "phihat_fp_resid_stein", "picard_resid",
+    "train_mse_theory", "eta_phihat", "n_backtrack_inner", "n_rejected_inner", "n_pd_clamped",
+    "norm_margin", "align_net",
 )  # fmt: skip
 SAMPLER_HEALTH_KEYS = (
     "hmc_accept", "hmc_eps", "hmc_div", "hmc_ess_frac", "is_max_weight", "hmc_mc_err",

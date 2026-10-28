@@ -12,7 +12,7 @@ import math
 import pytest
 import torch
 
-from fct.config import default_config, load_config, save_config
+from fct.config import STEP_CONTROL_FIELDS, default_config, load_config, save_config
 from tests.pinned_runs import (
     FIXTURES,
     HASHES_FILE,
@@ -60,6 +60,19 @@ def test_legacy_config_file_loads_and_keeps_its_hashes():
     assert cfg == legacy_config()
     assert cfg.section_hash("meanfield") == pins["meanfield"]
     assert cfg.section_hash(*MEANFIELD_RESULT_SECTIONS) == pins["result"]
+
+
+def test_a_config_file_without_the_step_control_fields_takes_the_new_defaults(tmp_path):
+    """Written before the fields existed, it solves with the default step control, a different
+    result, so it must not keep its hash."""
+    raw = json.loads(LEGACY_CONFIG_FILE.read_text())
+    for key in STEP_CONTROL_FIELDS:
+        del raw["meanfield"][key]
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(raw))
+    cfg = load_config(path)
+    assert cfg.meanfield.solver.inner_step_control == "progress"
+    assert cfg.section_hash(*MEANFIELD_RESULT_SECTIONS) != _pinned_hashes()["legacy"]["result"]
 
 
 def test_legacy_config_rewritten_in_the_current_layout_keeps_its_hashes(tmp_path):
