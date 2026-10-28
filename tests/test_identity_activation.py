@@ -91,6 +91,16 @@ def test_spatial_grid_notebook_runs_on_an_id_setting(trained_root):
     assert _n_figures_in(nb) == N_FIGURES
 
 
+def test_spatial_tiny_id_trains_with_the_presets_own_sgld(tmp_path):
+    """The PI's path: the preset's SGLD and epochs untouched; the loss stays finite."""
+    init = ["sweep", "init", str(tmp_path), "--preset", "spatial_tiny", "--axis", 'net.phi=["id"]']
+    assert main(init) == 0
+    assert main(["sweep", "run", str(tmp_path)]) == 0
+    for s in expand(load_sweep(tmp_path)):
+        run, _ = load_grid_run(select_setting(tmp_path, s.axes))
+        assert all(math.isfinite(v) for v in run.history["loss"]), s.axes
+
+
 # ---------------------------------------------------------------- lrplot
 def test_lrplot_draws_id_in_its_own_colour():
     rows = _table(lambda task, L: 1e-3)
@@ -102,7 +112,8 @@ def test_lrplot_draws_id_in_its_own_colour():
 
 # ---------------------------------------------------------------- solver on an iid id setting
 def test_iid_id_solve_stage_completes_with_a_finite_residual(tmp_path):
-    """The solver treats `id` as its Gaussian (linear) case; the solve finishes, not garbage."""
+    """Only completion and finiteness are checked here; the closed-form saddle of the linear case
+    is checked in test_meanfield (`analytic_saddle`)."""
     base = preset("tiny").model_copy(update={"meanfield": TINY_MEANFIELD})
     sweep = with_grid(base, {"net.phi": ["id"]})
     run_setting(sweep, 0, tmp_path, stage="solve", **QUIET)
