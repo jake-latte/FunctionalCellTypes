@@ -354,10 +354,40 @@ def spatial_n_scan() -> SweepConfig:
     )
 
 
+def spatial_grid() -> SweepConfig:
+    """Grid of spatially embedded linear-teacher nets, N = 512, one hidden layer, SGLD, float64,
+    with the MIR monitor: phi in {id, tanh, relu} x teacher latents in {2, 4} x hidden length
+    scale in {0.05, 0.1, 0.15, 0.2} (24 settings).
+
+    With L = 1 the one hidden kernel is both K^1_post and K^2_pre, so a single length-scale axis
+    ties them; the input and output kernels stay at 0.15.
+
+    weight_lambda 20 is under the lambda_w / (2 beta) convention: 2 beta x 1e-3 at beta 1e4, the
+    same effective prior as lambda_w = 1e-3 when the loss is lambda_w times the prior form.
+
+    `linear_teacher.n_latents` (2) in sweep.json is only the base value; the `data.n_latents`
+    axis wins in every setting.
+
+    Caveat: with min_rel_eig 1e-2 at N = 512, about 500 of the 512 hidden eigenvalues are floored
+    at 1e-2 x lambda_max(K), and lambda_max grows with the length scale. The mean hidden-side
+    prior variance diag(M^-1) is therefore 1.62 / 2.26 / 2.90 / 3.54 for length scales 0.05 / 0.1
+    / 0.15 / 0.2 (diag K = 1): the length-scale axis is confounded with prior strength."""
+    base = spatial_n_scan().model_copy(update={"N": 512, "P": 128, "weight_lambda": 20.0})
+    return with_grid(  # validates the whole sweep, so a wrong axis or value fails here
+        base,
+        {
+            "net.phi": ["id", "tanh", "relu"],
+            "data.n_latents": [2, 4],
+            "spatial.hidden.kernel.length_scale": [0.05, 0.1, 0.15, 0.2],
+        },
+    )
+
+
 # Presets with their own grid and no lambda axes, by name; each takes no argument.
 FIXED_GRID_PRESETS: dict[str, Callable[[], SweepConfig]] = {
     "spatial_tiny": spatial_tiny,
     "spatial_n_scan": spatial_n_scan,
+    "spatial_grid": spatial_grid,
 }
 
 
