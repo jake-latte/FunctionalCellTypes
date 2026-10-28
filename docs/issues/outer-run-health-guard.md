@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: simple
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -77,3 +77,18 @@ Starts after `solver-inner-step-control` merges (same functions).
   bound is not what fires in this replay. The solve still runs away (residual about 1, excursions
   to 6, to step 39, then 7 to 80), so `relu-tilt-rule` is not settled by the guard.
 - Full suite 1600 passed; `ruff check fct tests notebooks`, `ruff format --check fct tests` clean.
+
+## After the review (2026-10-28; mergeable, points applied in 4621608, 6b0a262)
+- UnhealthySolveError lists the failed checks with their values (`_soundness_failures`,
+  `_health_failures`) and which tilt the failing run was at; "1 retry" / "n retries". The
+  inner give-up raises it too (it was a bare RuntimeError).
+- Outer-run retries and drops have their own history columns, `n_retry_outer_run` and
+  `outer_run_dropped` (per layer), and a WARNING log line; `n_backtrack_inner` counts only the
+  inner loop's reverts. A dropped step's projection change stays in `tilt_projected_rel`.
+- config.py and design.md state the hash scope honestly: no hash covers the health checks, so a
+  cached solve they would have changed keeps its hash (no hash moved). Pinned outer-run MC
+  error is 1.75 to 4.31.
+- Follow-ups filed: `meanfield-cache-health-audit`, `meanfield-mc-error-control` (the latter also
+  records that the inner give-up `n_backtrack > max_backtrack x (inner + 1)` cannot fire from
+  `_inner_ascent`, since a layer has at most `inner` backtracks by then).
+- Full suite 1603 passed; both ruff checks clean.
