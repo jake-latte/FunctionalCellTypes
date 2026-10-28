@@ -24,8 +24,9 @@ from fct.tasks import TASK_SPECS
 # train section but is code, not a config field, so it is hashed separately: artefacts made
 # under another definition are rejected as stale instead of mixed with new ones. Increase it
 # whenever the loss changes in a way the TrainConfig fields do not express. History: 1 summed
-# the rate penalty over the samples, 2 averaged it over them, 3 sums it again.
-LOSS_VERSION = 3
+# the rate penalty over the samples, 2 averaged it over them, 3 sums it again, 4 scales the
+# weight prior by 1 / (2 beta) (beta = 1 for Adam).
+LOSS_VERSION = 4
 
 # Version of the network definition (`fct.model.MLP`), folded into every hash that holds the
 # net section, for the same reason: a trained net or a mean-field result made with another
@@ -97,7 +98,9 @@ class NetConfig(StrictModel):
 class TrainConfig(StrictModel):
     n_epochs: NonNegInt = 15_000
     lr: PosFloat = 1e-3
-    weight_lambda: NonNegFloat = 1e-4
+    # The loss carries the weight prior as weight_lambda / (2 beta) * quadratic form, with beta
+    # = `beta` for SGLD and 1 for Adam (`fct.train.prior_coefficient`).
+    weight_lambda: NonNegFloat = 2e-4
     rate_lambda: NonNegFloat = 1e-3
     log_int: PosInt = 100
     save_int: PosInt = 100
@@ -212,8 +215,8 @@ UNHASHED_SOLVER_FIELDS = ("tilt_tripwire_resid", "tilt_tripwire_steps")
 
 class MeanFieldConfig(StrictModel):
     """The mean-field problem: which points, and the constants of the action (`beta`, the
-    prior scale, `alpha`, the learning prefactor, the rate tilt; None means "derived from the
-    train section", see `fct.meanfield`). How it is solved is `solver`.
+    prior scale, `alpha`, the learning prefactor, the rate tilt; None means "follow the
+    network": derived from the train section, see `fct.meanfield.network_constants`). How it is solved is `solver`.
 
     A flat section in the layout used before the split (solver fields next to the problem
     fields) still loads: the solver keys are moved into `solver`. A key given both flat and in
@@ -221,10 +224,10 @@ class MeanFieldConfig(StrictModel):
     """
 
     n_points: PosInt = 100  # solve on the first n_points training points
-    beta: PosFloat = 1e6
+    beta: PosFloat | None = None  # None: train.beta for SGLD, 1 for Adam
     prior_scale: PosFloat | None = None
     alpha: PosFloat | None = None
-    learning_prefactor: PosFloat = 0.5
+    learning_prefactor: PosFloat | None = None
     rate_tilt: NonNegFloat | None = None
     solver: SolverConfig = SolverConfig()
 

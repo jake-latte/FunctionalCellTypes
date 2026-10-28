@@ -54,9 +54,9 @@ LEGACY_CONFIG_FILE = FIXTURES / "legacy_config.json"
 LEGACY_OVERRIDES = {
     "data": {"P": 64, "D_in": 8},
     "net": {"N": 16, "L": 2},
-    "train": {"rate_lambda": 1e-2},
+    "train": {"rate_lambda": 1e-2, "weight_lambda": 1e-4},
     "meanfield": {
-        "n_points": 20, "beta": 1e3, "rate_tilt": 1e-4, "alpha": 0.3,
+        "n_points": 20, "beta": 1e3, "rate_tilt": 1e-4, "alpha": 0.3, "learning_prefactor": 0.5,
         "n_chains": 64, "eps0": 0.1, "init": "gaussian", "log_int": 1, "save_int": 3,
         "precondition": False, "seed": 4,
     },
@@ -106,14 +106,11 @@ def legacy_config():
     return Config.model_validate(LEGACY_OVERRIDES)
 
 
-def write_fixtures() -> None:
-    """Write every fixture; run only with the code whose behaviour is to be pinned."""
-    from fct.config import default_config, save_config
+def write_hash_fixture() -> None:
+    """Write `meanfield_hashes.json`: the hashes change with LOSS_VERSION / MODEL_VERSION (the
+    train and net sections enter them), the solves do not, so a version bump needs only this."""
+    from fct.config import default_config
 
-    FIXTURES.mkdir(exist_ok=True)
-    for name in PINNED_SOLVES:
-        torch.save(pinned_solve_payload(pinned_solve(name)), FIXTURES / f"hmc_solve_{name}.pt")
-    save_config(legacy_config(), LEGACY_CONFIG_FILE)
     hashes = {
         label: {
             "meanfield": cfg.section_hash("meanfield"),
@@ -122,3 +119,14 @@ def write_fixtures() -> None:
         for label, cfg in (("default", default_config()), ("legacy", legacy_config()))
     }
     HASHES_FILE.write_text(json.dumps(hashes, indent=2) + "\n")
+
+
+def write_fixtures() -> None:
+    """Write every fixture; run only with the code whose behaviour is to be pinned."""
+    from fct.config import save_config
+
+    FIXTURES.mkdir(exist_ok=True)
+    for name in PINNED_SOLVES:
+        torch.save(pinned_solve_payload(pinned_solve(name)), FIXTURES / f"hmc_solve_{name}.pt")
+    save_config(legacy_config(), LEGACY_CONFIG_FILE)
+    write_hash_fixture()

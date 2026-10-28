@@ -65,9 +65,9 @@ what is plotted.
   stored (post, pre), are $W_1 = U$ of shape $(N, m)$, $W_l = J_{l-1}$, and $W_{L+1} = V^\top$.
   The rates are $r^{(l)}_{i\mu} = \phi(h^{(l)}_{i\mu})$.
 - Loss (`fct/train.py`):
-  $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \lambda_w \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \lambda_r \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
+  $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \frac{\lambda_w}{2\beta} \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \lambda_r \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
   with $\mathrm{mse} = \frac{1}{P m} \sum_\mu \lVert y_\mu - \hat y_\mu \rVert^2$,
-  $\lambda_w$ = `WEIGHT_LAMBDA`, $\lambda_r$ = `RATE_LAMBDA`; the penalty matrices $M$ are
+  $\lambda_w = 2\beta\,$`PRIOR_COEFF` (derived from the loss coefficient `PRIOR_COEFF` $= \lambda_w / 2\beta$, so SGLD and Adam train the same loss), $\lambda_r$ = `RATE_LAMBDA`, $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
   defined in the spatial prior section.
 
 Set `CACHE_ROOT` in the first cell. The run is cached under it in a directory named by a hash of
@@ -87,7 +87,7 @@ PHI = "tanh"  # "tanh", "relu" or "sigmoid"
 G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights
-WEIGHT_LAMBDA = 3e-3  # multiplies the spatial weight penalty
+PRIOR_COEFF = 3e-3  # coefficient of the spatial weight penalty in the loss
 RATE_LAMBDA = 1e-4  # multiplies the rate penalty
 DEVICE = "cpu"  # "cpu", "cuda" or "auto"; these nets are tiny"""
 
@@ -151,10 +151,10 @@ Weight layer $l$ maps population pre to population post, and its prior covarianc
 $K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l$. The penalty uses the inverse with floored
 eigenvalues: from $K^p = \sum_j \lambda_j v_j v_j^\top$,
 $$M^p = \sum_j \max(\lambda_j,\, \epsilon\, \lambda_{\max})^{-1}\, v_j v_j^\top, \qquad \epsilon = \texttt{MIN\_REL\_EIG},$$
-and the loss term is $\lambda_w \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top)$.
+and the loss term is $\frac{\lambda_w}{2\beta} \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top)$ ($\beta = 1$ for Adam).
 Under SGLD at inverse temperature $\beta$ the stationary law $\propto e^{-\beta \mathcal{L}}$ makes the
 prior alone
-$$\mathrm{vec}(W_l) \sim \mathcal{N}\big(0,\ (2 \beta \lambda_w)^{-1}\, K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l\big)$$
+$$\mathrm{vec}(W_l) \sim \mathcal{N}\big(0,\ \lambda_w^{-1}\, K^{\mathrm{post}}_l \otimes K^{\mathrm{pre}}_l\big)$$
 up to the floor (exactly, with $K^p$ replaced by $(M^p)^{-1}$). These kernels are over *units*:
 they are a prior on the weights, not the mean-field kernels $\Phi^{(l)}$ over *samples* of
 `fct/meanfield.py`. Under this prior those kernels gain a pair of unit indices; they are shown,
@@ -184,7 +184,7 @@ CFG = make_config(
     g=G,
     data_seed=DATA_SEED,
     net_seed=NET_SEED,
-    weight_lambda=WEIGHT_LAMBDA,
+    weight_lambda=PRIOR_COEFF * 2 * (1.0 if OPTIMIZER != "sgld" else BETA),
     rate_lambda=RATE_LAMBDA,
     optimizer=OPTIMIZER,
     beta=BETA,
@@ -202,18 +202,18 @@ A smooth kernel has eigenvalues down to round-off, so the floor $\epsilon$ is wh
 finite. It sets the largest penalty eigenvalue of a population, and that of a layer is the
 product of those of its two factors, so the floor enters squared:
 $$\lambda_{\max}(M^p) = \frac{1}{\epsilon\, \lambda_{\max}(K^p)}, \qquad \lambda_{\max}(M_l) = \lambda_{\max}(M^{\mathrm{post}}_l)\, \lambda_{\max}(M^{\mathrm{pre}}_l) = \frac{1}{\epsilon^2\, \lambda_{\max}(K^{\mathrm{post}}_l)\, \lambda_{\max}(K^{\mathrm{pre}}_l)}.$$
-The prior term has curvature $2 \lambda_w \lambda_{\max}(M_l)$ along its stiffest direction, and
+The prior term has curvature $(\lambda_w / \beta)\, \lambda_{\max}(M_l)$ along its stiffest direction, and
 an Euler step of size lr on a quadratic diverges once lr times its curvature reaches 2, so SGLD
 needs (and `fct.train` refuses to start otherwise)
-$$\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l) < 1 \quad \text{for every layer } l.$$
+$$\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) < 1 \quad \text{for every layer } l.$$
 At the defaults (rings of 12 input, 16 hidden and 12 output units, $\ell = 0.15$, $A = 1$,
 $\epsilon = 10^{-2}$), $\lambda_{\max}(K) \approx 4.51$ for 12 units and $6.02$ for 16, so
 $\lambda_{\max}(M_l) \approx 1 / (\epsilon^2 \cdot 4.51 \cdot 6.02) = 1 / (10^{-4} \cdot 4.51 \cdot 6.02) \approx 368$ and
-$\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l) \approx 10^{-2} \cdot 3 \cdot 10^{-3} \cdot 368 \approx 0.011$:
+$\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 10^{-2} \cdot 3 \cdot 10^{-3} \cdot 368 \approx 0.011$ (`PRIOR_COEFF` $= 3 \cdot 10^{-3}$):
 both optimisers are stable and 2000 epochs take seconds on a CPU. The library default
 $\epsilon = 10^{-6}$ would make both $10^8$ times larger ($\lambda_{\max}(M_l) \approx 3.7 \cdot 10^{10}$,
-$\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l) \approx 1.1 \cdot 10^6$); a larger network or a lower floor needs a
-smaller `LR` or `WEIGHT_LAMBDA`. The tables give the numbers for the current settings."""
+$\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 1.1 \cdot 10^6$); a larger network or a lower floor needs a
+smaller `LR` or `PRIOR_COEFF`. The tables give the numbers for the current settings."""
 
 FLOOR = r"""def top_eigenvalue(matrix):
     return torch.linalg.eigvalsh(matrix)[-1].item()
@@ -237,12 +237,12 @@ population_table = [
 layer_table = [
     (
         r"| layer $l$ | $\lambda_{\max}(M_l)$ "
-        r"| $\mathrm{lr}\, \lambda_w\, \lambda_{\max}(M_l)$ (SGLD needs < 1) |"
+        r"| $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l)$ (SGLD needs < 1) |"
     ),
     "|---|---|---|",
     *(
         f"| {s.layer + 1} ({s.pre.name} to {s.post.name}) | {stiffness(s):.3g} "
-        f"| {LR * WEIGHT_LAMBDA * stiffness(s):.3g} |"
+        f"| {LR * PRIOR_COEFF * stiffness(s):.3g} |"
         for s in SPACES
     ),
 ]
@@ -325,7 +325,7 @@ display(
 LOSS_TEXT = r"""## Loss curves
 
 The loss and its three raw terms, as logged during training, against epoch on a log axis:
-$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \lambda_w\, \Omega_w + \lambda_r\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
+$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \lambda_r\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
 The terms are drawn unweighted, so they do not add up to the $\mathcal{L}$ curve; a term that is zero at
 every epoch has no point on a log axis and is marked "(zero)" in the legend. Under SGLD the
 curves settle to a noisy stationary level rather than to a minimum."""
@@ -415,11 +415,11 @@ $$\hat K^{\mathrm{post}} = U U^\top / m, \qquad \hat K^{\mathrm{pre}} = U^\top U
 shown next to the prior's $K^{\mathrm{post}}$ and $K^{\mathrm{pre}}$, every matrix with its units
 sorted by ring position. Under the prior alone (SGLD, ignoring the floor)
 $\mathrm{vec}(U) \sim \mathcal{N}(0, c\, K^{\mathrm{post}} \otimes K^{\mathrm{pre}})$ with
-$c = (2 \beta \lambda_w)^{-1}$, so
+$c = \lambda_w^{-1}$, so
 $\mathbb{E}[\hat K^{\mathrm{post}}] = c\, A_{\mathrm{pre}}\, K^{\mathrm{post}}$ and
 $\mathbb{E}[\hat K^{\mathrm{pre}}] = c\, A_{\mathrm{post}}\, K^{\mathrm{pre}}$ ($A$ the kernel
 amplitude, the diagonal of $K$): the comparison holds up to that scale, so each panel has its own
-colour scale (Adam has no $\beta$, and only the shapes compare). These are second moments of the
+colour scale (Adam samples no such law: its prior is the $\beta = 1$ case, and only the shapes compare). These are second moments of the
 trained *weights* over *units*, not the mean-field kernels $\Phi^{(l)}$ of `fct/meanfield.py`, which
 are activity kernels between *samples* (with a pair of unit indices under a spatial prior), shown
 in their own section below.

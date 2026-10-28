@@ -41,21 +41,23 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
   choice) the sampler only works for small P / mild tilts (at the default n_points = 100 it raises). Both
   fields enter the importance result hash.
 - Spatial prior: with the default `SpatialConfig` (min_rel_eig 1e-6, N = 100) the SGLD stability check
-  rejects every default lr * weight_lambda (needs < 6e-10) and Adam starts from a prior term of order 1e9;
+  rejects every default lr * weight_lambda / (2 beta) (needs < 6e-10) and Adam starts from a prior term of order 1e9;
   the notebook uses min_rel_eig 1e-2, N = 16. Open for the PI: eigenvalue floor vs nugget, and drawing the
   initial weights from the prior. The history key `weight_l2` holds the prior's value in spatial runs.
-- **SGLD theory constants (exemplar review, PI decision pending).** The library's mean-field constants
-  (`prior_scale = 1/weight_lambda`, `alpha = weight_lambda P d_out / beta`, `rate_tilt = rate_lambda`, data-term
-  prefactor 1/2) describe the SGLD stationary law exp(-beta L) only at beta = 1/2 and prior_scale = 1. The
-  matching constants are prior_scale = 1/(2 beta weight_lambda), alpha = 2 weight_lambda P d_out,
-  rate_tilt = 2 beta rate_lambda, learning_prefactor = 1/(2 prior_scale); `fct.exemplar.sgld_theory_constants`
-  returns them and the exemplar notebook uses them (weight variance 4.81 vs 5.00 predicted; closed-form check on
-  the linear L=1 net). `run_meanfield`'s defaults are UNCHANGED, so every other mean-field result (grid solves,
-  pinned fixtures) still uses the old constants. Decide whether the library should adopt the mapping.
+- **SGLD theory constants and the prior scaling convention (PI decisions 2026-10-28, done in `prior-scaling-convention`).**
+  The loss carries the weight prior as `weight_lambda / (2 beta) * tr(M_post W M_pre W^T)` (`beta = train.beta` under SGLD, 1
+  under Adam; `LOSS_VERSION` 4), so the SGLD stationary law exp(-beta L) has `vec(W) ~ N(0, K / weight_lambda)` for every beta.
+  Every earlier `weight_lambda` maps to the same effective loss by x 2 beta (SGLD) or x 2 (Adam); the library default is now 2e-4
+  and the spatial and exemplar notebooks take the loss coefficient `PRIOR_COEFF` (3e-3, 1e-2) and derive `weight_lambda = 2 beta PRIOR_COEFF` (beta = 1 for Adam), so SGLD and Adam train the same loss. DECIDED: the mean-field solver's defaults follow the network
+  (`fct.meanfield.network_constants`): `prior_scale = 1/weight_lambda`, `alpha = weight_lambda P d_out / beta`,
+  `rate_tilt = 2 beta rate_lambda`, `learning_prefactor = weight_lambda/2`, `beta = train.beta` (SGLD) or 1 (Adam); explicit
+  `MeanFieldConfig` fields win. All four are exact for SGLD (a test on the exemplar's weight variance per beta, and one on `run_meanfield`'s defaults with the
+  library's own `meanfield.beta = None`, which follows `train.beta`, or 1 under Adam). Every earlier mean-field result is stale. Still open: the `phase_transition` preset's `weight_lambda` axis
+  (log-spaced 1e-6..1) was not rescaled.
 - Exemplar notebook: the solves are not converged at the default 40/80 outer steps (residual still falling);
   the importance sampler only works for small P (default P = 20; raises at 24).
 - Grid solve: `jobs/fct_solve.sh` duplicates the sbatch header of `jobs/fct_sweep.sh` (keep them in step by hand).
-- Mean-field rate tilt defaults to `rate_lambda` (exact for the summed penalty); `meanfield.rate_tilt` overrides.
+- Mean-field rate tilt defaults to `2 beta rate_lambda` (see above); `meanfield.rate_tilt` overrides.
 This was decided in `remove-rate-penalty-p-scaling`, not by the PI.
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};
   a group's MI is the SUM of its members' MIs; what-where = {where, what}; linear teacher = one group

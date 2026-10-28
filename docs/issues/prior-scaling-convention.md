@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: simple
-status: in progress
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -36,3 +36,16 @@ must be re-derived under the new convention and the result written into `docs/de
   net's closed-form weight variance, as the exemplar notebook does), or the remaining discrepancy is
   documented with its reason.
 - Tests CPU only; ruff clean; `docs/design.md` states the convention with the equation.
+
+## Resolution
+
+All `weight_lambda` values are stated under the new convention. An old value maps to the same
+effective loss by x 2 beta (SGLD) or x 2 (Adam, beta = 1): the library default is 2e-4 (was 1e-4), the
+notebooks take the old-convention loss coefficient as `PRIOR_COEFF` (spatial 3e-3, exemplar 1e-2) and derive `weight_lambda = 2 beta PRIOR_COEFF` (beta = 1 under Adam).
+The `spatial_tiny` / `spatial_n_scan` presets (3e-3 -> 60) are updated on the `spatial-sweep` branch;
+the `phase_transition` preset's `weight_lambda` axis (log-spaced 1e-6..1) is NOT rescaled.
+
+The mean-field solver's defaults follow the network (`fct.meanfield.network_constants`, `resolve_beta`):
+prior_scale = 1/weight_lambda, alpha = weight_lambda P d_out / beta, rate_tilt = 2 beta rate_lambda,
+learning_prefactor = weight_lambda / 2, beta = train.beta (SGLD) or 1 (Adam); explicit `meanfield`
+fields still win, so `exemplar_config` no longer overrides them.

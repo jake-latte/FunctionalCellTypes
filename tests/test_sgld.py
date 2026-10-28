@@ -13,15 +13,15 @@ from fct.config import LOSS_VERSION, Config, DataConfig, NetConfig, TrainConfig,
 from fct.data import make_dataset
 from fct.model import make_net
 from fct.sgld import SGLD
-from fct.train import compute_loss, train
+from fct.train import compute_loss, prior_coefficient, train
 
 CPU, F64 = torch.device("cpu"), torch.float64
 
 # Hashes of the default config (adam), which the SGLD-only fields must not move. They are those
-# of MODEL_VERSION 2 without `meanfield.readout`; at MODEL_VERSION 1 the train hash is the one
+# of LOSS_VERSION 4, MODEL_VERSION 2 without `meanfield.readout`; at MODEL_VERSION 1 the train hash is the one
 # written before the optimiser fields existed (test_spatial_prior pins it).
-DEFAULT_TRAIN_HASH = "e57a540044c4"
-DEFAULT_TRAIN_MEANFIELD_HASH = "3de5750865bd"
+DEFAULT_TRAIN_HASH = "542a8cb8b9da"
+DEFAULT_TRAIN_MEANFIELD_HASH = "537a47c2faeb"
 
 
 # ---------------------------------------------------------------- the optimiser itself
@@ -203,7 +203,7 @@ def test_adam_training_is_bit_for_bit_the_plain_adam_loop(tmp_path):
     optim = torch.optim.Adam(ref.parameters(), lr=cfg.train.lr)
     for _ in range(cfg.train.n_epochs):
         optim.zero_grad()
-        loss, _ = compute_loss(ref, ds.x, ds.y, cfg.train.weight_lambda, cfg.train.rate_lambda)
+        loss, _ = compute_loss(ref, ds.x, ds.y, prior_coefficient(cfg.train), cfg.train.rate_lambda)
         loss.backward()
         optim.step()
     assert _same_params(trained, ref)
@@ -243,7 +243,7 @@ def test_sgld_is_gradient_descent_as_beta_grows(tmp_path):
     ds, ref = _setup(cfg)
     for _ in range(10):
         ref.zero_grad()
-        loss, _ = compute_loss(ref, ds.x, ds.y, cfg.train.weight_lambda, cfg.train.rate_lambda)
+        loss, _ = compute_loss(ref, ds.x, ds.y, prior_coefficient(cfg.train), cfg.train.rate_lambda)
         loss.backward()
         with torch.no_grad():
             for p in ref.parameters():

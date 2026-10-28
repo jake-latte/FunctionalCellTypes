@@ -36,6 +36,7 @@ from fct.train import (
     compute_loss,
     load_trained,
     make_weight_penalty,
+    prior_coefficient,
     spatial_weight_penalty,
     train,
 )
@@ -44,7 +45,7 @@ CPU, F64 = torch.device("cpu"), torch.float64
 
 # ---------------------------------------------------------------- pins of runs without the prior
 
-# Section hashes of three configs without a spatial prior, from the MODEL_VERSION 2 code: the
+# Section hashes of three configs without a spatial prior, from the LOSS_VERSION 4, MODEL_VERSION 2 code: the
 # spatial section must not enter them when it is unset.
 SMALL = Config(
     data=DataConfig(P=16, D_in=4, d=2, embedding="linear", seed=1),
@@ -56,14 +57,14 @@ SMALL = Config(
 TRAIN = ("data", "net", "train")
 ANALYSIS = ("data", "net", "train", "analysis")
 HASH_PINS = [
-    (default_config(), {TRAIN: "e57a540044c4", ANALYSIS: "bbc2a4d80777"}),
+    (default_config(), {TRAIN: "542a8cb8b9da", ANALYSIS: "bd9eb0126f20"}),
     (
         Config(train=TrainConfig(optimizer="sgld", beta=2.0)),
-        {TRAIN: "8f5228781355", ANALYSIS: "59259573ee75"},
+        {TRAIN: "90fbfc347a8b", ANALYSIS: "d15368ec62ec"},
     ),
-    (SMALL, {TRAIN: "722559e81fd2", ANALYSIS: "f92664f6400a"}),
+    (SMALL, {TRAIN: "5a456f800eb7", ANALYSIS: "4eb572dcf97e"}),
 ]
-# compute_loss on the SMALL net (weight_lambda=0.1, rate_lambda=1e-3) and the squared norm of
+# compute_loss on the SMALL net (prior coefficient 0.1, rate_lambda=1e-3) and the squared norm of
 # each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output V^T phi(h^L) / N).
 LOSS_PIN = "0x1.f4f7158364a70p+5"
 GRAD_SQ_PINS = {
@@ -378,7 +379,7 @@ def test_adam_training_with_the_prior_is_the_plain_adam_loop_on_the_spatial_loss
     optim = torch.optim.Adam(ref.parameters(), lr=tc.lr)
     for _ in range(tc.n_epochs):
         optim.zero_grad()
-        loss, _ = compute_loss(ref, ds.x, ds.y, tc.weight_lambda, tc.rate_lambda, penalty)
+        loss, _ = compute_loss(ref, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)
         loss.backward()
         optim.step()
     assert _same_params(trained, ref)
@@ -429,13 +430,14 @@ def test_resume_with_the_prior_equals_the_uninterrupted_run(tmp_path, optimizer)
 
 def test_sgld_with_a_step_beyond_the_priors_stability_limit_fails_before_training(tmp_path):
     # The hidden-to-hidden layer of PRIOR on SMALL has lambda_max(M_post) lambda_max(M_pre)
-    # ~ 4e4, so lr * weight_lambda = 1e-4 puts the step at ~4 times the limit.
-    cfg = _train_cfg(optimizer="sgld", weight_lambda=1e-2)
+    # ~ 4e4, so lr * weight_lambda / (2 beta) * lambda_max = 1e-2 * 1 / 100 * 4e4 = 4 (beta = 50)
+    # is ~4 times the limit.
+    cfg = _train_cfg(optimizer="sgld", weight_lambda=1.0)
     ds, net = _setup(cfg)
     with pytest.raises(ValueError, match="diverges on the spatial prior"):
         train(cfg, ds, net, tmp_path, log=lambda s: None)
     assert not any(tmp_path.rglob("*.pt"))
-    adam = _train_cfg(optimizer="adam", weight_lambda=1e-2)  # Adam rescales its steps
+    adam = _train_cfg(optimizer="adam", weight_lambda=1.0)  # Adam rescales its steps
     assert make_weight_penalty(adam, net)(net) > 0
 
 

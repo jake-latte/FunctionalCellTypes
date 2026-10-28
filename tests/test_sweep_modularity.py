@@ -7,7 +7,7 @@ expanded to (in order), the directory and the swept values that code produced (e
 `test_it_builds_the_same_configs`, are the independent check against the pre-grid code.
 
 Each row's `train_hash` is NOT from that code: it is the `section_hash("data", "net", "train")`
-of the setting's config computed by the current code (LOSS_VERSION 3, MODEL_VERSION 2), a pin
+of the setting's config computed by the current code (LOSS_VERSION 4, MODEL_VERSION 2), a pin
 that catches an unintended hash change. The hash test sets both versions, so a deliberate
 version change does not make it fail.
 """
@@ -30,7 +30,7 @@ from fct.sweep import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-FIXTURE_LOSS_VERSION, FIXTURE_MODEL_VERSION = 3, 2
+FIXTURE_LOSS_VERSION, FIXTURE_MODEL_VERSION = 4, 2
 ROOT = Path("root")
 
 

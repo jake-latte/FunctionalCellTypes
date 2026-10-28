@@ -353,8 +353,13 @@ class Interrupted(Exception):
 
 
 def resume_cfg(sample_dtype="float64"):
+    # The tilt and prefactor are pinned: these solver tests were tuned (importance-sampling ESS
+    # margins, step-size reverts) at tilt 1e-3 and prefactor 1/2, not at the network's 2 beta
+    # lambda_r and lambda_w / 2.
     return MeanFieldConfig(
         beta=1e3,
+        rate_tilt=1e-3,
+        learning_prefactor=0.5,
         n_chains=64,
         n_outer=4,
         save_int=2,
@@ -560,10 +565,10 @@ def test_net_kernels_reject_more_points_than_data():
 
 @pytest.mark.parametrize(
     "rate_lambda, tilt, expected",
-    [(1e-3, None, 1e-3), (0.0, None, 0.0), (1e-3, 1e-4, 1e-4)],
-    ids=["default-is-rate_lambda", "no-penalty", "explicit-override"],
+    [(1e-3, None, 2.0), (0.0, None, 0.0), (1e-3, 1e-4, 1e-4)],
+    ids=["default-is-2-beta-rate_lambda", "no-penalty", "explicit-override"],
 )
-def test_run_meanfield_tilts_with_rate_lambda_unless_overridden(
+def test_run_meanfield_tilts_with_two_beta_rate_lambda_unless_overridden(
     tmp_path, monkeypatch, rate_lambda, tilt, expected
 ):
     cfg = small_config()

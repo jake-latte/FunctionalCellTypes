@@ -29,7 +29,7 @@ from fct.spatial import build_spaces, parameter_factors, weight_quadratic_form
 
 History = dict[str, list]  # monitor entries are lists over layers, the rest numbers
 Monitor = Callable[[MLP], dict[str, list]]
-WeightPenalty = Callable[[MLP], Tensor]  # the weight term of the loss, before weight_lambda
+WeightPenalty = Callable[[MLP], Tensor]  # the prior's quadratic form, before its coefficient
 MONITOR_PREFIX = "monitor_"  # history keys of monitor results: monitor_epoch, monitor_<key>
 MONITOR_EPOCH = f"{MONITOR_PREFIX}epoch"
 _HISTORY_KEYS = ("epoch", "mse", "weight_l2", "rate_l2", "loss")
@@ -39,15 +39,31 @@ _SGLD_KEYS = ("grad_norm", "param_msd")
 _REQUIRED_KEYS = ("epoch", "net_state_dict", "optim_state_dict", "history", "rng_state")
 
 
+def prior_coefficient(tc: TrainConfig) -> float:
+    """weight_lambda / (2 beta): the coefficient of the weight prior's quadratic form in the loss.
+
+    beta is the SGLD inverse temperature `tc.beta`, and 1 for Adam (which has no temperature).
+    The SGLD stationary law is exp(-beta L), so dividing by beta here leaves the prior
+    exp(-weight_lambda/2 * form), i.e. weights N(0, K / weight_lambda), for every beta, while
+    the data and rate terms of the law carry the factor beta.
+    """
+    beta = tc.beta if tc.optimizer == "sgld" else 1.0
+    return tc.weight_lambda / (2.0 * beta)
+
+
 def compute_loss(
     net: MLP,
     x: Tensor,
     y: Tensor,
-    weight_lambda: float,
+    prior_coefficient: float,
     rate_lambda: float,
     weight_penalty: WeightPenalty = MLP.weight_l2,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    """0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2, plus its parts.
+    """0.5*N*mse + prior_coefficient*weight_l2 + rate_lambda*rate_l2, plus its parts.
+
+    `prior_coefficient` multiplies the prior's quadratic form: callers pass
+    `prior_coefficient(train_config)` (= weight_lambda / (2 beta)), never the raw
+    `train.weight_lambda`.
 
     `rate_l2` is the squared rates phi(h) summed over samples, neurons and layers, so it grows
     with the number of samples P. `weight_l2` is `weight_penalty(net)`: by default the plain
@@ -61,7 +77,7 @@ def compute_loss(
     mse = (y - z).square().mean()
     weight_l2 = weight_penalty(net)
     rate_l2 = net.phi(h).square().sum()
-    loss = 0.5 * net.N * mse + weight_lambda * weight_l2 + rate_lambda * rate_l2
+    loss = 0.5 * net.N * mse + prior_coefficient * weight_l2 + rate_lambda * rate_l2
     parts = {"mse": mse, "weight_l2": weight_l2, "rate_l2": rate_l2, "loss": loss}
     return loss, {k: v.detach() for k, v in parts.items()}
 
@@ -79,9 +95,9 @@ def _check_sgld_step_resolves_the_prior(
 ) -> None:
     """Raise if an SGLD step of size lr is unstable on the prior term alone.
 
-    weight_lambda * tr(M_rows W M_cols W^T) has curvature 2 weight_lambda lambda_max(M_rows)
-    lambda_max(M_cols) along its stiffest direction, and an Euler step on a quadratic of
-    curvature c diverges once lr * c >= 2. A wide kernel makes lambda_max large (up to
+    c * tr(M_rows W M_cols W^T), with c = `prior_coefficient(tc)` = weight_lambda / (2 beta),
+    has curvature 2 c lambda_max(M_rows) lambda_max(M_cols) along its stiffest direction, and an
+    Euler step on a quadratic of curvature k diverges once lr * k >= 2. A wide kernel makes lambda_max large (up to
     1 / min_rel_eig over the largest eigenvalue of K), so this fails at the start instead of
     after the run has filled with NaN. Passing it is necessary, not sufficient: the data and
     rate terms add curvature of their own. Adam rescales its steps and needs no such check.
@@ -90,11 +106,12 @@ def _check_sgld_step_resolves_the_prior(
         torch.linalg.eigvalsh(rows)[-1].item() * torch.linalg.eigvalsh(cols)[-1].item()
         for rows, cols in factors.values()
     )
-    if tc.lr * tc.weight_lambda * stiffest >= 1:
+    step = tc.lr * prior_coefficient(tc) * stiffest
+    if step >= 1:
         raise ValueError(
-            f"SGLD with lr={tc.lr:g} diverges on the spatial prior alone: lr * weight_lambda * "
-            f"lambda_max(M) = {tc.lr * tc.weight_lambda * stiffest:.3g} must be < 1 "
-            f"(lambda_max(M) = {stiffest:.3g}); lower lr or weight_lambda, or widen the floor "
+            f"SGLD with lr={tc.lr:g} diverges on the spatial prior alone: lr * weight_lambda / "
+            f"(2 beta) * lambda_max(M) = {step:.3g} must be < 1 (lambda_max(M) = "
+            f"{stiffest:.3g}); lower lr or weight_lambda, raise beta, or widen the floor "
             "min_rel_eig"
         )
 
@@ -233,7 +250,7 @@ def _step(
     also the gradient norm and the step's mean squared displacement)."""
     optim.zero_grad()
     loss, parts = compute_loss(
-        net, dataset.x, dataset.y, tc.weight_lambda, tc.rate_lambda, weight_penalty
+        net, dataset.x, dataset.y, prior_coefficient(tc), tc.rate_lambda, weight_penalty
     )
     loss.backward()
     if isinstance(optim, SGLD):

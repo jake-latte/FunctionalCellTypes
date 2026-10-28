@@ -64,7 +64,7 @@ def test_every_task_and_net_setting_is_in_one_cell_and_each_stage_has_its_parame
     task = next(c for c in nb.cells if "parameters" in c.metadata.get("tags", [])).source
     for name in (
         "P =", "M_IN =", "K_LATENTS =", "N =", "L =", "PHI =", "G =", "DATA_SEED =", "NET_SEED =",
-        "WEIGHT_LAMBDA =", "RATE_LAMBDA =",
+        "PRIOR_COEFF =", "RATE_LAMBDA =",
     ):  # fmt: skip
         assert name in task
     code = _code(nb)
@@ -76,7 +76,7 @@ def test_every_task_and_net_setting_is_in_one_cell_and_each_stage_has_its_parame
 def test_the_text_says_why_the_sizes_are_small_and_what_importance_sampling_needs():
     intro = build_notebook().cells[0].source
     assert "InadequateSamplerError" in intro and "small-$P$" in intro
-    assert "sgld_theory_constants" in intro  # the mapping the theory is compared under
+    assert "network_constants" in intro  # the mapping the theory is compared under
 
 
 def test_set_parameters_rewrites_one_assignment_and_keeps_its_comment():
