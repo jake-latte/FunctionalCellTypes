@@ -38,3 +38,10 @@ majority the checks never touch; auditing the cached history finds the affected 
   exemplar's defaults).
 - design.md (cache section) states what is audited, what cannot be (h2 growth), and why the
   hash does not cover it. Full suite green; ruff clean.
+
+## Also (from the re-review of outer-run-health-guard)
+- The eps-collapse check cannot be audited either: `eps_ref` (the warm-up step size) is not
+  stored in the history. Name it alongside h2 growth as not checkable.
+- A checkpoint saved before `n_retry_outer_run` / `outer_run_dropped` existed resumes without
+  those columns for the whole history, including steps run under the guard (`_outer_step`
+  appends only keys the restored history has). Backfill them with NaN on restore, or document it.

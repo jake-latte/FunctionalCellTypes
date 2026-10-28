@@ -46,3 +46,10 @@ sampler ends the ascent at n_inner_max instead of raising `UnhealthySolveError`.
 - A unit test drives `_inner_ascent` into the inner give-up and gets `UnhealthySolveError`.
 - The tanh exemplar at its defaults and the analytic saddle tests stay within their pinned
   tolerances; design.md documents the rule. Full suite green; ruff clean.
+
+## Also (from the re-review of outer-run-health-guard)
+- Wording: at the give-up check a layer has at most `inner + 1` backtracks (the counter is
+  incremented first), not `inner`; the conclusion (unreachable) is unchanged.
+- `_unhealthy_outer_run_message` ends with the "Chains far above the prior's scale..." hint
+  even when only ESS or divergence checks failed; make the hint conditional on the h2 checks.
+- `fct/meanfield.py:1323` (solve docstring) is 102 columns.
