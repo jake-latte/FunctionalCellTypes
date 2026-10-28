@@ -105,8 +105,14 @@ only when it differs from its value in `config.STEP_CONTROL_LEGACY` (`health`, 1
 `eta_max = 1` the plain Algorithm 1): a config that sets those values explicitly keeps the hash it had before the
 fields existed (`tests/fixtures/legacy_config.json` does), while one that leaves them unset gets the new defaults, a
 different iteration, and a new hash, as does every config with the new default `eta_max` (0.25). `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
-`sampler="importance"`: switching sampler makes a result stale, importance settings never touch an HMC result. Every
-solver field is in exactly one of the three lists or in `config.UNHASHED_SOLVER_FIELDS` (`tilt_tripwire_resid`, `tilt_tripwire_steps`, a check on
+`sampler="importance"`: switching sampler makes a result stale, importance settings never touch an HMC result. The
+health bounds (`config.HEALTH_BOUND_FIELDS`: `max_h2_prior_ratio`) are added each only when it differs from its default
+in `config.HEALTH_BOUND_DEFAULTS` (100), so the default hashes are those of a solver without the bound. No hash covers
+the health checks themselves: the check of the outer-gradient run (`meanfield._outer_run`, below) and the bound can
+change the result of an existing config wherever they trip (an outer run with escaped chains, divergences, resets, a
+step-size collapse or an ESS drop), and a cached solve written by code without them keeps its hash. Solves they never
+trip are unchanged (the pinned solves and the tanh exemplar at its defaults, checked number for number). Every
+solver field is in exactly one of the four lists or in `config.UNHASHED_SOLVER_FIELDS` (`tilt_tripwire_resid`, `tilt_tripwire_steps`, a check on
 the result that changes no number of it; a test enforces it), so a new field has to be given a hash rule explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
 cache stale.
 
@@ -163,6 +169,7 @@ class SolverConfig(BaseModel):        # how it is solved
     eta_phi: float = 0.05; eta_phihat: float = 0.05; eta_max: float = 0.25; eta_grow: float = 1.1
     max_backtrack: int = 8; eta_min_rel: float = 1e-3; max_div_frac: float = 0.02
     max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
+    max_h2_prior_ratio: float = 100.0   # ||h||^2/P above this x the prior's is unhealthy (hashed only off 100)
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
     # step control (STEP_CONTROL_FIELDS, hashed when not at STEP_CONTROL_LEGACY; see meanfield.py "Step control").
     # eta_max caps only the outer step size; the inner one is capped by eta_max_phihat, so a smaller inner step is set
@@ -433,13 +440,17 @@ Measured on the exemplar's relu problem (`tests/test_relu_tilt.py`; P = 20, prio
   review's 33 %) is normalisable, and the rule keeps 59 % of it;
 - with solver.eta_max = 0.1 (lazy start, HMC at the notebook's sizes; measured under the legacy step control, which
   `tests/pinned_runs.LEGACY_STEP_CONTROL` with eta_max = eta_max_phihat = 0.1 replays exactly) the rule admits
-  non-normalisable tilts. At outer step
-  5 the margin is +0.19 and the plane minimum -0.007; the chains escape (h^2/prior 3e3), the next step backtracks 21 times,
-  the Stein mismatch jumps to 1.14 and the residual goes 1.3, 4.5, 16, 63, 92 over the following steps. From step 55 to 79
-  the margin rides the delta floor (+0.005), the projection fires every step, and 17 of those 25 admitted densities are not
-  normalisable while the Stein mismatch (0.05 to 0.6), h^2/prior (2 to 3.4) and the step validation flag nothing. A tilt on
-  the floor leaves the all-active direction a precision of about 0.005 (standard deviation about 14 against the prior's
-  about 3), on which HMC diverges. This runaway is driven by the rule;
+  non-normalisable tilts. At outer step 5 the inner ascent's trailing step goes to a tilt with margin +0.19 and plane
+  minimum -0.007. With its outer-gradient run accepted unchecked (measured at ae3dd45, which has no such check) the chains escaped
+  (h^2/prior 3e3), the next step backtracked 21 times, the Stein mismatch jumped to 1.14 and the residual went 1.3, 4.5,
+  16, 63, 92; from step 55 to 79 the margin rode the delta floor (+0.005), the projection fired every step, and 17 of
+  those 25 admitted densities were not normalisable while the Stein mismatch (0.05 to 0.6), h^2/prior (2 to 3.4) and the
+  step validation flagged nothing. A tilt on the floor leaves the all-active direction a precision of about 0.005
+  (standard deviation about 14 against the prior's about 3), on which HMC diverges. With the check, the outer-gradient
+  run rejects that step (its h^2 growth alone, about 3e3, trips the check), retakes it at half size (plane minimum
+  +0.03, h^2/prior 2.3), and none of the 80 tilts the solve goes on with is non-normalisable by the plane scan; the
+  solve still runs away (fixed-point residual about 1, with excursions to 6, to step 39, then 7 to 80), so the guard
+  does not settle the rule. This runaway is driven by the rule;
 - the default-step solves (lazy and net start) admitted only normalisable tilts over the 40 outer steps scanned, and so did
   the eta_phi 0.01 (lazy) and eta_max 0.1 (net start) runs at their ends; those runaways have the step-control signature
   (Stein mismatch near 1 with a normalisable density, residual climbing to 30 to 200), though the projection still fires on
@@ -504,7 +515,12 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # layer, SingleSiteHMC (solver.sampler="hmc", bit-for-bit the pre-split solver) or ImportanceSampler ("importance").
     # A sampler run validates the step before it (backtracking): HMC on divergences / resets / step-size collapse,
     # importance on an ESS drop (ess_frac < min_ess_drop x the ess_frac of the accepted point before the step), both on
-    # ||h||^2/P blow-up and MC error > max_mc_err. Under importance sampling every accepted point (the initial point after
+    # ||h||^2/P blow-up (growth > max_h2_growth since the point before, or above max_h2_prior_ratio x the prior's) and
+    # MC error > max_mc_err. The outer-gradient run validates the inner ascent's trailing step the same way, MC error
+    # excepted (see "Outer-run health guard" below). When backtracking cannot cure a run, inner or outer,
+    # UnhealthySolveError (a RuntimeError, a one-line error in the CLI, naming the failed checks and their values) is
+    # raised before any final.pt is written.
+    # Under importance sampling every accepted point (the initial point after
     # warm-up, each validated inner step, each outer-gradient run) must have ess_frac >= min_ess_frac, else
     # InadequateSamplerError (a RuntimeError) is raised before any final.pt is written: the ESS is a property of the
     # point, so backtracking cannot cure it, and carrying on would freeze the iteration at its start.
@@ -583,12 +599,38 @@ Step control (`SolverConfig` defaults; each part can be switched back, see the c
   against 0.013 after 40; `tests/test_meanfield_step_control.py` pins a lag below 0.1 at every step and the end points
   within 0.01). A weak-response tanh layer with a quadrature reference (same file) ends 0.042 to 0.046 from it after 30
   outer steps (five seeds), where the legacy control stays 0.110 to 0.119 away.
+- Outer-run health guard (`max_h2_prior_ratio`, `meanfield._outer_run`): a step is validated by the run after it, so
+  every inner ascent ends with a step it never measured, and the outer-gradient run is the first run at that tilt. That
+  run is held to the step validation (`_sampler_sound`: h^2 growth and the absolute bound, HMC divergences / resets /
+  step-size collapse, importance ESS drop); when it fails, the trailing step is reverted (tilt and chain state) and
+  retaken at half the step size, up to max_backtrack times. Under inner_step_control="progress" halving stops at
+  eta_min_rel x eta_phihat; a step that still fails there is dropped (back to the validated point before it). A run
+  that fails with nothing left to try (after max_backtrack retries, at that validated point, or with no trailing step)
+  raises `UnhealthySolveError`, whose message names the checks that failed with their values and the tilt the failing
+  run was at (the retaken step, the validated point, or the ascent's last point). Retries and drops are recorded per
+  layer in `history["n_retry_outer_run"]` and `history["outer_run_dropped"]` and logged as a WARNING line; the inner
+  loop's own reverts stay in `n_backtrack_inner`, and `tilt_projected_rel` keeps the projection change of a dropped
+  step (it was an inner step of that outer step). (An importance test with eta_phihat 1e4 reaches the floor: its
+  trailing step collapses the ESS at every size down to it.) The MC error is not checked there: it is a property of
+  the sample size, not of the step, so no revert cures it (the pinned 32-chain solves sit at 1.75 to 4.31 in every
+  outer run, above max_mc_err = 1). Why the outer run: on the exemplar's relu problem with eta_max = 0.1 (see "The relu tilt
+  rule" above) the inner loop of outer step 5 had converged and its trailing step went to a tilt that is not
+  normalisable; an unchecked outer-gradient run samples it at h^2/prior 2977, and its gradients drive the residual
+  from 1.3 to 92 (the replay with `max_h2_prior_ratio` and the outer check absent). Progress-based inner acceptance cannot see this: the inner rule never sees that run. Why an absolute
+  bound: max_h2_growth bounds only the jump from the accepted point before, so a scale that climbs in steps of less than
+  10x, or a run that starts escaped, passes it. Legitimate h^2/prior: 1.3 (tanh exemplar, every run of its HMC and
+  importance solves), up to about 3 (relu near-misses), 5.6 (L = 2 tanh); escaped chains 3e3. The bound at 100 never
+  binds on the tanh exemplar at its defaults (both samplers, measured: largest h^2/prior 1.33 over every run checked,
+  no retries), the analytic Gaussian saddle tests or the weak-response tanh test (all three assert it; largest
+  outer-run h^2/prior 1.1 to 1.3).
 
 History values are stored per outer step; arrays become lists for saving. The
 history keys are those of the notebook's `keys` list plus `is_max_weight`, `picard_resid` (a scalar: the last
 layer's residual at its Stein target, NaN unless `inner_start="target"`; see Step control), `n_accepted_inner` / `n_rejected_inner` (per
 layer, the inner steps of that outer step accepted, and reverted because the residual rose; `n_backtrack_inner` counts
-those reverted for sampler health) and `tilt_projected_rel` (per layer, the largest
+those reverted for sampler health), `n_retry_outer_run` / `outer_run_dropped` (per layer, the unsound outer-gradient
+runs before the accepted one, and whether the inner ascent's trailing step was dropped; see "Outer-run health guard")
+and `tilt_projected_rel` (per layer, the largest
 relative change ||Pi(x) - x|| / ||x|| the tilt projection made to an inner step of that outer step, or to the last layer's
 start; 0 without projection)
 (`meanfield.HISTORY_KEYS`),

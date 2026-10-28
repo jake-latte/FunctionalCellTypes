@@ -264,6 +264,19 @@ def test_a_tripped_tilt_tripwire_is_one_line_without_a_traceback(tmp_path, capsy
     assert not (tmp_path / "meanfield" / "final.pt").exists()
 
 
+def test_an_unhealthy_outer_run_is_one_line_without_a_traceback(tmp_path, capsys, monkeypatch):
+    def escape(*args, **kwargs):
+        raise mf.UnhealthySolveError("layer 0: h2/prior 3e+03")
+
+    _init(tmp_path)
+    assert main(["train", str(tmp_path)]) == 0
+    monkeypatch.setattr(mf, "_outer_gradients", escape)
+    capsys.readouterr()
+    assert main(["solve", str(tmp_path)]) == 1
+    assert capsys.readouterr().err.strip() == "error: layer 0: h2/prior 3e+03"
+    assert not (tmp_path / "meanfield" / "final.pt").exists()
+
+
 def test_solve_on_a_spatial_cache_fails_with_one_line_and_writes_nothing(tmp_path, capsys):
     cache = tmp_path / "cache"
     assert _init(cache) == 0

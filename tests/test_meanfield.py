@@ -210,6 +210,16 @@ def test_a_projection_needs_a_known_activation():
         solve(X, Y, 1, 1e-3, 0.0, torch.nn.functional.softplus, 1.0, MeanFieldConfig(), log=silent)
 
 
+def assert_the_scale_bound_never_binds(history) -> None:
+    """Every outer-gradient run sampled h2/prior far below max_h2_prior_ratio, and no step was
+    reverted for sampler health (on the scale bound or anything else)."""
+    ratio = max(float(np.max(r)) for r in history["hmc_h2_ratio"])
+    print(f"largest h2/prior of an outer-gradient run: {ratio:.3g}")
+    assert ratio < 0.1 * MeanFieldConfig().solver.max_h2_prior_ratio
+    assert sum(int(np.sum(b)) for b in history["n_backtrack_inner"]) == 0
+    assert sum(int(np.sum(n)) for n in history["n_retry_outer_run"]) == 0
+
+
 def test_linear_solve_recovers_analytic_saddle(linear_problem, linear_solution):
     X, Y = linear_problem
     result, seconds = linear_solution
@@ -235,6 +245,7 @@ def test_linear_solve_recovers_analytic_saddle(linear_problem, linear_solution):
     # ~0.013 at 100, ~0.009 at 200).
     assert dist < 0.2 * dist_prior
     assert dist < 0.04
+    assert_the_scale_bound_never_binds(h)
 
 
 def test_solve_without_checkpoint_dir_never_writes(linear_problem, monkeypatch):
@@ -627,6 +638,7 @@ def test_importance_solve_recovers_analytic_saddle(linear_problem):
     assert all(np.isnan(v).all() for k in HMC_ONLY_KEYS for v in h[k])
     assert all(0.1 < v[0] <= 1 for v in h["hmc_ess_frac"])
     assert all(0 < v[0] < 1e-3 for v in h["is_max_weight"])
+    assert_the_scale_bound_never_binds(h)
 
 
 def test_hmc_history_has_no_importance_diagnostics(linear_solution):
@@ -682,7 +694,7 @@ def test_an_ess_drop_relative_to_the_point_before_is_unhealthy():
     nan = float("nan")
 
     def healthy(ess_after, ess_before):
-        diag = {"h2_mean": 1.0, "ess_frac": ess_after, "psi_psi_rel_mc_err": 0.01}
+        diag = {"h2_mean": 1.0, "prior_h2": 1.0, "ess_frac": ess_after, "psi_psi_rel_mc_err": 0.01}
         return mf._healthy(diag, 1.0, ess_before, cfg.n_trans, nan, cfg)
 
     assert healthy(0.5, 0.5)

@@ -5,6 +5,8 @@ import torch
 from pydantic import ValidationError
 
 from fct.config import (
+    HEALTH_BOUND_DEFAULTS,
+    HEALTH_BOUND_FIELDS,
     IMPORTANCE_FIELDS,
     LEGACY_SOLVER_FIELDS,
     STEP_CONTROL_FIELDS,
@@ -221,7 +223,10 @@ def test_unknown_meanfield_key_still_raises():
 
 
 def test_every_solver_field_has_a_hash_rule():
-    rules = (LEGACY_SOLVER_FIELDS, IMPORTANCE_FIELDS, UNHASHED_SOLVER_FIELDS, STEP_CONTROL_FIELDS)
+    rules = (
+        LEGACY_SOLVER_FIELDS, IMPORTANCE_FIELDS, UNHASHED_SOLVER_FIELDS, STEP_CONTROL_FIELDS,
+        HEALTH_BOUND_FIELDS,
+    )  # fmt: skip
     assert set(SolverConfig.model_fields) == set().union(*rules)
     assert sum(len(r) for r in rules) == len(SolverConfig.model_fields)  # disjoint
 
@@ -251,6 +256,22 @@ def test_step_control_at_its_plain_values_stays_out_of_the_hash():
     payload = MeanFieldConfig(**STEP_CONTROL_LEGACY).hash_payload()
     assert not set(STEP_CONTROL_FIELDS) & set(payload)
     assert set(STEP_CONTROL_FIELDS) <= set(MeanFieldConfig().hash_payload())
+
+
+def test_the_h2_prior_bound_enters_the_hash_only_off_its_default():
+    """At its default a solve the bound never trips is the solve it was before the bound
+    existed, so the default hash stays; another bound is another solve."""
+    cfg = default_config()
+    assert cfg.meanfield.solver.max_h2_prior_ratio == HEALTH_BOUND_DEFAULTS["max_h2_prior_ratio"]
+    assert not set(HEALTH_BOUND_FIELDS) & set(cfg.meanfield.hash_payload())
+    other = _with_solver(cfg, max_h2_prior_ratio=10.0)
+    assert other.meanfield.hash_payload()["max_h2_prior_ratio"] == 10.0
+    assert other.section_hash(*RESULT_SECTIONS) != cfg.section_hash(*RESULT_SECTIONS)
+
+
+def test_the_h2_prior_bound_must_be_positive():
+    with pytest.raises(ValidationError, match="max_h2_prior_ratio"):
+        MeanFieldConfig(max_h2_prior_ratio=0.0)
 
 
 def test_hmc_hash_ignores_the_importance_settings():
