@@ -102,8 +102,8 @@ and the solver fields that existed before the sampler choice (`config.LEGACY_SOL
 included) in one flat dict, which is exactly how the section was hashed before it was split, so every existing meanfield
 result keeps its hash. `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
 `sampler="importance"`: switching sampler makes a result stale, importance settings never touch an HMC result. Every
-solver field is in exactly one of the two lists (a test enforces it), so a new field has to be given a hash rule
-explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
+solver field is in exactly one of the two lists or in `config.UNHASHED_SOLVER_FIELDS` (`max_final_resid`, a check on
+the result that changes no number of it; a test enforces it), so a new field has to be given a hash rule explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
 cache stale.
 
 ## Saved files
@@ -160,6 +160,7 @@ class SolverConfig(BaseModel):        # how it is solved
     max_backtrack: int = 8; eta_min_rel: float = 1e-3; max_div_frac: float = 0.02
     max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
+    max_final_resid: float = 0.9        # not hashed: solve raises UnconvergedSolveError if the last Stein residual of Phi_hat is >= this
     pd_floor_rel: float = 1e-8; inv_floor_rel: float = 1e-4
     # sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition; also max_div_frac, eps_collapse)
     n_chains: int = 2048; n_trans: int = 2; n_trans_outer: int = 5; n_leap: int = 10
@@ -375,10 +376,13 @@ class SingleSiteHMC      # verbatim port; plus
 def jittered_prior(Sigma, jitter_rel) -> (Sigma_j, chol, inv); def tilt_and_grad(h, M, lambda_r, phi, phi_prime, psi_is_phi) -> (U, u)
 # psi_is_phi: psi = phi(h), which the solver uses on every layer; False gives psi = h, a Gaussian tilt kept for closed-form sampler checks
 def psi_psi_rel_mc_err(psi_psi, psi2_psi2, n_eff); def stein_mismatch(h_h, h_u, Sigma)
-def project_tilt(M, delta, lambda_r, psi_is_phi, Sigma_chol); def normalisability_margin(M64, Sigma_inv, lambda_r, psi_is_phi)
-# project_tilt with psi = phi keeps M + lambda_r I >= delta lambda_r I whatever Sigma is, so with the solver's
-# psi = phi on every layer it removes the negative definite learning tilt of the read-out layer, Phi_hat_L =
-# -2c A Y Y^T A, almost entirely when rate_tilt is small (all of it at 0). Open: see docs/issues/readout-post-activations.md
+def tilt_rule(phi, psi_is_phi) -> "gaussian" | "bounded" | "relu"   # by activations.tilt_class; ValueError for an activation without a rule
+def relu_tilt_spectrum(M, lambda_r, Sigma_inv) -> (w, V, lambda_min(Sigma^-1))   # eigen-decomposition of M + lambda_r I; the relu certificate's pieces
+def project_tilt(M, delta, lambda_r, phi, psi_is_phi, Sigma_chol, Sigma_inv); def normalisability_margin(M64, Sigma_inv, lambda_r, phi, psi_is_phi)
+# by tilt_rule: "gaussian" (psi = h, or a linear phi such as activations.identity): Sigma^-1 + Q > 0, exact, Q = M (+ lambda_r I
+# for a linear phi), projected as Sigma^1/2 Q Sigma^1/2 >= -(1 - delta) I; "bounded" (tanh, sigmoid): no projection, the margin is
+# lambda_min(Sigma^-1); "relu": lambda(M + lambda_r I) >= -(1 - delta) lambda_min(Sigma^-1), the sufficient orthant certificate that
+# normalisability_margin reports (margin = lambda_min(Sigma^-1) + min(0, lambda_min(M + lambda_r I))). An admissible M is returned unchanged.
 ```
 
 ## importance.py
@@ -433,6 +437,9 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # warm-up, each validated inner step, each outer-gradient run) must have ess_frac >= min_ess_frac, else
     # InadequateSamplerError (a RuntimeError) is raised before any final.pt is written: the ESS is a property of the
     # point, so backtracking cannot cure it, and carrying on would freeze the iteration at its start.
+    # A solve whose last outer step has a Stein fixed-point residual of Phi_hat >= solver.max_final_resid in any layer
+    # raises UnconvergedSolveError (a RuntimeError) instead of returning, so no final.pt is written (the checkpoints stay).
+    # With project_tilt, phi needs a tilt_rule (ValueError up front otherwise).
     # If checkpoint_dir is given, return its final.pt if present, else
     # resume from its latest ckpt_*.pt (ValueError if it was written with a net and `net` is None, or vice
     # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then
@@ -453,7 +460,9 @@ def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor
 ```
 
 History values are stored per outer step; arrays become lists for saving. The
-history keys are those of the notebook's `keys` list plus `is_max_weight` (`meanfield.HISTORY_KEYS`),
+history keys are those of the notebook's `keys` list plus `is_max_weight` and `tilt_projected_rel` (per layer, the largest
+relative change ||Pi(x) - x|| / ||x|| the tilt projection made to an inner step of that outer step; 0 without projection)
+(`meanfield.HISTORY_KEYS`),
 except that `align_net` / `dist_net` are omitted when `solve` is given no net (instead of
 lists of `None`). Both samplers fill every key: under importance sampling `hmc_ess_frac` is the Kish ESS fraction,
 `hmc_mc_err`, `hmc_stein_mismatch`, `hmc_h2_ratio` keep their meaning, and `hmc_accept`, `hmc_eps`, `hmc_div`,

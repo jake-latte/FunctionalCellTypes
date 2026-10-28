@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from fct.config import (
     IMPORTANCE_FIELDS,
     LEGACY_SOLVER_FIELDS,
+    UNHASHED_SOLVER_FIELDS,
     Config,
     MeanFieldConfig,
     SolverConfig,
@@ -218,8 +219,15 @@ def test_unknown_meanfield_key_still_raises():
 
 
 def test_every_solver_field_has_a_hash_rule():
-    assert set(SolverConfig.model_fields) == set(LEGACY_SOLVER_FIELDS) | set(IMPORTANCE_FIELDS)
-    assert not set(LEGACY_SOLVER_FIELDS) & set(IMPORTANCE_FIELDS)
+    rules = (LEGACY_SOLVER_FIELDS, IMPORTANCE_FIELDS, UNHASHED_SOLVER_FIELDS)
+    assert set(SolverConfig.model_fields) == set().union(*rules)
+    assert sum(len(r) for r in rules) == len(SolverConfig.model_fields)  # disjoint
+
+
+def test_the_final_residual_check_does_not_enter_the_hash():
+    a, b = default_config(), default_config()
+    b.meanfield.solver.max_final_resid = 0.5
+    assert a.section_hash("meanfield") == b.section_hash("meanfield")
 
 
 def test_hmc_hash_ignores_the_importance_settings():

@@ -17,10 +17,11 @@ import torch
 
 import fct.config
 import fct.meanfield as mf
+from fct.activations import identity
 from fct.cache import StaleCacheError
 from fct.config import Config, DataConfig, MeanFieldConfig, NetConfig, TrainConfig
 from fct.data import Dataset
-from fct.hmc import SingleSiteHMC, relative_fro
+from fct.hmc import SingleSiteHMC, project_tilt, relative_fro
 from fct.importance import ImportanceSampler
 from fct.meanfield import (
     HISTORY_KEYS,
@@ -46,13 +47,14 @@ def silent(_msg):
     pass
 
 
+# The packaging tests run a few outer steps, far from converged; this lets them finish (the
+# final-residual check has its own tests).
+ANY_RESID = 1e9
+
+
 # ----------------------------------------------------------------------------- analytic L=1
 LAMBDA_W, ALPHA, PREFACTOR = 2.0, 0.5, 0.5
 P_LIN, D_LIN = 8, 8
-
-
-def identity(h):
-    return h
 
 
 @pytest.fixture(scope="module")
@@ -87,12 +89,7 @@ def analytic_saddle(X, Y, n_iter=2000):
 
 
 def linear_cfg(**overrides):
-    # No tilt projection: the solver samples psi = phi(h) = h here, and its projection for
-    # psi = phi (M + lambda_r I >= tilt_floor lambda_r I, the ReLU orthant condition) would remove
-    # the negative definite learning tilt -2c A Y Y^T A entirely at lambda_r = 0. The Gaussian
-    # problem only needs Sigma^-1 + Phi_hat > 0, which the saddle point satisfies comfortably.
     base = {
-        "project_tilt": False,
         "alpha": ALPHA,
         "learning_prefactor": PREFACTOR,
         "n_outer": 40,
@@ -125,6 +122,51 @@ def test_analytic_reference_is_a_fixed_point(linear_problem):
     # the physical branch: the tilted density is normalisable, so Phi is positive definite.
     assert relative_fro(Sigma, Phi) > 0.15
     assert torch.linalg.eigvalsh(torch.linalg.inv(Sigma) + Phi_hat).min() > 1.0
+
+
+def test_the_default_projection_keeps_the_analytic_saddle_tilt(linear_problem):
+    """The learning tilt Phi_hat* = -2c A Y Y^T A is negative definite; for the linear (Gaussian)
+    case the projection must leave it whole, since Sigma^-1 + Phi_hat* > 0."""
+    X, Y = linear_problem
+    _, Phi_hat_star, Sigma, _ = analytic_saddle(X, Y)
+    s = SingleSiteHMC(Sigma, torch.zeros_like(Sigma), 0.0, identity, True, n_chains=4)
+    assert linear_cfg().solver.project_tilt  # the default
+    out = s.project_tilt(Phi_hat_star, linear_cfg().solver.tilt_floor)
+    assert out.norm() / Phi_hat_star.norm() == pytest.approx(1.0, abs=1e-12)
+    torch.testing.assert_close(out, mf.sym(Phi_hat_star), rtol=0, atol=0)  # unchanged
+
+
+def test_the_linear_solve_is_not_changed_by_the_projection(linear_solution):
+    h = linear_solution[0].history
+    assert all(r[0] == 0.0 for r in h["tilt_projected_rel"][-5:])
+
+
+def test_relu_projection_keeps_part_of_a_learning_tilt():
+    """The relu certificate allows M + lambda_r I down to -(1 - delta) lambda_min(Sigma^-1):
+    a learning tilt within that bound passes unchanged, which the prior-blind floor did not."""
+    X, Y = relu_problem(6, 8, seed=56)
+    Sigma = X @ X.T / 8 + 0.1 * torch.eye(6, **F64)
+    s = torch.linalg.eigvalsh(torch.linalg.inv(Sigma)).min().item()
+    Mh = -0.5 * s * Y @ Y.T / torch.linalg.eigvalsh(Y @ Y.T).max()  # lambda_min = -s / 2
+    out = project_tilt(Mh, 0.05, 0.0, torch.relu, True, torch.linalg.cholesky(Sigma),
+                       torch.linalg.inv(Sigma))  # fmt: skip
+    torch.testing.assert_close(out, mf.sym(Mh), rtol=0, atol=0)
+
+
+def test_a_solve_ending_unconverged_raises_and_writes_no_final(linear_problem, tmp_path):
+    X, Y = linear_problem
+    cfg = linear_cfg(n_outer=2, save_int=1, max_final_resid=1e-12)
+    with pytest.raises(mf.UnconvergedSolveError, match="residual"):
+        solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent, checkpoint_dir=tmp_path,
+              config_hash="h0")  # fmt: skip
+    assert not (tmp_path / "final.pt").exists()
+    assert list(tmp_path.glob("ckpt_*.pt"))  # kept for inspection
+
+
+def test_a_projection_needs_a_known_activation():
+    X, Y = relu_problem(6, 8, seed=57)
+    with pytest.raises(ValueError, match="normalisability rule"):
+        solve(X, Y, 1, 1e-3, 0.0, torch.nn.functional.softplus, 1.0, MeanFieldConfig(), log=silent)
 
 
 def test_linear_solve_recovers_analytic_saddle(linear_problem, linear_solution):
@@ -161,7 +203,10 @@ def test_solve_without_checkpoint_dir_never_writes(linear_problem, monkeypatch):
     monkeypatch.setattr(mf, "save_artefact", forbidden)
     monkeypatch.setattr(mf, "write_checkpoint", forbidden)
     X, Y = linear_problem
-    cfg = linear_cfg(n_outer=2, warmup_trans=10, n_trans=2, n_trans_outer=2, n_inner_max=2)
+    cfg = linear_cfg(
+        n_outer=2, warmup_trans=10, n_trans=2, n_trans_outer=2, n_inner_max=2,
+        max_final_resid=ANY_RESID,
+    )  # fmt: skip
     result = solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent)
     assert len(result.history["outer_step"]) == 2
 
@@ -189,7 +234,10 @@ def small_net(D_in, L=2, N=32):
 def test_smoke_relu_two_layers_with_net_is_fast_and_complete():
     X, Y = relu_problem(16, 8, seed=20)
     net = small_net(8)
-    cfg = MeanFieldConfig(beta=1e3, n_chains=128, n_outer=3, warmup_trans=20, log_int=1, seed=1)
+    cfg = MeanFieldConfig(
+        beta=1e3, n_chains=128, n_outer=3, warmup_trans=20, log_int=1, seed=1,
+        max_final_resid=ANY_RESID,
+    )  # fmt: skip
     lines = []
     start = time.perf_counter()
     result = solve(X, Y, 2, 1e-3, 1e-3, torch.relu, 1.0, cfg, net=net, log=lines.append)
@@ -253,8 +301,9 @@ def test_init_net_requires_a_net():
 def test_init_net_runs():
     X, Y = relu_problem(8, 8, seed=41)
     cfg = MeanFieldConfig(
-        beta=1e3, init="net", n_chains=32, n_outer=1, warmup_trans=5, n_inner_max=2, seed=0
-    )
+        beta=1e3, init="net", n_chains=32, n_outer=1, warmup_trans=5, n_inner_max=2, seed=0,
+        max_final_resid=ANY_RESID,
+    )  # fmt: skip
     result = solve(X, Y, 2, 1e-3, 1e-3, torch.relu, 1.0, cfg, net=small_net(8), log=silent)
     assert torch.isfinite(result.Phi).all()
 
@@ -281,6 +330,7 @@ def resume_cfg(sample_dtype="float64"):
         sample_dtype=sample_dtype,
         log_int=1,
         seed=5,
+        max_final_resid=ANY_RESID,
     )
 
 
@@ -362,6 +412,7 @@ def small_config(beta=1e3):
             warmup_trans=10,
             n_inner_max=3,
             seed=0,
+            max_final_resid=ANY_RESID,
         ),
         device="cpu",
     )
@@ -618,11 +669,12 @@ def test_an_accepted_point_below_the_ess_floor_fails_loudly_even_with_one_inner_
     validated by the inner loop; the outer-gradient run at the collapsed tilt must raise rather
     than let the solve finish."""
     X, Y = relu_problem(8, 8, seed=54)
-    # Unprojected: the psi = phi projection keeps the learning tilt of the read-out layer near 0
-    # at this small rate tilt, and the weights would not collapse.
-    cfg = extreme_tilt_cfg(n_inner_max=1, project_tilt=False)
+    cfg = extreme_tilt_cfg(n_inner_max=1)
+    # tanh: a bounded phi needs no tilt projection, so the huge step reaches a tilt the prior
+    # proposal cannot represent (the relu certificate would keep the step small enough).
     with pytest.raises(mf.InadequateSamplerError, match="outer step 0"):
-        solve_relu(X, Y, cfg, checkpoint_dir=tmp_path, config_hash="h0")
+        solve(X, Y, 2, 1e-3, 1e-3, torch.tanh, 1.0, cfg, log=silent, checkpoint_dir=tmp_path,
+              config_hash="h0")  # fmt: skip
     assert not (tmp_path / "final.pt").exists()
 
 

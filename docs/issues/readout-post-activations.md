@@ -68,18 +68,26 @@ as soon as reviewed. The notebook part of the "figures only" alternative is moot
 - `MODEL_VERSION` 1 is left out of the hash, so a version-1 hash is the one the earlier code wrote
   (the modularity-sweep and spatial hash pins hold at version 1, which the tests set).
 
-## Open: the tilt projection removes the learning term of the read-out layer (needs a PI decision)
-With `solver.project_tilt = True` (the default) every inner step projects Phi_hat_l onto
-normalisable tilts. For psi = phi that projection is `M + lambda_r I >= tilt_floor * lambda_r I`,
-independent of the prior Sigma (the ReLU orthant condition). The learning tilt of the read-out
-layer, Phi_hat_L = -2c A Y Y^T A, is negative semidefinite, so it is cut to at most
-`(1 - tilt_floor) lambda_r` in size: with `rate_tilt = 0` it is removed entirely, and on a
-random P = 20 relu example its norm falls to 2e-6 of itself at lambda_r = 1e-3 (1.7e-4 at 0.1);
-the psi = h projection used before (`Sigma^{1/2} M Sigma^{1/2} >= -(1 - tilt_floor) I`) kept
-3%. The same held before for `readout = "phi"`; this item makes it the only case. So, until the
-projection changes, a default solve cannot represent learning in the last layer. The analytic
-L = 1 tests and the ESS-floor test now set `project_tilt = False` (with it off the analytic
-saddle is recovered to 1.3e-2). Candidate fixes, for the PI: the Sigma-aware sufficient
-condition `lambda_min(M) >= -(1 - delta) lambda_min(Sigma^-1)` that `normalisability_margin`
-already uses for psi = phi; no projection for bounded phi (tanh, sigmoid); or `project_tilt =
-False` by default.
+## Tilt projection (decided in review)
+With psi = phi on every layer, the old prior-blind projection for psi = phi
+(`M + lambda_r I >= tilt_floor * lambda_r I`) removed the negative semidefinite learning tilt of
+the read-out layer, Phi_hat_L = -2c A Y Y^T A, entirely at `rate_tilt = 0`: the analytic L = 1
+saddle solve returned Phi_hat = 0 and returned normally. The projection is now activation-aware
+(`fct.hmc.tilt_rule`, from `fct.activations.tilt_class`), `project_tilt = True` stays the default:
+- bounded phi (tanh, sigmoid): no projection; the tilt is bounded, the density always normalisable;
+- linear phi (`fct.activations.identity`) or psi = h: the Gaussian condition Sigma^-1 + Q > 0
+  (necessary and sufficient);
+- relu: `lambda_min(M + lambda_r I) >= -(1 - tilt_floor) lambda_min(Sigma^-1)`, the certificate
+  `normalisability_margin` reports (one implementation, `relu_tilt_spectrum`);
+- any other activation: ValueError when the solve starts (with `project_tilt`).
+The analytic saddle is recovered under the default again (the overrides are gone), and a test pins
+that the default projection leaves the analytic Phi_hat* whole. Every outer step records
+`tilt_projected_rel` (per layer, the largest relative change the projection made), and a solve
+whose last Stein residual of Phi_hat is >= `solver.max_final_resid` (0.9, not hashed) raises
+`UnconvergedSolveError` instead of returning, so no such final.pt is written.
+
+Reviewer's caveat, for the PI: the relu floor is sufficient, not necessary (the exact condition
+is a copositivity check per orthant, 2^P of them). With the library defaults
+(prior_scale = 1/lambda_w, lambda_min(Sigma^-1) ~ 1e-4 on a relu P = 20 example) it still cuts a
+relu learning tilt to about 0.7 % at rate_tilt 0 (5 % at 1e-3, 100 % at 0.1). The PI decides
+whether that is acceptable for relu solves.

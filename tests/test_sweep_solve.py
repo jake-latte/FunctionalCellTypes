@@ -27,7 +27,10 @@ from fct.sweep import (
 from tests.report_helpers import QUIET
 
 # A solve of a few outer steps at ten points: seconds on a CPU.
-TINY_SOLVER = SolverConfig(n_chains=32, n_outer=3, save_int=1, log_int=1, warmup_trans=10)
+# Three outer steps are far from converged; max_final_resid switches that check off.
+TINY_SOLVER = SolverConfig(
+    n_chains=32, n_outer=3, save_int=1, log_int=1, warmup_trans=10, max_final_resid=1e9
+)
 TINY_MEANFIELD = MeanFieldConfig(n_points=10, beta=1e3, solver=TINY_SOLVER)
 
 

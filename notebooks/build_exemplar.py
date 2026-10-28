@@ -150,6 +150,7 @@ N_OUTER_IMPORTANCE = 40  # it raised InadequateSamplerError at step 45 of an 80-
 PLOT_EVERY = 5  # refresh the live figures every this many outer steps
 SOLVER_SEED = 0
 SOLVE_LOG_INT = 1  # outer steps between log lines
+MAX_FINAL_RESID = 0.9  # the solve raises if the final fixed-point residual of Phi_hat is at least this
 # HMC only
 N_CHAINS = 512
 WARMUP_TRANS = 50  # transitions that let the chains equilibrate before the first estimate
@@ -175,6 +176,7 @@ SOLVE_CFG = with_solver(
     seed=SOLVER_SEED,
     log_int=SOLVE_LOG_INT,
     sample_dtype="float64",
+    max_final_resid=MAX_FINAL_RESID,
     **SAMPLER_SETTINGS[SAMPLER],
 )
 VIEW = LiveView(tail=6)  # replaces the figures at every refresh, keeps the last log lines

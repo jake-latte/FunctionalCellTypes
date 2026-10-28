@@ -137,11 +137,15 @@ class ImportanceSampler:
 
     def project_tilt(self, M: torch.Tensor, delta: float) -> torch.Tensor:
         """`fct.hmc.project_tilt` of M under this sampler's prior and rate tilt."""
-        return project_tilt(M, delta, self.lambda_r, self.psi_is_phi, self._Sigma_chol)
+        return project_tilt(
+            M, delta, self.lambda_r, self.phi, self.psi_is_phi, self._Sigma_chol, self.Sigma_inv
+        )
 
     def normalisability_margin(self) -> float:
         """`fct.hmc.normalisability_margin` of the current prior and tilt."""
-        return normalisability_margin(self.M64, self.Sigma_inv, self.lambda_r, self.psi_is_phi)
+        return normalisability_margin(
+            self.M64, self.Sigma_inv, self.lambda_r, self.phi, self.psi_is_phi
+        )
 
     # -- state: there is none beyond the generator, which the caller owns ---------
     def get_state(self) -> None:

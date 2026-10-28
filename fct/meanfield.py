@@ -58,6 +58,7 @@ from fct.hmc import (
     relative_fro,
     sym,
     tilt_and_grad,
+    tilt_rule,
 )
 from fct.importance import ImportanceSampler
 from fct.model import MLP
@@ -81,7 +82,7 @@ HISTORY_KEYS = (
     "phi_lambda_min", "n_pd_clamped", "norm_margin",
     "hmc_accept", "hmc_eps", "hmc_div", "hmc_reset", "hmc_max_abs_dH", "hmc_rho1", "hmc_ess_frac",
     "hmc_mc_err", "hmc_stein_mismatch", "hmc_h2_ratio", "is_max_weight",
-    "align_net", "dist_net", "phi_change_rel", "phihat_change_rel",
+    "align_net", "dist_net", "phi_change_rel", "phihat_change_rel", "tilt_projected_rel",
 )  # fmt: skip
 NET_KEYS = ("align_net", "dist_net")
 # Keys whose per-step entry is a per-layer numpy array (saved as a list, restored on load).
@@ -116,6 +117,10 @@ class SpatialPriorUnsupportedError(ValueError):
 
 class InadequateSamplerError(RuntimeError):
     """Importance sampling from the prior cannot represent the density at an accepted point."""
+
+
+class UnconvergedSolveError(RuntimeError):
+    """The solve ended with a fixed-point residual of order one: Φ̂ is not a saddle point."""
 
 
 # ----------------------------------------------------------------------------- public results
@@ -208,6 +213,8 @@ def _make_problem(
         raise ValueError(f"X (P, D_in) and Y (P, D_out) must share P; got {X.shape}, {Y.shape}")
     if L < 1:
         raise ValueError(f"L must be >= 1, got {L}")
+    if cfg.solver.project_tilt:
+        tilt_rule(phi, True)  # fail now, not at the first step, if phi has no projection rule
     X, Y = X.to(F64), Y.to(F64)
     P, D_in = X.shape
     D_out = Y.shape[1]
@@ -496,11 +503,17 @@ def _healthy(
     )
 
 
-def _tilt_step(prob: _Problem, st: _SolverState, l, hat0, grad0, eta_l) -> torch.Tensor:
-    """Φ̂_l ← Π(Φ̂_l + η̂_l ∂S/∂Φ̂_l / c_l²), Π the projection onto normalisable tilts."""
+def _tilt_step(
+    prob: _Problem, st: _SolverState, l, hat0, grad0, eta_l
+) -> tuple[torch.Tensor, float]:
+    """Φ̂_l ← Π(Φ̂_l + η̂_l ∂S/∂Φ̂_l / c_l²), Π the projection onto normalisable tilts, and
+    ||Π(x) - x|| / ||x||, how much the projection changed the step's result x."""
     new = sym(hat0 + eta_l * grad0 / _c2(st.Phi[l]))
     c = prob.solver
-    return st.samplers[l].project_tilt(new, c.tilt_floor) if c.project_tilt else new
+    if not c.project_tilt:
+        return new, 0.0
+    projected = st.samplers[l].project_tilt(new, c.tilt_floor)
+    return projected, relative_fro(projected, new) if new.norm().item() > 0 else 0.0
 
 
 def _learning_pieces(prob: _Problem, Phi_last: torch.Tensor):
@@ -520,6 +533,7 @@ class _InnerResult:
     residual: np.ndarray  # ||⟨ψψᵀ⟩ - Φ|| / ||Φ|| per layer
     grad_rel: np.ndarray  # ||∂S/∂Φ̂|| / ||Φ|| per layer
     n_backtrack: np.ndarray  # reverted steps per layer
+    projected_rel: np.ndarray  # largest relative change by the tilt projection, per layer
     converged: bool
     n_steps: int
 
@@ -537,7 +551,8 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
         state0, hat0, grad0 = pending[l]
         res.n_backtrack[l] += 1
         st.eta_hat[l] *= 0.5
-        st.Phi_hat[l] = _tilt_step(prob, st, l, hat0, grad0, st.eta_hat[l])
+        st.Phi_hat[l], rel = _tilt_step(prob, st, l, hat0, grad0, st.eta_hat[l])
+        res.projected_rel[l] = max(res.projected_rel[l], rel)
         s.set_tilt(st.Phi_hat[l])
         s.set_state(state0)
         if res.n_backtrack[l] > cfg.max_backtrack * (inner + 1):
@@ -552,7 +567,8 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
     res.residual[l] = relative_fro(moments["psi_psi"], st.Phi[l])
     res.grad_rel[l] = grad_hat.norm().item() / max(st.Phi[l].norm().item(), 1e-300)
     pending[l] = (s.get_state(), st.Phi_hat[l].clone(), grad_hat)
-    st.Phi_hat[l] = _tilt_step(prob, st, l, st.Phi_hat[l], grad_hat, st.eta_hat[l])
+    st.Phi_hat[l], rel = _tilt_step(prob, st, l, st.Phi_hat[l], grad_hat, st.eta_hat[l])
+    res.projected_rel[l] = max(res.projected_rel[l], rel)
     s.set_tilt(st.Phi_hat[l])
     return diag
 
@@ -565,6 +581,7 @@ def _inner_ascent(prob: _Problem, st: _SolverState) -> _InnerResult:
         residual=np.full(L, np.nan),
         grad_rel=np.full(L, np.nan),
         n_backtrack=np.zeros(L, dtype=int),
+        projected_rel=np.zeros(L),
         converged=False,
         n_steps=0,
     )
@@ -753,6 +770,7 @@ def _record(
         "phihat_change_rel": np.array(
             [relative_fro(Phi_hat[l], Phi_hat_prev[l]) for l in range(L)]
         ),
+        "tilt_projected_rel": inner.projected_rel.copy(),
     }
     if st.net_Phi is not None:
         rec["align_net"] = np.array([kernel_alignment(Phi[l], st.net_Phi[l]) for l in range(L)])
@@ -783,7 +801,7 @@ def _format_step(
         )
         + f"mcerr={fmt(rec['hmc_mc_err'])} "
         f"stein={fmt(rec['hmc_stein_mismatch'])} h2/prior={fmt(rec['hmc_h2_ratio'])} "
-        f"margin={fmt(rec['norm_margin'])}"
+        f"margin={fmt(rec['norm_margin'])} projected={fmt(rec['tilt_projected_rel'])}"
     )
     if "align_net" in rec:
         msg += f" | align={fmt(rec['align_net'])}"
@@ -943,7 +961,10 @@ def solve(
     The inner loop stops when every layer's residual ||⟨ψψᵀ⟩-Φ||/||Φ|| is below
     max(inner_tol, inner_tol_mc × its own Monte Carlo error): below that it is noise.
 
-    phi is a callable (any elementwise activation, not only the registered ones).  All
+    phi is a callable: any elementwise activation without tilt projection; with it (the
+    default) one whose normalisability rule is known (`fct.hmc.tilt_rule`: tanh, sigmoid,
+    relu, `fct.activations.identity`), else ValueError. A solve whose last outer step has a
+    Φ̂ fixed-point residual >= cfg.solver.max_final_resid raises UnconvergedSolveError.  All
     randomness comes from one torch.Generator seeded with cfg.solver.seed on X's device.
 
     With checkpoint_dir (requires config_hash): return its final.pt if present, else resume
@@ -986,9 +1007,26 @@ def solve(
             write_checkpoint(
                 checkpoint_dir, CKPT_PREFIX, st.outer, _to_payload(st, cfg), config_hash, CKPT_WIDTH
             )
+    _check_converged(st.history, cfg.solver.max_final_resid)
     if checkpoint_dir is not None:
         _save_final(Path(checkpoint_dir), _to_payload(st, cfg), config_hash)
     return SolveResult(st.Phi, st.Phi_hat, st.history, st.samplers)
+
+
+def _check_converged(history: History, max_final_resid: float) -> None:
+    """UnconvergedSolveError if a layer's Stein fixed-point residual of Φ̂ at the last outer
+    step is >= max_final_resid: the result is not a saddle point and must not stand in for
+    one (no final.pt is written; the checkpoints stay for inspection)."""
+    resid = np.asarray(history["phihat_fp_resid_stein"][-1], dtype=float)
+    if not (resid < max_final_resid).all():
+        projected = history.get("tilt_projected_rel", [None])[-1]
+        raise UnconvergedSolveError(
+            f"the solve ended unconverged: Stein fixed-point residual of Phi_hat per layer "
+            f"{np.array2string(resid, precision=3)} (max_final_resid={max_final_resid:g}); "
+            f"the tilt projection changed Phi_hat by {projected} (relative, per layer) in the "
+            "last step. Run more outer steps, check the sampler diagnostics, or raise "
+            "solver.max_final_resid to accept it"
+        )
 
 
 def _save_final(checkpoint_dir: Path, payload: dict, config_hash: str) -> None:

@@ -20,7 +20,7 @@ TINY = [
     "meanfield.n_points=8", "meanfield.solver.n_chains=64", "meanfield.solver.n_outer=2",
     "meanfield.solver.n_inner_max=3", "meanfield.solver.warmup_trans=10",
     "meanfield.solver.n_init_samples=256",
-    "meanfield.solver.save_int=1", "analysis.n_grid=5", "analysis.n_components=3", "device=cpu",
+    "meanfield.solver.save_int=1", "meanfield.solver.max_final_resid=1e9", "analysis.n_grid=5", "analysis.n_components=3", "device=cpu",
 ]  # fmt: skip
 
 FIGURES = ["learning", "representation", "neurons", "training", "solver", "kernels", "example"]

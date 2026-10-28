@@ -153,6 +153,7 @@ def test_solving_shows_live_frames_then_the_final_ones_and_reloads_from_cache(tr
     cfg = exemplar.with_solver(
         cfg, sampler=sampler, n_outer=4, n_chains=16, warmup_trans=5, n_importance_samples=64,
         sample_dtype="float64", n_inner_max=3, log_int=1, save_int=2, min_ess_frac=0.0,
+        max_final_resid=1e9,
     )  # fmt: skip
     frames = []
 

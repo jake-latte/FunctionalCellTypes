@@ -9,6 +9,7 @@ import math
 import pytest
 import torch
 
+from fct.activations import identity
 from fct.hmc import SingleSiteHMC, kernel_alignment, project_pd, relative_fro, sym
 
 P, N_CHAINS, WARMUP, N_TRANS = 20, 2048, 300, 200
@@ -203,11 +204,42 @@ def test_load_state_dict_rejects_chain_shape_mismatch(warmed_small, Sigma, M):
 
 # ----------------------------------------------------------------------------- project_tilt
 @pytest.mark.parametrize("delta", [0.1, 0.5])
-def test_project_tilt_phi_is_normalisable(Sigma, delta):
+def test_project_tilt_relu_meets_the_sigma_aware_certificate(Sigma, delta):
     s = make_sampler(Sigma, torch.zeros(P, P, **F64), 0.1, torch.relu, seed=6, n_chains=8)
     out = s.project_tilt(-3.0 * torch.eye(P, **F64), delta)
-    floor = delta * s.lambda_r
-    assert torch.linalg.eigvalsh(out + s.lambda_r * torch.eye(P, **F64)).min() >= floor - 1e-9
+    lam_s = torch.linalg.eigvalsh(s.Sigma_inv).min().item()
+    T = out + s.lambda_r * torch.eye(P, **F64)
+    assert torch.linalg.eigvalsh(T).min() >= -(1 - delta) * lam_s - 1e-9
+    # the margin reads the same certificate: what the projection leaves is delta * lam_s
+    s.set_tilt(out)
+    assert s.normalisability_margin() == pytest.approx(delta * lam_s, rel=1e-9)
+
+
+@pytest.mark.parametrize("phi", [torch.tanh, torch.sigmoid])
+def test_project_tilt_leaves_any_tilt_of_a_bounded_phi(Sigma, phi):
+    s = make_sampler(Sigma, torch.zeros(P, P, **F64), 0.1, phi, seed=6, n_chains=8)
+    M = -100.0 * torch.eye(P, **F64)
+    torch.testing.assert_close(s.project_tilt(M, 0.1), M, rtol=0, atol=0)
+    assert s.normalisability_margin() == pytest.approx(
+        torch.linalg.eigvalsh(s.Sigma_inv).min().item()
+    )
+
+
+@pytest.mark.parametrize("delta", [0.1, 0.5])
+def test_project_tilt_identity_phi_is_the_gaussian_condition(Sigma, delta):
+    lambda_r = 0.2
+    s = make_sampler(Sigma, torch.zeros(P, P, **F64), lambda_r, identity, seed=6, n_chains=8)
+    out = s.project_tilt(-5.0 * torch.linalg.inv(s.Sigma), delta)
+    root = torch.linalg.cholesky(s.Sigma)
+    Q = out + lambda_r * torch.eye(P, **F64)  # the rate tilt of a linear phi is quadratic too
+    assert torch.linalg.eigvalsh(root.T @ Q @ root).min() >= -(1 - delta) - 1e-9
+
+
+def test_project_tilt_rejects_an_activation_without_a_rule(Sigma):
+    s = make_sampler(Sigma, torch.zeros(P, P, **F64), 0.0, torch.nn.functional.softplus, seed=6,
+                     n_chains=8)  # fmt: skip
+    with pytest.raises(ValueError, match="normalisability rule"):
+        s.project_tilt(-torch.eye(P, **F64), 0.1)
 
 
 @pytest.mark.parametrize("delta", [0.1, 0.5])

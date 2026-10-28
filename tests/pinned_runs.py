@@ -1,7 +1,6 @@
 """The tiny solves and configs whose outputs are pinned in tests/fixtures/.
 
-The fixtures were first written by the code at commit d1d3091, i.e. by the solver before it had
-a sampler choice or a solver sub-section, with
+The fixtures are written with
 
     uv run python -c "from tests import pinned_runs; pinned_runs.write_fixtures()"
 
@@ -9,12 +8,11 @@ They pin behaviour that must not change: `sampler="hmc"` reproduces those solves
 and a config.json in the flat layout still loads and hashes to the same cache keys. Regenerate
 them only when that behaviour is meant to change, and say so in the commit.
 
-When the net's output became V^T phi(h^L) / N (MODEL_VERSION 2), `hmc_solve_lazy_net_f32.pt`
-(made with a net read out from h^L) and `meanfield_hashes.json` were rewritten, and the
-`readout` key was deleted by hand from `legacy_config.json`, which keeps its flat layout:
-`write_fixtures` would save that file in the current nested layout instead. The no-net solve
-`hmc_solve_gaussian_phi_f64.pt` was already read out from phi(h^L) and still reproduces its
-d1d3091 output.
+Provenance: the solves `hmc_solve_*.pt` are written by the code of the readout-post-activations
+branch (output V^T phi(h^L) / N, activation-aware tilt projection); `meanfield_hashes.json` by
+the same code. `legacy_config.json` is the flat layout of the code before the solver
+sub-section (commit d1d3091) with the `readout` key deleted by hand: `write_fixtures` would save
+it in the current nested layout, so restore it from git after running it.
 
 Only flat `MeanFieldConfig` keyword arguments are used here, which both the old flat schema and
 the split one accept, so the same code produced the fixtures and checks them.
@@ -86,7 +84,9 @@ def pinned_solve(name: str, **meanfield_overrides):
     net = None
     if spec["with_net"]:
         net = make_net(NetConfig(N=8, L=2, phi="relu", seed=3), D_IN_PIN, 2, "cpu", torch.float64)
-    cfg = MeanFieldConfig(**spec["meanfield"], **meanfield_overrides)
+    # Three outer steps are far from converged: the final-residual check, which changes no
+    # number, is switched off.
+    cfg = MeanFieldConfig(**{"max_final_resid": 1e9, **spec["meanfield"], **meanfield_overrides})
     return solve(X, Y, 2, LAMBDA_W, LAMBDA_R, torch.relu, 1.0, cfg, net=net, log=lambda _m: None)
 
 
