@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -130,8 +130,10 @@ no numerical fault; every point it raised is now done:
   weak-test numbers in design.md (0.042-0.046 / 0.110-0.119) were re-measured over seeds 0-4
   and are exact, so unchanged. History wording in the relu replay and design.md config
   comments reworded. `tests/pinned_runs.py:13` is 83 columns on this tip. No line this branch
-  adds to a .py file is over 100 columns (the docstring in `fct/exemplar.py` was wrapped only
-  in d671fcb; b39d037 had missed it).
+  adds to a .py file is over 100 columns, counting Python source only (the docstring in
+  `fct/exemplar.py` was wrapped in d671fcb; the exemplar intro paragraph, a markdown string in
+  `notebooks/build_exemplar.py`, and the inner-step bullet in design.md in a66746f). design.md
+  keeps the long lines it had before; this branch adds a few over 120 columns among them.
 - Exemplar numbers in design.md re-measured (7f09d8c); they supersede those in "Result"
   above. At the defaults (HMC, net init, 80 steps): last three at most 0.196 (tripwire 0.9),
   inner loop converged at all 80 outer steps (1-13 inner steps, 3 rejected, 0 health
@@ -146,6 +148,12 @@ no numerical fault; every point it raised is now done:
   lives in `tests/weak_tanh.py` (e3e4dda); the lazy and importance ranges in design.md and
   the exemplar intro are accurate (lazy 0.09-0.80 after step 20, importance up to 0.42 in its
   last 30 steps), design.md's broken wrap fixed (d671fcb).
-- Full suite: 1574 passed; `ruff check fct tests notebooks` and `ruff format --check fct
-  tests` clean.
-Next: merge, then start `outer-run-health-guard`.
+- Re-review (at 0f93249): main 67aca7d (identity activation) merged in (8189aac, no
+  conflict). `exemplar_reference` accepts only a bounded phi: it applies no tilt projection,
+  and with phi = "id" the NSD Stein target makes the density non-normalisable at the first
+  iteration and the iteration diverges silently; the rejection test covers "id". The
+  quadrature bound is 0.015 (over seeds 0-19 `exemplar_reference` lands 0.0016-0.0112, with
+  the learning prefactor 20 % low 0.025-0.038) (c3e3701). Wraps (a66746f).
+- Full suite on a66746f: 1584 passed; `ruff check fct tests notebooks` and `ruff format
+  --check fct tests` clean.
+Done; the PM merges. Next: `outer-run-health-guard`.
