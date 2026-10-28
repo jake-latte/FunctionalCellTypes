@@ -57,8 +57,7 @@ LAMBDA_W, ALPHA, PREFACTOR = 2.0, 0.5, 0.5
 P_LIN, D_LIN = 8, 8
 
 
-@pytest.fixture(scope="module")
-def linear_problem():
+def make_linear_problem() -> tuple[torch.Tensor, torch.Tensor]:
     """X with Phi0 = X X^T / D_in = U diag(s) U^T, s in [0.8, 1.2] (well conditioned), and
     targets Y scaled so that the saddle point moves Phi ~20% away from the prior yet keeps
     Sigma^-1 + Phi_hat comfortably positive definite.  (Much larger Y also admits a second,
@@ -68,6 +67,11 @@ def linear_problem():
     X = (U * s.sqrt()) * D_LIN**0.5  # (P, D_in) with D_in = P
     Y = 0.4 * torch.randn(P_LIN, 2, generator=seeded(11), **F64)
     return X, Y
+
+
+@pytest.fixture(scope="module")
+def linear_problem():
+    return make_linear_problem()
 
 
 def analytic_saddle(X, Y, n_iter=2000):
