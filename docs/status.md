@@ -54,6 +54,15 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
   `MeanFieldConfig` fields win. All four are exact for SGLD (a test on the exemplar's weight variance per beta, and one on `run_meanfield`'s defaults with the
   library's own `meanfield.beta = None`, which follows `train.beta`, or 1 under Adam). Every earlier mean-field result is stale. Still open: the `phase_transition` preset's `weight_lambda` axis
   (log-spaced 1e-6..1) was not rescaled.
+- **Relu tilt rule (PI confirmed the item 2026-10-29; the PM chose the option; `relu-tilt-rule`).** For relu the tilt
+  projection enforces the all-active orthant's Gaussian condition Sigma^-1 + M + lambda_r I > 0 (option 2), replacing the
+  sufficient orthant floor; `fct.hmc.relu_orthant_check` is the per-orthant oracle (option 3), a diagnostic only (about 15 s
+  at P = 20; refuses P > 20). Found while validating, for the PI: the condition is not strictly necessary (normalisability on
+  that orthant needs copositivity), so it still cuts strong learning tilts of mixed sign that are normalisable: on the
+  exemplar's relu problem it keeps 59 % of a tilt where the floor kept 31 % (not ~100 %); every tilt it admitted there was
+  normalisable (exact plane scan, the prior has rank 2), and the oracle's few flags were false alarms. The exemplar's relu
+  variant and a tiny relu grid setting still end in the tilt tripwire, with the projection idle: their residuals run away
+  (5 to 200), which is `solver-inner-step-control`'s problem. Details in docs/design.md, "The relu tilt rule".
 - Exemplar notebook: the solves are not converged at the default 40/80 outer steps (residual still falling);
   the importance sampler only works for small P (default P = 20; raises at 24).
 - Grid solve: `jobs/fct_solve.sh` duplicates the sbatch header of `jobs/fct_sweep.sh` (keep them in step by hand).
