@@ -93,7 +93,7 @@ delete the old ones. Likewise the hash of any set of sections that includes `net
 version of the forward pass of `MLP`. Version 2 reads the output from the post-activations, `Z = V^T phi(h^L) / N`
 (version 1 read it from the pre-activation `h^L`): every train and meanfield cache made under version 1 is rejected with
 `StaleCacheError`, and a sweep ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
-hashed train section, so every pre-existing Adam hash and cache is unchanged. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
+hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
 enters the hash by value.
 
 The meanfield section enters every hash as `MeanFieldConfig.hash_payload()`, not as its nested dump: the problem fields
@@ -300,7 +300,8 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # we
 
 ```python
 def compute_loss(net, x, y, weight_lambda, rate_lambda, weight_penalty=MLP.weight_l2) -> tuple[Tensor, dict[str, Tensor]]
-    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2
+    # loss = 0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2; the `weight_lambda` argument is the coefficient of the
+    #   prior as the loss uses it, prior_coefficient(cfg.train) = train.weight_lambda / (2 beta), never the raw train.weight_lambda
     # weight_l2 = weight_penalty(net): the sum of squares of every parameter by default, the spatial prior
     #   sum_l tr(M_post W_l M_pre W_l^T) from make_weight_penalty when cfg.spatial is set (see "Spatial weight prior in training")
     # rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
@@ -330,14 +331,28 @@ effective temperature that tends to `1/beta` when the noise dominates the drift)
 
 Mapping to `Latex/sections/01_setup.tex`. The Latex trains `d(theta) = -grad L_tex dt + sqrt(2/beta) eta` with
 `L_tex = N/(2Pn) sum (f - y)^2 + (1/beta) P_weight + (1/beta) P_rates`, i.e. `p ~ exp(-beta L_tex)`. The repo loss is
-`L = 0.5 N mse + weight_lambda weight_l2 + rate_lambda rate_l2` (`weight_l2` is the spatial prior when one is set) and `mse` is the mean over the P*n entries, so the data
+`L = 0.5 N mse + weight_lambda / (2 beta) weight_l2 + rate_lambda rate_l2` (`weight_l2` is the spatial prior when one is set; `beta = 1` for Adam) and `mse` is the mean over the P*n entries, so the data
 terms agree and `beta L_tex = beta (0.5 N mse) + P_weight + P_rates`. SGLD on `L` at inverse temperature `beta` samples
-`exp(-beta L) = exp(-beta 0.5 N mse - beta weight_lambda weight_l2 - beta rate_lambda rate_l2)`. The Latex regulariser
-strengths are therefore `lambda_tex = beta * lambda_repo` (`P_weight = lambda_tex weight_l2`, likewise for the rates), and
-`weight_lambda` / `rate_lambda` stay the repo's own quantities. `beta` sets only the noise, never the loss; `lr` is the step
-size `dt`. (The mean-field defaults do not follow this mapping: `prior_scale = 1/weight_lambda`, `alpha = weight_lambda P D_out / beta`,
-`rate_tilt = rate_lambda` and `learning_prefactor = 1/2` describe the stationary law only at `beta = 1/2`, the prefactor only at `prior_scale = 1`. The exemplar
-notebook passes the constants of `exp(-beta L)`, see the exemplar section; whether the library should do so for SGLD nets is a PI decision, pending.)
+`exp(-beta L) = exp(-beta 0.5 N mse - weight_lambda/2 weight_l2 - beta rate_lambda rate_l2)`. The Latex regulariser
+strengths are therefore `P_weight = weight_lambda/2 weight_l2` (independent of `beta`) and `lambda_tex = beta * rate_lambda` for the rates. `beta` sets only the noise; `lr` is the step
+size `dt`.
+
+#### Prior scaling convention
+
+The weight prior enters the loss as `weight_lambda / (2 beta) * tr(M_post W M_pre W^T)` per layer (the iid prior `K = M = I` included: the plain L2 is
+`weight_lambda / (2 beta) * sum W^2`), where `beta` is `train.beta` under SGLD and 1 under Adam (`fct.train.prior_coefficient`). The `1/beta` cancels the `beta` of the
+stationary law, so `vec(W) ~ N(0, K / weight_lambda)` for every `beta` (`K = M^-1`); the data and rate terms carry the `beta`. The recorded `weight_l2` history is the raw quadratic form
+(no coefficient), so it does not depend on `beta`. Consequences for the mean-field constants (`fct.exemplar.sgld_theory_constants`, for the standard-normal-parametrised
+weights and the 1/N readout):
+
+| constant | exact value for `exp(-beta L)` | solver default |
+|---|---|---|
+| `prior_scale` | `1 / weight_lambda` | `1 / weight_lambda`: exact |
+| `alpha` | `weight_lambda P d_out / beta` | same, with the solver's `beta` equal to `train.beta`: exact |
+| `rate_tilt` | `2 beta rate_lambda` (from `exp(-beta rate_lambda sum phi^2)`) | `rate_lambda`: exact only at `beta = 1/2` |
+| `learning_prefactor` | `1 / (2 prior_scale) = weight_lambda / 2` (the kernels are unscaled) | `1/2`: exact only at `weight_lambda = 1` |
+
+The exemplar config overrides all four for SGLD. Under Adam there is no Gibbs distribution and the defaults stand; the Adam loss is the `beta = 1` case, so its prior is `weight_lambda/2 weight_l2`.
 
 Monitor hook: `monitor(net)` is called under `torch.no_grad()` with the global RNG state restored afterwards,
 at the START of every epoch e with `e % monitor_int == 0` (after e's periodic checkpoint, before its step; so e = 0
@@ -925,21 +940,20 @@ default, and what every `config.json` written before the field existed loads as)
   those of `build_spaces(cfg.spatial, m=D_in, N, L, n_out=D_out)`: the first layer's pre is the input embedding, the
   readout's post the output embedding. `MLP` has no biases; `make_weight_penalty` raises if the net has a parameter the
   prior does not cover, so a parameter added later cannot silently drop out of the loss.
-- Convention: the penalty carries NO factor 1/2, so identity factors give exactly the plain sum of squares, and
-  `weight_lambda` multiplies it as it multiplies the L2 norm. The history and log key stays `weight_l2` (it holds the
-  prior's value) so plots and logs keep one schema. Mapping to the Latex `P_weight = 1/2 sum_l W M^l_tex W` under SGLD at
-  inverse temperature `beta` (see the SGLD mapping above): `beta * weight_lambda * tr(...) = P_weight` gives
-  `M^l_tex = 2 beta weight_lambda (M^post (x) M^pre)`, so the prior covariance is
-  `K^l_tex = (K^post (x) K^pre) / (2 beta weight_lambda)`. For identity kernels this is the L2 case,
-  `lambda_tex = beta weight_lambda` with `P_weight = lambda_tex weight_l2`.
+- Convention: the penalty function carries NO coefficient, so identity factors give exactly the plain sum of squares; the loss
+  multiplies it by `prior_coefficient = weight_lambda / (2 beta)` (see "Prior scaling convention"), the same coefficient as for the L2 norm. The history and log key stays `weight_l2` (it holds the
+  raw value) so plots and logs keep one schema. Mapping to the Latex `P_weight = 1/2 sum_l W M^l_tex W` under SGLD at
+  inverse temperature `beta`: `beta * weight_lambda / (2 beta) * tr(...) = P_weight` gives
+  `M^l_tex = weight_lambda (M^post (x) M^pre)`, so the prior covariance is
+  `K^l_tex = (K^post (x) K^pre) / weight_lambda`, for every `beta`. For identity kernels this is the L2 case, variance `1 / weight_lambda`.
 - The rate penalty is unchanged (`rate_lambda * sum phi^2`, identity `G`).
 - The matrices `M` are built once per `train` call (float64 on the CPU, then cast to the net's dtype and device). They are
   not parameters and not checkpointed: a resumed run rebuilds them from the config, so resume is exact.
 - Hash: the `spatial` section enters `section_hash` with `train` only when it is set, so the caches of runs without it keep
   their hashes (pinned in `tests/test_spatial_prior.py`), and a run trained without the prior is stale for a config with it.
-- SGLD stability. The prior's stiffest curvature is `2 weight_lambda lambda_max(M^post) lambda_max(M^pre)`, which a wide
+- SGLD stability. The prior's stiffest curvature is `(weight_lambda / beta) lambda_max(M^post) lambda_max(M^pre)`, which a wide
   kernel makes large (up to `1 / (min_rel_eig * lambda_max(K))` per factor). An Euler step diverges once
-  `lr * weight_lambda * lambda_max(M^post) lambda_max(M^pre) >= 1`, so `make_weight_penalty` raises for SGLD before the
+  `lr * weight_lambda / (2 beta) * lambda_max(M^post) lambda_max(M^pre) >= 1`, so `make_weight_penalty` raises for SGLD before the
   first step. The check is necessary, not sufficient (the data and rate terms add curvature). Adam rescales its steps and
   is not checked.
 - Not covered: the initial weights are still iid `N(0, 1)` rather than drawn from the prior, so the prior term starts
@@ -974,7 +988,7 @@ Limits: the viewer needs positive lambdas. A grid containing lambda = 0 cannot b
 `notebooks/build_exemplar.py` builds `exemplar.ipynb` (source only; executed copies go to the ignored `tmp/`): one linear-teacher run, trained with SGLD (or Adam), then the mean-field solve of the same problem with live diagnostics. `fct/exemplar.py` holds all the logic; the cells set variables and call it and `fct.draw`.
 
 - `exemplar_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed) -> Config`: a thin wrapper over `spatial_view.make_config` (no spatial prior, CPU, float64; log and checkpoint intervals as there) that adds the `meanfield` section: `n_points = P` (all points are solved), `beta`, and, **for SGLD**, `prior_scale`, `alpha` and `rate_tilt` from `sgld_theory_constants(beta, weight_lambda, rate_lambda, n_points, d_out)` (four keys: `prior_scale`, `alpha`, `rate_tilt`, `learning_prefactor`). `with_solver(cfg, **solver_fields)` sets `SolverConfig` fields (unknown ones raise).
-- Why the constants are overridden: SGLD at `beta` samples `exp(-beta L)`, so each (standard-normal-parametrised) weight has variance `1 / (2 beta weight_lambda)` (pinned by a test: weights in directions the data does not span have that variance), the readout's Gaussian likelihood gives the ridge `alpha = P d_out / (beta prior_scale) = 2 weight_lambda P d_out`, the rate penalty is the tilt `2 beta rate_lambda`, and, the solver's kernels being unscaled (`Sigma = prior_scale Phi0`), the data-term prefactor is `learning_prefactor = 1 / (2 prior_scale) = beta weight_lambda` (the library's fixed 1/2 holds only for `prior_scale = 1`). The library defaults describe the same distribution only at `beta = 1/2`. With the defaults the solved kernels were about 19 times too large at `beta = 10`, which the scale-invariant alignment (0.996) hid; an exact Gibbs / closed-form check by the reviewer found the fixed point near the net's kernel scale only with the prefactor above (c = 0.1 there; at c = 0.5 the single-site precision is non-normalisable near it). For Adam there is no Gibbs distribution and the defaults stand.
+- Why the constants are overridden: SGLD at `beta` samples `exp(-beta L)`, and the loss prior `weight_lambda / (2 beta) ||theta||^2` makes each (standard-normal-parametrised) weight have variance `1 / weight_lambda` for every `beta` (pinned by a test per `beta`: weights in directions the data does not span have that variance), the readout's Gaussian likelihood gives the ridge `alpha = P d_out / (beta prior_scale) = weight_lambda P d_out / beta`, the rate penalty is the tilt `2 beta rate_lambda`, and, the solver's kernels being unscaled (`Sigma = prior_scale Phi0`), the data-term prefactor is `learning_prefactor = 1 / (2 prior_scale) = weight_lambda / 2` (the library's fixed 1/2 holds only for `prior_scale = 1`). The solver's defaults for `prior_scale` and `alpha` are therefore exact (a test checks them against `sgld_theory_constants` for several `beta`); the defaults for the rate tilt (`rate_lambda`) and the prefactor (1/2) describe the same distribution only at `beta = 1/2` and `weight_lambda = 1`. Under the previous convention (prior `weight_lambda ||theta||^2`) none of the four defaults was exact. With the old defaults the solved kernels were about 19 times too large at `beta = 10`, which the scale-invariant alignment (0.996) hid; an exact Gibbs / closed-form check by the reviewer found the fixed point near the net's kernel scale only with the prefactor above (c = 0.1 there; at c = 0.5 the single-site precision is non-normalisable near it). For Adam there is no Gibbs distribution and the defaults stand.
 - Cache layout under CACHE_ROOT: `exemplar-<section_hash(data, net, train)>/{data, train, config.json}` and, inside it, `solve-<section_hash(data, net, train, meanfield)>/meanfield/` (`exemplar_dirs`). A solver setting therefore re-solves without retraining. `train_exemplar(cfg, cache_root, log) -> spatial_view.TrainRun` (via `spatial_view.train_in`, which `train_run` shares) and `solve_exemplar(cfg, dataset, net, cache_root, plot_every, show, log, on_failure) -> SolveResult` go through `train_from_config` / `run_meanfield`, so both resume from checkpoints and reload finished work. `on_failure` is called before an exception from the solve propagates (the notebook passes `LiveView.flush`).
 - Live view: `live_figures(snapshot)` is `[fig_layer_kernels({Φ, Φ̂}), fig_solver_health, fig_sampler_health]` (layers counted from 1 in all three); `live_plotter(every, show)` is an `on_outer` callback that calls `show(figures)` at outer steps 0, every, 2 every, ...; `solve_exemplar` calls `show` once more with the finished solve's figures (a loaded final.pt runs no steps). Plotting time is charged to the history's `time`. `LiveView(tail)` is the notebook edge: `show` does `clear_output(wait=True)`, displays and closes the figures, then reprints its last `tail` log lines (`log` collects them, `flush` prints them), because clearing empties the whole cell output. IPython is imported lazily; the clear / display / print functions are injectable.
 - `kernel_comparison` (solved Φ_l beside the net's, `draw.fig_kernels` with an own colour scale per panel), `empirical_kernel_figure`, `example_outputs_of(net, dataset)`, `solve_summary(history, sampler, Phi=None, net_Phi=None)` (markdown computed from the solve: first and last fixed-point residual of Φ̂ with "fell" / "rose", smallest ESS fraction and where, largest eigenvalue and mean diagonal of the solved and the net's kernels, train MSE theory and net, alignment). `cache_root_from_env` lives in `fct.cache` (`$FCT_CACHE_ROOT`), shared with the spatial notebook.
@@ -992,5 +1006,5 @@ Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD
 - Figures, each with its plotting function defined in its cell: `plot_layer_prior(space)` per weight layer (K_pre, K_post, every K_ij against torus distance with the profile `wrapped_gaussian_profile`, unit positions; d <= 2), `plot_loss_curves(history, title)` (loss and raw terms, log y), `plot_example_outputs(outputs, title)` (true and predicted output vectors and the pooled R^2 scatter), `plot_kernel_comparison(comparison, space)` (prior K_post / K_pre beside U U^T / m and U^T U / N, ring-sorted; d = 1), `plot_weights_by_position(W, space)` (U sorted by position; d = 1), `plot_tuning_by_position(view, positions, n_cols, bar_width)` (`view` a `TuningView`; bars drawn by the unlisted helper `_draw_information_bars`) (a curve panel and an information bar panel per neuron, placed by `panel_grid`, one curve and one bar per latent, from `grid_view.tuning_view`, so tuning and MIR are computed as in the phase-transition notebook). The kernels shown are weight-prior and weight second-moment kernels over units, not the mean-field Phi over samples of `meanfield.py` (the spatially indexed Phi is the next bullet); the markdown says so.
 - Spatially indexed kernels (the paper's eq. kernel-def under the factorised prior): hidden layer l (0-based) is the pre population of `SPACES[l + 1]`, so K^pre = `SPACES[l + 1].pre.K` and K^post = `SPACES[l + 1].post.K` (the next hidden layer, or the output for the last one); psi is `meanfield.readout_activities` (phi(h) on every layer, the paper's eq. kernel-def), computed on the training device and moved to the CPU in float64 where the K live. Helpers defined in the cells and tested: `data_kernels(H, phi, spaces) -> (L, P, P)` and `layer_kernel_pairs(A, spaces, layer, trials) -> (post population, (S, S, n, n) blocks)`. Figures: `plot_data_kernels(A, order, sorted_by)` (one panel per hidden layer, A^(l) (P, P) sorted by `sample_order` on the latent `PHI_SORT_LATENT`, own symmetric scale, title with psi and tr A / P), `plot_trial_latents(factors, trials)` (bars of z_{f mu} of the `PHI_TRIALS` samples `spread_trials(order, S)` picks at evenly spaced ranks of the sorted order), and per hidden layer `plot_spatial_kernel_pairs(pairs, trials, unit_order, title)` (the S x S grid of (n_post, n_post) blocks Phi^{mu nu}_ij, units in `position_order` for d = 1 and index order otherwise, one symmetric colour scale for the grid, an all-zero grid shown on -1..1). The input kernel Phi^(0) is not drawn.
 - Notebook cells: task and network (the `parameters`-tagged cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `N`, `L`, `PHI`, `G`, seeds, `WEIGHT_LAMBDA`, `RATE_LAMBDA`, `DEVICE`), training (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup (imports), spatial (`D`, `BOX`, `MIN_REL_EIG`, `INPUT`, `HIDDEN`, `OUTPUT`), the eigenvalue-floor and step-size tables, the prior kernels, train, loss curves, example outputs (`N_EXAMPLES`), first-layer kernels, first-layer weights, the data kernels A (`PHI_SORT_LATENT`), the chosen trials (`PHI_TRIALS`), the Phi grids, tuning (`N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). `build_spatial.set_parameters(nb, values)` rewrites the one-line `NAME = value` assignments (a name not assigned exactly once raises); `execute_notebook(nb, cache_root, overrides)` runs a copy with them set, and the CLI takes them as `--set NAME=literal`.
-- Default sizes: 16 hidden units on a ring, 12 inputs, kernel length scale 0.15, `MIN_REL_EIG = 1e-2`, `LR = 1e-2`, `WEIGHT_LAMBDA = 3e-3`. SGLD is rejected unless `lr * weight_lambda * lambda_max(M_l) < 1` for every layer, with `lambda_max(M_l) = lambda_max(M_post) lambda_max(M_pre)` and `lambda_max(M^p) = 1 / (min_rel_eig * lambda_max(K^p))` (here about 368, so the product is about 0.011), and the library default floor of 1e-6 starts even Adam with a prior term of order 1e9; both optimisers run 2000 epochs in a few seconds on a CPU. SGLD fits the teacher less closely than Adam in the same number of epochs.
+- Default sizes: 16 hidden units on a ring, 12 inputs, kernel length scale 0.15, `MIN_REL_EIG = 1e-2`, `LR = 1e-2`, `WEIGHT_LAMBDA = 60` (with `BETA = 1e4`, so the loss prior is `60 / 2e4 = 3e-3` times the penalty). SGLD is rejected unless `lr * weight_lambda / (2 beta) * lambda_max(M_l) < 1` for every layer, with `lambda_max(M_l) = lambda_max(M_post) lambda_max(M_pre)` and `lambda_max(M^p) = 1 / (min_rel_eig * lambda_max(K^p))` (here about 368, so the product is about 0.011), and the library default floor of 1e-6 starts even Adam with a prior term of order 1e9; both optimisers run 2000 epochs in a few seconds on a CPU. SGLD fits the teacher less closely than Adam in the same number of epochs.
 - Limits: kernels and tuning panels cover d <= 2; the weight image and the ring-sorted empirical kernels need d = 1. A hidden-layer panel per neuron gets large for N in the hundreds (the figure height grows with the rows).
