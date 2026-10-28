@@ -116,18 +116,27 @@ Unresolved, for the PI:
 - A Gaussian layer is slower to converge under the 0.25 outer cap; `eta_max = 1` restores the
   legacy speed for Gaussian problems if that matters.
 
-## Where it stopped (PM, end of session 2026-10-30)
-Branch `solver-inner-step-control`, worktree `.claude/worktrees/agent-ad58bab09b794cd54`, tip
-after b3c4b99 plus one WIP commit. Review found no numerical fault; it asked for:
-- B1 merge with main: DONE (6696884; legacy-steps fixtures = main's blobs, default fixtures
-  regenerated, relu incident test replays with LEGACY_STEP_CONTROL and eta_max_phihat 0.1).
-- S4 conditional hashing of step-control fields: DONE (7c9c98c).
-- S2 noise-tolerance cap and S6 progress against the best residual: DONE (8f13c92).
-- S1 last layer's residual at its Stein target, Picard wording: DONE (b3c4b99).
-- NOT DONE: S5 (one line in design.md and the config comment: eta_max now caps only the outer
-  step); nits (floor on health backtracks documented; Picard reference script committed as
-  WIP and its test unrun; design.md weak-test numbers 0.042-0.046 / 0.110-0.119; history
-  wording in comments; over-long line in tests/pinned_runs.py:13).
-- NOT RUN: the full suite after these commits.
-Next: finish S5 and the nits, run the suite, a confirmation review pass, merge, then start
-`outer-run-health-guard`.
+## Where it stopped (worker, 2026-10-28, after the review)
+Branch `solver-inner-step-control`, main 4ba7cb8 merged in (7df645a; docs only). Review found
+no numerical fault; every point it raised is now done:
+- B1 merge with main (6696884), S4 conditional hashing (7c9c98c), S2 noise-tolerance cap and
+  S6 progress against the best residual (8f13c92), S1 last layer's residual at its Stein
+  target, Picard wording (b3c4b99).
+- S5: `eta_max` caps only the outer step, stated in the `SolverConfig` comment and design.md
+  (already in 7c9c98c/b3c4b99; the design.md config block reworded in present tense).
+- Nits: the floor on health backtracks is in design.md (b39d037); the Picard reference
+  `notebooks/exemplar_reference.py` and its quadrature test pass (ff68919: 0.004 from the
+  quadrature fixed point, bound 0.02, test budget cut to ~1 s); the script also runs end to
+  end on an exemplar cache. The weak-test numbers in design.md (0.042-0.046 / 0.110-0.119)
+  were re-measured over seeds 0-4 and are exact (default 0.042-0.046, legacy 0.110-0.119),
+  so unchanged. History wording in the relu replay and design.md config comments reworded.
+  `tests/pinned_runs.py:13` is 83 columns on this tip; the five lines the branch added over
+  100 columns are wrapped.
+- Exemplar numbers in design.md re-measured (7f09d8c); they supersede those in "Result"
+  above. At the defaults (HMC, net init, 80 steps): last three at most 0.196 (tripwire 0.9),
+  inner loop converged at all 80 outer steps (1-13 inner steps, 3 rejected, 0 health
+  backtracks); importance 0.092; lazy 0.392 (12 rejected), all converged inner loops. Solves
+  2.1 / 2.7 / 1.6 % from the Picard reference (net 6.4 %).
+- Full suite: 1569 passed; `ruff check fct tests notebooks` and `ruff format --check fct
+  tests` clean.
+Next: a confirmation review pass, merge, then start `outer-run-health-guard`.
