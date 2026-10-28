@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: awaiting your confirmation
+status: todo
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -39,3 +39,7 @@ removed from the equations and titles). Example outputs and R^2 are shown on the
 - The Phi cells use `get_test_dataset`; the A^(l) are (3^k, 3^k); the trial picks spread over
   the sign patterns sorted by the chosen latent.
 - The spatial notebook test suite still passes; ruff clean.
+
+## PI confirmation (2026-10-28)
+Confirmed. Starts once `spatial-sweep`, `readout-post-activations` and `prior-scaling-convention`
+are merged (it needs the spatial presets, the phi(h^L) readout and the final loss).

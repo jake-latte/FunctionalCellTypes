@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: in progress
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -42,3 +42,8 @@ readout: in the model, the solver and every notebook.
   net's empirical kernels use phi(h^L); no `readout` field remains.
 - Old artefacts raise StaleCacheError; new ones load.
 - Tests CPU only; ruff clean; design doc updated.
+
+## PI confirmation (2026-10-28)
+Confirmed as planned (the model, the solver and every notebook read out phi(h^L)). The PI cancelled
+the `pt_sweep_big` arrays because this change invalidates them, so the hazard above is gone: merge
+as soon as reviewed. The notebook part of the "figures only" alternative is moot.

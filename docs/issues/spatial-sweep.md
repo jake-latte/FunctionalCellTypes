@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: in progress
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -64,3 +64,12 @@ existing `net.*` / `train.*` axes.
   same axis on a non-spatial sweep fails at load time naming the axis.
 - `sweep run --stage solve` on a spatial setting fails with the solver's one-line message.
 - Tests CPU only; ruff clean; README and design doc updated.
+
+## PI confirmation (2026-10-28)
+Confirmed. The prior-term convention is decided: it is ALWAYS `lambda_w / (2 beta)` times the prior
+quadratic form, with `beta = 1` under Adam. That change is its own item, `prior-scaling-convention`,
+which lands after `readout-post-activations`; this item does not touch the loss. Because
+`LOSS_VERSION` / `MODEL_VERSION` bumps are landing in parallel, the "non-spatial sweeps build the
+same configs as before" criterion is tested as equality of the expanded `Config` objects against the
+previous `SweepConfig` expansion (or a dump made at the branch base), NOT against pinned hash strings.
+The SLURM hazard is gone (the PI cancelled the arrays), so this branch may change anything it needs.
