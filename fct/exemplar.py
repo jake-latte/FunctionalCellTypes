@@ -210,9 +210,9 @@ def solve_summary(
     """One markdown paragraph on a finished solve, every number measured from it (layers
     counted from 1): the fixed-point residual of Φ̂ at the first and last outer step and
     whether it fell, the last layer's residual at its Stein target (if recorded), the smallest
-    sampler ESS fraction and where it occurred, the largest eigenvalue and mean diagonal of the solved kernels `Phi` (and of the net's `net_Phi`, if
-    given), the final train MSE (theory and, if the solve had a net, the net's) and the final
-    kernel alignment with the net."""
+    sampler ESS fraction and where it occurred, the largest eigenvalue and mean diagonal of the
+    solved kernels `Phi` (and of the net's `net_Phi`, if given), the final train MSE (theory
+    and, if the solve had a net, the net's) and the final kernel alignment with the net."""
     first = np.asarray(history["phihat_fp_resid_stein"][0], dtype=float)
     last = np.asarray(history["phihat_fp_resid_stein"][-1], dtype=float)
     parts = [
