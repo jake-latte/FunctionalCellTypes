@@ -88,7 +88,8 @@ def exemplar_reference(cfg: Config, X: torch.Tensor, Y: torch.Tensor, **kw) -> t
 
 
 def _scales(Phi: torch.Tensor) -> str:
-    return f"top eigenvalue {torch.linalg.eigvalsh(Phi)[-1]:.3f}, mean diagonal {Phi.diagonal().mean():.4f}"
+    top = torch.linalg.eigvalsh(Phi)[-1]
+    return f"top eigenvalue {top:.3f}, mean diagonal {Phi.diagonal().mean():.4f}"
 
 
 def report(cache_root: Path) -> None:
