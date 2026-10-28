@@ -165,8 +165,8 @@ class SolverConfig(BaseModel):        # how it is solved
     max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
     # step control (STEP_CONTROL_FIELDS, hashed when not at STEP_CONTROL_LEGACY; see meanfield.py "Step control").
-    # eta_max caps only the outer step size; the inner one is capped by eta_max_phihat (eta_max capped both before
-    # eta_max_phihat existed, so a config that relied on eta_max for the inner step must set eta_max_phihat too)
+    # eta_max caps only the outer step size; the inner one is capped by eta_max_phihat, so a smaller inner step is set
+    # there, not through eta_max
     inner_step_control: Literal["health", "progress"] = "progress"; eta_max_phihat: float = 0.25
     phi_step_scale: Literal["trace", "kernel"] = "kernel"; inner_start: Literal["previous", "target"] = "target"
     # STEP_CONTROL_LEGACY ("health", 1, "trace", "previous") with eta_max = 1 is the plain Algorithm 1
@@ -539,7 +539,9 @@ Step control (`SolverConfig` defaults; each part can be switched back, see the c
   smallest residual accepted so far in that ascent by more than the convergence tolerance of the point before the step,
   max(inner_tol, min(inner_tol_mc x MC error, 0.5)), is reverted (tilt and chain state) and retried with half the step
   size, not below eta_min_rel x eta_phihat (a step at the floor is accepted, so Monte Carlo noise cannot stall the
-  ascent; the floor also bounds halvings after a health revert; the log says when a layer sits at it). The reference is
+  ascent; the floor also bounds halvings after a health revert, so a step that still breaks the sampler at the floor
+  is retried there until max_backtrack raises; under "health" halving has no floor; the log says when a layer sits at
+  it). The reference is
   the smallest accepted residual, not the last, so a run of small accepted rises cannot let the residual creep up; the
   margin is the tolerance because the residuals are noisy estimates (the smallest a lucky low one), and a strict "did
   not rise" ratchets eta_phihat down to its floor. The Monte Carlo part of the tolerance is capped at 0.5

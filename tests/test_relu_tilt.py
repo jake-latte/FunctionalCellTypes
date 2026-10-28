@@ -231,8 +231,8 @@ def test_the_rule_admits_a_non_normalisable_tilt_in_a_solve_with_eta_max_0_1(exe
     as -r^2. That step's HMC Stein mismatch (0.06) does not flag it; its h^2 / prior jumps to
     about 3e3 and the next step backtracks, but the solve carries on (and later rides the
     delta floor with the projection firing every step and the density often non-normalisable)."""
-    # The incident was found under the step control before inner steps were checked on
-    # progress; these settings replay it exactly.
+    # The incident's settings: health-only inner steps, the trace-scaled outer step and both
+    # step caps at 0.1, under which this solve is replayed exactly.
     snapshots = relu_solve(
         exemplar, 6, **{**LEGACY_STEP_CONTROL, "eta_max": 0.1, "eta_max_phihat": 0.1}
     )

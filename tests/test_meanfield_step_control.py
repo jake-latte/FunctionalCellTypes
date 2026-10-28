@@ -338,8 +338,12 @@ def test_a_gaussian_layer_follows_the_legacy_path_to_the_same_saddle():
 
     def distances(**solver) -> np.ndarray:
         path = []
+
+        def record(snap):
+            path.append(relative_fro(snap.Phi[0], Phi_star))
+
         mf.solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, linear_cfg(**solver), log=lambda _m: None,
-                 on_outer=lambda snap: path.append(relative_fro(snap.Phi[0], Phi_star)))  # fmt: skip
+                 on_outer=record)  # fmt: skip
         return np.array(path)
 
     new, legacy = distances(), distances(**LEGACY_STEP_CONTROL)
