@@ -636,7 +636,7 @@ class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monito
     # rate_lambda, optimizer, beta; an axis of the same name wins. spatial: SpatialConfig | None = None, the spatial weight prior of every setting
     # (written to Config.spatial; training hashes change with it, grid_hash does not). A `spatial.<path>` axis varies a field of the section and
     # is rejected at load ("set the sweep's spatial section first") when the sweep has none; `spatial` itself is a valid axis only while the
-    # section is None (its values are whole dumps, or None). A dict-valued axis value is labelled in directory names as `<axis>-<6 hex of the
+    # section is None (its values are whole dumps, or None). A dict- or list-valued axis value (or one whose text exceeds MAX_LABEL_VALUE = 24 characters) is labelled in directory names as `<axis>-<6 hex of the
     # sha256 of its sorted JSON>`, so names stay short; the solve stage raises SpatialPriorUnsupportedError per spatial setting
     # meanfield: the problem fields plus the `solver` group, library defaults (rate_tilt None: follows train.rate_lambda). It reaches every setting's
     # Config.meanfield but never enters a training hash or a directory name, so a sweep.json without it (legacy) loads with the defaults and keeps both;
@@ -647,7 +647,7 @@ class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monito
     # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles (change the
     # sweep field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
     # build the same Config, so [0, 0.0] is a repeat), then every combination is built into a Config, so a bad axis name or value fails
-    # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the TrainConfig default (1e-4) unless it is an axis
+    # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the sweep's `weight_lambda` field (the TrainConfig default 1e-4 unless set) unless it is an axis
 def preset(name: str, n_lambda: int | None = None) -> SweepConfig   # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full" and "modularity": N=256, P=4096, 15000 epochs (placeholders to tune), the modularity grid;
                                                                     # "phase_transition": the sizes of "full" + phase_transition(n_lambda); n_lambda is required there and rejected elsewhere; ValueError otherwise
 def spatial_tiny() -> SweepConfig                    # presets without lambda axes (FIXED_GRID_PRESETS; n_lambda is rejected): grid net.N [4, 8], P 16, linear teacher m 6 k 2, L 1, tanh, SGLD (beta 1e3), 6 epochs, CPU, spatial prior with grid embeddings, length scale 0.15, min_rel_eig 1e-2, meanfield.n_points 16

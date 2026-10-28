@@ -15,7 +15,15 @@ import numpy as np
 from torch import Tensor
 
 from fct.cache import cache_paths
-from fct.config import Config, DataConfig, NetConfig, TrainConfig, save_config
+from fct.config import (
+    Config,
+    DataConfig,
+    NetConfig,
+    Optimizer,
+    Phi,
+    TrainConfig,
+    save_config,
+)
 from fct.data import Dataset, get_dataset
 from fct.model import MLP
 from fct.spatial import (
@@ -58,13 +66,13 @@ def make_config(
     k: int,
     N: int,
     L: int,
-    phi: Literal["relu", "tanh", "sigmoid"],
+    phi: Phi,
     g: float,
     data_seed: int,
     net_seed: int,
     weight_lambda: float,
     rate_lambda: float,
-    optimizer: Literal["adam", "sgld"],
+    optimizer: Optimizer,
     beta: float,
     lr: float,
     n_epochs: int,

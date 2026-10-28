@@ -50,6 +50,8 @@ from fct.config import (
     NetConfig,
     NonNegFloat,
     NonNegInt,
+    Optimizer,
+    Phi,
     PosFloat,
     PosInt,
     StrictModel,
@@ -69,8 +71,10 @@ SWEEP_FILE = "sweep.json"
 SETTING_FILE = "setting.json"
 TASK_AXIS = "data.task"
 SPATIAL_PREFIX = "spatial."
-# Length of the hash that stands for a dict-valued axis value in a directory name.
+# Length of the hash that stands for a dict-, list- or long-valued axis value in a directory name.
 LABEL_HASH_LENGTH = 6
+# A value whose text is longer than this is shown as a hash in a directory name.
+MAX_LABEL_VALUE = 24
 # Setting directories are ROOT/<task>/<name>: `expand` builds `relpath` that way, and the lookups
 # below find them with this glob.
 SETTING_DIRS_GLOB = "*/*"
@@ -160,8 +164,8 @@ class SweepConfig(StrictModel):
     """Shared settings of the runs, and the grid they are swept over; see `preset`.
 
     The same data, net and training seeds are used for every setting, so settings differ only
-    in the grid axes. Everything else is the base `Config` a setting starts from (`weight_lambda`
-    is the library default unless it is an axis). `grid` maps a dotted `Config` path to the list
+    in the grid axes. Everything else is the base `Config` a setting starts from (the shared
+    network and loss fields `L`, `g`, `phi`, `weight_lambda`, ... are the library defaults unless set). `grid` maps a dotted `Config` path to the list
     of values that axis takes; None means the modularity grid. Any Config field may be an axis
     and then wins over the sweep's shared field (`net.N` over `N`, `train.lr` over `lr`), except
     the fields the sweep owns (`SWEEP_OWNED_AXES`: sizes of the data, seeds, log/save/monitor
@@ -198,10 +202,10 @@ class SweepConfig(StrictModel):
     # Shared network and loss fields, the library defaults unless set; any of them may be an axis.
     L: PosInt = NetConfig().L
     g: PosFloat = NetConfig().g
-    phi: Literal["relu", "tanh", "sigmoid"] = NetConfig().phi
+    phi: Phi = NetConfig().phi
     weight_lambda: NonNegFloat = TrainConfig().weight_lambda
     rate_lambda: NonNegFloat = TrainConfig().rate_lambda
-    optimizer: Literal["adam", "sgld"] = TrainConfig().optimizer
+    optimizer: Optimizer = TrainConfig().optimizer
     beta: PosFloat = TrainConfig().beta
     # The spatial weight prior of every setting (`Config.spatial`); None trains under the iid
     # prior (the plain weight L2). Its fields may be axes (`spatial.hidden.kernel.length_scale`).
@@ -382,7 +386,9 @@ def preset(name: str, n_lambda: int | None = None) -> SweepConfig:
     is `full`); the grid presets need `n_lambda`, the others reject it."""
     if name not in PRESET_NAMES:
         raise ValueError(f"unknown preset {name!r}; valid: {sorted(PRESET_NAMES)}")
-    if name in FIXED_GRID_PRESETS and n_lambda is None:
+    if name in FIXED_GRID_PRESETS:
+        if n_lambda is not None:
+            raise ValueError(f"preset {name!r} has no lambda axes, so n_lambda does not apply")
         return FIXED_GRID_PRESETS[name]()
     if name in GRID_PRESETS:
         if n_lambda is None:
@@ -524,14 +530,14 @@ def _validate_grid(sweep: SweepConfig, grid: dict[str, list]) -> None:
 
 def _label_part(axis: str, value: Any) -> str:
     """`<last part of the axis path><value>` for a directory name, e.g. `rate_lambda1e-06`; a
-    dict value is shown as a short hash of its contents.
+    dict or list value (or any text longer than MAX_LABEL_VALUE) is shown as a short hash of its
+    contents, so the name stays within NAME_MAX.
     Characters outside letters, digits and `._+-` become `-` so the name is a safe path
     component. The label is for people; uniqueness comes from the index prefix."""
-    if isinstance(value, dict):  # a whole section: its dump is far longer than NAME_MAX
+    text = f"{value:g}" if isinstance(value, float) else str(value)
+    if isinstance(value, dict | list) or len(text) > MAX_LABEL_VALUE:
         digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
         text = f"-{digest[:LABEL_HASH_LENGTH]}"
-    else:
-        text = f"{value:g}" if isinstance(value, float) else str(value)
     return re.sub(r"[^A-Za-z0-9._+-]", "-", axis.rsplit(".", 1)[-1] + text)
 
 

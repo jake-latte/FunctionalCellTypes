@@ -4,10 +4,12 @@ for dict-valued axes, and that sweeps without a spatial section are unchanged (C
 import pytest
 
 from fct.cli import main
-from fct.config import Config, DataConfig, NetConfig, TrainConfig
+from fct.config import Config, NetConfig, TrainConfig
 from fct.spatial import SpatialConfig
 from fct.sweep import (
     SweepConfig,
+    _label_part,
+    data_config,
     expand,
     load_sweep,
     phase_transition,
@@ -38,14 +40,7 @@ def _previous_config(sweep: SweepConfig, axes: dict) -> Config:
     """The Config the sweep built before it had a spatial section: the base fields written out
     by hand, then the axis values over it."""
     base = Config(
-        data=DataConfig(
-            task="linear_teacher",
-            P=sweep.P,
-            seed=sweep.seeds.data,
-            D_in=sweep.linear_teacher.n_features,
-            n_latents=sweep.linear_teacher.n_latents,
-            latent_range=sweep.linear_teacher.latent_range,
-        ),
+        data=data_config(sweep, axes.get("data.task", sweep.task)),
         net=NetConfig(N=sweep.N, seed=sweep.seeds.net),
         train=TrainConfig(
             n_epochs=sweep.n_epochs,
@@ -63,6 +58,8 @@ def _previous_config(sweep: SweepConfig, axes: dict) -> Config:
     )
     tree = base.model_dump()
     for axis, value in axes.items():
+        if axis == "data.task":  # chosen above, together with the task's own D_in
+            continue
         section, field = axis.split(".")
         tree[section][field] = value
     return Config.model_validate(tree)
@@ -82,17 +79,67 @@ def test_sweeps_without_spatial_build_the_configs_they_built_before(grid):
         assert setting_config(sweep, setting) == _previous_config(sweep, setting.axes)
 
 
+@pytest.mark.parametrize("name", ["tiny", "modularity"])
+def test_the_modularity_grid_builds_the_configs_it_built_before(name):
+    sweep = preset(name)
+    assert sweep.grid is None
+    settings = expand(sweep)
+    assert len(settings) == 36
+    for setting in settings:
+        assert setting_config(sweep, setting) == _previous_config(sweep, setting.axes)
+
+
 def test_the_phase_transition_preset_builds_the_configs_it_built_before():
     sweep = phase_transition(2)
     for setting in expand(sweep):
         assert setting_config(sweep, setting) == _previous_config(sweep, setting.axes)
 
 
-def test_the_shared_fields_the_spatial_presets_set_default_to_the_library_defaults():
-    sweep = with_grid(preset("tiny"), {"net.L": [1]})
-    cfg = setting_config(sweep, expand(sweep)[0])
-    assert (cfg.net.g, cfg.net.phi, cfg.train.optimizer) == (1.0, "relu", "adam")
-    assert cfg.train.weight_lambda == TrainConfig().weight_lambda
+def _only_setting_config(sweep: SweepConfig) -> Config:
+    (setting,) = expand(sweep)
+    return setting_config(sweep, setting)
+
+
+def test_the_shared_fields_default_to_the_library_defaults():
+    cfg = _only_setting_config(with_grid(preset("tiny"), {"net.N": [4]}))
+    net, train = NetConfig(), TrainConfig()
+    assert (cfg.net.L, cfg.net.g, cfg.net.phi) == (net.L, net.g, net.phi)
+    assert (cfg.train.weight_lambda, cfg.train.rate_lambda) == (
+        train.weight_lambda,
+        train.rate_lambda,
+    )
+    assert (cfg.train.optimizer, cfg.train.beta) == (train.optimizer, train.beta)
+
+
+@pytest.mark.parametrize(
+    "field, value, read",
+    [
+        ("L", 2, lambda c: c.net.L),
+        ("g", 0.7, lambda c: c.net.g),
+        ("phi", "sigmoid", lambda c: c.net.phi),
+        ("weight_lambda", 0.02, lambda c: c.train.weight_lambda),
+        ("rate_lambda", 0.03, lambda c: c.train.rate_lambda),
+        ("optimizer", "sgld", lambda c: c.train.optimizer),
+        ("beta", 123.0, lambda c: c.train.beta),
+    ],
+)
+def test_each_shared_field_reaches_the_config(field, value, read):
+    sweep = with_grid(preset("tiny").model_copy(update={field: value}), {"net.N": [4]})
+    assert read(_only_setting_config(sweep)) == value
+
+
+@pytest.mark.parametrize(
+    "shared, axis, values, read",
+    [
+        ({"L": 1}, "net.L", [2, 3], lambda c: c.net.L),
+        ({"beta": 1e4}, "train.beta", [5.0], lambda c: c.train.beta),
+        ({"phi": "tanh"}, "net.phi", ["relu"], lambda c: c.net.phi),
+        ({"weight_lambda": 3e-3}, "train.weight_lambda", [0.5], lambda c: c.train.weight_lambda),
+    ],
+)
+def test_an_axis_wins_over_a_non_default_shared_field(shared, axis, values, read):
+    sweep = with_grid(preset("tiny").model_copy(update=shared), {axis: values})
+    assert [read(setting_config(sweep, s)) for s in expand(sweep)] == values
 
 
 # ---------------------------------------------------------------- the presets
@@ -175,6 +222,23 @@ def test_a_dict_valued_axis_gets_a_short_distinct_directory_name(tmp_path):
     assert names[0] == "s0000_spatialNone" and names[1].startswith("s0001_spatial-")
 
 
+@pytest.mark.parametrize(
+    "axis, values",
+    [
+        ("train.lr", [[0.001 * (i + 1) for i in range(60)], [0.002 * (i + 1) for i in range(60)]]),
+        ("spatial.hidden.embedding.shape", [[4], [8]]),
+    ],
+)
+def test_list_valued_axes_give_short_distinct_labels(axis, values):
+    """A list of 60 floats would otherwise give a name beyond NAME_MAX."""
+    labels = [_label_part(axis, v) for v in values]
+    assert len(set(labels)) == 2 and all(len(label) < 40 for label in labels)
+
+
+def test_a_long_string_value_is_hashed_in_the_label():
+    assert len(_label_part("data.task", "x" * 300)) < 40
+
+
 # ---------------------------------------------------------------- running
 def test_spatial_tiny_runs_end_to_end_and_resumes(tmp_path, capsys):
     root = str(tmp_path)
@@ -189,14 +253,25 @@ def test_spatial_tiny_runs_end_to_end_and_resumes(tmp_path, capsys):
     assert "2 done, 0 partial, 0 missing, 0 stale" in capsys.readouterr().out
 
 
-def test_an_interrupted_spatial_setting_resumes(tmp_path):
+class _Interrupt(Exception):
+    pass
+
+
+def test_an_interrupted_spatial_setting_resumes_from_its_checkpoint(tmp_path):
     sweep = preset("spatial_tiny")
-    run_setting(sweep, 0, tmp_path, log=lambda *_: None)
-    final = setting_dir(tmp_path, expand(sweep)[0]) / "train" / "final.pt"
-    final.unlink()
-    assert setting_status(tmp_path, sweep, expand(sweep)[0]) == "partial"
-    run_setting(sweep, 0, tmp_path, log=lambda *_: None)
-    assert setting_status(tmp_path, sweep, expand(sweep)[0]) == "done"
+    setting = expand(sweep)[0]
+
+    def stop_at_epoch_4(line: str) -> None:
+        if line.startswith("[00004/"):
+            raise _Interrupt
+
+    with pytest.raises(_Interrupt):
+        run_setting(sweep, 0, tmp_path, log=stop_at_epoch_4)
+    assert setting_status(tmp_path, sweep, setting) == "partial"
+    lines: list[str] = []
+    run_setting(sweep, 0, tmp_path, log=lines.append)
+    assert any(line.startswith("resumed from") and "at epoch" in line for line in lines)
+    assert setting_status(tmp_path, sweep, setting) == "done"
 
 
 def test_sweep_run_stage_solve_on_a_spatial_setting_is_a_one_line_error(tmp_path, capsys):
