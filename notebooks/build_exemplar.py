@@ -210,7 +210,8 @@ def build_notebook() -> NotebookNode:
         new_code_cell(TRAIN),
         new_markdown_cell(
             "The training loss, the net's outputs on a few training points, and its empirical "
-            "kernels $\\Phi_l = \\langle \\psi\\psi^\\top \\rangle$ at the end of training."
+            "kernels $\\Phi_l = \\langle \\psi\\psi^\\top \\rangle$, $\\psi = \\phi(h^{(l)})$, at the "
+            "end of training; the output reads the last one, $\\hat y = V^\\top \\phi(h^{(L)}) / N$."
         ),
         new_code_cell(TRAIN_PLOTS),
         new_markdown_cell(
