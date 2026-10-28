@@ -50,26 +50,26 @@ def sgld_theory_constants(
     beta: float, weight_lambda: float, rate_lambda: float, n_points: int, d_out: int
 ) -> dict[str, float]:
     """The `MeanFieldConfig` constants (prior_scale, alpha, rate_tilt, learning_prefactor) under
-    which the theory
-    describes the stationary law exp(-beta L) of SGLD on the repo loss L (see `fct.sgld`).
+    which the theory describes the stationary law exp(-beta L) of SGLD on the repo loss L (see
+    `fct.sgld`), whose weight prior is weight_lambda / (2 beta) ||theta||^2 (`prior_coefficient`).
 
-    The loss puts weight_lambda ||theta||^2 on standard-normal-parametrised weights, so under
-    SGLD at beta each weight has variance 1 / (2 beta weight_lambda): that is the prior scale.
-    The 1/N-scaled readout turns the data term into a Gaussian likelihood of precision
-    beta N / (P d_out) on the outputs, which makes the ridge
-    alpha = P d_out / (beta prior_scale) = 2 weight_lambda P d_out. The rate penalty
-    beta rate_lambda sum(phi^2) is the tilt exp(-rate_tilt phi^T phi / 2), so
-    rate_tilt = 2 beta rate_lambda. The solver's kernels are unscaled (Sigma = prior_scale Phi0),
-    so the data-term prefactor of the action, which is 1/2 for prior_scale = 1, is
-    learning_prefactor = 1 / (2 prior_scale) = beta weight_lambda.
-    The library's own defaults (prior_scale = 1 / weight_lambda, alpha = weight_lambda P d_out
-    / beta, rate_tilt = rate_lambda, learning_prefactor = 1/2) agree with this only at
-    beta = 1/2, and the prefactor only at prior_scale = 1."""
+    The beta in the prior cancels the beta of the law, so each standard-normal-parametrised
+    weight has variance 1 / weight_lambda for every beta: that is the prior scale, and the
+    solver's default. The 1/N-scaled readout turns the data term into a Gaussian likelihood of
+    precision beta N / (P d_out) on the outputs, which makes the ridge
+    alpha = P d_out / (beta prior_scale) = weight_lambda P d_out / beta (also the solver's
+    default). The rate penalty beta rate_lambda sum(phi^2) is the tilt
+    exp(-rate_tilt phi^T phi / 2), so rate_tilt = 2 beta rate_lambda. The solver's kernels are
+    unscaled (Sigma = prior_scale Phi0), so the data-term prefactor of the action, which is 1/2
+    for prior_scale = 1, is learning_prefactor = 1 / (2 prior_scale) = weight_lambda / 2.
+    The solver's own defaults (rate_tilt = rate_lambda, learning_prefactor = 1/2) agree with
+    these only at beta = 1/2 and weight_lambda = 1 respectively; they are exact for prior_scale
+    and alpha."""
     return {
-        "prior_scale": 1.0 / (2.0 * beta * weight_lambda),
-        "alpha": 2.0 * weight_lambda * n_points * d_out,
+        "prior_scale": 1.0 / weight_lambda,
+        "alpha": weight_lambda * n_points * d_out / beta,
         "rate_tilt": 2.0 * beta * rate_lambda,
-        "learning_prefactor": beta * weight_lambda,
+        "learning_prefactor": 0.5 * weight_lambda,
     }
 
 

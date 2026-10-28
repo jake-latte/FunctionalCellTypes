@@ -50,7 +50,7 @@ from fct.sweep import (
     setting_status,
 )
 from fct.tasks import Dataset, resample
-from fct.train import compute_loss, load_trained, make_weight_penalty
+from fct.train import compute_loss, load_trained, make_weight_penalty, prior_coefficient
 
 Row = dict[str, object]
 
@@ -413,7 +413,9 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
     tc = cfg.train
     with torch.no_grad():
         penalty = make_weight_penalty(cfg, net)
-        loss, parts = compute_loss(net, train.x, train.y, tc.weight_lambda, tc.rate_lambda, penalty)
+        loss, parts = compute_loss(
+            net, train.x, train.y, prior_coefficient(tc), tc.rate_lambda, penalty
+        )
     stats = loss_curve_stats(history)
     train_mse, held_mse = parts["mse"].item(), mse(net, held)
     null_mse = held.y.square().mean().item()

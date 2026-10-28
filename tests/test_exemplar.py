@@ -40,34 +40,56 @@ def test_the_config_carries_every_setting_and_ties_both_betas():
 
 
 def test_sgld_theory_constants_follow_the_stationary_law_of_the_loss():
-    """exp(-beta L) puts variance 1 / (2 beta lambda_w) on each weight; the likelihood precision
-    beta N / (P d_out) gives the ridge 2 lambda_w P d_out; the tilt is 2 beta lambda_r."""
+    """The loss prior weight_lambda / (2 beta) ||theta||^2 makes exp(-beta L) put variance
+    1 / weight_lambda on each weight; the likelihood precision beta N / (P d_out) gives the ridge
+    weight_lambda P d_out / beta; the tilt is 2 beta lambda_r and the prefactor weight_lambda / 2."""
     c = exemplar.sgld_theory_constants(
         beta=5.0, weight_lambda=1e-2, rate_lambda=1e-3, n_points=8, d_out=4
     )
-    assert c["prior_scale"] == pytest.approx(10.0)
-    assert c["alpha"] == pytest.approx(0.64)
+    assert c["prior_scale"] == pytest.approx(100.0)
+    assert c["alpha"] == pytest.approx(0.064)
     assert c["rate_tilt"] == pytest.approx(1e-2)
-    assert c["learning_prefactor"] == pytest.approx(0.05)  # beta weight_lambda = 1 / (2 s)
+    assert c["learning_prefactor"] == pytest.approx(0.005)
     assert c["learning_prefactor"] == pytest.approx(1 / (2 * c["prior_scale"]))
     assert c["alpha"] == pytest.approx(8 * 4 / (5.0 * c["prior_scale"]))  # P d_out / (beta s)
 
 
+@pytest.mark.parametrize("beta", [0.1, 1.0, 5.0, 1e3])
+def test_the_solver_defaults_for_prior_scale_and_alpha_are_the_sgld_constants(beta):
+    """Exact for every beta; the rate tilt and the prefactor defaults are not (docstring of
+    `sgld_theory_constants`), which is why the exemplar config overrides all four."""
+    from fct.config import MeanFieldConfig
+    from fct.meanfield import _make_problem
+
+    c = exemplar.sgld_theory_constants(beta, 0.03, 1e-3, n_points=8, d_out=4)
+    X, Y = torch.randn(8, 4, dtype=torch.float64), torch.randn(8, 4, dtype=torch.float64)
+    prob = _make_problem(X, Y, 1, 0.03, 1e-3, torch.tanh, 1.0, MeanFieldConfig(beta=beta))
+    assert prob.prior_scale == pytest.approx(c["prior_scale"])
+    assert prob.alpha == pytest.approx(c["alpha"])
+
+
 def test_the_config_sets_those_constants_for_sgld_and_leaves_adam_at_the_defaults():
     sgld = config().meanfield
-    assert (sgld.prior_scale, sgld.alpha, sgld.rate_tilt) == pytest.approx((10.0, 0.64, 1e-2))
-    assert sgld.learning_prefactor == pytest.approx(0.05)
+    assert (sgld.prior_scale, sgld.alpha, sgld.rate_tilt) == pytest.approx((100.0, 0.064, 1e-2))
+    assert sgld.learning_prefactor == pytest.approx(0.005)
     adam = config(optimizer="adam").meanfield
     assert (adam.prior_scale, adam.alpha, adam.rate_tilt) == (None, None, None)
     assert adam.learning_prefactor == 0.5
 
 
-def test_sgld_weights_in_data_free_directions_have_the_variance_prior_scale(tmp_path):
+# (beta, weight_lambda) with lr * weight_lambda / beta = 0.04, so the weights equilibrate in
+# about a hundred steps per relaxation time and the 6000 epochs are many relaxation times.
+@pytest.mark.parametrize("beta, weight_lambda", [(0.5, 0.4), (5.0, 4.0), (50.0, 40.0)])
+def test_sgld_weights_in_data_free_directions_have_the_variance_prior_scale(
+    tmp_path, beta, weight_lambda
+):
     """The law the constants claim: x spans only k of the m features, so U v for v orthogonal to
     the data feels neither the data term nor the rate penalty, and under SGLD at beta its
-    entries are N(0, 1 / (2 beta weight_lambda)) = N(0, prior_scale). 64 units x 2 directions
+    entries are N(0, 1 / weight_lambda) = N(0, prior_scale) for every beta. 64 units x 2 directions
     give about 12% sampling error; the tolerance is 30%."""
-    cfg = config(N=64, P=12, m=4, k=2, beta=5.0, lr=0.05, n_epochs=6000)
+    cfg = config(
+        N=64, P=12, m=4, k=2, beta=beta, weight_lambda=weight_lambda, lr=0.05, n_epochs=6000
+    )
     run = exemplar.train_exemplar(cfg, tmp_path, **QUIET)
     _, _, directions = torch.linalg.svd(run.dataset.x.double())
     free = directions[cfg.data.n_latents :]  # right singular vectors outside the data's span

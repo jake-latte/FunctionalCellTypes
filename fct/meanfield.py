@@ -17,11 +17,15 @@ expectation under that density, which a per-layer sampler provides: `SingleSiteH
     ∂S/∂Φ_L = -½ Φ̂_L - c A Y Yᵀ A,  A = (αI + Φ_L)⁻¹      (Eq. 31c)
 
 Mapping of the network's (β, λ_w, λ_r) onto the action (overridable in MeanFieldConfig):
-prior_scale = 1/λ_w, α = λ_w P D_out / β, c = learning_prefactor = ½.  The rate tilt λ_r
-multiplies φᵀφ summed over the P solved points, a per-sample coefficient; `solve` takes it as
-`lambda_r`.  The trained network's rate penalty is summed over its samples, so its per-sample
-coefficient is exactly train.rate_lambda (exact under the same ½ convention as the weight prior:
-prior_scale = 1/λ_w ↔ loss λ_w‖θ‖², density exp(-½ λ_w‖θ‖²)), which `run_meanfield` passes as `lambda_r`;
+prior_scale = 1/λ_w, α = λ_w P D_out / β, c = learning_prefactor = ½.  The loss carries the weight
+prior as λ_w/(2β)‖θ‖² (`fct.train.prior_coefficient`, β = 1 for Adam), so the stationary law
+exp(-βL) of SGLD at inverse temperature β has weights N(0, 1/λ_w) for every β: prior_scale and α
+are exact when the solver's `beta` is the training β.  The other two defaults are not: the rate
+penalty λ_r Σφ² enters the law as exp(-β λ_r Σφ²), a tilt of 2βλ_r (the default λ_r is exact
+only at β = ½), and the data-term prefactor is 1/(2 prior_scale) = λ_w/2 for the unscaled
+kernels (the default ½ is exact only at λ_w = 1).  `fct.exemplar.sgld_theory_constants` returns
+all four exact values.  The rate tilt multiplies φᵀφ summed over the P solved points, a
+per-sample coefficient; `solve` takes the default as `lambda_r`, and
 `MeanFieldConfig.rate_tilt`, when set, overrides it.
 
 Layers: `solve` is the computation (it touches disk only when given a checkpoint_dir),

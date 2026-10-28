@@ -280,7 +280,7 @@ def test_loss_golden_value_is_tied_to_the_loss_and_model_versions():
     # Change the expected value and LOSS_VERSION (MODEL_VERSION) together whenever the loss
     # (the forward pass) changes: the versions are what reject caches made under the previous
     # definition.
-    assert fct.config.LOSS_VERSION == 3
+    assert fct.config.LOSS_VERSION == 4
     assert fct.config.MODEL_VERSION == 2
     net = _two_sample_net()
     with torch.no_grad():
