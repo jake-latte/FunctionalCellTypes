@@ -1,13 +1,20 @@
 """The tiny solves and configs whose outputs are pinned in tests/fixtures/.
 
-The fixtures were written by the code at commit d1d3091, i.e. by the solver before it had a
-sampler choice or a solver sub-section, with
+The fixtures were first written by the code at commit d1d3091, i.e. by the solver before it had
+a sampler choice or a solver sub-section, with
 
     uv run python -c "from tests import pinned_runs; pinned_runs.write_fixtures()"
 
 They pin behaviour that must not change: `sampler="hmc"` reproduces those solves bit for bit,
-and a config.json written then still loads and hashes to the same cache keys. Regenerate them
-only when that behaviour is meant to change, and say so in the commit.
+and a config.json in the flat layout still loads and hashes to the same cache keys. Regenerate
+them only when that behaviour is meant to change, and say so in the commit.
+
+When the net's output became V^T phi(h^L) / N (MODEL_VERSION 2), `hmc_solve_lazy_net_f32.pt`
+(made with a net read out from h^L) and `meanfield_hashes.json` were rewritten, and the
+`readout` key was deleted by hand from `legacy_config.json`, which keeps its flat layout:
+`write_fixtures` would save that file in the current nested layout instead. The no-net solve
+`hmc_solve_gaussian_phi_f64.pt` was already read out from phi(h^L) and still reproduces its
+d1d3091 output.
 
 Only flat `MeanFieldConfig` keyword arguments are used here, which both the old flat schema and
 the split one accept, so the same code produced the fixtures and checks them.
@@ -22,7 +29,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 F64 = {"device": "cpu", "dtype": torch.float64}
 
 # Two small, fast problems that between them reach every HMC code path the solver has:
-# lazy init with a net and float32 chains; gaussian init, readout phi, float64 chains, no net.
+# lazy init with a net and float32 chains; gaussian init, float64 chains, no net.
 PINNED_SOLVES = {
     "lazy_net_f32": {
         "with_net": True,
@@ -35,7 +42,7 @@ PINNED_SOLVES = {
     "gaussian_phi_f64": {
         "with_net": False,
         "meanfield": {
-            "beta": 1e3, "readout": "phi", "n_chains": 32, "n_outer": 3, "warmup_trans": 10,
+            "beta": 1e3, "n_chains": 32, "n_outer": 3, "warmup_trans": 10,
             "n_inner_max": 3, "n_trans": 2, "n_trans_outer": 3, "n_init_samples": 256,
             "init": "gaussian", "sample_dtype": "float64", "log_int": 1, "seed": 8,
         },
@@ -51,7 +58,7 @@ LEGACY_OVERRIDES = {
     "net": {"N": 16, "L": 2},
     "train": {"rate_lambda": 1e-2},
     "meanfield": {
-        "n_points": 20, "beta": 1e3, "readout": "phi", "rate_tilt": 1e-4, "alpha": 0.3,
+        "n_points": 20, "beta": 1e3, "rate_tilt": 1e-4, "alpha": 0.3,
         "n_chains": 64, "eps0": 0.1, "init": "gaussian", "log_int": 1, "save_int": 3,
         "precondition": False, "seed": 4,
     },

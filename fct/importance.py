@@ -80,7 +80,7 @@ class ImportanceSampler:
     M : (P, P) symmetric tilt matrix (Φ̂ of the solver).
     lambda_r : coefficient of the ½ λ_r φ(h)ᵀφ(h) rate tilt (>= 0).
     phi : elementwise activation.
-    psi_is_phi : True for ψ = φ, False for ψ = h (last layer with readout="h").
+    psi_is_phi : True for ψ = φ (the solver's case); False for ψ = h, a Gaussian tilt.
     n_samples : independent draws per transition.
     proposal_scale : s > 0, the proposal is N(0, s² Σ); s > 1 widens it.
     jitter_rel : relative diagonal jitter added to Σ.

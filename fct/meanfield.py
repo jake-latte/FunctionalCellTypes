@@ -120,24 +120,21 @@ class InadequateSamplerError(RuntimeError):
 
 # ----------------------------------------------------------------------------- public results
 def readout_activities(
-    H: torch.Tensor, phi: Callable[[torch.Tensor], torch.Tensor], readout: str
+    H: torch.Tensor, phi: Callable[[torch.Tensor], torch.Tensor]
 ) -> list[torch.Tensor]:
-    """ψ^l (P, N) of every hidden layer from the pre-activations H (P, L, N): φ(h^l), except
-    on the last layer under readout "h", where the output reads h^L itself and ψ^L = h^L."""
-    if readout not in ("h", "phi"):
-        raise ValueError(f'readout must be "h" or "phi", got {readout!r}')
-    L = H.shape[1]
-    return [phi(H[:, l]) if (l < L - 1 or readout == "phi") else H[:, l] for l in range(L)]
+    """ψ^l = φ(h^l) (P, N) of every hidden layer from the pre-activations H (P, L, N). The last
+    one is what the output reads, Z = Vᵀ φ(h^L) / N."""
+    return [phi(H[:, l]) for l in range(H.shape[1])]
 
 
 @torch.no_grad()
-def empirical_kernels(net: MLP, X: torch.Tensor, readout: str) -> tuple[torch.Tensor, torch.Tensor]:
-    """Φ_l = ψ(h^l) ψ(h^l)ᵀ / N from the trained network at the solver's inputs, and the
+def empirical_kernels(net: MLP, X: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Φ_l = φ(h^l) φ(h^l)ᵀ / N from the trained network at the solver's inputs, and the
     raw pre-activations (P, L, N) (the N neurons are samples from the net's own
     single-site density, which is what the theory predicts)."""
     H, _ = net(X)  # (P, L, N)
     N = H.shape[2]
-    psis = readout_activities(H, net.phi, readout)
+    psis = readout_activities(H, net.phi)
     return torch.stack([psi @ psi.T / N for psi in psis]), H
 
 
@@ -151,9 +148,9 @@ def _solver_inputs(dataset: Dataset, cfg: Config) -> tuple[torch.Tensor, torch.T
 
 def net_kernels(net: MLP, dataset: Dataset, cfg: Config) -> torch.Tensor:
     """The trained net's empirical kernels (L, P, P), float64, on exactly the solver's inputs
-    and readout, so they are directly comparable with the solver's Φ."""
+    so they are directly comparable with the solver's Φ."""
     X, _ = _solver_inputs(dataset, cfg)
-    Phi, _ = empirical_kernels(net, X.to(net.dtype), cfg.meanfield.readout)
+    Phi, _ = empirical_kernels(net, X.to(net.dtype))
     return Phi.to(F64)
 
 
@@ -182,7 +179,6 @@ class _Problem:
     prior_scale: float
     rate_tilt: float
     lp: float  # learning_prefactor c
-    psi_is_phi: tuple[bool, ...]
     sample_dtype: torch.dtype
 
     @property
@@ -228,7 +224,6 @@ def _make_problem(
         prior_scale=1.0 / lambda_w if cfg.prior_scale is None else cfg.prior_scale,
         rate_tilt=lambda_r if cfg.rate_tilt is None else cfg.rate_tilt,
         lp=cfg.learning_prefactor,
-        psi_is_phi=(True,) * (L - 1) + (cfg.readout == "phi",),
         sample_dtype=resolve_dtype(cfg.solver.sample_dtype),
     )
 
@@ -260,7 +255,7 @@ def _new_sampler(
             M,
             prob.rate_tilt,
             prob.phi,
-            prob.psi_is_phi[l],
+            True,  # ψ = φ on every layer, the read-out one included
             n_samples=c.n_importance_samples,
             proposal_scale=c.importance_proposal_scale,
             jitter_rel=c.jitter_rel,
@@ -272,7 +267,7 @@ def _new_sampler(
         M,
         prob.rate_tilt,
         prob.phi,
-        prob.psi_is_phi[l],
+        True,
         n_chains=c.n_chains,
         eps=c.eps0,
         n_leap=c.n_leap,
@@ -302,7 +297,7 @@ def _init_gaussian(prob: _Problem, Phi: torch.Tensor, gen) -> None:
             sym(Sigma) + prob.solver.jitter_rel * Sigma.diagonal().mean() * prob.eye
         )
         h = torch.randn(n, prob.P, device=prob.dev, dtype=F64, generator=gen) @ Lc.T
-        psi = prob.phi(h) if prob.psi_is_phi[l] else h
+        psi = prob.phi(h)
         Phi[l] = psi.T @ psi / n
 
 
@@ -335,7 +330,7 @@ def _init_from_net(prob: _Problem, Phi, Phi_hat, net_Phi, net_H) -> None:
     for l in range(prob.L - 2, -1, -1):
         h = net_H[:, l + 1].T  # (N, P)
         M = sym(Phi_hat[l + 1].to(F64))
-        _, u = tilt_and_grad(h, M, float(prob.rate_tilt), prob.phi, dphi, prob.psi_is_phi[l + 1])
+        _, u = tilt_and_grad(h, M, float(prob.rate_tilt), prob.phi, dphi, True)
         h_u = h.T @ u / h.shape[0]
         Phi_hat[l] = sym(torch.linalg.solve(Phi[l], h_u))
 
@@ -389,7 +384,7 @@ def _fresh_state(prob: _Problem, net: MLP | None, gen, log: Log) -> _SolverState
     if net is not None:
         # The net runs in its own dtype; the theory works in float64.
         X_net = prob.X.to(net.dtype)
-        net_Phi, net_H = empirical_kernels(net, X_net, prob.cfg.readout)
+        net_Phi, net_H = empirical_kernels(net, X_net)
         net_Phi, net_H = net_Phi.to(F64), net_H.to(F64)
         with torch.no_grad():
             _, Z = net(X_net)

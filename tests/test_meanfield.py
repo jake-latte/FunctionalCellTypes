@@ -87,7 +87,12 @@ def analytic_saddle(X, Y, n_iter=2000):
 
 
 def linear_cfg(**overrides):
+    # No tilt projection: the solver samples psi = phi(h) = h here, and its projection for
+    # psi = phi (M + lambda_r I >= tilt_floor lambda_r I, the ReLU orthant condition) would remove
+    # the negative definite learning tilt -2c A Y Y^T A entirely at lambda_r = 0. The Gaussian
+    # problem only needs Sigma^-1 + Phi_hat > 0, which the saddle point satisfies comfortably.
     base = {
+        "project_tilt": False,
         "alpha": ALPHA,
         "learning_prefactor": PREFACTOR,
         "n_outer": 40,
@@ -207,36 +212,35 @@ def test_smoke_relu_two_layers_with_net_is_fast_and_complete():
 def test_empirical_kernels_match_definition():
     X, _ = relu_problem(6, 8, seed=30)
     net = small_net(8, L=3, N=5)
-    Phi, H = empirical_kernels(net, X, "h")
+    Phi, H = empirical_kernels(net, X)
     assert H.shape == (6, 3, 5) and Phi.shape == (3, 6, 6)
-    torch.testing.assert_close(Phi[0], torch.relu(H[:, 0]) @ torch.relu(H[:, 0]).T / 5)
-    torch.testing.assert_close(Phi[2], H[:, 2] @ H[:, 2].T / 5)
-    Phi_phi, _ = empirical_kernels(net, X, "phi")
-    torch.testing.assert_close(Phi_phi[2], torch.relu(H[:, 2]) @ torch.relu(H[:, 2]).T / 5)
+    for layer in range(3):  # phi(h) on every layer, the last (read out) one included
+        psi = torch.relu(H[:, layer])
+        torch.testing.assert_close(Phi[layer], psi @ psi.T / 5)
 
 
-def test_readout_activities_are_phi_of_h_except_h_on_the_last_layer_under_readout_h():
+def test_readout_activities_are_phi_of_h_on_every_layer():
     H = torch.randn(6, 3, 5, generator=torch.Generator().manual_seed(0), dtype=torch.float64)
-    psis = readout_activities(H, torch.tanh, "h")
+    psis = readout_activities(H, torch.tanh)
     assert len(psis) == 3 and all(psi.shape == (6, 5) for psi in psis)
-    for layer in (0, 1):
+    for layer in range(3):
         assert torch.equal(psis[layer], torch.tanh(H[:, layer]))
-    assert torch.equal(psis[2], H[:, 2])
-    assert torch.equal(readout_activities(H, torch.tanh, "phi")[2], torch.tanh(H[:, 2]))
-
-
-def test_readout_activities_reject_an_unknown_readout():
-    with pytest.raises(ValueError, match="readout"):
-        readout_activities(torch.zeros(2, 1, 3), torch.tanh, "rates")
 
 
 def test_empirical_kernels_are_built_from_the_readout_activities():
     X, _ = relu_problem(6, 8, seed=31)
     net = small_net(8, L=2, N=5)
-    for readout in ("h", "phi"):
-        Phi, H = empirical_kernels(net, X, readout)
-        psis = readout_activities(H, net.phi, readout)
-        assert torch.equal(Phi, torch.stack([psi @ psi.T / 5 for psi in psis]))
+    Phi, H = empirical_kernels(net, X)
+    psis = readout_activities(H, net.phi)
+    assert torch.equal(Phi, torch.stack([psi @ psi.T / 5 for psi in psis]))
+
+
+def test_the_net_output_is_the_linear_readout_of_the_last_kernel_activities():
+    X, _ = relu_problem(6, 8, seed=32)
+    net = small_net(8, L=2, N=5)
+    H, Z = net(X)
+    psi_L = readout_activities(H, net.phi)[-1]
+    torch.testing.assert_close(Z, psi_L @ net.V / 5)
 
 
 def test_init_net_requires_a_net():
@@ -416,6 +420,16 @@ def test_load_meanfield_is_stale_when_beta_changes(cached_run):
         load_meanfield(cache_dir, small_config(beta=2e3), "cpu")
 
 
+def test_load_meanfield_rejects_a_result_from_another_model_version(tmp_path, monkeypatch):
+    cfg = small_config()
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "MODEL_VERSION", fct.config.MODEL_VERSION - 1)
+        run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+    with pytest.raises(StaleCacheError):
+        load_meanfield(tmp_path, cfg, "cpu")
+
+
 def test_load_meanfield_rejects_a_result_from_another_loss_version(tmp_path, monkeypatch):
     cfg = small_config()
     net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
@@ -440,16 +454,13 @@ def test_run_meanfield_rejects_more_points_than_data(tmp_path):
         run_meanfield(cfg, dataset, net, tmp_path, log=silent)
 
 
-@pytest.mark.parametrize("readout", ["h", "phi"])
-def test_net_kernels_are_the_empirical_kernels_on_the_solver_inputs(readout):
+def test_net_kernels_are_the_empirical_kernels_on_the_solver_inputs():
     cfg = small_config()
-    mf_cfg = MeanFieldConfig(**{**cfg.meanfield.model_dump(), "readout": readout})
-    cfg = Config(**{**cfg.model_dump(), "meanfield": mf_cfg.model_dump()})
     dataset = small_dataset(cfg)
     # A float32 net: net_kernels must evaluate it in its own dtype, then return float64.
     net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float32)
     K = net_kernels(net, dataset, cfg)
-    expected, _ = empirical_kernels(net, dataset.x[:10].to(torch.float32), readout)
+    expected, _ = empirical_kernels(net, dataset.x[:10].to(torch.float32))
     assert K.dtype == torch.float64 and K.shape == (2, 10, 10)
     torch.testing.assert_close(K, expected.to(torch.float64), rtol=0, atol=0)
 
@@ -607,7 +618,9 @@ def test_an_accepted_point_below_the_ess_floor_fails_loudly_even_with_one_inner_
     validated by the inner loop; the outer-gradient run at the collapsed tilt must raise rather
     than let the solve finish."""
     X, Y = relu_problem(8, 8, seed=54)
-    cfg = extreme_tilt_cfg(n_inner_max=1)
+    # Unprojected: the psi = phi projection keeps the learning tilt of the read-out layer near 0
+    # at this small rate tilt, and the weights would not collapse.
+    cfg = extreme_tilt_cfg(n_inner_max=1, project_tilt=False)
     with pytest.raises(mf.InadequateSamplerError, match="outer step 0"):
         solve_relu(X, Y, cfg, checkpoint_dir=tmp_path, config_hash="h0")
     assert not (tmp_path / "final.pt").exists()
@@ -641,14 +654,14 @@ def test_init_from_net_matches_the_tilt_gradient_of_an_hmc_sampler():
     net = small_net(8, L=3)
     cfg = MeanFieldConfig(beta=1e3, init="net", n_chains=8)
     prob = mf._make_problem(X, Y, 3, 1e-3, 1e-2, torch.relu, 1.0, cfg)
-    net_Phi, net_H = empirical_kernels(net, prob.X, "h")
+    net_Phi, net_H = empirical_kernels(net, prob.X)
     L, P = 3, prob.P
     Phi, Phi_hat = torch.zeros(L, P, P, **F64), torch.zeros(L, P, P, **F64)
     mf._init_from_net(prob, Phi, Phi_hat, net_Phi, net_H)
     for l in range(L - 1):
         ref = SingleSiteHMC(
             mf._prior_cov(prob, l + 1, Phi), Phi_hat[l + 1], prob.rate_tilt, torch.relu,
-            prob.psi_is_phi[l + 1], n_chains=1, sample_dtype=torch.float64, generator=seeded(0),
+            True, n_chains=1, sample_dtype=torch.float64, generator=seeded(0),
         )  # fmt: skip
         h = net_H[:, l + 1].T
         _, u = ref.tilt_and_grad(h)

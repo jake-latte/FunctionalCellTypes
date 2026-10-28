@@ -10,8 +10,8 @@ Single-site density of layer l (h in R^P, one entry per input pattern):
 
     p(h) ∝ N(h; 0, Sigma) exp( -1/2 psi(h)^T M psi(h) - 1/2 lambda_r phi(h)^T phi(h) ),
 
-with psi = phi for hidden layers, and psi = identity (readout from the pre-activation) or
-psi = phi for the last layer.  With u = grad_h U, U(h) = 1/2 psi^T M psi + 1/2 lambda_r phi^T phi,
+with psi = phi (what the solver uses on every layer, since the net reads its output from
+phi(h^L)); psi = identity, the Gaussian tilt, is kept for closed-form checks of the sampler.  With u = grad_h U, U(h) = 1/2 psi^T M psi + 1/2 lambda_r phi^T phi,
 the Stein identity <h h^T> = Sigma - Sigma <u h^T> holds in equilibrium and is reported as
 `stein_mismatch`.
 """
@@ -166,8 +166,8 @@ class SingleSiteHMC:
     M : (P, P) symmetric tilt matrix (Φ̂ of the solver), converted to float64.
     lambda_r : coefficient of the extra ½ λ_r φ(h)ᵀφ(h) penalty (>= 0; 0 switches it off).
     phi : elementwise activation; its derivative comes from `fct.activations.phi_prime`.
-    psi_is_phi : True for ψ = φ (hidden layers, or readout="phi"); False for ψ = identity
-        (last layer with readout="h").
+    psi_is_phi : True for ψ = φ (the solver's case on every layer); False for ψ = identity,
+        a Gaussian tilt with closed-form moments.
     n_chains : number of parallel chains.
     eps : initial leapfrog step size in whitened coordinates (adapted unless `adapt` is False).
     n_leap : leapfrog steps per transition.
