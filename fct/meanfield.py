@@ -110,6 +110,10 @@ class OuterSnapshot(NamedTuple):
 OnOuter = Callable[[OuterSnapshot], Any]
 
 
+class SpatialPriorUnsupportedError(ValueError):
+    """The config sets `spatial`, which the solver (iid weight prior only) cannot honour."""
+
+
 class InadequateSamplerError(RuntimeError):
     """Importance sampling from the prior cannot represent the density at an accepted point."""
 
@@ -1015,7 +1019,12 @@ def run_meanfield(
     """Solve on the first cfg.meanfield.n_points training points, caching under
     CACHE_DIR/meanfield (returns final.pt if present, resumes from a checkpoint otherwise).
     The rate tilt is train.rate_lambda unless meanfield.rate_tilt overrides it.
-    `on_outer` is passed to `solve`."""
+    `on_outer` is passed to `solve`.
+    Raises SpatialPriorUnsupportedError if cfg.spatial is set (checked before any file access)."""
+    if cfg.spatial is not None:
+        raise SpatialPriorUnsupportedError(
+            "the mean-field solver has no spatial prior; unset `spatial` in the config"
+        )
     X, Y = _solver_inputs(dataset, cfg)
     return solve(
         X,

@@ -24,6 +24,7 @@ from fct.hmc import SingleSiteHMC, relative_fro
 from fct.importance import ImportanceSampler
 from fct.meanfield import (
     HISTORY_KEYS,
+    SpatialPriorUnsupportedError,
     empirical_kernels,
     load_meanfield,
     net_kernels,
@@ -32,6 +33,7 @@ from fct.meanfield import (
     solve,
 )
 from fct.model import make_net
+from fct.spatial import SpatialConfig
 
 F64 = {"device": "cpu", "dtype": torch.float64}
 
@@ -677,3 +679,11 @@ def test_load_meanfield_ignores_importance_settings_of_an_hmc_result(cached_run)
     cfg, _, _, cache_dir, first = cached_run
     Phi, _, _ = load_meanfield(cache_dir, with_solver(cfg, n_importance_samples=7), "cpu")
     torch.testing.assert_close(Phi, first.Phi)
+
+
+def test_run_meanfield_refuses_a_spatial_config_before_writing_anything(tmp_path):
+    cfg = small_config().model_copy(update={"spatial": SpatialConfig()})
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
+    with pytest.raises(SpatialPriorUnsupportedError, match="no spatial prior"):
+        run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+    assert not (tmp_path / "meanfield").exists()

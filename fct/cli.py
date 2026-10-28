@@ -42,7 +42,13 @@ from fct.draw import (
     fig_solver_history,
     plot_training_history,
 )
-from fct.meanfield import InadequateSamplerError, load_meanfield, net_kernels, run_meanfield
+from fct.meanfield import (
+    InadequateSamplerError,
+    SpatialPriorUnsupportedError,
+    load_meanfield,
+    net_kernels,
+    run_meanfield,
+)
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
@@ -184,7 +190,10 @@ def cmd_solve(args: argparse.Namespace) -> int:
     if n_points > P:
         raise CliError(f"meanfield.n_points={n_points} exceeds the dataset size data.P={P}")
     net, _ = _load_net(args.cache_dir, cfg)
-    run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
+    try:
+        run_meanfield(cfg, dataset, net, args.cache_dir, log=print)
+    except SpatialPriorUnsupportedError as err:  # fixable by the user, no traceback
+        raise CliError(str(err)) from err
     return 0
 
 
@@ -395,11 +404,15 @@ def cmd_sweep_status(args: argparse.Namespace) -> int:
     return 0
 
 
+# Errors the user fixes by changing a config or the sweep: reported as one line, no traceback.
+USER_FIXABLE_ERRORS = (SweepError, InadequateSamplerError, SpatialPriorUnsupportedError)
+
+
 def _run_all(sweep: SweepConfig, root: Path, stage: Stage) -> None:
     """Run every setting, continuing past failures; raise CliError listing the failed indices.
 
     A failure is printed with its index, exception type and message (plus the traceback for
-    anything that is not a sweep configuration error), so nothing is swallowed silently.
+    anything that is not a user-fixable error), so nothing is swallowed silently.
     """
     failed = []
     for i in range(len(expand(sweep))):
@@ -408,7 +421,7 @@ def _run_all(sweep: SweepConfig, root: Path, stage: Stage) -> None:
         except Exception as err:  # noqa: BLE001 - reported with type, message and traceback
             failed.append(i)
             print(f"error: setting {i} failed: {type(err).__name__}: {err}", file=sys.stderr)
-            if not isinstance(err, SweepError):
+            if not isinstance(err, USER_FIXABLE_ERRORS):
                 traceback.print_exc()
     if failed:
         raise CliError(f"{len(failed)} of {len(expand(sweep))} settings failed: {failed}")
@@ -417,8 +430,9 @@ def _run_all(sweep: SweepConfig, root: Path, stage: Stage) -> None:
 def cmd_sweep_run(args: argparse.Namespace) -> int:
     """One setting with --index (a SLURM array task), else every setting in order.
 
-    Only sweep errors (bad index, config mismatch) and an inadequate sampler (change the solver
-    config) become CliError; anything else raised by training or solving keeps its traceback.
+    Only the USER_FIXABLE_ERRORS (bad index or config mismatch, an inadequate sampler, a spatial
+    config the solver refuses) become CliError; anything else raised by training or solving keeps
+    its traceback.
     """
     sweep = _load_sweep(args.root)
     if args.index is None:
@@ -426,7 +440,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> int:
         return 0
     try:
         run_setting(sweep, args.index, args.root, log=print, stage=args.stage)
-    except (SweepError, InadequateSamplerError) as err:  # fixable by the user, no traceback
+    except (
+        SweepError,
+        InadequateSamplerError,
+        SpatialPriorUnsupportedError,
+    ) as err:  # fixable by the user, no traceback
         raise CliError(str(err)) from err
     return 0
 
