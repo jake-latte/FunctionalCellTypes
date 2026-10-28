@@ -50,7 +50,7 @@ _POSITIVE_FLOAT = {
     SolverConfig: [
         "eps0", "target_accept", "adapt_rate", "eta_phi", "eta_phihat", "eta_max", "eta_grow",
         "inner_tol", "inner_tol_mc", "max_rel_step", "pd_floor_rel", "inv_floor_rel",
-        "jitter_rel", "max_h2_growth", "max_mc_err", "importance_proposal_scale",
+        "jitter_rel", "max_h2_growth", "max_mc_err_growth", "importance_proposal_scale",
         "min_ess_drop",
     ],
 }  # fmt: skip

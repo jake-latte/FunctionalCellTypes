@@ -91,7 +91,8 @@ def layer(x0: float, eta: float, mc_err: float = 1e-3, **solver):
     st = mf._SolverState(
         outer=0, Phi=0.5 * EYE[None].clone(), Phi_hat=x0 * EYE[None].clone(), samplers=[sampler],
         gen=None, eta=0.05, eta_hat=np.array([eta]), h2_last=[1.0], eps_ref=[1.0],
-        ess_ref=[float("nan")], history={}, mse_net=None, net_Phi=None, elapsed=0.0,
+        ess_ref=[float("nan")], mc_ref=[float("nan")], history={}, mse_net=None, net_Phi=None,
+        elapsed=0.0,
     )  # fmt: skip
     return prob, st, sampler
 

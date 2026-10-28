@@ -1,12 +1,12 @@
 """The health guard on the outer-gradient run and the absolute bound on the sampled scale.
 
 An inner ascent ends with a step it has not validated (steps are validated by the next run).
-The outer-gradient run is that next run: it must pass `_sampler_sound` (`_healthy` but for the
-Monte Carlo error, which no revert can cure), and if it does not, the trailing step is
-reverted and retaken at half the step size (dropped, if that size is already the floor), up to
-max_backtrack times, after which the solve raises. `_sampler_sound` also fails a run whose
-sample scale ||h||²/P exceeds max_h2_prior_ratio times the prior's, whatever the growth since
-the point before.
+The outer-gradient run is that next run: it must pass `_healthy`, as every inner run does, and
+if it does not, the trailing step is reverted and retaken at half the step size (dropped, if
+that size is already the floor), up to max_backtrack times, after which the solve raises.
+`_healthy` also fails a run whose sample scale ||h||²/P exceeds max_h2_prior_ratio times the
+prior's, whatever the growth since the point before. Its Monte Carlo error check is
+tests/test_mc_error_control.py's.
 
 The stubbed layer is that of tests/test_meanfield_step_control.py: Σ = I, Φ = ½ I, and a tilt
 x I gives ⟨ψψᵀ⟩ = I / (1 + x), so the sample scale is h² = 1 / (1 + x) against a prior's 1.
@@ -58,28 +58,28 @@ def test_a_run_whose_scale_exceeds_the_bound_times_the_prior_is_unhealthy(h2, he
     cfg = MeanFieldConfig(sampler=sampler).solver
     assert cfg.max_h2_prior_ratio == 100.0
     diag = hmc_diag(h2) | {"ess_frac": 0.5}
-    assert mf._healthy(diag, h2, 0.5, cfg.n_trans, 1.0, cfg) is healthy
+    assert mf._healthy(diag, h2, 0.5, NAN, cfg.n_trans, 1.0, cfg) is healthy
 
 
 def test_the_bound_is_relative_to_the_prior_scale():
     cfg = MeanFieldConfig(max_h2_prior_ratio=10.0).solver
     diag = hmc_diag(50.0) | {"prior_h2": 10.0}
-    assert mf._healthy(diag, 50.0, NAN, cfg.n_trans, 1.0, cfg)
-    assert not mf._healthy(diag | {"prior_h2": 4.0}, 50.0, NAN, cfg.n_trans, 1.0, cfg)
+    assert mf._healthy(diag, 50.0, NAN, NAN, cfg.n_trans, 1.0, cfg)
+    assert not mf._healthy(diag | {"prior_h2": 4.0}, 50.0, NAN, NAN, cfg.n_trans, 1.0, cfg)
 
 
 def test_the_failures_name_each_check_with_its_value():
     """Divergences, resets and a step-size collapse, not the scale: each is reported."""
     cfg = MeanFieldConfig(max_div_frac=0.01, n_chains=100).solver
     diag = hmc_diag(1.0) | {"n_divergent": 5, "n_reset": 2, "eps": 1e-4}
-    assert mf._soundness_failures(diag, 1.0, NAN, 1, 1.0, cfg) == [
+    assert mf._health_failures(diag, 1.0, NAN, NAN, 1, 1.0, cfg) == [
         "divergent fraction 0.05 > max_div_frac=0.01",
         "2 chain resets",
         "HMC step size 0.0001 < eps_collapse x warm-up = 0.01",
     ]
     importance = MeanFieldConfig(sampler="importance").solver
     diag = hmc_diag(1.0) | {"ess_frac": 0.01}
-    assert mf._soundness_failures(diag, 1.0, 0.5, 1, NAN, importance) == [
+    assert mf._health_failures(diag, 1.0, 0.5, NAN, 1, NAN, importance) == [
         "ESS fraction 0.01 < min_ess_drop x before = 0.05"
     ]
 
@@ -115,24 +115,10 @@ def test_an_outer_run_above_the_bound_reverts_the_trailing_step_and_retries_at_h
 
 def test_the_outer_run_is_checked_for_growth_too():
     """Below the absolute bound (h² 20 times the prior's) but a growth of 20 since the point
-    before, above max_h2_growth = 10: the outer run is held to all of `_sampler_sound`."""
+    before, above max_h2_growth = 10: the outer run is held to all of `_healthy`."""
     prob, st, _, inner = end_of_ascent(-0.95)
     og = mf._outer_gradients(prob, st, inner)
     assert og.n_retry == [1] and tilt(st) == pytest.approx(-0.475)
-
-
-def test_a_large_monte_carlo_error_alone_does_not_reject_an_outer_run():
-    """The MC error is a property of the sample size, not of the step: a revert cannot cure
-    it, so it fails an inner run (`_healthy`) but not the outer one."""
-    prob, st, sampler, inner = end_of_ascent(0.2, max_mc_err=0.5)
-    sampler.mc_err = 2.0
-    _, diag = sampler.run(1)
-    assert mf._health_failures(diag, 1.0, NAN, 1, 1.0, prob.solver) == [
-        "MC error 2 > max_mc_err=0.5"
-    ]
-    sampler.state = 0
-    og = mf._outer_gradients(prob, st, inner)
-    assert og.n_retry == [0] and tilt(st) == pytest.approx(0.2)
 
 
 def test_an_outer_run_that_stays_above_the_bound_raises_with_the_ratio():
@@ -195,13 +181,25 @@ def test_retries_and_drops_are_logged_as_a_warning():
 
 # ----------------------------------------------------------------------------- the inner run
 def test_an_inner_step_that_keeps_breaking_the_sampler_raises_unhealthy_solve_error():
-    """Every inner run is 1e3 times the (stubbed) prior's scale. Driven at a fixed inner index
-    (budget max_backtrack x 2 = 4), the backtracking gives up with the failure list."""
+    """Every inner run is 1e3 times the (stubbed) prior's scale: after max_backtrack = 2
+    reverts since the last accepted point, the third failure gives up with the failure list."""
     prob, st, sampler = layer(0.0, eta=1.0, max_backtrack=2, max_h2_growth=1e6)
     sampler.prior_h2 = 1e-3
     pending, res = [None], mf._new_inner_result(1)
     mf._inner_layer_step(prob, st, 0, 0, pending, res)  # the start: accepted unchecked
     with pytest.raises(mf.UnhealthySolveError, match=r"keeps breaking.*h2/prior .* > max_h2"):
-        for _ in range(10):
-            mf._inner_layer_step(prob, st, 0, 1, pending, res)
-    assert res.n_backtrack[0] == 5
+        for inner in range(1, 10):
+            mf._inner_layer_step(prob, st, 0, inner, pending, res)
+    assert res.n_backtrack[0] == 2  # the third failure raises instead of reverting
+
+
+# ----------------------------------------------------------------------------- the message
+def test_the_escaped_chains_hint_follows_only_an_h2_failure():
+    """The hint on escaped chains follows a failed h2 check only, not divergences or resets."""
+    h2 = mf._unhealthy_outer_run_message(0, 3, 1, "x", ["h2/prior 200 > max_h2_prior_ratio=100"])
+    assert "Chains far above the prior's scale" in h2
+    growth = mf._unhealthy_outer_run_message(0, 3, 1, "x", ["h2 growth 20 > max_h2_growth=10"])
+    assert "Chains far above the prior's scale" in growth
+    divergent = mf._unhealthy_outer_run_message(0, 3, 1, "x", ["2 chain resets"])
+    assert "Chains far above" not in divergent
+    assert divergent.endswith("at x: 2 chain resets")

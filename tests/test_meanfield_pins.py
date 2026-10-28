@@ -45,6 +45,15 @@ def test_hmc_solve_reproduces_the_pinned_output_bit_for_bit(name):
         assert _same(now["history"][key], column), key
 
 
+@pytest.mark.parametrize("name", [n for n in PINNED_SOLVES if not n.endswith("_legacy_steps")])
+def test_the_pinned_small_solves_accept_inner_steps(name):
+    """32 chains put the MC error at 1.75 to 5.3 in every run: a property of the sample size,
+    which the step checks do not hold against a step (they did, and accepted no inner step)."""
+    history = torch.load(FIXTURES / f"hmc_solve_{name}.pt", weights_only=True)["history"]
+    assert all(sum(layers) > 0 for layers in history["n_accepted_inner"])
+    assert min(min(layers) for layers in history["hmc_mc_err"]) > 1.0
+
+
 def _pinned_hashes() -> dict:
     return json.loads(HASHES_FILE.read_text())
 

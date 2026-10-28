@@ -9,6 +9,7 @@ from fct.config import (
     HEALTH_BOUND_FIELDS,
     IMPORTANCE_FIELDS,
     LEGACY_SOLVER_FIELDS,
+    RETIRED_SOLVER_FIELDS,
     STEP_CONTROL_FIELDS,
     STEP_CONTROL_LEGACY,
     UNHASHED_SOLVER_FIELDS,
@@ -267,6 +268,38 @@ def test_the_h2_prior_bound_enters_the_hash_only_off_its_default():
     other = _with_solver(cfg, max_h2_prior_ratio=10.0)
     assert other.meanfield.hash_payload()["max_h2_prior_ratio"] == 10.0
     assert other.section_hash(*RESULT_SECTIONS) != cfg.section_hash(*RESULT_SECTIONS)
+
+
+def test_the_mc_error_growth_bound_enters_the_hash_only_off_its_default():
+    cfg = default_config()
+    assert cfg.meanfield.solver.max_mc_err_growth == HEALTH_BOUND_DEFAULTS["max_mc_err_growth"]
+    assert "max_mc_err_growth" not in cfg.meanfield.hash_payload()
+    other = _with_solver(cfg, max_mc_err_growth=3.0)
+    assert other.meanfield.hash_payload()["max_mc_err_growth"] == 3.0
+    assert other.section_hash(*RESULT_SECTIONS) != cfg.section_hash(*RESULT_SECTIONS)
+
+
+def test_the_retired_mc_error_bound_is_hashed_at_its_last_value():
+    """max_mc_err is no longer a setting, but every hash written while it was holds it at 1:
+    it stays in the payload so those hashes do not move."""
+    assert RETIRED_SOLVER_FIELDS == {"max_mc_err": 1.0}
+    assert "max_mc_err" not in SolverConfig.model_fields
+    assert MeanFieldConfig().hash_payload()["max_mc_err"] == 1.0
+
+
+@pytest.mark.parametrize("layout", ["flat", "nested"])
+def test_a_config_with_the_retired_bound_at_its_old_default_loads(layout):
+    """Every config.json written while the field existed holds it (at 1 unless changed)."""
+    raw = {"max_mc_err": 1.0} if layout == "flat" else {"solver": {"max_mc_err": 1.0}}
+    assert MeanFieldConfig.model_validate(raw) == MeanFieldConfig()
+
+
+@pytest.mark.parametrize("layout", ["flat", "nested"])
+def test_a_config_that_changed_the_retired_bound_is_rejected(layout):
+    """Its value would be silently ignored: say so, and what replaced it."""
+    raw = {"max_mc_err": 2.0} if layout == "flat" else {"solver": {"max_mc_err": 2.0}}
+    with pytest.raises(ValidationError, match="max_mc_err.*max_mc_err_growth"):
+        MeanFieldConfig.model_validate(raw)
 
 
 def test_the_h2_prior_bound_must_be_positive():
