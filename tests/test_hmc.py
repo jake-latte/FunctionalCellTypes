@@ -369,7 +369,9 @@ def test_the_all_active_condition_can_admit_a_non_normalisable_relu_tilt():
     exponent = h @ Sigma_inv @ h + torch.relu(h) @ M @ torch.relu(h)
     assert exponent < 0  # a ray of growing density: not normalisable
     check = relu_orthant_check(Sigma_inv, M, 0.0)
-    assert check.n_violated == 1 and check.fraction_violated == 0.25  # S = {1} of 4 orthants
+    assert (
+        check.n_violated == 1 and check.fraction_violated == 0.25
+    )  # S = {1}, of 2^2 including the trivial one
     assert check.worst_min_eig == pytest.approx(1.0 - 0.8**2 - 0.5)  # (Sigma_11)^-1 + M_11
 
 

@@ -121,11 +121,12 @@ def tilt_rule(phi: Activation, psi_is_phi: bool) -> TiltRule:
     "bounded": ψ = φ with a bounded φ (tanh, sigmoid); the tilt is bounded, so the density is
         normalisable whatever M is.
     "relu": ψ = φ = relu; the tilt grows quadratically on the orthant of active units. The rule
-        is the all-active orthant's Gaussian condition Σ⁻¹ + M + λ_r I ≻ 0. It is necessary
-        whenever a negative direction of that form lies in the positive orthant (as a learning
-        tilt -2c A Y Yᵀ A's does when it is too strong), but not sufficient: another orthant can
-        still fail, which the samplers' Stein / ESS checks and the solver's tilt tripwire are
-        left to catch (`relu_orthant_check` is the per-orthant oracle).
+        enforces positive definiteness of Σ⁻¹ + T, T = M + λ_r I: exactly the condition for the
+        Gaussian density that equals the relu one on the all-active orthant. It is neither
+        necessary nor sufficient for the relu density: the all-active orthant itself needs only
+        strict copositivity of Σ⁻¹ + T, so the rule over-cuts tilts whose offending direction
+        has mixed signs; the other orthants are not checked, so it under-cuts, and admits
+        non-normalisable tilts (`relu_orthant_check` is the per-orthant oracle).
     ValueError (from `tilt_class`) for an activation without a known rule."""
     if not psi_is_phi:
         return "gaussian"
@@ -179,9 +180,8 @@ def normalisability_margin(
 ) -> float:
     """How far the tilted density is inside the region of `tilt_rule`; positive means inside.
     "gaussian": λ_min(Σ⁻¹ + Q), exact. "relu": λ_min(Σ⁻¹ + M + λ_r I), the margin of the
-    all-active orthant's condition, a necessary condition (see `tilt_rule`) and not a
-    sufficient one: a positive value does not prove normalisability (`relu_orthant_check`
-    tests every orthant). "bounded": λ_min(Σ⁻¹), the prior's own (any M is fine). NaN for ψ = φ with an
+    all-active orthant's Gaussian condition, neither necessary nor sufficient (see `tilt_rule`):
+    a positive value does not prove normalisability, a negative one does not disprove it. "bounded": λ_min(Σ⁻¹), the prior's own (any M is fine). NaN for ψ = φ with an
     activation that has no rule (allowed when the solver does not project)."""
     if psi_is_phi and known_tilt_class(phi) is None:
         return float("nan")
@@ -220,7 +220,7 @@ def relu_orthant_check(
     Passing every orthant proves normalisability. A violated orthant is a warning, not a proof:
     the minimum over h_{S^c} and the sign of h_S are not constrained to the orthant, so a
     copositive but indefinite K_S (positive on the orthant itself) is also flagged. The
-    all-active orthant, S = all units, is the condition `project_tilt` enforces for relu.
+    all-active orthant's check, S = all units, is the condition `project_tilt` enforces for relu.
 
     Cost: 2^P eigen-decompositions of P x P matrices, batched `chunk` at a time (each K_S is
     padded to P x P by a diagonal larger than any of its eigenvalues); about 15 s at P = 20 on
@@ -237,9 +237,10 @@ def relu_orthant_check(
     # (Σ_SS)⁻¹ ⪯ λ_max(Σ⁻¹) I by interlacing, so `pad` exceeds every eigenvalue of every K_S and
     # the padding never sets λ_min of a non-empty S.
     pad = (
-        torch.linalg.eigvalsh(Sigma_inv).max().item() + torch.linalg.eigvalsh(T).abs().max().item()
+        torch.linalg.eigvalsh(Sigma_inv).max().item()
+        + torch.linalg.matrix_norm(T, ord=2).item()
+        + 1.0
     )
-    pad = pad + 1.0
     bits = 1 << torch.arange(P, device=M.device)
     min_eigs = [
         _padded_orthant_min_eigs(Sigma, T, pad, bits, start, min(start + chunk, 1 << P))

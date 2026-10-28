@@ -131,7 +131,7 @@ SOLVER_PANELS: list[SolverPanel] = [
     SolverPanel("hmc_rho1", "lag-1 autocorrelation of ||h||²/P", "linear"),
     SolverPanel("hmc_h2_ratio", "chain scale  ⟨||h||²⟩ / prior diag", "log", 1.0),
     SolverPanel("hmc_stein_mismatch", "Stein identity mismatch", "log"),
-    SolverPanel("norm_margin", "normalisability margin (necessary cond.)", "symlog", 0.0),
+    SolverPanel("norm_margin", "normalisability margin (all-active orthant cond.)", "symlog", 0.0),
     SolverPanel("align_net", "kernel alignment with the trained net", "linear"),
     SolverPanel("n_pd_clamped", "eigenvalues raised to the PD floor", "symlog"),
     SolverPanel("phi_lambda_min", "λ_min(Φ) before PD floor", "symlog", 0.0),
