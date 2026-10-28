@@ -771,12 +771,23 @@ def _unhealthy_outer_run_message(
     )
 
 
+def _drop_trailing_step(st: _SolverState, l: int, step: _PendingStep) -> None:
+    """Revert layer l's trailing inner step (tilt and chain state) to the validated point
+    before it, without retaking it."""
+    st.Phi_hat[l] = step.hat.clone()
+    st.samplers[l].set_tilt(st.Phi_hat[l])
+    st.samplers[l].set_state(step.state)
+
+
 def _outer_run(prob: _Problem, st: _SolverState, l: int, inner: _InnerResult):
     """Layer l's outer-gradient run, (moments, diagnostics), held to `_sampler_sound`: it is
     the run that validates the inner ascent's trailing step, which the ascent took and never
     measured. A run that is not sound reverts that step (tilt and chain state) and retakes it
-    at half the step size (`_retry_half_step`, counted in inner.n_backtrack), up to
-    max_backtrack times; then, or at once if there is no step to revert, UnhealthySolveError.
+    at half the step size (`_retry_half_step`, counted in inner.n_backtrack). Under
+    inner_step_control="progress" halving stops at `_eta_hat_floor`; a step that still fails
+    there is dropped, back to the validated point before it, and a run that fails at that
+    point raises UnhealthySolveError, as do max_backtrack failed retries or a failure with no
+    step to revert.
     Not `_healthy`: its MC error is a property of the sample size, not of the step, so a
     revert cannot cure it (small solves sit above max_mc_err at every run), and the outer
     gradients' MC error is recorded instead (history["hmc_mc_err"]).
@@ -792,7 +803,12 @@ def _outer_run(prob: _Problem, st: _SolverState, l: int, inner: _InnerResult):
         if step is None or n_retry == cfg.max_backtrack:
             break
         inner.n_backtrack[l] += 1
-        _retry_half_step(prob, st, l, step, inner)
+        at_floor = st.eta_hat[l] <= _eta_hat_floor(cfg)
+        if cfg.inner_step_control == "progress" and at_floor:
+            _drop_trailing_step(st, l, step)
+            step = None
+        else:
+            _retry_half_step(prob, st, l, step, inner)
     raise UnhealthySolveError(_unhealthy_outer_run_message(prob, st, l, diag, n_retry))
 
 

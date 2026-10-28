@@ -601,7 +601,10 @@ Step control (`SolverConfig` defaults; each part can be switched back, see the c
   run is held to the step validation (`_sampler_sound`: h^2 growth and the absolute bound, HMC divergences / resets /
   step-size collapse, importance ESS drop); when it fails, the trailing step is reverted (tilt and chain state) and
   retaken at half the step size (counted in `n_backtrack_inner`), up to max_backtrack times, then
-  `UnhealthySolveError` with the h^2/prior ratio in the message. The MC error is not checked there: it is a property of
+  `UnhealthySolveError` with the h^2/prior ratio in the message. Under inner_step_control="progress" halving stops at
+  eta_min_rel x eta_phihat; a step that still fails there is dropped (back to the validated point before it), and a
+  failure at that point raises. (An importance test with eta_phihat 1e4 reaches that floor: its trailing step collapses
+  the ESS at every size down to it.) The MC error is not checked there: it is a property of
   the sample size, not of the step, so no revert cures it (the pinned 32-chain solves sit at 2 to 2.5 in every outer
   run, above max_mc_err = 1). Why the outer run: on the exemplar's relu problem with eta_max = 0.1 (see "The relu tilt
   rule" above) the inner loop of outer step 5 had converged and its trailing step went to a tilt that is not

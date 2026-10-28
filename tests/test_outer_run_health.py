@@ -128,6 +128,25 @@ def test_an_outer_run_that_stays_above_the_bound_raises_with_the_ratio():
     assert isinstance(err.value, RuntimeError)
 
 
+def test_a_trailing_step_that_fails_at_the_step_size_floor_is_dropped():
+    """Halving stops at eta_min_rel x eta_phihat (here 1, where the step already is): retaking
+    the step there would only repeat it, so it is dropped, back to the validated tilt 0."""
+    prob, st, sampler, inner = end_of_ascent(-0.995, max_h2_growth=1e6, eta_min_rel=1.0)
+    assert mf._eta_hat_floor(prob.solver) == st.eta_hat[0] == 1.0
+    og = mf._outer_gradients(prob, st, inner)
+    assert inner.n_backtrack[0] == 1 and st.eta_hat[0] == 1.0
+    assert tilt(st) == 0.0 and sampler.state == 1
+    assert og.hmc_diag[0]["h2_mean"] == pytest.approx(1.0)
+
+
+def test_a_run_that_fails_after_the_step_is_dropped_raises():
+    prob, st, sampler, inner = end_of_ascent(-0.995, max_h2_growth=1e6, eta_min_rel=1.0)
+    sampler.prior_h2 = 1e-3
+    with pytest.raises(mf.UnhealthySolveError, match="after 1 retries"):
+        mf._outer_gradients(prob, st, inner)
+    assert inner.n_backtrack[0] == 1 and tilt(st) == 0.0
+
+
 def test_an_unhealthy_outer_run_with_no_trailing_step_raises_at_once():
     """Nothing to revert (no inner step was taken): the only honest outcome is to stop."""
     prob, st, sampler, inner = end_of_ascent(0.0, max_h2_growth=1e6)
