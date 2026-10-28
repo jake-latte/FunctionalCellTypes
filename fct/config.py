@@ -27,6 +27,12 @@ from fct.tasks import TASK_SPECS
 # the rate penalty over the samples, 2 averaged it over them, 3 sums it again.
 LOSS_VERSION = 3
 
+# Version of the network definition (`fct.model.MLP`), folded into every hash that holds the
+# net section, for the same reason: a trained net or a mean-field result made with another
+# forward pass is rejected as stale. History: 1 read the output from the pre-activation,
+# V^T h^L / N; 2 reads it from the post-activation, V^T phi(h^L) / N.
+MODEL_VERSION = 2
+
 
 class DataConfig(StrictModel):
     """Data settings. `task` selects the generator and only that task's fields are read: the
@@ -134,6 +140,14 @@ class SolverConfig(StrictModel):
     project_tilt: bool = True
     tilt_floor: Annotated[float, Field(ge=0, lt=1)] = 0.05
     max_rel_step: PosFloat = 0.1
+    # A tripwire for a lost tilt, not a convergence test: `solve` raises UnconvergedSolveError
+    # instead of returning (and writing final.pt) when, in some layer, the largest Stein
+    # fixed-point residual of Phi_hat over the last tilt_tripwire_steps outer steps is >=
+    # tilt_tripwire_resid. A tilt near 0 (e.g. projected away) has a residual near 1; an
+    # unconverged solve with a residual below the tripwire passes, so judge convergence from the
+    # history.
+    tilt_tripwire_resid: PosFloat = 0.9
+    tilt_tripwire_steps: PosInt = 3
     pd_floor_rel: PosFloat = 1e-8
     inv_floor_rel: PosFloat = 1e-4
     # Sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition)
@@ -188,6 +202,10 @@ IMPORTANCE_FIELDS = (
 )  # fmt: skip
 
 
+# Solver fields left out of every hash: they check a result and never change a number of it.
+UNHASHED_SOLVER_FIELDS = ("tilt_tripwire_resid", "tilt_tripwire_steps")
+
+
 class MeanFieldConfig(StrictModel):
     """The mean-field problem: which points, and the constants of the action (`beta`, the
     prior scale, `alpha`, the learning prefactor, the rate tilt; None means "derived from the
@@ -200,7 +218,6 @@ class MeanFieldConfig(StrictModel):
 
     n_points: PosInt = 100  # solve on the first n_points training points
     beta: PosFloat = 1e6
-    readout: Literal["h", "phi"] = "h"
     prior_scale: PosFloat | None = None
     alpha: PosFloat | None = None
     learning_prefactor: PosFloat = 0.5
@@ -264,7 +281,8 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections, and
+        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections,
+        `LOSS_VERSION` when "train" is, and
         `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser. The
         `spatial` section enters with "train" only when it is set, so runs without a spatial
         prior keep the hashes they had before the section existed. The meanfield section
@@ -279,6 +297,8 @@ class Config(StrictModel):
         hashed = self.model_dump(include={*sections, "dtype"})
         if "meanfield" in sections:
             hashed["meanfield"] = self.meanfield.hash_payload()
+        if "net" in sections:  # the forward pass belongs to the net section
+            hashed["model_version"] = MODEL_VERSION
         if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes

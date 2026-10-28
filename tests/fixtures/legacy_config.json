@@ -58,7 +58,6 @@
     "prior_scale": null,
     "project_tilt": true,
     "rate_tilt": 0.0001,
-    "readout": "phi",
     "sample_dtype": "float32",
     "save_int": 3,
     "seed": 4,

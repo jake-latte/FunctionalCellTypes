@@ -9,6 +9,7 @@ from pydantic import ValidationError
 import fct.config
 from fct.config import (
     LOSS_VERSION,
+    MODEL_VERSION,
     AnalysisConfig,
     DataConfig,
     MeanFieldConfig,
@@ -133,7 +134,11 @@ def test_default_data_hash_unchanged():
 @pytest.mark.parametrize("sections", TRAIN_SECTIONS)
 def test_train_section_hashes_hold_the_loss_version(sections):
     cfg = default_config()
-    payload = {**cfg.model_dump(include={*sections, "dtype"}), "loss_version": LOSS_VERSION}
+    payload = {
+        **cfg.model_dump(include={*sections, "dtype"}),
+        "loss_version": LOSS_VERSION,
+        "model_version": MODEL_VERSION,
+    }
     del payload["train"]["optimizer"], payload["train"]["beta"]  # adam: SGLD fields not hashed
     if "meanfield" in sections:  # hashed in its flat pre-split layout, see hash_payload
         payload["meanfield"] = cfg.meanfield.hash_payload()

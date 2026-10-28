@@ -9,7 +9,8 @@ from fct.config import NetConfig
 
 
 class MLP(torch.nn.Module):
-    """L-layer network storing pre-activations H, with a 1/N readout from the last one.
+    """L-layer network storing pre-activations H, with a 1/N linear readout of the last
+    layer's post-activations, Z = V^T phi(h^L) / N.
 
     Parameters are U (N, D_in), J_1..J_{L-1} (N, N) and V (N, D_out), all standard normal;
     the 1/sqrt(D_in), g/sqrt(N) and 1/N factors live in `forward`.
@@ -66,7 +67,7 @@ class MLP(torch.nn.Module):
             h_next = (self.g / math.sqrt(self.N)) * torch.einsum("ij, pj -> pi", J, z_prev)
             H.append(h_next)
 
-        Z = (1 / self.N) * torch.einsum("id, pi -> pd", self.V, H[-1])  # P, D_out
+        Z = (1 / self.N) * torch.einsum("id, pi -> pd", self.V, self.phi(H[-1]))  # P, D_out
         return torch.stack(H, dim=1), Z
 
     def weight_l2(self) -> torch.Tensor:

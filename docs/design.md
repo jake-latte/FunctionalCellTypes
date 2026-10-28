@@ -89,7 +89,10 @@ samples (version 1 summed it, version 2 averaged it): every train cache (`train/
 change is rejected with `StaleCacheError` the next time it is loaded; data caches are unaffected. A sweep ROOT whose
 settings were finished before the change is not silently reused: `sweep status` lists them as `stale`, `run_setting` raises
 `StaleCacheError` instead of calling them done, and the results notebook shows them with a note and no results. Use fresh cache directories or
-delete the old ones. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
+delete the old ones. Likewise the hash of any set of sections that includes `net` folds in `config.MODEL_VERSION`, the
+version of the forward pass of `MLP`. Version 2 reads the output from the post-activations, `Z = V^T phi(h^L) / N`
+(version 1 read it from the pre-activation `h^L`): every train and meanfield cache made under version 1 is rejected with
+`StaleCacheError`, and a sweep ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
 hashed train section, so every pre-existing Adam hash and cache is unchanged. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
 enters the hash by value.
 
@@ -98,8 +101,8 @@ and the solver fields that existed before the sampler choice (`config.LEGACY_SOL
 included) in one flat dict, which is exactly how the section was hashed before it was split, so every existing meanfield
 result keeps its hash. `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
 `sampler="importance"`: switching sampler makes a result stale, importance settings never touch an HMC result. Every
-solver field is in exactly one of the two lists (a test enforces it), so a new field has to be given a hash rule
-explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
+solver field is in exactly one of the two lists or in `config.UNHASHED_SOLVER_FIELDS` (`tilt_tripwire_resid`, `tilt_tripwire_steps`, a check on
+the result that changes no number of it; a test enforces it), so a new field has to be given a hash rule explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
 cache stale.
 
 ## Saved files
@@ -142,7 +145,6 @@ class TrainConfig(BaseModel):
 class MeanFieldConfig(BaseModel):      # the problem: the equations being solved
     n_points: int = 100                 # solve on the first n_points training points (X=x[:n_points])
     beta: float = 1e6
-    readout: Literal["h", "phi"] = "h"
     prior_scale: float | None = None; alpha: float | None = None   # None: derived from train (see meanfield.py)
     learning_prefactor: float = 0.5; rate_tilt: float | None = None
     solver: SolverConfig = SolverConfig()
@@ -157,6 +159,7 @@ class SolverConfig(BaseModel):        # how it is solved
     max_backtrack: int = 8; eta_min_rel: float = 1e-3; max_div_frac: float = 0.02
     max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
+    tilt_tripwire_resid: float = 0.9; tilt_tripwire_steps: int = 3   # not hashed: the tilt tripwire (see solve), not a convergence test
     pd_floor_rel: float = 1e-8; inv_floor_rel: float = 1e-4
     # sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition; also max_div_frac, eps_collapse)
     n_chains: int = 2048; n_trans: int = 2; n_trans_outer: int = 5; n_leap: int = 10
@@ -181,7 +184,7 @@ class Config(BaseModel):
     spatial: SpatialConfig | None = None   # the spatial weight prior (fct.spatial); None -> weight L2 norm
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
-    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `LOSS_VERSION` when `train` is a section), first 12 hex chars; >=1 section required
+    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `LOSS_VERSION` when `train` is), first 12 hex chars; >=1 section required
         # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
 
 def default_config() -> Config
@@ -289,7 +292,7 @@ def latent_lattice_dataset(cfg, reference: Dataset) -> Dataset
 ## model.py
 
 ```python
-class MLP(nn.Module)   # verbatim from the notebook: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None); forward(x) -> (H (P,L,N), Z (P,D_out)); weight_l2()
+class MLP(nn.Module)   # the notebook's net: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None); forward(x) -> (H (P,L,N), Z (P,D_out)) with Z = phi(H[:, -1]) @ V / N, a linear readout of the last layer's post-activations (MODEL_VERSION 2); weight_l2()
 def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # weights drawn on CPU from a local torch.Generator seeded with cfg.seed, then moved to device (no global RNG touched); phi = get_phi(cfg.phi)
 ```
 
@@ -370,8 +373,15 @@ class SingleSiteHMC      # verbatim port; plus
     def load_state_dict(self, d) -> None
 # pure pieces of the single-site density, shared with importance.py (SingleSiteHMC's methods call them):
 def jittered_prior(Sigma, jitter_rel) -> (Sigma_j, chol, inv); def tilt_and_grad(h, M, lambda_r, phi, phi_prime, psi_is_phi) -> (U, u)
+# psi_is_phi: psi = phi(h), which the solver uses on every layer; False gives psi = h, a Gaussian tilt kept for closed-form sampler checks
 def psi_psi_rel_mc_err(psi_psi, psi2_psi2, n_eff); def stein_mismatch(h_h, h_u, Sigma)
-def project_tilt(M, delta, lambda_r, psi_is_phi, Sigma_chol); def normalisability_margin(M64, Sigma_inv, lambda_r, psi_is_phi)
+def tilt_rule(phi, psi_is_phi) -> "gaussian" | "bounded" | "relu"   # by activations.tilt_class; ValueError for an activation without a rule
+def relu_tilt_spectrum(M, lambda_r, Sigma_inv) -> (w, V, lambda_min(Sigma^-1))   # eigen-decomposition of M + lambda_r I; the relu certificate's pieces
+def project_tilt(M, delta, lambda_r, phi, psi_is_phi, Sigma_chol, Sigma_inv); def normalisability_margin(M64, Sigma_inv, lambda_r, phi, psi_is_phi)
+# by tilt_rule: "gaussian" (psi = h, or a linear phi such as activations.identity): Sigma^-1 + Q > 0, exact, Q = M (+ lambda_r I
+# for a linear phi), projected as Sigma^1/2 Q Sigma^1/2 >= -(1 - delta) I; "bounded" (tanh, sigmoid): no projection, the margin is
+# lambda_min(Sigma^-1); "relu": lambda(M + lambda_r I) >= -(1 - delta) lambda_min(Sigma^-1), the sufficient orthant certificate that
+# normalisability_margin reports (margin = lambda_min(Sigma^-1) + min(0, lambda_min(M + lambda_r I))). An admissible M is returned unchanged.
 ```
 
 ## importance.py
@@ -403,9 +413,9 @@ a relu, L=2, beta=1e3 problem, layer 1: 0.08 at P=8, 0.03 at P=16, 0.0085 at P=4
 ## meanfield.py
 
 ```python
-def readout_activities(H (P, L, N), phi, readout) -> list[Tensor (P, N)]   # psi per hidden layer: phi(h), h on the last under readout "h"; ValueError for another readout
+def readout_activities(H (P, L, N), phi) -> list[Tensor (P, N)]   # psi = phi(h^l) per hidden layer; the last is what the output reads
 @torch.no_grad()
-def empirical_kernels(net, X, readout) -> tuple[Tensor, Tensor]     # notebook
+def empirical_kernels(net, X) -> tuple[Tensor, Tensor]     # Phi_l = phi(h^l) phi(h^l)^T / N (L, P, P), and H (P, L, N)
 @dataclass
 class SolveResult: Phi: Tensor; Phi_hat: Tensor; history: dict[str, list]; samplers: list[SingleSiteHMC | ImportanceSampler]
 class OuterSnapshot(NamedTuple): outer: int; history: dict[str, list]; Phi: Tensor; Phi_hat: Tensor
@@ -426,6 +436,13 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # warm-up, each validated inner step, each outer-gradient run) must have ess_frac >= min_ess_frac, else
     # InadequateSamplerError (a RuntimeError) is raised before any final.pt is written: the ESS is a property of the
     # point, so backtracking cannot cure it, and carrying on would freeze the iteration at its start.
+    # Tilt tripwire: when, in some layer, the largest Stein fixed-point residual of Phi_hat over the last
+    # solver.tilt_tripwire_steps outer steps is >= solver.tilt_tripwire_resid, solve raises UnconvergedSolveError (a
+    # RuntimeError) instead of returning, so no final.pt is written (the checkpoints stay). It catches a lost tilt (Phi_hat
+    # near 0 has residual near 1), not non-convergence: an unconverged solve below it passes. The CLI (`solve`, `sweep run`)
+    # reports it as a one-line error. history["phihat_change_rel"] is NaN for a step from a zero tilt; the log prints
+    # margin=n/a for a bounded phi.
+    # With project_tilt, phi needs a tilt_rule (ValueError up front otherwise).
     # If checkpoint_dir is given, return its final.pt if present, else
     # resume from its latest ckpt_*.pt (ValueError if it was written with a net and `net` is None, or vice
     # versa); write ckpt_<outer:05d>.pt every cfg.save_int outer steps and final.pt at the end, which then
@@ -440,13 +457,15 @@ def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=
     # hash = section_hash("data","net","train","meanfield") (meanfield as hash_payload); returns final.pt if present
 def net_kernels(net: MLP, dataset: Dataset, cfg: Config) -> Tensor   # (L, P, P) float64
     # the trained net's empirical_kernels on exactly the solver's inputs (same slicing code as run_meanfield)
-    # and cfg.meanfield.readout, the net evaluated in its own dtype; for the theory-vs-net kernels figure
+    # the net evaluated in its own dtype; for the theory-vs-net kernels figure
 def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor, dict]   # Phi, Phi_hat, history
-    # FileNotFoundError if there is no result, StaleCacheError if the config (or LOSS_VERSION) changed
+    # FileNotFoundError if there is no result, StaleCacheError if the config (or MODEL_VERSION / LOSS_VERSION) changed
 ```
 
 History values are stored per outer step; arrays become lists for saving. The
-history keys are those of the notebook's `keys` list plus `is_max_weight` (`meanfield.HISTORY_KEYS`),
+history keys are those of the notebook's `keys` list plus `is_max_weight` and `tilt_projected_rel` (per layer, the largest
+relative change ||Pi(x) - x|| / ||x|| the tilt projection made to an inner step of that outer step; 0 without projection)
+(`meanfield.HISTORY_KEYS`),
 except that `align_net` / `dist_net` are omitted when `solve` is given no net (instead of
 lists of `None`). Both samplers fill every key: under importance sampling `hmc_ess_frac` is the Kish ESS fraction,
 `hmc_mc_err`, `hmc_stein_mismatch`, `hmc_h2_ratio` keep their meaning, and `hmc_accept`, `hmc_eps`, `hmc_div`,
@@ -971,7 +990,7 @@ Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD
 - Config and run: `population_spec(kind, length_scale, amplitude=1, shape=None, seed=0) -> PopulationSpec`; `make_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed, spatial, device) -> Config` (task `linear_teacher`, `D_in = m`, `n_latents = k`; `log_int = n_epochs // 50`, `save_int = n_epochs // 4`); `layer_spaces(cfg)` (the L + 1 `LayerSpace`s, `n_out = D_in`); `cache_dir_for(cfg, root) = root / "spatial_<section_hash(data, net, train)>"` (the hash includes the spatial section, so any change of setting is a new directory); `train_run(cfg, root, log) -> TrainRun(cache_dir, dataset, net, history)` writes `config.json`, loads or generates the dataset and calls `train_from_config`, so a finished run is loaded and an interrupted one resumes; `cache_root_from_env()` reads `$FCT_CACHE_ROOT`.
 - Layout (pure): `position_order(positions)` argsort around a ring (d = 1 only); `order_weights(W, pos_post, pos_pre) -> OrderedWeights(W, post_order, pre_order)` (rows by post position, columns by pre position; W is (post, pre), so `MLP.U` is (hidden, input)); `panel_grid(positions, n_cols) -> PanelGrid(n_rows, n_cols, cells)` with `cells[u] = (row, col)`: ring order along wrapped rows of `n_cols` for d = 1, the unit's lattice cell for d = 2 (column from x, row from y with y up; positions that do not form a full lattice, such as a random 2-D embedding, raise), d > 2 raises. `empirical_kernels(W) = (W W^T / n_pre, W^T W / n_post)`; `ordered_kernel_comparison(space, W) -> KernelComparison` has the prior and empirical kernels of one layer indexed in the same ring order.
 - Figures, each with its plotting function defined in its cell: `plot_layer_prior(space)` per weight layer (K_pre, K_post, every K_ij against torus distance with the profile `wrapped_gaussian_profile`, unit positions; d <= 2), `plot_loss_curves(history, title)` (loss and raw terms, log y), `plot_example_outputs(outputs, title)` (true and predicted output vectors and the pooled R^2 scatter), `plot_kernel_comparison(comparison, space)` (prior K_post / K_pre beside U U^T / m and U^T U / N, ring-sorted; d = 1), `plot_weights_by_position(W, space)` (U sorted by position; d = 1), `plot_tuning_by_position(view, positions, n_cols, bar_width)` (`view` a `TuningView`; bars drawn by the unlisted helper `_draw_information_bars`) (a curve panel and an information bar panel per neuron, placed by `panel_grid`, one curve and one bar per latent, from `grid_view.tuning_view`, so tuning and MIR are computed as in the phase-transition notebook). The kernels shown are weight-prior and weight second-moment kernels over units, not the mean-field Phi over samples of `meanfield.py` (the spatially indexed Phi is the next bullet); the markdown says so.
-- Spatially indexed kernels (the paper's eq. kernel-def under the factorised prior): hidden layer l (0-based) is the pre population of `SPACES[l + 1]`, so K^pre = `SPACES[l + 1].pre.K` and K^post = `SPACES[l + 1].post.K` (the next hidden layer, or the output for the last one); psi is `meanfield.readout_activities` (phi(h), except h on the last layer under readout "h", so the last panel matches the paper's phi(h^L) only under readout "phi"), computed on the training device and moved to the CPU in float64 where the K live. Helpers defined in the cells and tested: `data_kernels(H, phi, spaces, readout) -> (L, P, P)` and `layer_kernel_pairs(A, spaces, layer, trials) -> (post population, (S, S, n, n) blocks)`. Figures: `plot_data_kernels(A, order, sorted_by, readout)` (one panel per hidden layer, A^(l) (P, P) sorted by `sample_order` on the latent `PHI_SORT_LATENT`, own symmetric scale, title with psi and tr A / P), `plot_trial_latents(factors, trials)` (bars of z_{f mu} of the `PHI_TRIALS` samples `spread_trials(order, S)` picks at evenly spaced ranks of the sorted order), and per hidden layer `plot_spatial_kernel_pairs(pairs, trials, unit_order, title)` (the S x S grid of (n_post, n_post) blocks Phi^{mu nu}_ij, units in `position_order` for d = 1 and index order otherwise, one symmetric colour scale for the grid, an all-zero grid shown on -1..1). The input kernel Phi^(0) is not drawn.
+- Spatially indexed kernels (the paper's eq. kernel-def under the factorised prior): hidden layer l (0-based) is the pre population of `SPACES[l + 1]`, so K^pre = `SPACES[l + 1].pre.K` and K^post = `SPACES[l + 1].post.K` (the next hidden layer, or the output for the last one); psi is `meanfield.readout_activities` (phi(h) on every layer, the paper's eq. kernel-def), computed on the training device and moved to the CPU in float64 where the K live. Helpers defined in the cells and tested: `data_kernels(H, phi, spaces) -> (L, P, P)` and `layer_kernel_pairs(A, spaces, layer, trials) -> (post population, (S, S, n, n) blocks)`. Figures: `plot_data_kernels(A, order, sorted_by)` (one panel per hidden layer, A^(l) (P, P) sorted by `sample_order` on the latent `PHI_SORT_LATENT`, own symmetric scale, title with psi and tr A / P), `plot_trial_latents(factors, trials)` (bars of z_{f mu} of the `PHI_TRIALS` samples `spread_trials(order, S)` picks at evenly spaced ranks of the sorted order), and per hidden layer `plot_spatial_kernel_pairs(pairs, trials, unit_order, title)` (the S x S grid of (n_post, n_post) blocks Phi^{mu nu}_ij, units in `position_order` for d = 1 and index order otherwise, one symmetric colour scale for the grid, an all-zero grid shown on -1..1). The input kernel Phi^(0) is not drawn.
 - Notebook cells: task and network (the `parameters`-tagged cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `N`, `L`, `PHI`, `G`, seeds, `WEIGHT_LAMBDA`, `RATE_LAMBDA`, `DEVICE`), training (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup (imports), spatial (`D`, `BOX`, `MIN_REL_EIG`, `INPUT`, `HIDDEN`, `OUTPUT`), the eigenvalue-floor and step-size tables, the prior kernels, train, loss curves, example outputs (`N_EXAMPLES`), first-layer kernels, first-layer weights, the data kernels A (`PHI_SORT_LATENT`), the chosen trials (`PHI_TRIALS`), the Phi grids, tuning (`N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). `build_spatial.set_parameters(nb, values)` rewrites the one-line `NAME = value` assignments (a name not assigned exactly once raises); `execute_notebook(nb, cache_root, overrides)` runs a copy with them set, and the CLI takes them as `--set NAME=literal`.
 - Default sizes: 16 hidden units on a ring, 12 inputs, kernel length scale 0.15, `MIN_REL_EIG = 1e-2`, `LR = 1e-2`, `WEIGHT_LAMBDA = 3e-3`. SGLD is rejected unless `lr * weight_lambda * lambda_max(M_l) < 1` for every layer, with `lambda_max(M_l) = lambda_max(M_post) lambda_max(M_pre)` and `lambda_max(M^p) = 1 / (min_rel_eig * lambda_max(K^p))` (here about 368, so the product is about 0.011), and the library default floor of 1e-6 starts even Adam with a prior term of order 1e9; both optimisers run 2000 epochs in a few seconds on a CPU. SGLD fits the teacher less closely than Adam in the same number of epochs.
 - Limits: kernels and tuning panels cover d <= 2; the weight image and the ring-sorted empirical kernels need d = 1. A hidden-layer panel per neuron gets large for N in the hundreds (the figure height grows with the rows).

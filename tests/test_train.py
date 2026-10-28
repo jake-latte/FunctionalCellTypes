@@ -59,7 +59,7 @@ def test_compute_loss_matches_hand_computation():
     lw, lr_ = 0.1, 0.2
 
     h = (x @ net.U.T) / 2**0.5  # (P, N)
-    z = (h @ net.V) / 3  # (P, 1)
+    z = (torch.relu(h) @ net.V) / 3  # (P, 1), read out from the post-activations
     mse = ((y - z) ** 2).mean()
     w2 = net.U.square().sum() + net.V.square().sum()
     r2 = torch.relu(h).square().sum()  # sum over samples and neurons
@@ -84,7 +84,7 @@ def test_compute_loss_two_layers_sums_every_layer_and_every_weight():
 
     h1 = (x @ net.U.T) / 2**0.5
     h2 = (1.5 / 3**0.5) * torch.tanh(h1) @ net.J[0].T
-    z = (h2 @ net.V) / 3
+    z = (torch.tanh(h2) @ net.V) / 3
     mse = ((y - z) ** 2).mean()
     w2 = net.U.square().sum() + net.J[0].square().sum() + net.V.square().sum()
     r2 = torch.tanh(h1).square().sum() + torch.tanh(h2).square().sum()  # all samples and layers
@@ -276,19 +276,22 @@ def test_rate_l2_is_the_sum_over_samples_neurons_and_layers():
     assert loss.item() == pytest.approx(0.5 * 13)  # only the rate term remains
 
 
-def test_loss_golden_value_is_tied_to_the_loss_version():
-    # Change the expected value and LOSS_VERSION together whenever the loss definition changes:
-    # LOSS_VERSION is what rejects caches made under the previous definition.
+def test_loss_golden_value_is_tied_to_the_loss_and_model_versions():
+    # Change the expected value and LOSS_VERSION (MODEL_VERSION) together whenever the loss
+    # (the forward pass) changes: the versions are what reject caches made under the previous
+    # definition.
     assert fct.config.LOSS_VERSION == 3
+    assert fct.config.MODEL_VERSION == 2
     net = _two_sample_net()
     with torch.no_grad():
         net.V.copy_(torch.tensor([[1.0], [0.5]], dtype=F64))
     x = torch.tensor([[3.0], [-2.0]], dtype=F64)
     y = torch.tensor([[1.0], [0.0]], dtype=F64)
-    # z = [0.75, -0.5], mse = 0.15625, weight_l2 = 3.25, rate_l2 = 9 + 4 = 13
+    # relu(h) = [[3, 0], [0, 2]], z = relu(h) V / 2 = [1.5, 0.5], mse = (0.25 + 0.25) / 2 = 0.25,
+    # weight_l2 = 2 + 1.25 = 3.25, rate_l2 = 9 + 4 = 13
     loss, _ = compute_loss(net, x, y, weight_lambda=0.1, rate_lambda=0.2)
-    assert loss.item() == pytest.approx(0.5 * 2 * 0.15625 + 0.1 * 3.25 + 0.2 * 13)
-    assert loss.item() == pytest.approx(3.08125)
+    assert loss.item() == pytest.approx(0.5 * 2 * 0.25 + 0.1 * 3.25 + 0.2 * 13)
+    assert loss.item() == pytest.approx(3.175)
 
 
 def test_loss_is_assembled_from_the_parts():
@@ -323,6 +326,25 @@ def test_history_logs_the_summed_rate_l2(tmp_path):
     summed = net.phi(net(ds.x)[0]).square().sum().item()  # before the first step
     _, hist = train(cfg, ds, net, tmp_path, log=lambda s: None)
     assert hist["rate_l2"][0] == pytest.approx(summed)
+
+
+def test_artefact_written_under_the_old_model_is_rejected(tmp_path, monkeypatch):
+    """A run trained with the previous model definition (readout of h^L) must not be loaded
+    as if it came from this one, and a run of the current model loads."""
+    cfg = _cfg()
+    ds, net = _setup(cfg)
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "MODEL_VERSION", fct.config.MODEL_VERSION - 1)
+        train(cfg, ds, net, tmp_path / "old", log=lambda s: None)
+    with pytest.raises(StaleCacheError):
+        load_trained(tmp_path / "old", cfg, CPU, F64)
+    train(cfg, ds, _setup(cfg)[1], tmp_path / "new", log=lambda s: None)
+    load_trained(tmp_path / "new", cfg, CPU, F64)
+
+
+def test_model_version_is_two():
+    # 1 read the output from the pre-activation h^L; 2 reads it from phi(h^L).
+    assert fct.config.MODEL_VERSION == 2
 
 
 @pytest.mark.parametrize("interrupt_at", [None, 10], ids=["final.pt", "checkpoint"])

@@ -264,26 +264,21 @@ def _block_kernels() -> torch.Tensor:
 def test_data_kernels_one_panel_per_layer_titled_with_the_kernel_scale(
     notebook_functions, tmp_path
 ):
-    fig = notebook_functions["plot_data_kernels"](_block_kernels(), np.arange(6), "", "h")
+    fig = notebook_functions["plot_data_kernels"](_block_kernels(), np.arange(6), "")
     assert_png(fig, tmp_path)
     panels = [ax for ax in fig.axes if ax.images]
     assert len(panels) == 2
-    # psi is phi(h) below the last layer and h on it under readout "h"
-    assert re.fullmatch(r"hidden layer 1, .*phi.*: .* = 1", panels[0].get_title())
-    assert re.fullmatch(r"hidden layer 2, .*psi = h.*: .* = 2", panels[1].get_title())
+    # psi is phi(h) on every layer, the last (read out) one included
+    assert re.fullmatch(r"hidden layer 1, .*phi\(h\).*: .* = 1", panels[0].get_title())
+    assert re.fullmatch(r"hidden layer 2, .*phi\(h\).*: .* = 2", panels[1].get_title())
     # each panel has its own scale, symmetric about zero: layer 0 spans 1, layer 1 spans 2
     assert panels[0].images[0].get_clim() == (-1.0, 1.0)
     assert panels[1].images[0].get_clim() == (-2.0, 2.0)
 
 
-def test_data_kernels_last_layer_is_phi_of_h_under_the_phi_readout(notebook_functions):
-    fig = notebook_functions["plot_data_kernels"](_block_kernels(), np.arange(6), "", "phi")
-    assert all("phi" in ax.get_title() for ax in fig.axes if ax.images)
-
-
 def test_data_kernels_sorting_permutes_rows_and_columns_together(notebook_functions):
     order = np.array([0, 3, 1, 4, 2, 5])  # interleaves the two blocks
-    fig = notebook_functions["plot_data_kernels"](_block_kernels(), order, "z0", "h")
+    fig = notebook_functions["plot_data_kernels"](_block_kernels(), order, "z0")
     shown = next(ax for ax in fig.axes if ax.images).images[0].get_array()
     A = _block_kernels()[0].numpy()
     assert np.array_equal(shown, A[np.ix_(order, order)])
@@ -294,9 +289,7 @@ def test_data_kernels_sorting_permutes_rows_and_columns_together(notebook_functi
 
 def test_data_kernels_refuse_an_order_that_is_not_a_permutation(notebook_functions):
     with pytest.raises(ValueError, match="permutation"):
-        notebook_functions["plot_data_kernels"](
-            _block_kernels(), np.array([0, 0, 1, 2, 3, 4]), "", "h"
-        )
+        notebook_functions["plot_data_kernels"](_block_kernels(), np.array([0, 0, 1, 2, 3, 4]), "")
 
 
 def test_sample_order_sorts_by_the_latent_and_keeps_dataset_order_for_none(notebook_functions):
@@ -393,14 +386,13 @@ def _spaces_and_activity(L: int, P: int = 5):
     return spaces, H
 
 
-@pytest.mark.parametrize("readout", ["h", "phi"])
 def test_data_kernels_use_the_pre_kernel_of_the_layer_each_hidden_layer_feeds(
-    notebook_functions, readout
+    notebook_functions,
 ):
     spaces, H = _spaces_and_activity(L=2)
-    A = notebook_functions["data_kernels"](H, torch.tanh, spaces, readout)
+    A = notebook_functions["data_kernels"](H, torch.tanh, spaces)
     assert A.shape == (2, 5, 5)
-    psis = [torch.tanh(H[:, 0]), H[:, 1] if readout == "h" else torch.tanh(H[:, 1])]
+    psis = [torch.tanh(H[:, 0]), torch.tanh(H[:, 1])]
     for layer, psi in enumerate(psis):
         assert spaces[layer + 1].pre.name == f"hidden {layer + 1}"
         torch.testing.assert_close(A[layer], data_kernel(psi, spaces[layer + 1].pre.K))
@@ -408,7 +400,7 @@ def test_data_kernels_use_the_pre_kernel_of_the_layer_each_hidden_layer_feeds(
 
 def test_the_last_hidden_layer_drives_the_output_population(notebook_functions):
     spaces, H = _spaces_and_activity(L=2)
-    A = notebook_functions["data_kernels"](H, torch.tanh, spaces, "h")
+    A = notebook_functions["data_kernels"](H, torch.tanh, spaces)
     trials = np.array([4, 1])
     pair = notebook_functions["layer_kernel_pairs"]
     first, _ = pair(A, spaces, 0, trials)
@@ -422,7 +414,7 @@ def test_the_last_hidden_layer_drives_the_output_population(notebook_functions):
 
 def test_data_kernels_take_activity_from_the_training_device(notebook_functions):
     spaces, H = _spaces_and_activity(L=1)
-    A = notebook_functions["data_kernels"](on_fake_device(H), torch.tanh, spaces, "h")
+    A = notebook_functions["data_kernels"](on_fake_device(H), torch.tanh, spaces)
     assert A.shape == (1, 5, 5)
 
 
@@ -430,9 +422,7 @@ def test_the_phi_figure_inputs_may_live_on_the_training_device(notebook_function
     """Latents and kernels on a GPU refuse `.numpy()`; the helpers and plots go through `.cpu()`."""
     factors = {"z0": on_fake_device(torch.tensor([0.3, -1.0, 0.9, 0.0, 0.5, 2.0]))}
     order = notebook_functions["sample_order"](factors, "z0", 6)
-    fig = notebook_functions["plot_data_kernels"](
-        on_fake_device(_block_kernels()), order, "z0", "h"
-    )
+    fig = notebook_functions["plot_data_kernels"](on_fake_device(_block_kernels()), order, "z0")
     assert len([ax for ax in fig.axes if ax.images]) == 2
     trials = notebook_functions["spread_trials"](order, 2)
     fig = notebook_functions["plot_trial_latents"](factors, trials)

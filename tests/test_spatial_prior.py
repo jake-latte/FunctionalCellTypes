@@ -44,8 +44,8 @@ CPU, F64 = torch.device("cpu"), torch.float64
 
 # ---------------------------------------------------------------- pins of runs without the prior
 
-# Section hashes of three configs, written by the code before `Config.spatial` existed: a run
-# without a spatial prior must keep its caches.
+# Section hashes of three configs without a spatial prior, from the MODEL_VERSION 2 code: the
+# spatial section must not enter them when it is unset.
 SMALL = Config(
     data=DataConfig(P=16, D_in=4, d=2, embedding="linear", seed=1),
     net=NetConfig(N=8, L=2, g=1.0, phi="tanh", seed=2),
@@ -56,20 +56,20 @@ SMALL = Config(
 TRAIN = ("data", "net", "train")
 ANALYSIS = ("data", "net", "train", "analysis")
 HASH_PINS = [
-    (default_config(), {TRAIN: "1628f5950dd5", ANALYSIS: "89bef42003a8"}),
+    (default_config(), {TRAIN: "e57a540044c4", ANALYSIS: "bbc2a4d80777"}),
     (
         Config(train=TrainConfig(optimizer="sgld", beta=2.0)),
-        {TRAIN: "612e50816922", ANALYSIS: "084652f7164b"},
+        {TRAIN: "8f5228781355", ANALYSIS: "59259573ee75"},
     ),
-    (SMALL, {TRAIN: "b03d959af82e", ANALYSIS: "314b5c6191a3"}),
+    (SMALL, {TRAIN: "722559e81fd2", ANALYSIS: "f92664f6400a"}),
 ]
 # compute_loss on the SMALL net (weight_lambda=0.1, rate_lambda=1e-3) and the squared norm of
-# each parameter's gradient, as float.hex, from the same code.
-LOSS_PIN = "0x1.f2fd0476077f9p+5"
+# each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output V^T phi(h^L) / N).
+LOSS_PIN = "0x1.f4f7158364a70p+5"
 GRAD_SQ_PINS = {
-    "U": "0x1.2c8058b160712p+2",
-    "V": "0x1.e79a6655c4412p+2",
-    "J.0": "0x1.a72dff2cbbd3ep+3",
+    "U": "0x1.043d22892c3e3p+2",
+    "V": "0x1.4b0c010b89e84p+2",
+    "J.0": "0x1.1cf291f264d20p+3",
 }
 
 

@@ -14,6 +14,7 @@ TINY = {
     "N_EPOCHS": 300,
     "N_OUTER_HMC": 6,
     "N_OUTER_IMPORTANCE": 6,
+    "TILT_TRIPWIRE_RESID": 1e9,  # six outer steps are far from converged
     "PLOT_EVERY": 2,
     "N_CHAINS": 32,
     "WARMUP_TRANS": 10,

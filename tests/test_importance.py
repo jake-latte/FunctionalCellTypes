@@ -15,6 +15,7 @@ import math
 import pytest
 import torch
 
+from fct.activations import identity
 from fct.hmc import SingleSiteHMC, relative_fro
 from fct.importance import ImportanceSampler
 
@@ -26,10 +27,6 @@ N_CHAINS, WARMUP, N_TRANS = 2048, 300, 200
 
 def seeded(seed):
     return torch.Generator(device="cpu").manual_seed(seed)
-
-
-def identity(h):
-    return h
 
 
 @pytest.fixture(scope="module")

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from fct.config import (
     IMPORTANCE_FIELDS,
     LEGACY_SOLVER_FIELDS,
+    UNHASHED_SOLVER_FIELDS,
     Config,
     MeanFieldConfig,
     SolverConfig,
@@ -142,6 +143,27 @@ def test_resolve_dtype():
         resolve_dtype("float16")
 
 
+def test_a_config_with_a_readout_field_fails_to_load_naming_it(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"meanfield": {"readout": "h"}}))
+    with pytest.raises(ValidationError, match="readout"):
+        load_config(path)
+
+
+def test_model_definition_enters_every_hash_with_the_net_section_only(monkeypatch):
+    import fct.config
+
+    cfg = default_config()
+    sections = ("data", "net", "train", "meanfield")
+    before = {s: cfg.section_hash(s) for s in sections}
+    combined = cfg.section_hash("data", "net", "train")  # the training cache key
+    monkeypatch.setattr(fct.config, "MODEL_VERSION", fct.config.MODEL_VERSION + 1)
+    after = {s: cfg.section_hash(s) for s in sections}
+    assert after["net"] != before["net"]
+    assert all(after[s] == before[s] for s in ("data", "train", "meanfield"))
+    assert cfg.section_hash("data", "net", "train") != combined
+
+
 def test_loss_definition_enters_the_train_hash_only(monkeypatch):
     import fct.config
 
@@ -158,7 +180,7 @@ def test_loss_definition_enters_the_train_hash_only(monkeypatch):
 
 # ----------------------------------------------------------------------------- meanfield split
 PROBLEM_FIELDS = {
-    "n_points", "beta", "readout", "prior_scale", "alpha", "learning_prefactor", "rate_tilt",
+    "n_points", "beta", "prior_scale", "alpha", "learning_prefactor", "rate_tilt",
 }  # fmt: skip
 RESULT_SECTIONS = ("data", "net", "train", "meanfield")
 
@@ -197,8 +219,15 @@ def test_unknown_meanfield_key_still_raises():
 
 
 def test_every_solver_field_has_a_hash_rule():
-    assert set(SolverConfig.model_fields) == set(LEGACY_SOLVER_FIELDS) | set(IMPORTANCE_FIELDS)
-    assert not set(LEGACY_SOLVER_FIELDS) & set(IMPORTANCE_FIELDS)
+    rules = (LEGACY_SOLVER_FIELDS, IMPORTANCE_FIELDS, UNHASHED_SOLVER_FIELDS)
+    assert set(SolverConfig.model_fields) == set().union(*rules)
+    assert sum(len(r) for r in rules) == len(SolverConfig.model_fields)  # disjoint
+
+
+def test_the_final_residual_check_does_not_enter_the_hash():
+    a, b = default_config(), default_config()
+    b.meanfield.solver.tilt_tripwire_resid = 0.5
+    assert a.section_hash("meanfield") == b.section_hash("meanfield")
 
 
 def test_hmc_hash_ignores_the_importance_settings():

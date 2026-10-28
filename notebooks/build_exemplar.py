@@ -150,6 +150,9 @@ N_OUTER_IMPORTANCE = 40  # it raised InadequateSamplerError at step 45 of an 80-
 PLOT_EVERY = 5  # refresh the live figures every this many outer steps
 SOLVER_SEED = 0
 SOLVE_LOG_INT = 1  # outer steps between log lines
+# The solve raises if the fixed-point residual of Phi_hat stays at least this over its last
+# outer steps (Phi_hat has lost its tilt); a smaller residual does not mean convergence.
+TILT_TRIPWIRE_RESID = 0.9
 # HMC only
 N_CHAINS = 512
 WARMUP_TRANS = 50  # transitions that let the chains equilibrate before the first estimate
@@ -175,6 +178,7 @@ SOLVE_CFG = with_solver(
     seed=SOLVER_SEED,
     log_int=SOLVE_LOG_INT,
     sample_dtype="float64",
+    tilt_tripwire_resid=TILT_TRIPWIRE_RESID,
     **SAMPLER_SETTINGS[SAMPLER],
 )
 VIEW = LiveView(tail=6)  # replaces the figures at every refresh, keeps the last log lines
@@ -210,7 +214,8 @@ def build_notebook() -> NotebookNode:
         new_code_cell(TRAIN),
         new_markdown_cell(
             "The training loss, the net's outputs on a few training points, and its empirical "
-            "kernels $\\Phi_l = \\langle \\psi\\psi^\\top \\rangle$ at the end of training."
+            "kernels $\\Phi_l = \\langle \\psi\\psi^\\top \\rangle$, $\\psi = \\phi(h^{(l)})$, at the "
+            "end of training; the output reads the last one, $\\hat y = V^\\top \\phi(h^{(L)}) / N$."
         ),
         new_code_cell(TRAIN_PLOTS),
         new_markdown_cell(

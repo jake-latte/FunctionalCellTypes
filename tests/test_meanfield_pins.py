@@ -1,5 +1,6 @@
-"""Regression pins against outputs written by the solver before the sampler choice existed
-(see tests/pinned_runs.py for how and when the fixtures were made).
+"""Regression pins of two small HMC solves and of the meanfield cache hashes, and a check that a
+flat-layout config.json still loads (see tests/pinned_runs.py for how and when the fixtures
+were made).
 
 Bit-for-bit equality holds on the machine and torch build that wrote the fixtures; another
 BLAS or thread count may reorder float reductions, which these tests would report.

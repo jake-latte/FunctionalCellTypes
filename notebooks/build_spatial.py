@@ -61,7 +61,7 @@ what is plotted.
   i.i.d. $\mathcal{N}(0, 1/k)$ entries fixed by `DATA_SEED`.
 - Network (`fct/model.py`), $L$ hidden layers of $N$ units with activation $\phi$:
   $h^{(1)}_\mu = U x_\mu / \sqrt{m}$, $h^{(l)}_\mu = (g / \sqrt{N})\, J_{l-1}\, \phi(h^{(l-1)}_\mu)$
-  for $l = 2, \dots, L$, output $\hat y_\mu = V^\top h^{(L)}_\mu / N$. The weight layers, each
+  for $l = 2, \dots, L$, output $\hat y_\mu = V^\top \phi(h^{(L)}_\mu) / N$, a linear map of the last layer's post-activations. The weight layers, each
   stored (post, pre), are $W_1 = U$ of shape $(N, m)$, $W_l = J_{l-1}$, and $W_{L+1} = V^\top$.
   The rates are $r^{(l)}_{i\mu} = \phi(h^{(l)}_{i\mu})$.
 - Loss (`fct/train.py`):
@@ -355,7 +355,7 @@ plt.show()"""
 
 EXAMPLES_TEXT = r"""## Example outputs
 
-The trained network's output $\hat y_\mu = V^\top h^{(L)}_\mu / N$ against the target
+The trained network's output $\hat y_\mu = V^\top \phi(h^{(L)}_\mu) / N$ against the target
 $y_\mu = W_Y z_\mu$ for `N_EXAMPLES` samples $\mu$ drawn at random. Left: one panel per sample
 with $y_{\mu a}$ (ring on a stem) and $\hat y_{\mu a}$ (diamond) for every output $a = 1, \dots, m$.
 Right: every shown entry $\hat y_{\mu a}$ against $y_{\mu a}$, with the identity line and the
@@ -500,16 +500,12 @@ The kernel through which hidden layer $l$ drives the next layer carries two indi
 kind: samples $\mu, \nu$ and post-synaptic units $i, j$ (pre-synaptic units are $a, b$). For the
 weight layer $W_{l+1}$ that reads from hidden layer $l$, with the factorised prior
 $K_{iajb} = K^{\mathrm{post}}_{ij} K^{\mathrm{pre}}_{ab}$ of the section above,
-$$\Phi^{(l)\,\mu\nu}_{ij} = \frac{1}{N} \sum_{a,b=1}^{N} \psi^{(l)}_{a\mu}\, K_{iajb}\, \psi^{(l)}_{b\nu} = K^{\mathrm{post}}_{ij}\, A^{(l)}_{\mu\nu}, \qquad A^{(l)}_{\mu\nu} = \frac{1}{N} \sum_{a,b=1}^{N} \psi^{(l)}_{a\mu}\, K^{\mathrm{pre}}_{ab}\, \psi^{(l)}_{b\nu}, \qquad \psi^{(l)} = \begin{cases} \phi\big(h^{(l)}\big) & l < L, \\ h^{(L)} & l = L \text{ and readout } \texttt{"h"}, \\ \phi\big(h^{(L)}\big) & l = L \text{ and readout } \texttt{"phi"}. \end{cases}$$
+$$\Phi^{(l)\,\mu\nu}_{ij} = \frac{1}{N} \sum_{a,b=1}^{N} \psi^{(l)}_{a\mu}\, K_{iajb}\, \psi^{(l)}_{b\nu} = K^{\mathrm{post}}_{ij}\, A^{(l)}_{\mu\nu}, \qquad A^{(l)}_{\mu\nu} = \frac{1}{N} \sum_{a,b=1}^{N} \psi^{(l)}_{a\mu}\, K^{\mathrm{pre}}_{ab}\, \psi^{(l)}_{b\nu}, \qquad \psi^{(l)} = \phi\big(h^{(l)}\big).$$
 $K^{\mathrm{pre}}$ is the kernel of hidden layer $l$ and $K^{\mathrm{post}}$ that of hidden layer
-$l + 1$, or of the output for the last hidden layer. So $\psi$ is the rate $r$ above except on the
-last hidden layer under readout `"h"` (`cfg.meanfield.readout`, default `"h"`: the output is
-$V^\top h^{(L)} / N$), where it is the pre-activation, as in `fct.meanfield.empirical_kernels`
-(`fct.meanfield.readout_activities` gives these $\psi$); each panel title says which $\psi$ it
-shows. The paper's eq. kernel-def uses $\phi(h^{(L)})$ on every layer, since its readout is
-$W \phi(h^{(L)}) / N$, the library's `"phi"`: under the default `"h"` the last hidden layer's
-kernel is built from $h^{(L)}$ instead, so that panel and its grid match the paper only under
-readout `"phi"`. The post-synaptic kernel only multiplies: all the
+$l + 1$, or of the output for the last hidden layer. So $\psi$ is the rate $r$ above on every
+layer, the last one included, since the output reads $\phi(h^{(L)})$; this is the paper's
+eq. kernel-def and what `fct.meanfield.empirical_kernels` computes
+(`fct.meanfield.readout_activities` gives these $\psi$). The post-synaptic kernel only multiplies: all the
 dependence on the data is in the $(P \times P)$ data kernel $A^{(l)}$, the pre-synaptic index
 summed out against its prior. Writing $K^{\mathrm{pre}} = \sum_q \lambda_q v_q v_q^\top$ and
 $\tilde\psi_{q\mu} = v_q^\top \psi_\mu$, $A_{\mu\nu} = \frac{1}{N} \sum_q \lambda_q \tilde\psi_{q\mu} \tilde\psi_{q\nu}$:
@@ -540,21 +536,21 @@ def sample_order(factors, name, n_samples):
     return np.argsort(factors[name].detach().cpu().numpy(), kind="stable")
 
 
-def data_kernels(H, phi, spaces, readout):
-    # A^(l) (P, P) of every hidden layer l (0-based) from the pre-activations H (P, L, N): its psi
-    # against the K_pre of the weight layer it feeds, spaces[l + 1]. The K are float64 on the
-    # CPU, so psi is brought there from the training device.
-    psis = readout_activities(H, phi, readout)
+def data_kernels(H, phi, spaces):
+    # A^(l) (P, P) of every hidden layer l (0-based) from the pre-activations H (P, L, N): its
+    # psi = phi(h) against the K_pre of the weight layer it feeds, spaces[l + 1]. The K are
+    # float64 on the CPU, so psi is brought there from the training device.
+    psis = readout_activities(H, phi)
     kernels = [spaces[l + 1].pre.K for l in range(len(psis))]
     return torch.stack(
         [data_kernel(psi.detach().cpu().to(K.dtype), K) for psi, K in zip(psis, kernels)]
     )
 
 
-def plot_data_kernels(A, order, sorted_by, readout):
+def plot_data_kernels(A, order, sorted_by):
     # One panel per hidden layer: the (P, P) data kernel with samples reordered by `order`, its
-    # own colour scale symmetric about zero, titled with psi and the kernel scale tr(A) / P
-    # (unchanged by the reordering). The last layer's psi is h unless the readout is "phi".
+    # own colour scale symmetric about zero, titled with psi = phi(h) and the kernel scale
+    # tr(A) / P (unchanged by the reordering).
     A = A.detach().cpu().numpy()
     n_layers, P = A.shape[0], A.shape[1]
     if sorted(order.tolist()) != list(range(P)):
@@ -567,23 +563,21 @@ def plot_data_kernels(A, order, sorted_by, readout):
         bound = np.abs(shown).max()
         image = ax.imshow(shown, cmap="RdBu_r", vmin=-bound, vmax=bound, interpolation="none")
         fig.colorbar(image, ax=ax, shrink=0.8)
-        psi = "h" if layer == n_layers - 1 and readout != "phi" else r"\phi(h)"
         scale = np.trace(A[layer]) / P
         ax.set(
-            title=rf"hidden layer {layer + 1}, $\psi = {psi}$: $\mathrm{{tr}}\,A / P$ = {scale:.3g}",
+            title=rf"hidden layer {layer + 1}, $\psi = \phi(h)$: $\mathrm{{tr}}\,A / P$ = {scale:.3g}",
             xlabel=rf"sample $\nu$, sorted by {sorted_by}" if sorted_by else r"sample $\nu$",
             ylabel=r"sample $\mu$",
         )
     return fig
 
 
-readout = CFG.meanfield.readout
 with torch.no_grad():
     H, _ = RUN.net(RUN.dataset.x.to(RUN.net.dtype))  # (P, L, N), on the training device
-A = data_kernels(H, RUN.net.phi, SPACES, readout)
+A = data_kernels(H, RUN.net.phi, SPACES)
 by = None if PHI_SORT_LATENT is None else f"z{PHI_SORT_LATENT}"
 order = sample_order(RUN.dataset.factors, by, len(RUN.dataset.x))
-plot_data_kernels(A, order, by, readout)
+plot_data_kernels(A, order, by)
 plt.show()"""
 
 TRIALS_TEXT = r"""### The trials whose kernels are drawn

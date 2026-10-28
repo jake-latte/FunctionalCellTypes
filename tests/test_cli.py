@@ -7,6 +7,7 @@ import sys
 import pytest
 import torch
 
+import fct.meanfield as mf
 from fct.cli import main
 from fct.config import load_config, save_config
 from fct.meanfield import SpatialPriorUnsupportedError
@@ -20,7 +21,7 @@ TINY = [
     "meanfield.n_points=8", "meanfield.solver.n_chains=64", "meanfield.solver.n_outer=2",
     "meanfield.solver.n_inner_max=3", "meanfield.solver.warmup_trans=10",
     "meanfield.solver.n_init_samples=256",
-    "meanfield.solver.save_int=1", "analysis.n_grid=5", "analysis.n_components=3", "device=cpu",
+    "meanfield.solver.save_int=1", "meanfield.solver.tilt_tripwire_resid=1e9", "analysis.n_grid=5", "analysis.n_components=3", "device=cpu",
 ]  # fmt: skip
 
 FIGURES = ["learning", "representation", "neurons", "training", "solver", "kernels", "example"]
@@ -247,6 +248,20 @@ def test_solve_and_plot_solver_default_to_rate_lambda_as_tilt(tmp_path):
     assert main(["train", str(tmp_path)]) == 0
     assert main(["solve", str(tmp_path)]) == 0
     assert main(["plot", str(tmp_path), "--which", "solver"]) == 0
+
+
+def test_a_tripped_tilt_tripwire_is_one_line_without_a_traceback(tmp_path, capsys, monkeypatch):
+    def trip(*args, **kwargs):
+        raise mf.UnconvergedSolveError("tilt tripwire: the test")
+
+    _init(tmp_path)
+    assert main(["train", str(tmp_path)]) == 0
+    monkeypatch.setattr(mf, "_check_tilt_tripwire", trip)
+    capsys.readouterr()
+    assert main(["solve", str(tmp_path)]) == 1
+    err = capsys.readouterr().err.strip()
+    assert err == "error: tilt tripwire: the test"
+    assert not (tmp_path / "meanfield" / "final.pt").exists()
 
 
 def test_solve_on_a_spatial_cache_fails_with_one_line_and_writes_nothing(tmp_path, capsys):

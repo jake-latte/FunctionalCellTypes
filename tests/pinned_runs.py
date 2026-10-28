@@ -1,13 +1,18 @@
 """The tiny solves and configs whose outputs are pinned in tests/fixtures/.
 
-The fixtures were written by the code at commit d1d3091, i.e. by the solver before it had a
-sampler choice or a solver sub-section, with
+The fixtures are written with
 
     uv run python -c "from tests import pinned_runs; pinned_runs.write_fixtures()"
 
 They pin behaviour that must not change: `sampler="hmc"` reproduces those solves bit for bit,
-and a config.json written then still loads and hashes to the same cache keys. Regenerate them
-only when that behaviour is meant to change, and say so in the commit.
+and a config.json in the flat layout still loads and hashes to the same cache keys. Regenerate
+them only when that behaviour is meant to change, and say so in the commit.
+
+Provenance: the solves `hmc_solve_*.pt` and `meanfield_hashes.json` are written by code whose
+net reads its output as V^T phi(h^L) / N (MODEL_VERSION 2) and whose tilt projection follows
+`fct.hmc.tilt_rule`. `legacy_config.json` is the flat layout of the code before the solver
+sub-section (commit d1d3091) with the `readout` key deleted by hand: `write_fixtures` would save
+it in the current nested layout, so restore it from git after running it.
 
 Only flat `MeanFieldConfig` keyword arguments are used here, which both the old flat schema and
 the split one accept, so the same code produced the fixtures and checks them.
@@ -22,7 +27,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 F64 = {"device": "cpu", "dtype": torch.float64}
 
 # Two small, fast problems that between them reach every HMC code path the solver has:
-# lazy init with a net and float32 chains; gaussian init, readout phi, float64 chains, no net.
+# lazy init with a net and float32 chains; gaussian init, float64 chains, no net.
 PINNED_SOLVES = {
     "lazy_net_f32": {
         "with_net": True,
@@ -35,7 +40,7 @@ PINNED_SOLVES = {
     "gaussian_phi_f64": {
         "with_net": False,
         "meanfield": {
-            "beta": 1e3, "readout": "phi", "n_chains": 32, "n_outer": 3, "warmup_trans": 10,
+            "beta": 1e3, "n_chains": 32, "n_outer": 3, "warmup_trans": 10,
             "n_inner_max": 3, "n_trans": 2, "n_trans_outer": 3, "n_init_samples": 256,
             "init": "gaussian", "sample_dtype": "float64", "log_int": 1, "seed": 8,
         },
@@ -51,7 +56,7 @@ LEGACY_OVERRIDES = {
     "net": {"N": 16, "L": 2},
     "train": {"rate_lambda": 1e-2},
     "meanfield": {
-        "n_points": 20, "beta": 1e3, "readout": "phi", "rate_tilt": 1e-4, "alpha": 0.3,
+        "n_points": 20, "beta": 1e3, "rate_tilt": 1e-4, "alpha": 0.3,
         "n_chains": 64, "eps0": 0.1, "init": "gaussian", "log_int": 1, "save_int": 3,
         "precondition": False, "seed": 4,
     },
@@ -79,7 +84,11 @@ def pinned_solve(name: str, **meanfield_overrides):
     net = None
     if spec["with_net"]:
         net = make_net(NetConfig(N=8, L=2, phi="relu", seed=3), D_IN_PIN, 2, "cpu", torch.float64)
-    cfg = MeanFieldConfig(**spec["meanfield"], **meanfield_overrides)
+    # Three outer steps are far from converged: the final-residual check, which changes no
+    # number, is switched off.
+    cfg = MeanFieldConfig(
+        **{"tilt_tripwire_resid": 1e9, **spec["meanfield"], **meanfield_overrides}
+    )
     return solve(X, Y, 2, LAMBDA_W, LAMBDA_R, torch.relu, 1.0, cfg, net=net, log=lambda _m: None)
 
 

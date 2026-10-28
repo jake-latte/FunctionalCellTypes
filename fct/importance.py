@@ -80,7 +80,7 @@ class ImportanceSampler:
     M : (P, P) symmetric tilt matrix (Φ̂ of the solver).
     lambda_r : coefficient of the ½ λ_r φ(h)ᵀφ(h) rate tilt (>= 0).
     phi : elementwise activation.
-    psi_is_phi : True for ψ = φ, False for ψ = h (last layer with readout="h").
+    psi_is_phi : True for ψ = φ (the solver's case); False for ψ = h, a Gaussian tilt.
     n_samples : independent draws per transition.
     proposal_scale : s > 0, the proposal is N(0, s² Σ); s > 1 widens it.
     jitter_rel : relative diagonal jitter added to Σ.
@@ -137,11 +137,15 @@ class ImportanceSampler:
 
     def project_tilt(self, M: torch.Tensor, delta: float) -> torch.Tensor:
         """`fct.hmc.project_tilt` of M under this sampler's prior and rate tilt."""
-        return project_tilt(M, delta, self.lambda_r, self.psi_is_phi, self._Sigma_chol)
+        return project_tilt(
+            M, delta, self.lambda_r, self.phi, self.psi_is_phi, self._Sigma_chol, self.Sigma_inv
+        )
 
     def normalisability_margin(self) -> float:
         """`fct.hmc.normalisability_margin` of the current prior and tilt."""
-        return normalisability_margin(self.M64, self.Sigma_inv, self.lambda_r, self.psi_is_phi)
+        return normalisability_margin(
+            self.M64, self.Sigma_inv, self.lambda_r, self.phi, self.psi_is_phi
+        )
 
     # -- state: there is none beyond the generator, which the caller owns ---------
     def get_state(self) -> None:

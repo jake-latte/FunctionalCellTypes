@@ -17,9 +17,11 @@ from fct.train import compute_loss, train
 
 CPU, F64 = torch.device("cpu"), torch.float64
 
-# Hashes of the default config before the optimiser fields existed: adam runs keep their caches.
-DEFAULT_TRAIN_HASH = "1628f5950dd5"
-DEFAULT_TRAIN_MEANFIELD_HASH = "08c8fb804269"
+# Hashes of the default config (adam), which the SGLD-only fields must not move. They are those
+# of MODEL_VERSION 2 without `meanfield.readout`; at MODEL_VERSION 1 the train hash is the one
+# written before the optimiser fields existed (test_spatial_prior pins it).
+DEFAULT_TRAIN_HASH = "e57a540044c4"
+DEFAULT_TRAIN_MEANFIELD_HASH = "3de5750865bd"
 
 
 # ---------------------------------------------------------------- the optimiser itself

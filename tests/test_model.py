@@ -43,11 +43,11 @@ def test_wrong_input_dim_raises():
 
 
 @pytest.mark.parametrize("L", [1, 3])
-def test_input_and_readout_scaling(L):
+def test_input_scaling_and_readout_of_the_post_activations(L):
     net, x = _net(L), _x()
     H, Z = net(x)
     assert torch.allclose(H[:, 0], x @ net.U.T / math.sqrt(D_IN))
-    assert torch.allclose(Z, H[:, -1] @ net.V / N)  # last pre-activation, not phi of it
+    assert torch.allclose(Z, net.phi(H[:, -1]) @ net.V / N)  # post-activation of the last layer
 
 
 def test_every_hidden_layer_uses_its_own_J_and_scaling():

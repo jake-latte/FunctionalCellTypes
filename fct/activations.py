@@ -1,6 +1,7 @@
 """Activation-function registry and derivatives."""
 
 from collections.abc import Callable
+from typing import Literal
 
 import torch
 
@@ -13,6 +14,16 @@ def get_phi(name: str) -> Activation:
     if name not in PHI:
         raise KeyError(f"unknown activation {name!r}; valid names: {sorted(PHI)}")
     return PHI[name]
+
+
+def identity(h: torch.Tensor) -> torch.Tensor:
+    """The linear activation: not a net activation (not in PHI), but the Gaussian case of the
+    single-site density, whose moments are known in closed form."""
+    return h
+
+
+def _identity_prime(h: torch.Tensor) -> torch.Tensor:
+    return torch.ones_like(h)
 
 
 def _relu_prime(h: torch.Tensor) -> torch.Tensor:
@@ -45,7 +56,39 @@ _ANALYTIC_PRIME = {
     torch.nn.functional.tanh: _tanh_prime,
     torch.sigmoid: _sigmoid_prime,
     torch.nn.functional.sigmoid: _sigmoid_prime,
+    identity: _identity_prime,
 }
+
+
+# How the tilt -1/2 phi(h)^T M phi(h) behaves for large h, which decides when the single-site
+# density is normalisable (see `fct.hmc.normalisable_tilt_floor`): "bounded" phi keeps the tilt
+# bounded, "linear" makes the density Gaussian, "relu" is positively 1-homogeneous (the tilt
+# grows quadratically, but only on the orthant where units are active).
+TiltClass = Literal["bounded", "linear", "relu"]
+_TILT_CLASS: dict[Activation, TiltClass] = {
+    torch.tanh: "bounded",
+    torch.nn.functional.tanh: "bounded",
+    torch.sigmoid: "bounded",
+    torch.nn.functional.sigmoid: "bounded",
+    identity: "linear",
+    torch.relu: "relu",
+    torch.nn.functional.relu: "relu",
+}
+
+
+def known_tilt_class(phi: Activation) -> TiltClass | None:
+    """The normalisability class of phi, None for an activation without a known rule."""
+    return _TILT_CLASS.get(phi)
+
+
+def tilt_class(phi: Activation) -> TiltClass:
+    """The normalisability class of phi; ValueError for an activation without a known rule."""
+    if known_tilt_class(phi) is None:
+        raise ValueError(
+            f"no normalisability rule for the activation {phi!r}; known: tanh, sigmoid, relu "
+            "and fct.activations.identity"
+        )
+    return _TILT_CLASS[phi]
 
 
 def phi_prime(phi: Activation) -> Activation:

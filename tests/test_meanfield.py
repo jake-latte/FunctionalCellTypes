@@ -17,10 +17,11 @@ import torch
 
 import fct.config
 import fct.meanfield as mf
+from fct.activations import identity
 from fct.cache import StaleCacheError
 from fct.config import Config, DataConfig, MeanFieldConfig, NetConfig, TrainConfig
 from fct.data import Dataset
-from fct.hmc import SingleSiteHMC, relative_fro
+from fct.hmc import SingleSiteHMC, project_tilt, relative_fro
 from fct.importance import ImportanceSampler
 from fct.meanfield import (
     HISTORY_KEYS,
@@ -46,13 +47,14 @@ def silent(_msg):
     pass
 
 
+# The packaging tests run a few outer steps, far from converged; this lets them finish (the
+# final-residual check has its own tests).
+ANY_RESID = 1e9
+
+
 # ----------------------------------------------------------------------------- analytic L=1
 LAMBDA_W, ALPHA, PREFACTOR = 2.0, 0.5, 0.5
 P_LIN, D_LIN = 8, 8
-
-
-def identity(h):
-    return h
 
 
 @pytest.fixture(scope="module")
@@ -122,6 +124,84 @@ def test_analytic_reference_is_a_fixed_point(linear_problem):
     assert torch.linalg.eigvalsh(torch.linalg.inv(Sigma) + Phi_hat).min() > 1.0
 
 
+def test_the_default_projection_keeps_the_analytic_saddle_tilt(linear_problem):
+    """The learning tilt Phi_hat* = -2c A Y Y^T A is negative definite; for the linear (Gaussian)
+    case the projection must leave it whole, since Sigma^-1 + Phi_hat* > 0."""
+    X, Y = linear_problem
+    _, Phi_hat_star, Sigma, _ = analytic_saddle(X, Y)
+    s = SingleSiteHMC(Sigma, torch.zeros_like(Sigma), 0.0, identity, True, n_chains=4)
+    assert linear_cfg().solver.project_tilt  # the default
+    out = s.project_tilt(Phi_hat_star, linear_cfg().solver.tilt_floor)
+    assert out.norm() / Phi_hat_star.norm() == pytest.approx(1.0, abs=1e-12)
+    torch.testing.assert_close(out, mf.sym(Phi_hat_star), rtol=0, atol=0)  # unchanged
+
+
+def test_the_linear_solve_is_not_changed_by_the_projection(linear_solution):
+    h = linear_solution[0].history
+    assert all(r[0] == 0.0 for r in h["tilt_projected_rel"][-5:])
+
+
+def test_relu_projection_keeps_part_of_a_learning_tilt():
+    """The relu certificate allows M + lambda_r I down to -(1 - delta) lambda_min(Sigma^-1):
+    a learning tilt within that bound passes unchanged, which the prior-blind floor did not."""
+    X, Y = relu_problem(6, 8, seed=56)
+    Sigma = X @ X.T / 8 + 0.1 * torch.eye(6, **F64)
+    s = torch.linalg.eigvalsh(torch.linalg.inv(Sigma)).min().item()
+    Mh = -0.5 * s * Y @ Y.T / torch.linalg.eigvalsh(Y @ Y.T).max()  # lambda_min = -s / 2
+    out = project_tilt(Mh, 0.05, 0.0, torch.relu, True, torch.linalg.cholesky(Sigma),
+                       torch.linalg.inv(Sigma))  # fmt: skip
+    torch.testing.assert_close(out, mf.sym(Mh), rtol=0, atol=0)
+
+
+def test_a_solve_ending_unconverged_raises_and_writes_no_final(linear_problem, tmp_path):
+    X, Y = linear_problem
+    cfg = linear_cfg(n_outer=2, save_int=1, tilt_tripwire_resid=1e-12)
+    with pytest.raises(mf.UnconvergedSolveError, match="residual"):
+        solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent, checkpoint_dir=tmp_path,
+              config_hash="h0")  # fmt: skip
+    assert not (tmp_path / "final.pt").exists()
+    assert list(tmp_path.glob("ckpt_*.pt"))  # kept for inspection
+
+
+def _resid_history(*rows):
+    return {"phihat_fp_resid_stein": [np.array(r) for r in rows], "tilt_projected_rel": [None]}
+
+
+def test_the_tripwire_reads_the_largest_residual_of_the_last_steps():
+    # oscillating around the tripwire (as a relu run did) trips it, though the last step is below
+    with pytest.raises(mf.UnconvergedSolveError, match="last 3 outer steps"):
+        mf._check_tilt_tripwire(_resid_history([0.1], [0.96], [1.04], [0.89]), 0.9, 3)
+    # steps before the last k do not count; a steady unconverged 0.76 passes (not a convergence test)
+    mf._check_tilt_tripwire(_resid_history([5.0], [0.76], [0.76], [0.76]), 0.9, 3)
+    # fewer steps than k: all of them
+    with pytest.raises(mf.UnconvergedSolveError):
+        mf._check_tilt_tripwire(_resid_history([0.1, 0.95]), 0.9, 3)
+
+
+def test_phihat_change_is_nan_after_a_step_from_a_zero_tilt(linear_problem):
+    X, Y = linear_problem
+    cfg = linear_cfg(n_outer=1, init="lazy", tilt_tripwire_resid=ANY_RESID)
+    h = solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent).history
+    assert np.isnan(h["phihat_change_rel"][0]).all()
+
+
+def test_the_log_has_no_margin_for_a_bounded_phi():
+    X, Y = relu_problem(6, 8, seed=58)
+    cfg = MeanFieldConfig(
+        beta=1e3, n_chains=16, n_outer=1, warmup_trans=5, n_inner_max=2, log_int=1,
+        tilt_tripwire_resid=ANY_RESID,
+    )  # fmt: skip
+    lines = []
+    solve(X, Y, 1, 1e-3, 0.0, torch.tanh, 1.0, cfg, log=lines.append)
+    assert any("margin=n/a" in line for line in lines)
+
+
+def test_a_projection_needs_a_known_activation():
+    X, Y = relu_problem(6, 8, seed=57)
+    with pytest.raises(ValueError, match="normalisability rule"):
+        solve(X, Y, 1, 1e-3, 0.0, torch.nn.functional.softplus, 1.0, MeanFieldConfig(), log=silent)
+
+
 def test_linear_solve_recovers_analytic_saddle(linear_problem, linear_solution):
     X, Y = linear_problem
     result, seconds = linear_solution
@@ -156,7 +236,10 @@ def test_solve_without_checkpoint_dir_never_writes(linear_problem, monkeypatch):
     monkeypatch.setattr(mf, "save_artefact", forbidden)
     monkeypatch.setattr(mf, "write_checkpoint", forbidden)
     X, Y = linear_problem
-    cfg = linear_cfg(n_outer=2, warmup_trans=10, n_trans=2, n_trans_outer=2, n_inner_max=2)
+    cfg = linear_cfg(
+        n_outer=2, warmup_trans=10, n_trans=2, n_trans_outer=2, n_inner_max=2,
+        tilt_tripwire_resid=ANY_RESID,
+    )  # fmt: skip
     result = solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, cfg, log=silent)
     assert len(result.history["outer_step"]) == 2
 
@@ -184,7 +267,10 @@ def small_net(D_in, L=2, N=32):
 def test_smoke_relu_two_layers_with_net_is_fast_and_complete():
     X, Y = relu_problem(16, 8, seed=20)
     net = small_net(8)
-    cfg = MeanFieldConfig(beta=1e3, n_chains=128, n_outer=3, warmup_trans=20, log_int=1, seed=1)
+    cfg = MeanFieldConfig(
+        beta=1e3, n_chains=128, n_outer=3, warmup_trans=20, log_int=1, seed=1,
+        tilt_tripwire_resid=ANY_RESID,
+    )  # fmt: skip
     lines = []
     start = time.perf_counter()
     result = solve(X, Y, 2, 1e-3, 1e-3, torch.relu, 1.0, cfg, net=net, log=lines.append)
@@ -207,36 +293,35 @@ def test_smoke_relu_two_layers_with_net_is_fast_and_complete():
 def test_empirical_kernels_match_definition():
     X, _ = relu_problem(6, 8, seed=30)
     net = small_net(8, L=3, N=5)
-    Phi, H = empirical_kernels(net, X, "h")
+    Phi, H = empirical_kernels(net, X)
     assert H.shape == (6, 3, 5) and Phi.shape == (3, 6, 6)
-    torch.testing.assert_close(Phi[0], torch.relu(H[:, 0]) @ torch.relu(H[:, 0]).T / 5)
-    torch.testing.assert_close(Phi[2], H[:, 2] @ H[:, 2].T / 5)
-    Phi_phi, _ = empirical_kernels(net, X, "phi")
-    torch.testing.assert_close(Phi_phi[2], torch.relu(H[:, 2]) @ torch.relu(H[:, 2]).T / 5)
+    for layer in range(3):  # phi(h) on every layer, the last (read out) one included
+        psi = torch.relu(H[:, layer])
+        torch.testing.assert_close(Phi[layer], psi @ psi.T / 5)
 
 
-def test_readout_activities_are_phi_of_h_except_h_on_the_last_layer_under_readout_h():
+def test_readout_activities_are_phi_of_h_on_every_layer():
     H = torch.randn(6, 3, 5, generator=torch.Generator().manual_seed(0), dtype=torch.float64)
-    psis = readout_activities(H, torch.tanh, "h")
+    psis = readout_activities(H, torch.tanh)
     assert len(psis) == 3 and all(psi.shape == (6, 5) for psi in psis)
-    for layer in (0, 1):
+    for layer in range(3):
         assert torch.equal(psis[layer], torch.tanh(H[:, layer]))
-    assert torch.equal(psis[2], H[:, 2])
-    assert torch.equal(readout_activities(H, torch.tanh, "phi")[2], torch.tanh(H[:, 2]))
-
-
-def test_readout_activities_reject_an_unknown_readout():
-    with pytest.raises(ValueError, match="readout"):
-        readout_activities(torch.zeros(2, 1, 3), torch.tanh, "rates")
 
 
 def test_empirical_kernels_are_built_from_the_readout_activities():
     X, _ = relu_problem(6, 8, seed=31)
     net = small_net(8, L=2, N=5)
-    for readout in ("h", "phi"):
-        Phi, H = empirical_kernels(net, X, readout)
-        psis = readout_activities(H, net.phi, readout)
-        assert torch.equal(Phi, torch.stack([psi @ psi.T / 5 for psi in psis]))
+    Phi, H = empirical_kernels(net, X)
+    psis = readout_activities(H, net.phi)
+    assert torch.equal(Phi, torch.stack([psi @ psi.T / 5 for psi in psis]))
+
+
+def test_the_net_output_is_the_linear_readout_of_the_last_kernel_activities():
+    X, _ = relu_problem(6, 8, seed=32)
+    net = small_net(8, L=2, N=5)
+    H, Z = net(X)
+    psi_L = readout_activities(H, net.phi)[-1]
+    torch.testing.assert_close(Z, psi_L @ net.V / 5)
 
 
 def test_init_net_requires_a_net():
@@ -249,8 +334,9 @@ def test_init_net_requires_a_net():
 def test_init_net_runs():
     X, Y = relu_problem(8, 8, seed=41)
     cfg = MeanFieldConfig(
-        beta=1e3, init="net", n_chains=32, n_outer=1, warmup_trans=5, n_inner_max=2, seed=0
-    )
+        beta=1e3, init="net", n_chains=32, n_outer=1, warmup_trans=5, n_inner_max=2, seed=0,
+        tilt_tripwire_resid=ANY_RESID,
+    )  # fmt: skip
     result = solve(X, Y, 2, 1e-3, 1e-3, torch.relu, 1.0, cfg, net=small_net(8), log=silent)
     assert torch.isfinite(result.Phi).all()
 
@@ -277,6 +363,7 @@ def resume_cfg(sample_dtype="float64"):
         sample_dtype=sample_dtype,
         log_int=1,
         seed=5,
+        tilt_tripwire_resid=ANY_RESID,
     )
 
 
@@ -358,6 +445,7 @@ def small_config(beta=1e3):
             warmup_trans=10,
             n_inner_max=3,
             seed=0,
+            tilt_tripwire_resid=ANY_RESID,
         ),
         device="cpu",
     )
@@ -416,6 +504,16 @@ def test_load_meanfield_is_stale_when_beta_changes(cached_run):
         load_meanfield(cache_dir, small_config(beta=2e3), "cpu")
 
 
+def test_load_meanfield_rejects_a_result_from_another_model_version(tmp_path, monkeypatch):
+    cfg = small_config()
+    net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "MODEL_VERSION", fct.config.MODEL_VERSION - 1)
+        run_meanfield(cfg, small_dataset(cfg), net, tmp_path, log=silent)
+    with pytest.raises(StaleCacheError):
+        load_meanfield(tmp_path, cfg, "cpu")
+
+
 def test_load_meanfield_rejects_a_result_from_another_loss_version(tmp_path, monkeypatch):
     cfg = small_config()
     net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float64)
@@ -440,16 +538,13 @@ def test_run_meanfield_rejects_more_points_than_data(tmp_path):
         run_meanfield(cfg, dataset, net, tmp_path, log=silent)
 
 
-@pytest.mark.parametrize("readout", ["h", "phi"])
-def test_net_kernels_are_the_empirical_kernels_on_the_solver_inputs(readout):
+def test_net_kernels_are_the_empirical_kernels_on_the_solver_inputs():
     cfg = small_config()
-    mf_cfg = MeanFieldConfig(**{**cfg.meanfield.model_dump(), "readout": readout})
-    cfg = Config(**{**cfg.model_dump(), "meanfield": mf_cfg.model_dump()})
     dataset = small_dataset(cfg)
     # A float32 net: net_kernels must evaluate it in its own dtype, then return float64.
     net = make_net(cfg.net, cfg.data.D_in, cfg.data.d, "cpu", torch.float32)
     K = net_kernels(net, dataset, cfg)
-    expected, _ = empirical_kernels(net, dataset.x[:10].to(torch.float32), readout)
+    expected, _ = empirical_kernels(net, dataset.x[:10].to(torch.float32))
     assert K.dtype == torch.float64 and K.shape == (2, 10, 10)
     torch.testing.assert_close(K, expected.to(torch.float64), rtol=0, atol=0)
 
@@ -608,8 +703,11 @@ def test_an_accepted_point_below_the_ess_floor_fails_loudly_even_with_one_inner_
     than let the solve finish."""
     X, Y = relu_problem(8, 8, seed=54)
     cfg = extreme_tilt_cfg(n_inner_max=1)
+    # tanh: a bounded phi needs no tilt projection, so the huge step reaches a tilt the prior
+    # proposal cannot represent (the relu certificate would keep the step small enough).
     with pytest.raises(mf.InadequateSamplerError, match="outer step 0"):
-        solve_relu(X, Y, cfg, checkpoint_dir=tmp_path, config_hash="h0")
+        solve(X, Y, 2, 1e-3, 1e-3, torch.tanh, 1.0, cfg, log=silent, checkpoint_dir=tmp_path,
+              config_hash="h0")  # fmt: skip
     assert not (tmp_path / "final.pt").exists()
 
 
@@ -641,14 +739,14 @@ def test_init_from_net_matches_the_tilt_gradient_of_an_hmc_sampler():
     net = small_net(8, L=3)
     cfg = MeanFieldConfig(beta=1e3, init="net", n_chains=8)
     prob = mf._make_problem(X, Y, 3, 1e-3, 1e-2, torch.relu, 1.0, cfg)
-    net_Phi, net_H = empirical_kernels(net, prob.X, "h")
+    net_Phi, net_H = empirical_kernels(net, prob.X)
     L, P = 3, prob.P
     Phi, Phi_hat = torch.zeros(L, P, P, **F64), torch.zeros(L, P, P, **F64)
     mf._init_from_net(prob, Phi, Phi_hat, net_Phi, net_H)
     for l in range(L - 1):
         ref = SingleSiteHMC(
             mf._prior_cov(prob, l + 1, Phi), Phi_hat[l + 1], prob.rate_tilt, torch.relu,
-            prob.psi_is_phi[l + 1], n_chains=1, sample_dtype=torch.float64, generator=seeded(0),
+            True, n_chains=1, sample_dtype=torch.float64, generator=seeded(0),
         )  # fmt: skip
         h = net_H[:, l + 1].T
         _, u = ref.tilt_and_grad(h)

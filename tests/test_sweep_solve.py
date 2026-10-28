@@ -27,7 +27,10 @@ from fct.sweep import (
 from tests.report_helpers import QUIET
 
 # A solve of a few outer steps at ten points: seconds on a CPU.
-TINY_SOLVER = SolverConfig(n_chains=32, n_outer=3, save_int=1, log_int=1, warmup_trans=10)
+# Three outer steps are far from converged; tilt_tripwire_resid switches that check off.
+TINY_SOLVER = SolverConfig(
+    n_chains=32, n_outer=3, save_int=1, log_int=1, warmup_trans=10, tilt_tripwire_resid=1e9
+)
 TINY_MEANFIELD = MeanFieldConfig(n_points=10, beta=1e3, solver=TINY_SOLVER)
 
 
@@ -407,6 +410,19 @@ def test_cli_inadequate_sampler_exits_nonzero_with_a_message(small, root, capsys
     assert code == 1
     assert "inadequate" in err and "Traceback" not in err
     assert not (_dirs(root, small, 0).meanfield / "final.pt").exists()
+
+
+def test_cli_tripped_tilt_tripwire_exits_nonzero_with_one_line(small, root, capsys, monkeypatch):
+    def trip(*args, **kwargs):
+        raise mf.UnconvergedSolveError("tilt tripwire: the test")
+
+    monkeypatch.setattr(mf, "_check_tilt_tripwire", trip)
+    code, _, err = _cli(capsys, "run", root, "--index", 0, "--stage", "solve")
+    assert code == 1
+    assert "tilt tripwire" in err and "Traceback" not in err
+    code, _, err = _cli(capsys, "run", root, "--stage", "solve")
+    assert code == 1
+    assert "setting 0 failed: UnconvergedSolveError" in err and "Traceback" not in err
 
 
 def test_cli_run_all_reports_an_inadequate_setting_and_continues(small, root, capsys, monkeypatch):
