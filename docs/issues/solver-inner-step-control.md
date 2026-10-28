@@ -124,19 +124,28 @@ no numerical fault; every point it raised is now done:
   target, Picard wording (b3c4b99).
 - S5: `eta_max` caps only the outer step, stated in the `SolverConfig` comment and design.md
   (already in 7c9c98c/b3c4b99; the design.md config block reworded in present tense).
-- Nits: the floor on health backtracks is in design.md (b39d037); the Picard reference
-  `notebooks/exemplar_reference.py` and its quadrature test pass (ff68919: 0.004 from the
-  quadrature fixed point, bound 0.02, test budget cut to ~1 s); the script also runs end to
-  end on an exemplar cache. The weak-test numbers in design.md (0.042-0.046 / 0.110-0.119)
-  were re-measured over seeds 0-4 and are exact (default 0.042-0.046, legacy 0.110-0.119),
-  so unchanged. History wording in the relu replay and design.md config comments reworded.
-  `tests/pinned_runs.py:13` is 83 columns on this tip; the five lines the branch added over
-  100 columns are wrapped.
+- Nits: the floor on health backtracks is in design.md (b39d037). The Picard reference
+  `notebooks/exemplar_reference.py` builds its prior, constants and Stein target with the
+  solver's own helpers and is tested against the quadrature fixed point (see below). The
+  weak-test numbers in design.md (0.042-0.046 / 0.110-0.119) were re-measured over seeds 0-4
+  and are exact, so unchanged. History wording in the relu replay and design.md config
+  comments reworded. `tests/pinned_runs.py:13` is 83 columns on this tip. No line this branch
+  adds to a .py file is over 100 columns (the docstring in `fct/exemplar.py` was wrapped only
+  in d671fcb; b39d037 had missed it).
 - Exemplar numbers in design.md re-measured (7f09d8c); they supersede those in "Result"
   above. At the defaults (HMC, net init, 80 steps): last three at most 0.196 (tripwire 0.9),
   inner loop converged at all 80 outer steps (1-13 inner steps, 3 rejected, 0 health
   backtracks); importance 0.092; lazy 0.392 (12 rejected), all converged inner loops. Solves
   2.1 / 2.7 / 1.6 % from the Picard reference (net 6.4 %).
-- Full suite: 1569 passed; `ruff check fct tests notebooks` and `ruff format --check fct
+- Confirmation review (at b0397bc): mergeable, numbers reproduce. Its points are applied:
+  the quadrature test's bound is 0.01, not 0.02 (seeds 0-9 land 0.002-0.007; a target 20 %
+  low fails it), `exemplar_reference` reuses the solver's problem (new
+  `meanfield._last_stein_target`, called by the solver's three copies too) and is tested on
+  a config with the weak problem's constants, returns its last change instead of printing
+  it, and rejects activations needing a tilt projection (6c8fff0); the shared weak problem
+  lives in `tests/weak_tanh.py` (e3e4dda); the lazy and importance ranges in design.md and
+  the exemplar intro are accurate (lazy 0.09-0.80 after step 20, importance up to 0.42 in its
+  last 30 steps), design.md's broken wrap fixed (d671fcb).
+- Full suite: 1574 passed; `ruff check fct tests notebooks` and `ruff format --check fct
   tests` clean.
-Next: a confirmation review pass, merge, then start `outer-run-health-guard`.
+Next: merge, then start `outer-run-health-guard`.
