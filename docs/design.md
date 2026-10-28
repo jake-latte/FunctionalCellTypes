@@ -92,8 +92,7 @@ settings were finished before the change is not silently reused: `sweep status` 
 delete the old ones. Likewise the hash of any set of sections that includes `net` folds in `config.MODEL_VERSION`, the
 version of the forward pass of `MLP`. Version 2 reads the output from the post-activations, `Z = V^T phi(h^L) / N`
 (version 1 read it from the pre-activation `h^L`): every train and meanfield cache made under version 1 is rejected with
-`StaleCacheError`, and a sweep ROOT of version-1 runs shows them as `stale`. Version 1 is not put in the hash, so a
-version-1 hash is the one the code before `MODEL_VERSION` wrote. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
+`StaleCacheError`, and a sweep ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
 hashed train section, so every pre-existing Adam hash and cache is unchanged. Changing a config value such as the `weight_lambda` default (now 1e-4) needs no version bump: it
 enters the hash by value.
 

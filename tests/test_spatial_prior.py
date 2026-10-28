@@ -10,7 +10,6 @@ from functools import partial
 import pytest
 import torch
 
-import fct.config
 from fct.cache import StaleCacheError, cache_paths, latest_checkpoint
 from fct.config import (
     LOSS_VERSION,
@@ -45,9 +44,8 @@ CPU, F64 = torch.device("cpu"), torch.float64
 
 # ---------------------------------------------------------------- pins of runs without the prior
 
-# Section hashes of three configs, written by the code before `Config.spatial` existed (that
-# is, at MODEL_VERSION 1, which the hash leaves out): a run without a spatial prior must keep
-# its caches.
+# Section hashes of three configs without a spatial prior, from the MODEL_VERSION 2 code: the
+# spatial section must not enter them when it is unset.
 SMALL = Config(
     data=DataConfig(P=16, D_in=4, d=2, embedding="linear", seed=1),
     net=NetConfig(N=8, L=2, g=1.0, phi="tanh", seed=2),
@@ -58,12 +56,12 @@ SMALL = Config(
 TRAIN = ("data", "net", "train")
 ANALYSIS = ("data", "net", "train", "analysis")
 HASH_PINS = [
-    (default_config(), {TRAIN: "1628f5950dd5", ANALYSIS: "89bef42003a8"}),
+    (default_config(), {TRAIN: "e57a540044c4", ANALYSIS: "bbc2a4d80777"}),
     (
         Config(train=TrainConfig(optimizer="sgld", beta=2.0)),
-        {TRAIN: "612e50816922", ANALYSIS: "084652f7164b"},
+        {TRAIN: "8f5228781355", ANALYSIS: "59259573ee75"},
     ),
-    (SMALL, {TRAIN: "b03d959af82e", ANALYSIS: "314b5c6191a3"}),
+    (SMALL, {TRAIN: "722559e81fd2", ANALYSIS: "f92664f6400a"}),
 ]
 # compute_loss on the SMALL net (weight_lambda=0.1, rate_lambda=1e-3) and the squared norm of
 # each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output V^T phi(h^L) / N).
@@ -81,8 +79,7 @@ def _small_net_and_data():
     return net, ds
 
 
-def test_hashes_without_a_spatial_prior_are_unchanged(monkeypatch):
-    monkeypatch.setattr(fct.config, "MODEL_VERSION", 1)
+def test_hashes_without_a_spatial_prior_are_unchanged():
     for cfg, pins in HASH_PINS:
         for sections, want in pins.items():
             assert cfg.section_hash(*sections) == want, sections

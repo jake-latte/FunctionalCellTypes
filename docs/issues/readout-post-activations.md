@@ -65,8 +65,8 @@ as soon as reviewed. The notebook part of the "figures only" alternative is moot
   panel titles and `data_kernels` / `plot_data_kernels` signatures) and `exemplar` (psi of the
   kernel figure) regenerated from their builders. `phase_transition` and `modularity` contain no
   readout equation or case, so they are unchanged.
-- `MODEL_VERSION` 1 is left out of the hash, so a version-1 hash is the one the earlier code wrote
-  (the modularity-sweep and spatial hash pins hold at version 1, which the tests set).
+- `MODEL_VERSION` is hashed unconditionally, like `LOSS_VERSION`; the spatial-prior and
+  modularity-sweep hash pins are re-pinned to the current code.
 
 ## Tilt projection (decided in review)
 With psi = phi on every layer, the old prior-blind projection for psi = phi
@@ -91,3 +91,16 @@ is a copositivity check per orthant, 2^P of them). With the library defaults
 (prior_scale = 1/lambda_w, lambda_min(Sigma^-1) ~ 1e-4 on a relu P = 20 example) it still cuts a
 relu learning tilt to about 0.7 % at rate_tilt 0 (5 % at 1e-3, 100 % at 0.1). The PI decides
 whether that is acceptable for relu solves.
+
+## Open: the exemplar notebook's default solve no longer converges (needs a PI decision)
+Executed at its defaults (L = 1, tanh, beta = 10, 80 HMC outer steps, `INIT = "net"`), the
+exemplar notebook now ends with `UnconvergedSolveError`: the Stein residual of Phi_hat is 0.33 at
+step 0 and 0.49 at step 1, jumps to 32 at step 2 and stays at 20 to 60 (40 at step 80), with the
+samples' scale ||h||^2/P up to 10 to 20 times the prior's. For L = 1 the read-out layer is the only
+layer, so it is now a tanh tilt (unprojected, being bounded) instead of the Gaussian one. Smaller
+inner steps help but do not settle it (20 steps: `eta_max = 0.1` plateaus at a residual of
+about 2; `eta_max = 0.01` drifts from 0.21 to 0.54). Under the prior-blind projection of the first
+review round the tilt would have been cut to near 0 (rate_tilt 0.02), a residual near 1, so this
+is a consequence of the readout change, not of the new projection; before the final-residual
+check it would have returned silently. The notebook defaults are unchanged; choosing solver
+settings (or defaults) for which the phi-readout theory converges is a PI question.

@@ -30,9 +30,7 @@ LOSS_VERSION = 3
 # Version of the network definition (`fct.model.MLP`), folded into every hash that holds the
 # net section, for the same reason: a trained net or a mean-field result made with another
 # forward pass is rejected as stale. History: 1 read the output from the pre-activation,
-# V^T h^L / N; 2 reads it from the post-activation, V^T phi(h^L) / N. Version 1 is the code
-# from before the version was hashed, so it is left out of the hash: version-1 hashes are the
-# ones that code wrote.
+# V^T h^L / N; 2 reads it from the post-activation, V^T phi(h^L) / N.
 MODEL_VERSION = 2
 
 
@@ -295,7 +293,7 @@ class Config(StrictModel):
         hashed = self.model_dump(include={*sections, "dtype"})
         if "meanfield" in sections:
             hashed["meanfield"] = self.meanfield.hash_payload()
-        if "net" in sections and MODEL_VERSION != 1:  # the forward pass belongs to the net
+        if "net" in sections:  # the forward pass belongs to the net section
             hashed["model_version"] = MODEL_VERSION
         if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
