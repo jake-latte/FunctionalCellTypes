@@ -153,11 +153,16 @@ class SolverConfig(StrictModel):
     # step size, eta_max_phihat each layer's inner one. phi_step_scale "kernel" steps Phi_l
     # along Phi_l dS/dPhi_l Phi_l, the Newton direction of a Gaussian layer (eta = 2 is a full
     # Newton step there; a bounded phi responds several times more weakly, hence the cap of
-    # 0.25), "trace" along c_l^2 dS/dPhi_l with c_l = tr(Phi_l)/P. "health" and "trace" with
-    # eta_max = eta_max_phihat = 1 is the solver before step control.
+    # 0.25), "trace" along c_l^2 dS/dPhi_l with c_l = tr(Phi_l)/P. inner_start "target" starts
+    # every inner ascent of the last layer from its Stein target -2c A Y Y^T A (exact, no
+    # sampling), so directions of Phi_hat_L the kernel barely responds to cannot collect
+    # Monte Carlo noise from one outer step to the next; "previous" continues from the last
+    # tilt. "health", "trace", "previous" with eta_max = eta_max_phihat = 1 is the solver
+    # before step control.
     inner_step_control: Literal["health", "progress"] = "progress"
     eta_max_phihat: PosFloat = 0.25
     phi_step_scale: Literal["trace", "kernel"] = "kernel"
+    inner_start: Literal["previous", "target"] = "target"
     # A tripwire for a lost tilt, not a convergence test: `solve` raises UnconvergedSolveError
     # instead of returning (and writing final.pt) when, in some layer, the largest Stein
     # fixed-point residual of Phi_hat over the last tilt_tripwire_steps outer steps is >=
@@ -223,7 +228,7 @@ IMPORTANCE_FIELDS = (
 # Solver fields left out of every hash: they check a result and never change a number of it.
 UNHASHED_SOLVER_FIELDS = ("tilt_tripwire_resid", "tilt_tripwire_steps")
 # The step-control fields change the iteration and so the result: they enter every hash.
-STEP_CONTROL_FIELDS = ("inner_step_control", "eta_max_phihat", "phi_step_scale")
+STEP_CONTROL_FIELDS = ("inner_step_control", "eta_max_phihat", "phi_step_scale", "inner_start")
 
 
 class MeanFieldConfig(StrictModel):

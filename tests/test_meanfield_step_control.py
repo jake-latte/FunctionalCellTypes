@@ -1,5 +1,6 @@
 """Step control of the mean-field solver: the inner ascent on Φ̂ accepts a step only if the inner
-residual does not rise (beyond its tolerance), and the outer step on Φ is scaled by the kernel.
+residual does not rise (beyond its tolerance), the outer step on Φ is scaled by the kernel, and
+the last layer's inner ascent starts at its Stein target.
 
 The inner-step tests drive `_inner_layer_step` with a stand-in sampler that returns the exact
 moments of a tilted Gaussian, so every residual is known in closed form:
@@ -8,6 +9,8 @@ with Σ = I, a tilt Φ̂ = x I gives ⟨ψψᵀ⟩ = I / (1 + x), and against Φ
 """
 
 import math
+from collections.abc import Callable
+from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -16,6 +19,9 @@ import torch
 import fct.meanfield as mf
 from fct.activations import identity
 from fct.config import MeanFieldConfig
+from fct.hmc import relative_fro
+from tests.pinned_runs import LEGACY_STEP_CONTROL
+from tests.test_meanfield import LAMBDA_W, analytic_saddle, linear_cfg, make_linear_problem
 
 F64 = {"device": "cpu", "dtype": torch.float64}
 P = 3
@@ -178,3 +184,110 @@ def test_the_kernel_step_is_the_newton_step_of_a_gaussian_layer():
 
     assert tilt_error("kernel") < 1e-2
     assert tilt_error("trace") > 0.5
+
+
+# ----------------------------------------------------------------------------- weak response
+# A tanh layer on two-dimensional inputs, h = sqrt(prior_scale / 2) X w with w ~ N(0, I_2):
+# every expectation of its single-site density is a two-dimensional integral, done here by
+# Gauss-Hermite quadrature, and the saddle point by a damped Picard iteration on Φ, never by
+# the solver. The kernel is nearly rank two and responds to the tilt with a fifth or less of
+# the Gaussian response Φ dΦ̂ Φ: the case the health-only, trace-scaled solver did not solve.
+WEAK_P, WEAK_CONSTANTS = 8, {"prior_scale": 5.0, "alpha": 2.0, "learning_prefactor": 0.2}
+
+
+class WeakTanh(NamedTuple):
+    X: torch.Tensor
+    Y: torch.Tensor
+    moments: Callable[[torch.Tensor], torch.Tensor]  # tilt Φ̂ -> ⟨ψψᵀ⟩, by quadrature
+    target: Callable[[torch.Tensor], torch.Tensor]  # Φ -> Stein target -2c A Y Yᵀ A
+    Phi_star: torch.Tensor
+
+
+def weak_tanh_problem(n_nodes: int = 60) -> WeakTanh:
+    gen = torch.Generator().manual_seed(0)
+    X = torch.randn(WEAK_P, 2, generator=gen, **F64)
+    Y = X @ torch.randn(2, 3, generator=gen, **F64)  # a linear teacher
+    nodes, weights = np.polynomial.hermite_e.hermegauss(n_nodes)
+    w = torch.tensor(np.stack(np.meshgrid(nodes, nodes, indexing="ij"), -1).reshape(-1, 2), **F64)
+    q = torch.tensor(np.outer(weights, weights).reshape(-1), **F64)
+    psi = torch.tanh(w @ X.T * (WEAK_CONSTANTS["prior_scale"] / 2) ** 0.5)
+    eye = torch.eye(WEAK_P, **F64)
+
+    def moments(M):
+        log_tilt = -0.5 * ((psi @ M) * psi).sum(1)
+        p = q * torch.exp(log_tilt - log_tilt.max())
+        return (psi * (p / p.sum())[:, None]).T @ psi
+
+    def target(Phi):
+        A = torch.linalg.inv(WEAK_CONSTANTS["alpha"] * eye + Phi)
+        return -2.0 * WEAK_CONSTANTS["learning_prefactor"] * A @ Y @ Y.T @ A
+
+    Phi = moments(torch.zeros_like(eye))
+    for _ in range(300):
+        Phi = 0.5 * Phi + 0.5 * moments(target(Phi))
+    return WeakTanh(X, Y, moments, target, Phi)
+
+
+@pytest.fixture(scope="module")
+def weak_tanh():
+    return weak_tanh_problem()
+
+
+def weak_cfg(**overrides) -> MeanFieldConfig:
+    return MeanFieldConfig(
+        **WEAK_CONSTANTS, rate_tilt=0.0, n_outer=30, n_chains=512, n_trans=5, n_trans_outer=10,
+        warmup_trans=50, init="lazy", sample_dtype="float64", seed=0, **overrides,
+    )  # fmt: skip
+
+
+def solve_weak(problem: WeakTanh, cfg: MeanFieldConfig) -> mf.SolveResult:
+    return mf.solve(problem.X, problem.Y, 1, 1.0, 0.0, torch.tanh, 1.0, cfg, log=lambda _m: None)
+
+
+def test_the_weak_response_reference_is_a_weak_response_fixed_point(weak_tanh):
+    p = weak_tanh
+    assert relative_fro(p.moments(p.target(p.Phi_star)), p.Phi_star) < 1e-12
+    eig = torch.linalg.eigvalsh(p.Phi_star).flip(0)
+    assert eig[2] < 0.1 * eig[0]  # nearly rank two
+    # the response to the tilt along the target, against the Gaussian one
+    T = p.target(p.Phi_star)
+    response = p.moments(2 * T) - p.moments(T)
+    gaussian = -p.Phi_star @ T @ p.Phi_star
+    assert (response * gaussian).sum() / (gaussian * gaussian).sum() < 0.2
+    # far from the lazy start, so a solver that does not move fails
+    assert relative_fro(p.moments(torch.zeros_like(T)), p.Phi_star) > 0.2
+
+
+def test_a_weak_response_tanh_layer_converges_within_thirty_outer_steps(weak_tanh):
+    """Under the default tilt tripwire (solve raises if Φ̂ ends far from its fixed point)."""
+    result = solve_weak(weak_tanh, weak_cfg())
+    assert all(result.history["inner_converged"])
+    assert relative_fro(result.Phi[0], weak_tanh.Phi_star) < 0.07
+
+
+def test_the_legacy_step_control_does_not_converge_on_it(weak_tanh):
+    result = solve_weak(weak_tanh, weak_cfg(**LEGACY_STEP_CONTROL, tilt_tripwire_resid=1e9))
+    assert relative_fro(result.Phi[0], weak_tanh.Phi_star) > 0.1
+
+
+# ----------------------------------------------------------------------------- Gaussian layer
+def test_a_gaussian_layer_follows_the_legacy_path_to_the_same_saddle():
+    """The L = 1 linear problem of tests/test_meanfield.py, whose saddle is known in closed
+    form. The step-controlled path lags the legacy one (its outer step size is capped at 0.25,
+    the legacy one grew to 1) by less than 0.1 at every outer step, and the two end within 0.01
+    of each other on the analytic saddle."""
+    X, Y = make_linear_problem()
+    Phi_star, _, _, _ = analytic_saddle(X, Y)
+
+    def distances(**solver) -> np.ndarray:
+        path = []
+        mf.solve(X, Y, 1, LAMBDA_W, 0.0, identity, 1.0, linear_cfg(**solver), log=lambda _m: None,
+                 on_outer=lambda snap: path.append(relative_fro(snap.Phi[0], Phi_star)))  # fmt: skip
+        return np.array(path)
+
+    new, legacy = distances(), distances(**LEGACY_STEP_CONTROL)
+    print(f"\nGaussian layer, distance to the saddle: step-controlled {np.round(new, 3)}, "
+          f"legacy {np.round(legacy, 3)}")  # fmt: skip
+    assert (new - legacy).max() < 0.1
+    assert new[-1] < 0.04 and legacy[-1] < 0.04
+    assert abs(new[-1] - legacy[-1]) < 0.01

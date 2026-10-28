@@ -935,12 +935,37 @@ def _format_step(
     return msg
 
 
+def _start_last_tilt_at_target(prob: _Problem, st: _SolverState) -> float:
+    """Φ̂_L ← Π(-2c A Y Yᵀ A), the last layer's Stein target at the current Φ_L (Π the tilt
+    projection), as the start of the inner ascent; returns ||Π(x) - x|| / ||x||.
+
+    The inner residual pins Φ̂_L only along directions the kernel responds to. Along the
+    others (most of them, for a low-rank kernel or a saturating φ) every inner step adds Monte
+    Carlo noise that nothing removes, and the noise piles up over the outer steps. Started at
+    the target, those directions stay at their fixed-point value and the ascent moves Φ̂_L
+    only as far as the residual requires; at the saddle point the target is the solution."""
+    A, _, _, _ = _learning_pieces(prob, st.Phi[-1])
+    target = sym(-2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A)
+    rel = 0.0
+    if prob.solver.project_tilt:
+        projected = st.samplers[-1].project_tilt(target, prob.solver.tilt_floor)
+        rel = relative_fro(projected, target) if target.norm().item() > 0 else 0.0
+        target = projected
+    st.Phi_hat[-1] = target
+    st.samplers[-1].set_tilt(target)
+    return rel
+
+
 def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> None:
     """One iteration of Algorithm 1: inner ascent on Φ̂, one descent step on Φ, diagnostics.
     Advances st.outer by one."""
     outer = st.outer
     Phi_prev, Phi_hat_prev = st.Phi.clone(), st.Phi_hat.clone()
+    start_projected = 0.0
+    if prob.solver.inner_start == "target":
+        start_projected = _start_last_tilt_at_target(prob, st)
     inner = _inner_ascent(prob, st)
+    inner.projected_rel[-1] = max(inner.projected_rel[-1], start_projected)
     og = _outer_gradients(prob, st)
     step = _outer_descent(prob, st, og.grads, Phi_prev, outer, log)
     rec = _record(prob, st, outer, time.time() - t_start, inner, og, step, Phi_prev, Phi_hat_prev)
@@ -1080,7 +1105,9 @@ def solve(
     residual by more than the convergence tolerance of the point before it
     (inner_step_control="progress"; not below eta_min_rel · eta_phihat). Otherwise the step
     size grows by eta_grow up to eta_max (outer) or eta_max_phihat (inner).  This keeps the
-    iteration on the normalisable side of the tilt.  The settings are cfg.solver's.
+    iteration on the normalisable side of the tilt.  With inner_start="target" every inner
+    ascent of the last layer starts from its Stein target -2c A Y Yᵀ A at the current Φ_L.
+    The settings are cfg.solver's.
     Under importance sampling every accepted point (the initial one, each validated inner
     step, each outer-gradient run) must have ESS fraction >= min_ess_frac, else
     InadequateSamplerError: the prior proposal does not suit the problem.

@@ -48,12 +48,13 @@ _PROBLEMS = {
         },
     },
 }  # fmt: skip
-# The step control of the solver before inner steps were validated on progress and the outer
-# step scaled by the kernel (`fct.config.SolverConfig`): the `*_legacy_steps` fixtures were
-# written by that solver, and these settings still reproduce them bit for bit.
+# The step control of the solver before inner steps were validated on progress, the outer step
+# scaled by the kernel and the last layer's inner ascent started at its target
+# (`fct.config.SolverConfig`): the `*_legacy_steps` fixtures were written by that solver, and
+# these settings still reproduce them bit for bit.
 LEGACY_STEP_CONTROL = {
-    "inner_step_control": "health", "phi_step_scale": "trace", "eta_max": 1.0,
-    "eta_max_phihat": 1.0,
+    "inner_step_control": "health", "phi_step_scale": "trace", "inner_start": "previous",
+    "eta_max": 1.0, "eta_max_phihat": 1.0,
 }  # fmt: skip
 PINNED_SOLVES = _PROBLEMS | {
     f"{name}_legacy_steps": spec | {"meanfield": spec["meanfield"] | LEGACY_STEP_CONTROL}

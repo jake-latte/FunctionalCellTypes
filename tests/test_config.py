@@ -237,6 +237,7 @@ def test_the_final_residual_check_does_not_enter_the_hash():
         {"inner_step_control": "health"},
         {"eta_max_phihat": 0.5},
         {"phi_step_scale": "trace"},
+        {"inner_start": "previous"},
     ],
 )
 def test_step_control_makes_the_result_stale(setting):
