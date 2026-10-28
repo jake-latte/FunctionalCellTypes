@@ -20,7 +20,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
 - `unset VIRTUAL_ENV; export UV_CACHE_DIR=/ceph/scratch/jlaherty/Projects/FunctionalCellTypes/.uv-cache`
   before any `uv`; never write outside the project (pytest's temp dir is pinned to `tmp/pytest` in pyproject.toml;
   scratch in `tmp/`); unit tests are CPU only (`CUDA_VISIBLE_DEVICES=""`), `uv run pytest -q`,
-  `uv run ruff check fct tests && uv run ruff format --check fct tests`.
+  `uv run ruff check fct tests notebooks && uv run ruff format --check fct tests`.
 - GPUs for small local runs (PI, 2026-10-20): either, but pin by UUID and check `nvidia-smi` first.
   T1000 `GPU-71887a86-0384-411b-29cf-b76af75d0ab8`; RTX 4500 `GPU-e058dce4-5227-fc65-8fd3-fc5604ac22e8`
   (torch `cuda:0` = RTX 4500). An unrelated 5.5 GB idle process of the PI sits on the RTX 4500: keep
