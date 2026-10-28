@@ -691,8 +691,9 @@ def extreme_tilt_cfg(**overrides):
     # gaussian init and a tolerance never met: the lazy init would make Phi_hat = 0 the inner
     # solution, and the loop would stop before validating any step.
     base = {
-        "init": "gaussian", "eta_phihat": 1e4, "eta_max": 1e4, "inner_tol": 1e-12,
-        "inner_tol_mc": 1e-12, "n_inner_max": 5, "n_outer": 1, "max_backtrack": 50,
+        "init": "gaussian", "eta_phihat": 1e4, "eta_max": 1e4, "eta_max_phihat": 1e4,
+        "inner_tol": 1e-12, "inner_tol_mc": 1e-12, "n_inner_max": 5, "n_outer": 1,
+        "max_backtrack": 50,
     }  # fmt: skip
     return importance_cfg(**{**base, **overrides})
 

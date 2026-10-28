@@ -122,6 +122,7 @@ SOLVER_PANELS: list[SolverPanel] = [
         None,
         _BACKTRACK_OVERLAY,
     ),
+    SolverPanel("n_rejected_inner", "inner steps rejected: the residual rose", "symlog"),
     SolverPanel("hmc_accept", "HMC acceptance", "linear", 0.75),
     SolverPanel("hmc_eps", "HMC step size ε", "log"),
     SolverPanel("hmc_div", "divergent transitions per run", "symlog"),
@@ -142,7 +143,8 @@ SOLVER_N_COLS = 4
 # (all-NaN columns) are left out, so one list serves both samplers.
 SOLVER_HEALTH_KEYS = (
     "inner_residual", "outer_grad_rel", "phihat_fp_resid_stein", "train_mse_theory",
-    "eta_phihat", "n_backtrack_inner", "n_pd_clamped", "norm_margin", "align_net",
+    "eta_phihat", "n_backtrack_inner", "n_rejected_inner", "n_pd_clamped", "norm_margin",
+    "align_net",
 )  # fmt: skip
 SAMPLER_HEALTH_KEYS = (
     "hmc_accept", "hmc_eps", "hmc_div", "hmc_ess_frac", "is_max_weight", "hmc_mc_err",

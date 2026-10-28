@@ -10,7 +10,9 @@ them only when that behaviour is meant to change, and say so in the commit.
 
 Provenance: the solves `hmc_solve_*.pt` and `meanfield_hashes.json` are written by code whose
 net reads its output as V^T phi(h^L) / N (MODEL_VERSION 2) and whose tilt projection follows
-`fct.hmc.tilt_rule`. `legacy_config.json` is the flat layout of the code before the solver
+`fct.hmc.tilt_rule`; `hmc_solve_<problem>.pt` by the step-controlled solver at its defaults,
+`hmc_solve_<problem>_legacy_steps.pt` by the solver before step control (`LEGACY_STEP_CONTROL`
+reproduces them). `write_fixtures` rewrites all of them. `legacy_config.json` is the flat layout of the code before the solver
 sub-section (commit d1d3091) with the `readout` key deleted by hand: `write_fixtures` would save
 it in the current nested layout, so restore it from git after running it.
 
@@ -28,7 +30,7 @@ F64 = {"device": "cpu", "dtype": torch.float64}
 
 # Two small, fast problems that between them reach every HMC code path the solver has:
 # lazy init with a net and float32 chains; gaussian init, float64 chains, no net.
-PINNED_SOLVES = {
+_PROBLEMS = {
     "lazy_net_f32": {
         "with_net": True,
         "meanfield": {
@@ -46,6 +48,14 @@ PINNED_SOLVES = {
         },
     },
 }  # fmt: skip
+# The step control of the solver before inner steps were validated on progress
+# (`fct.config.SolverConfig`): the `*_legacy_steps` fixtures were written by that solver, and
+# these settings still reproduce them bit for bit.
+LEGACY_STEP_CONTROL = {"inner_step_control": "health", "eta_max_phihat": 1.0}
+PINNED_SOLVES = _PROBLEMS | {
+    f"{name}_legacy_steps": spec | {"meanfield": spec["meanfield"] | LEGACY_STEP_CONTROL}
+    for name, spec in _PROBLEMS.items()
+}
 LAMBDA_W, LAMBDA_R, P_PIN, D_IN_PIN = 1e-3, 1e-3, 6, 4
 
 # A config.json in the flat pre-split layout, with non-default values in both the problem

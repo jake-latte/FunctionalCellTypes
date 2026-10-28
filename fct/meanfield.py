@@ -79,7 +79,8 @@ CKPT_PREFIX, CKPT_WIDTH, FINAL_NAME = "ckpt_", 5, "final.pt"
 # rho1); the is_* keys are NaN under HMC.
 HISTORY_KEYS = (
     "outer_step", "time", "inner_steps", "inner_residual", "inner_grad_rel", "inner_converged",
-    "step_clipped", "eta_phi", "eta_phihat", "n_backtrack_inner", "n_backtrack_outer",
+    "step_clipped", "eta_phi", "eta_phihat", "n_backtrack_inner", "n_accepted_inner",
+    "n_rejected_inner", "n_backtrack_outer",
     "outer_grad_rel", "phihat_fp_resid_stein", "phihat_fp_resid_direct", "stein_vs_direct",
     "trace_term", "learning_term", "train_mse_theory", "train_mse_net",
     "phi_lambda_min", "n_pd_clamped", "norm_margin",
@@ -564,68 +565,121 @@ def _learning_pieces(prob: _Problem, Phi_last: torch.Tensor):
 # ----------------------------------------------------------------------------- inner ascent
 @dataclass
 class _InnerResult:
-    residual: np.ndarray  # ||⟨ψψᵀ⟩ - Φ|| / ||Φ|| per layer
+    residual: np.ndarray  # ||⟨ψψᵀ⟩ - Φ|| / ||Φ|| per layer, at the last accepted point
     grad_rel: np.ndarray  # ||∂S/∂Φ̂|| / ||Φ|| per layer
-    n_backtrack: np.ndarray  # reverted steps per layer
+    n_backtrack: np.ndarray  # steps reverted because they broke the sampler, per layer
+    n_accepted: np.ndarray  # steps validated and kept, per layer
+    n_rejected: np.ndarray  # steps reverted because they raised the residual, per layer
     projected_rel: np.ndarray  # largest relative change by the tilt projection, per layer
     converged: bool
     n_steps: int
 
 
+class _PendingStep(NamedTuple):
+    """An inner step taken on one layer and not yet validated, with the point it left."""
+
+    state: Any  # sampler state before the step
+    hat: torch.Tensor  # Φ̂_l before the step
+    grad: torch.Tensor  # ∂S/∂Φ̂_l measured there
+    residual: float  # inner residual measured there
+    tol: float  # its convergence tolerance (`_inner_tol`)
+
+
+def _inner_tol(cfg: SolverConfig, diag: dict) -> float:
+    """The inner residual below which a layer counts as converged: below
+    inner_tol_mc × its own Monte Carlo error the residual is noise."""
+    return max(cfg.inner_tol, cfg.inner_tol_mc * diag["psi_psi_rel_mc_err"])
+
+
+def _no_progress(cfg: SolverConfig, residual: float, step: _PendingStep, eta: float) -> bool:
+    """Whether inner_step_control="progress" rejects a step after which the residual is
+    `residual`: it rose by more than the convergence tolerance of the point before the step.
+    The tolerance is the margin because the residual before the step is itself a Monte Carlo
+    estimate (and, among repeated retries, a lucky low one), so a strict "did not rise" would
+    reject sound steps on noise alone. A step already at the floor eta_min_rel · eta_phihat is
+    never rejected, so noise cannot stall the ascent."""
+    floor = cfg.eta_min_rel * cfg.eta_phihat
+    rose = residual > step.residual + step.tol
+    return cfg.inner_step_control == "progress" and rose and eta > floor
+
+
+def _retry_half_step(prob: _Problem, st: _SolverState, l: int, step: _PendingStep, res) -> None:
+    """Revert layer l's pending inner step (tilt and chain state) and take it again from the
+    same point with half the step size (not below eta_min_rel · eta_phihat under
+    inner_step_control="progress")."""
+    cfg, s = prob.solver, st.samplers[l]
+    floor = cfg.eta_min_rel * cfg.eta_phihat if cfg.inner_step_control == "progress" else 0.0
+    st.eta_hat[l] = max(st.eta_hat[l] * 0.5, floor)
+    st.Phi_hat[l], rel = _tilt_step(prob, st, l, step.hat, step.grad, st.eta_hat[l])
+    res.projected_rel[l] = max(res.projected_rel[l], rel)
+    s.set_tilt(st.Phi_hat[l])
+    s.set_state(step.state)
+
+
 def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResult) -> dict:
-    """One ascent step on Φ̂_l.  The sampler run at its top also validates the previous step
-    (retrospective backtracking): if that step broke the sampler it is reverted and retried
-    with half the step size.  Updates `pending[l]` and `res` in place; returns the run's
-    diagnostics."""
+    """One ascent step on Φ̂_l.  The sampler run at its top also validates the pending step
+    (retrospective backtracking): if that step broke the sampler, or (inner_step_control
+    "progress", `_no_progress`) raised the residual ||⟨ψψᵀ⟩ - Φ_l|| / ||Φ_l||, it is reverted
+    and retried with half the step size; the step size grows only after an accepted step.
+    Updates `pending[l]` and `res` in place; returns the run's diagnostics."""
     cfg, s = prob.solver, st.samplers[l]
     moments, diag = s.run(cfg.n_trans)
-    if pending[l] is not None and not _healthy(
-        diag, st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg
-    ):
-        state0, hat0, grad0 = pending[l]
-        res.n_backtrack[l] += 1
-        st.eta_hat[l] *= 0.5
-        st.Phi_hat[l], rel = _tilt_step(prob, st, l, hat0, grad0, st.eta_hat[l])
-        res.projected_rel[l] = max(res.projected_rel[l], rel)
-        s.set_tilt(st.Phi_hat[l])
-        s.set_state(state0)
-        if res.n_backtrack[l] > cfg.max_backtrack * (inner + 1):
-            raise RuntimeError(
-                f"layer {l}: inner step keeps breaking the sampler (eta_phihat={st.eta_hat[l]:.2e})"
-            )
-        return diag
+    residual = relative_fro(moments["psi_psi"], st.Phi[l])
+    step = pending[l]
+    if step is not None:
+        if not _healthy(diag, st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg):
+            res.n_backtrack[l] += 1
+            _retry_half_step(prob, st, l, step, res)
+            if res.n_backtrack[l] > cfg.max_backtrack * (inner + 1):
+                raise RuntimeError(
+                    f"layer {l}: inner step keeps breaking the sampler "
+                    f"(eta_phihat={st.eta_hat[l]:.2e})"
+                )
+            return diag
+        if _no_progress(cfg, residual, step, st.eta_hat[l]):
+            res.n_rejected[l] += 1
+            _retry_half_step(prob, st, l, step, res)
+            return diag
     _accept_point(prob, st, l, diag, f"outer step {st.outer}, inner step {inner}")
-    if pending[l] is not None:
-        st.eta_hat[l] = min(st.eta_hat[l] * cfg.eta_grow, cfg.eta_max)
+    if step is not None:
+        res.n_accepted[l] += 1
+        st.eta_hat[l] = min(st.eta_hat[l] * cfg.eta_grow, cfg.eta_max_phihat)
     grad_hat = 0.5 * (moments["psi_psi"] - st.Phi[l])
-    res.residual[l] = relative_fro(moments["psi_psi"], st.Phi[l])
+    res.residual[l] = residual
     res.grad_rel[l] = grad_hat.norm().item() / max(st.Phi[l].norm().item(), 1e-300)
-    pending[l] = (s.get_state(), st.Phi_hat[l].clone(), grad_hat)
+    pending[l] = _PendingStep(
+        s.get_state(), st.Phi_hat[l].clone(), grad_hat, residual, _inner_tol(cfg, diag)
+    )
     st.Phi_hat[l], rel = _tilt_step(prob, st, l, st.Phi_hat[l], grad_hat, st.eta_hat[l])
     res.projected_rel[l] = max(res.projected_rel[l], rel)
     s.set_tilt(st.Phi_hat[l])
     return diag
 
 
-def _inner_ascent(prob: _Problem, st: _SolverState) -> _InnerResult:
-    """Gradient ascent on Φ̂ at fixed Φ, ∂S/∂Φ̂_l = ½(⟨ψψᵀ⟩_l - Φ_l), until every layer's
-    residual is below max(inner_tol, inner_tol_mc × its own MC error) or n_inner_max steps."""
-    cfg, L = prob.solver, prob.L
-    res = _InnerResult(
+def _new_inner_result(L: int) -> _InnerResult:
+    """The record of an inner ascent before its first step."""
+    return _InnerResult(
         residual=np.full(L, np.nan),
         grad_rel=np.full(L, np.nan),
         n_backtrack=np.zeros(L, dtype=int),
+        n_accepted=np.zeros(L, dtype=int),
+        n_rejected=np.zeros(L, dtype=int),
         projected_rel=np.zeros(L),
         converged=False,
         n_steps=0,
     )
-    pending = [None] * L  # (state_before, hat_before, grad_before) of each layer's last step
+
+
+def _inner_ascent(prob: _Problem, st: _SolverState) -> _InnerResult:
+    """Gradient ascent on Φ̂ at fixed Φ, ∂S/∂Φ̂_l = ½(⟨ψψᵀ⟩_l - Φ_l), until every layer's
+    residual is below max(inner_tol, inner_tol_mc × its own MC error) or n_inner_max steps."""
+    cfg, L = prob.solver, prob.L
+    res = _new_inner_result(L)
+    pending: list[_PendingStep | None] = [None] * L
     for inner in range(cfg.n_inner_max):
         diags = [_inner_layer_step(prob, st, l, inner, pending, res) for l in range(L)]
         res.n_steps = inner + 1
-        tol = np.array(
-            [max(cfg.inner_tol, cfg.inner_tol_mc * d["psi_psi_rel_mc_err"]) for d in diags]
-        )
+        tol = np.array([_inner_tol(cfg, d) for d in diags])
         if np.isfinite(res.residual).all() and (res.residual < tol).all():
             res.converged = True
             break
@@ -773,6 +827,8 @@ def _record(
         "eta_phihat": st.eta_hat.copy(),
         "n_backtrack_inner": inner.n_backtrack.copy(),
         "n_backtrack_outer": step.n_backtrack,
+        "n_accepted_inner": inner.n_accepted.copy(),
+        "n_rejected_inner": inner.n_rejected.copy(),
         "outer_grad_rel": np.array(
             [
                 og.grads[l].norm().item() * _c2(Phi[l]) / max(Phi_prev[l].norm().item(), 1e-300)
@@ -837,6 +893,7 @@ def _format_step(
         f"mse={rec['train_mse_theory']:.3e}"
         + (f" (net {mse_net:.3e})" if mse_net is not None else "")
         + f" | eta={st.eta:.1e}/{fmt(st.eta_hat)} bt={inner.n_backtrack.tolist()}/{step.n_backtrack}"
+        + f" rej={inner.n_rejected.tolist()}"
         + (
             f" | IS ess={fmt(rec['hmc_ess_frac'])} max_w={fmt(rec['is_max_weight'])} "
             if sampler == "importance"
@@ -996,9 +1053,11 @@ def solve(
     HMC chains show divergences (> max_div_frac of transitions) or resets, the importance
     ESS fraction drops below min_ess_drop times that of the point before, or the sample scale
     ||h||²/P jumps by more than max_h2_growth, the step is reverted (kernel and chain state)
-    and its step size
-    halved; otherwise the step size grows by eta_grow up to eta_max.  This keeps the
-    iteration on the normalisable side of the tilt.  The settings are cfg.solver's.
+    and its step size halved; so is an inner step that raised the layer's inner residual by
+    more than the convergence tolerance of the point before it (inner_step_control=
+    "progress"; not below eta_min_rel · eta_phihat). Otherwise the step size grows by
+    eta_grow up to eta_max (outer) or eta_max_phihat (inner).  This keeps the iteration on
+    the normalisable side of the tilt.  The settings are cfg.solver's.
     Under importance sampling every accepted point (the initial one, each validated inner
     step, each outer-gradient run) must have ESS fraction >= min_ess_frac, else
     InadequateSamplerError: the prior proposal does not suit the problem.

@@ -142,6 +142,7 @@ def test_the_full_dashboard_keeps_its_panels_and_zero_based_layers():
         "train MSE: theory (lines) vs net (dashed)",
         "adaptive step sizes  η̂ (lines), η (black)",
         "backtracking: inner (lines), outer (black)",
+        "inner steps rejected: the residual rose",
         "HMC acceptance",
         "HMC step size ε",
         "divergent transitions per run",

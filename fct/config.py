@@ -147,6 +147,13 @@ class SolverConfig(StrictModel):
     project_tilt: bool = True
     tilt_floor: Annotated[float, Field(ge=0, lt=1)] = 0.05
     max_rel_step: PosFloat = 0.1
+    # Step control (`fct.meanfield`). inner_step_control "progress" also rejects an inner step
+    # that raised a layer's inner residual by more than the convergence tolerance of the point
+    # before it; "health" validates a step on sampler health alone. eta_max caps the outer
+    # step size, eta_max_phihat each layer's inner one. "health" with eta_max_phihat = 1 is
+    # the solver before step control.
+    inner_step_control: Literal["health", "progress"] = "progress"
+    eta_max_phihat: PosFloat = 0.25
     # A tripwire for a lost tilt, not a convergence test: `solve` raises UnconvergedSolveError
     # instead of returning (and writing final.pt) when, in some layer, the largest Stein
     # fixed-point residual of Phi_hat over the last tilt_tripwire_steps outer steps is >=
@@ -211,6 +218,8 @@ IMPORTANCE_FIELDS = (
 
 # Solver fields left out of every hash: they check a result and never change a number of it.
 UNHASHED_SOLVER_FIELDS = ("tilt_tripwire_resid", "tilt_tripwire_steps")
+# The step-control fields change the iteration and so the result: they enter every hash.
+STEP_CONTROL_FIELDS = ("inner_step_control", "eta_max_phihat")
 
 
 class MeanFieldConfig(StrictModel):
@@ -254,12 +263,13 @@ class MeanFieldConfig(StrictModel):
         return {**rest, "solver": {**group, **flat}}
 
     def hash_payload(self) -> dict[str, Any]:
-        """The section as it enters a cache hash: the problem fields and LEGACY_SOLVER_FIELDS
-        in one flat dict (the pre-split layout), plus IMPORTANCE_FIELDS when the sampler is
-        "importance"."""
+        """The section as it enters a cache hash: the problem fields, LEGACY_SOLVER_FIELDS and
+        STEP_CONTROL_FIELDS in one flat dict (the pre-split layout), plus IMPORTANCE_FIELDS
+        when the sampler is "importance"."""
         solver = self.solver.model_dump()
         payload = self.model_dump(exclude={"solver"})
         payload.update({k: solver[k] for k in LEGACY_SOLVER_FIELDS})
+        payload.update({k: solver[k] for k in STEP_CONTROL_FIELDS})
         if self.solver.sampler != "hmc":
             payload.update({k: solver[k] for k in IMPORTANCE_FIELDS})
         return payload
