@@ -695,7 +695,7 @@ def test_an_ess_drop_relative_to_the_point_before_is_unhealthy():
 
     def healthy(ess_after, ess_before):
         diag = {"h2_mean": 1.0, "prior_h2": 1.0, "ess_frac": ess_after, "psi_psi_rel_mc_err": 0.01}
-        return mf._healthy(diag, 1.0, ess_before, cfg.n_trans, nan, cfg)
+        return mf._healthy(diag, mf._RunReference(1.0, ess_before, nan, nan), cfg.n_trans, cfg)
 
     assert healthy(0.5, 0.5)
     assert healthy(1.01 * cfg.min_ess_drop * 0.5, 0.5)

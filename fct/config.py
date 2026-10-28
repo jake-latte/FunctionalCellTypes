@@ -117,6 +117,18 @@ class TrainConfig(StrictModel):
     beta: PosFloat = 1.0
 
 
+# Solver fields that no longer exist, at the value every hash written while they did holds
+# (`MeanFieldConfig.hash_payload` keeps them there, so those hashes do not move). A config that
+# sets one at that value loads (every saved config.json has the key); at any other value it is
+# rejected, since the value would be ignored. The text says what took the field's place.
+RETIRED_SOLVER_FIELDS: dict[str, Any] = {"max_mc_err": 1.0}
+_RETIRED_BECAUSE = {
+    "max_mc_err": "a step's Monte Carlo error is now bounded relative to that of the accepted "
+    "point before it, by max_mc_err_growth (an absolute bound rejected every step of a solve "
+    "with few chains)",
+}
+
+
 class SolverConfig(StrictModel):
     """How the saddle point is found: Algorithm 1, the single-site sampler, the initial guess,
     logging and checkpoints. `MeanFieldConfig` holds the equations being solved.
@@ -147,7 +159,16 @@ class SolverConfig(StrictModel):
     # from the point before, so a scale can climb by steps or start a run already escaped.
     # Legitimate solves sit at 1 to 6; escaped HMC chains on a non-normalisable tilt at 3e3.
     max_h2_prior_ratio: PosFloat = 100.0
-    max_mc_err: PosFloat = 1.0
+    # A run whose Monte Carlo error of <psi psi^T>, per transition (MC error x sqrt(transitions),
+    # so runs of different length compare), exceeds max_mc_err_growth times that of the
+    # accepted point before it is unhealthy: the step made the sampler mix worse. The size of
+    # the MC error is a property of the sample size, which no revert cures, so only its growth
+    # is held against a step. A backstop: a ratio of 10 is about a hundredfold ESS drop under
+    # HMC, where the h2, divergence and step-size checks normally fire first, and under
+    # importance sampling it overlaps min_ess_drop. Not lower: the estimate is itself noisy
+    # (fourth moments, the lag-1 ESS estimate), and sound relu runs differ by up to 6x from the
+    # point before (tanh ones by 1.3x).
+    max_mc_err_growth: PosFloat = 10.0
     eps_collapse: NonNegFloat = 1e-2
     project_tilt: bool = True
     tilt_floor: Annotated[float, Field(ge=0, lt=1)] = 0.05
@@ -210,14 +231,28 @@ class SolverConfig(StrictModel):
     save_int: PosInt = 10
     seed: int = 0
 
+    @model_validator(mode="before")
+    @classmethod
+    def _retired_fields_only_at_their_last_value(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or not data.keys() & RETIRED_SOLVER_FIELDS.keys():
+            return data
+        for key, value in RETIRED_SOLVER_FIELDS.items():
+            if key in data and data[key] != value:
+                raise ValueError(
+                    f"{key}={data[key]!r} is no longer a setting ({_RETIRED_BECAUSE[key]}); "
+                    "delete the key"
+                )
+        return {k: v for k, v in data.items() if k not in RETIRED_SOLVER_FIELDS}
+
 
 # The solver fields that existed before the sampler choice. They enter the mean-field result
 # hash exactly as they did then (flat, next to the problem fields), so results solved before
 # the sampler choice existed stay valid. log_int and save_int change no number but are among
-# them: dropping them would change every existing hash.
+# them: dropping them would change every existing hash (RETIRED_SOLVER_FIELDS holds those
+# that are no longer settings).
 LEGACY_SOLVER_FIELDS = (
     "n_outer", "n_inner_max", "inner_tol", "inner_tol_mc", "eta_phi", "eta_phihat", "eta_max",
-    "eta_grow", "max_backtrack", "eta_min_rel", "max_div_frac", "max_h2_growth", "max_mc_err",
+    "eta_grow", "max_backtrack", "eta_min_rel", "max_div_frac", "max_h2_growth",
     "eps_collapse", "project_tilt", "tilt_floor", "max_rel_step", "pd_floor_rel",
     "inv_floor_rel", "n_chains", "n_trans", "n_trans_outer", "n_leap", "eps0", "target_accept",
     "adapt_rate", "warmup_trans", "sample_dtype", "jitter_rel", "precondition", "init",
@@ -246,10 +281,12 @@ STEP_CONTROL_FIELDS = tuple(STEP_CONTROL_LEGACY)
 # Health bounds, each hashed only when it differs from its default here, so a default config
 # keeps its hash. That hash does not cover the solver's health checks themselves: a cached
 # solve keyed by it may have been written by code without the check of the outer-gradient run
-# (meanfield._outer_run) or without this bound, and a solve those checks would have changed
-# (any outer run with escaped chains, divergences, resets, a step-size collapse or an ESS drop)
-# keeps its hash. Solves they never trip are unchanged by them.
-HEALTH_BOUND_DEFAULTS: dict[str, Any] = {"max_h2_prior_ratio": 100.0}
+# (meanfield._outer_run), without these bounds, or with the absolute MC-error bound
+# max_mc_err = 1 in their place, and a solve those checks would have changed keeps its hash:
+# any outer run with escaped chains, divergences, resets, a step-size collapse, an ESS drop or
+# an MC-error jump, and any solve with an MC error above 1 (fewer than about a hundred HMC
+# chains), whose inner steps max_mc_err rejected. Solves they never trip are unchanged by them.
+HEALTH_BOUND_DEFAULTS: dict[str, Any] = {"max_h2_prior_ratio": 100.0, "max_mc_err_growth": 10.0}
 HEALTH_BOUND_FIELDS = tuple(HEALTH_BOUND_DEFAULTS)
 
 
@@ -276,7 +313,8 @@ class MeanFieldConfig(StrictModel):
     def _flat_solver_keys_into_the_group(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
-        flat = {k: v for k, v in data.items() if k in SolverConfig.model_fields}
+        solver_keys = SolverConfig.model_fields.keys() | RETIRED_SOLVER_FIELDS.keys()
+        flat = {k: v for k, v in data.items() if k in solver_keys}
         if not flat:
             return data
         group = data.get("solver", {})
@@ -297,10 +335,11 @@ class MeanFieldConfig(StrictModel):
         """The section as it enters a cache hash: the problem fields and LEGACY_SOLVER_FIELDS
         in one flat dict (the pre-split layout), plus each of STEP_CONTROL_FIELDS that differs
         from STEP_CONTROL_LEGACY and each of HEALTH_BOUND_FIELDS that differs from
-        HEALTH_BOUND_DEFAULTS, plus IMPORTANCE_FIELDS when the sampler is "importance"."""
+        HEALTH_BOUND_DEFAULTS, plus IMPORTANCE_FIELDS when the sampler is "importance", plus
+        RETIRED_SOLVER_FIELDS at their last values."""
         solver = self.solver.model_dump()
         payload = self.model_dump(exclude={"solver"})
-        payload.update({k: solver[k] for k in LEGACY_SOLVER_FIELDS})
+        payload.update({k: solver[k] for k in LEGACY_SOLVER_FIELDS} | RETIRED_SOLVER_FIELDS)
         payload.update(
             {k: solver[k] for k in STEP_CONTROL_FIELDS if solver[k] != STEP_CONTROL_LEGACY[k]}
         )

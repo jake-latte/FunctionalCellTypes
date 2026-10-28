@@ -90,5 +90,5 @@ Starts after `solver-inner-step-control` merges (same functions).
   error is 1.75 to 4.31.
 - Follow-ups filed: `meanfield-cache-health-audit`, `meanfield-mc-error-control` (the latter also
   records that the inner give-up `n_backtrack > max_backtrack x (inner + 1)` cannot fire from
-  `_inner_ascent`, since a layer has at most `inner` backtracks by then).
+  `_inner_ascent`, since a layer has at most `inner + 1` backtracks by then).
 - Full suite 1603 passed; both ruff checks clean.
