@@ -67,7 +67,7 @@ from fct.sweep import (
     run_setting,
     save_sweep,
     setting_dir,
-    setting_status,
+    setting_statuses,
     sweep_path,
 )
 from fct.train import History, load_trained, train_from_config
@@ -402,8 +402,8 @@ def cmd_sweep_list(args: argparse.Namespace) -> int:
 def cmd_sweep_status(args: argparse.Namespace) -> int:
     sweep = _load_sweep(args.root)
     states = [
-        (i, setting_status(args.root, sweep, s, args.stage), _setting_name(args.root, s))
-        for i, s in enumerate(expand(sweep))
+        (i, state, _setting_name(args.root, s))
+        for i, s, state in setting_statuses(args.root, sweep, args.stage)
     ]
     for i, state, name in states:
         print(f"{i} {state} {name}")

@@ -42,7 +42,7 @@ training device.
 
 import math
 import numbers
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Literal, Self
 
@@ -355,6 +355,15 @@ def data_kernel(psi: torch.Tensor, K_pre: torch.Tensor) -> torch.Tensor:
     if K_pre.shape[0] != n_pre:
         raise ValueError(f"psi has {n_pre} pre-synaptic units but K_pre is {tuple(K_pre.shape)}")
     return psi @ K_pre @ psi.T / n_pre
+
+
+def latent_kernel(factors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    """B_{mu nu} = z_mu . z_nu / k for latents given as `{name: (P,)}`: the (P, P) kernel a
+    layer that is linear in the latents would have as its data kernel A (up to scale)."""
+    if not factors:
+        raise ValueError("no latents")
+    Z = torch.stack(list(factors.values()), dim=1)
+    return Z @ Z.T / Z.shape[1]
 
 
 def spatial_kernel_pairs(

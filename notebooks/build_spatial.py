@@ -74,6 +74,9 @@ Set `CACHE_ROOT` in the first cell. The run is cached under it in a directory na
 the task, net, training and spatial settings, so re-running reloads a finished run, resumes an
 interrupted one, and changing any setting starts a new one."""
 
+# The notation block, shared with the spatial-grid notebook so the two cannot drift.
+NOTATION = INTRO[INTRO.index("**Notation.**") : INTRO.index("Set `CACHE_ROOT`")].rstrip()
+
 TASK_AND_NET = """CACHE_ROOT = None  # directory for the cached runs; None reads $FCT_CACHE_ROOT
 # task: a linear teacher with m features and k latents
 P = 256  # samples
@@ -109,34 +112,38 @@ SETUP_TEXT = """## Setup
 
 The library computes; the cells below only draw, with plain matplotlib on the arrays it returns."""
 
-SETUP = """import matplotlib as mpl
+IMPORTS = """import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from IPython.display import Markdown, display
 
 from fct.analyse import example_outputs, pick_examples, r_squared
-from fct.cache import cache_root_from_env
 from fct.grid_view import tuning_view
 from fct.meanfield import readout_activities
 from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import (
     data_kernel,
+    latent_kernel,
     spatial_kernel_pairs,
     torus_distance,
     wrapped_gaussian_profile,
 )
 from fct.spatial_view import (
     layer_spaces,
-    make_config,
     order_weights,
     ordered_kernel_comparison,
     panel_grid,
     position_order,
-    train_run,
 )
 
-mpl.rcParams.update({"figure.dpi": 100, "font.size": 12, "axes.titlesize": 12})
+mpl.rcParams.update({"figure.dpi": 100, "font.size": 12, "axes.titlesize": 12})"""
+
+# What only the notebook that trains its own run needs; the grid notebook has its own extras.
+TRAIN_IMPORTS = """from fct.cache import cache_root_from_env
+from fct.data import get_latent_lattice_dataset
+from fct.spatial_view import make_config, train_run
+
 RUNS_ROOT = CACHE_ROOT or cache_root_from_env()"""
 
 PRIOR_TEXT = r"""## Spatial prior
@@ -310,6 +317,8 @@ for space in SPACES:
 plt.show()"""
 
 TRAIN = """RUN = train_run(CFG, RUNS_ROOT, log=print)
+# held-out set of the same teacher: one point per sign pattern of the k latents, 3^k in all
+TEST_DATASET = get_latent_lattice_dataset(RUN.cache_dir, CFG)
 tc = CFG.train
 sampler = f"SGLD, beta = {tc.beta:g}" if tc.optimizer == "sgld" else "Adam"
 last = {key: RUN.history[key][-1] for key in ("epoch", "loss", "mse", "weight_l2", "rate_l2")}
@@ -356,19 +365,24 @@ plt.show()"""
 EXAMPLES_TEXT = r"""## Example outputs
 
 The trained network's output $\hat y_\mu = V^\top \phi(h^{(L)}_\mu) / N$ against the target
-$y_\mu = W_Y z_\mu$ for `N_EXAMPLES` samples $\mu$ drawn at random. Left: one panel per sample
+$y_\mu = W_Y z_\mu$ for `N_EXAMPLES` points $\mu$ drawn at random from the **test set**: the $3^k$
+points of the latent lattice $z \in \{-a, 0, a\}^k$ ($a$ the latent range, one point per sign pattern
+of the latents, with inputs and targets from the training samples' own $W_X$ and $W_Y$), which the
+net was not trained on. Left: one panel per sample
 with $y_{\mu a}$ (ring on a stem) and $\hat y_{\mu a}$ (diamond) for every output $a = 1, \dots, m$.
-Right: every shown entry $\hat y_{\mu a}$ against $y_{\mu a}$, with the identity line and the
-pooled
+Right: every entry $\hat y_{\mu a}$ against $y_{\mu a}$ of **all** $3^k$ test points (the examples
+are only a subset of them), with the identity line and the pooled
 $$R^2 = 1 - \frac{\sum_{\mu a} (y_{\mu a} - \hat y_{\mu a})^2}{\sum_{\mu a} (y_{\mu a} - \bar y)^2}$$
-over the shown entries, $\bar y$ their mean. A good fit puts every diamond inside its ring and
-every point on the identity line."""
+over all test points and outputs, $\bar y$ their mean. A good fit puts every diamond inside its ring
+and every point on the identity line."""
 
 EXAMPLES = r"""N_EXAMPLES = 4  # samples shown
 
 
-def plot_example_outputs(outputs, title):
-    # True and predicted output vector of each example, then all entries against each other.
+def plot_example_outputs(outputs, title, everything=None):
+    # True and predicted output vector of each example (`outputs`), then the entries of
+    # `everything` (default: the examples) against each other with their pooled R^2.
+    everything = outputs if everything is None else everything
     y_true, y_pred = outputs.y_true.numpy(), outputs.y_pred.numpy()
     n, m = y_true.shape
     fig = plt.figure(figsize=(12, 2.2 * n + 1.5), layout="constrained")
@@ -392,19 +406,22 @@ def plot_example_outputs(outputs, title):
     first.legend(frameon=False, loc="upper right", ncol=2)
 
     ax = fig.add_subplot(right)
-    r2 = r_squared(outputs.y_true, outputs.y_pred)
-    lim = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
+    all_true, all_pred = everything.y_true.numpy(), everything.y_pred.numpy()
+    r2 = r_squared(everything.y_true, everything.y_pred)
+    lim = [min(all_true.min(), all_pred.min()), max(all_true.max(), all_pred.max())]
     ax.plot(lim, lim, "--", color="grey", label=f"identity; $R^2$ = {r2:.2f}")
-    ax.scatter(y_true.ravel(), y_pred.ravel(), s=30, alpha=0.7, color="C1")
+    ax.scatter(all_true.ravel(), all_pred.ravel(), s=30, alpha=0.7, color="C1")
     ax.set(xlabel=r"true $y_{\mu a}$", ylabel=r"predicted $\hat y_{\mu a}$", aspect="equal")
     ax.legend(frameon=False, loc="upper left")
     fig.suptitle(title)
     return fig
 
 
-n_samples = len(RUN.dataset.x)
+n_samples = len(TEST_DATASET.x)
 picks = pick_examples(n_samples, min(N_EXAMPLES, n_samples), seed=0)
-plot_example_outputs(example_outputs(RUN.net, RUN.dataset, picks), "trained network")
+test_outputs = example_outputs(RUN.net, TEST_DATASET, list(range(n_samples)))
+shown = example_outputs(RUN.net, TEST_DATASET, picks)
+plot_example_outputs(shown, f"trained network, test set ({n_samples} points)", test_outputs)
 plt.show()"""
 
 EMPIRICAL_TEXT = r"""## First-layer weights: their kernels next to the prior
@@ -506,7 +523,7 @@ $l + 1$, or of the output for the last hidden layer. So $\psi$ is the rate $r$ a
 layer, the last one included, since the output reads $\phi(h^{(L)})$; this is the paper's
 eq. kernel-def and what `fct.meanfield.empirical_kernels` computes
 (`fct.meanfield.readout_activities` gives these $\psi$). The post-synaptic kernel only multiplies: all the
-dependence on the data is in the $(P \times P)$ data kernel $A^{(l)}$, the pre-synaptic index
+dependence on the data is in the $(P_\mathrm{test} \times P_\mathrm{test})$ data kernel $A^{(l)}$, the pre-synaptic index
 summed out against its prior. Writing $K^{\mathrm{pre}} = \sum_q \lambda_q v_q v_q^\top$ and
 $\tilde\psi_{q\mu} = v_q^\top \psi_\mu$, $A_{\mu\nu} = \frac{1}{N} \sum_q \lambda_q \tilde\psi_{q\mu} \tilde\psi_{q\nu}$:
 each activity pattern is weighted by the prior variance of its spatial mode, so a smooth
@@ -515,10 +532,21 @@ $K^{\mathrm{pre}} = I$ it is the plain $\psi^\top \psi / N$ (in the code $\psi$ 
 $(P, N)$, samples by rows, so the same matrix is `psi @ psi.T / n_pre` there). The input kernel $\Phi^{(0)}$
 (with $1/m$, over the input units) is not drawn.
 
-One panel per hidden layer: $A^{(l)}$ over all $P$ training samples, with its own colour scale
+The activities $\psi$ are those of the **test set**: the $P_\mathrm{test} = 3^k$ points of the latent
+lattice $z \in \{-a, 0, a\}^k$ (one point per sign pattern of the $k$ latents, inputs from the
+training samples' own teacher map $W_X$; `fct.data.get_latent_lattice_dataset`), so $A^{(l)}$ is
+$(3^k \times 3^k)$ and every pair of sign patterns appears once, instead of whatever pairs the random
+training samples happen to give.
+
+One panel per hidden layer: $A^{(l)}$ over the $P_\mathrm{test}$ points, with its own colour scale
 (symmetric about zero, since $A$ is signed) and titled with the kernel scale
-$\mathrm{tr}\,A^{(l)} / P$. The samples are **sorted** by the latent $z_f$ with $f$ =
-`PHI_SORT_LATENT` (0-based; `None` keeps dataset order). How to read it: a first layer that is
+$\mathrm{tr}\,A^{(l)} / P_\mathrm{test}$. The first panel is the latent kernel of the same points,
+$$B_{\mu\nu} = \frac{1}{k} \sum_{f=1}^{k} z_{f\mu}\, z_{f\nu} = \frac{1}{k}\, z_\mu \cdot z_\nu,$$
+which a layer that is linear in the latents would have as its data kernel up to scale
+($A \propto B$), so how much each $A^{(l)}$ resembles $B$ shows how far that layer is from linear.
+The points are **sorted** by the latent $z_f$ with $f$ =
+`PHI_SORT_LATENT` (0-based; `None` keeps lattice order), the ties of the three values $-a, 0, a$
+keeping lattice order. How to read it: a first layer that is
 nearly linear in $x = W_X z$ gives a dot-product-like kernel, $A_{\mu\nu} \propto z_\mu \cdot z_\nu$,
 which sorted by $z_0$ shows a rank-one $z_0 z_0^\top$ pattern: the same sign in the top-left and
 bottom-right quadrants, the opposite sign in the two off-diagonal ones. A band along the diagonal
@@ -526,7 +554,7 @@ would instead mean that similarity falls with the distance $|z_{f\mu} - z_{f\nu}
 localised tuning. This is the trained net's empirical kernel only: the library's solver has no
 spatial prior, so no theory $\Phi$ is computed here."""
 
-DATA_KERNEL = r"""PHI_SORT_LATENT = 0  # 0-based index f of the latent z_f (z0 .. z{k-1}) that orders the samples; None: dataset order
+DATA_KERNEL = r"""PHI_SORT_LATENT = 0  # 0-based index f of the latent z_f (z0 .. z{k-1}) that orders the test points; None: lattice order
 
 
 def sample_order(factors, name, n_samples):
@@ -547,25 +575,34 @@ def data_kernels(H, phi, spaces):
     )
 
 
-def plot_data_kernels(A, order, sorted_by):
+def plot_data_kernels(A, order, sorted_by, B=None):
     # One panel per hidden layer: the (P, P) data kernel with samples reordered by `order`, its
     # own colour scale symmetric about zero, titled with psi = phi(h) and the kernel scale
-    # tr(A) / P (unchanged by the reordering).
+    # tr(A) / P (unchanged by the reordering). With B, the latent kernel Z Z^T / k of the same
+    # samples is drawn first, in the same order.
     A = A.detach().cpu().numpy()
     n_layers, P = A.shape[0], A.shape[1]
     if sorted(order.tolist()) != list(range(P)):
         raise ValueError(f"order is not a permutation of the {P} samples")
+    panels = [
+        (A[layer], rf"hidden layer {layer + 1}, $\psi = \phi(h)$: $\mathrm{{tr}}\,A / P$")
+        for layer in range(n_layers)
+    ]
+    if B is not None:
+        B = B.detach().cpu().numpy()
+        if B.shape != (P, P):
+            raise ValueError(f"B is {B.shape}, but A is over {P} samples")
+        panels.insert(0, (B, r"latent kernel $B = Z Z^\top / k$: $\mathrm{tr}\,B / P$"))
     fig, axes = plt.subplots(
-        1, n_layers, figsize=(5 * n_layers + 1, 5), squeeze=False, layout="constrained"
+        1, len(panels), figsize=(5 * len(panels) + 1, 5), squeeze=False, layout="constrained"
     )
-    for layer, ax in enumerate(axes[0]):
-        shown = A[layer][np.ix_(order, order)]
+    for ax, (kernel, title) in zip(axes[0], panels, strict=True):
+        shown = kernel[np.ix_(order, order)]
         bound = np.abs(shown).max()
         image = ax.imshow(shown, cmap="RdBu_r", vmin=-bound, vmax=bound, interpolation="none")
         fig.colorbar(image, ax=ax, shrink=0.8)
-        scale = np.trace(A[layer]) / P
         ax.set(
-            title=rf"hidden layer {layer + 1}, $\psi = \phi(h)$: $\mathrm{{tr}}\,A / P$ = {scale:.3g}",
+            title=f"{title} = {np.trace(kernel) / P:.3g}",
             xlabel=rf"sample $\nu$, sorted by {sorted_by}" if sorted_by else r"sample $\nu$",
             ylabel=r"sample $\mu$",
         )
@@ -573,22 +610,25 @@ def plot_data_kernels(A, order, sorted_by):
 
 
 with torch.no_grad():
-    H, _ = RUN.net(RUN.dataset.x.to(RUN.net.dtype))  # (P, L, N), on the training device
+    H, _ = RUN.net(TEST_DATASET.x.to(RUN.net.dtype))  # (3^k, L, N), on the training device
 A = data_kernels(H, RUN.net.phi, SPACES)
 by = None if PHI_SORT_LATENT is None else f"z{PHI_SORT_LATENT}"
-order = sample_order(RUN.dataset.factors, by, len(RUN.dataset.x))
-plot_data_kernels(A, order, by)
+order = sample_order(TEST_DATASET.factors, by, len(TEST_DATASET.x))
+print(f"test set: {len(order)} points, data kernels A of shape {tuple(A.shape[1:])} per layer")
+plot_data_kernels(A, order, by, latent_kernel(TEST_DATASET.factors))
 plt.show()"""
 
 TRIALS_TEXT = r"""### The trials whose kernels are drawn
 
 The full $\Phi^{(l)}$ has $P^2$ blocks of $(n_\mathrm{post} \times n_\mathrm{post})$, too many
-to draw, so the grids below show the $S$ = `PHI_TRIALS` samples at evenly spaced ranks of the
+to draw, so the grids below show the $S$ = `PHI_TRIALS` test points at evenly spaced ranks of the
 sorting latent, from its smallest value to its largest:
-$$\mu_s = \pi\big(\mathrm{round}(s\, (P - 1) / (S - 1))\big), \qquad s = 0, \dots, S - 1,$$
+$$\mu_s = \pi\big(\mathrm{round}(s\, (P_\mathrm{test} - 1) / (S - 1))\big), \qquad s = 0, \dots, S - 1,$$
 with $\pi$ the sorting order of the figure above ($\mu_0 = \pi(0)$ for $S = 1$). With
 `PHI_SORT_LATENT = None`, $\pi$ is the dataset order, so the picks are evenly spaced dataset
-indices and their latents follow no order from bar group to bar group. The figure
+indices and their latents follow no order from bar group to bar group. Each test point is a sign
+pattern of the latents ($z_f \in \{-a, 0, a\}$), so the picks spread over the sign patterns, ordered by
+the sorting latent. The figure
 shows the latents $z_{f\mu_s}$ of the chosen samples, one group of $k$ bars per sample, labelled
 by its index $\mu_s$."""
 
@@ -621,7 +661,7 @@ def plot_trial_latents(factors, trials):
 
 
 trials = spread_trials(order, PHI_TRIALS)
-plot_trial_latents(RUN.dataset.factors, trials)
+plot_trial_latents(TEST_DATASET.factors, trials)
 plt.show()"""
 
 PHI_PAIRS_TEXT = r"""### $\Phi^{(l)}$ between pairs of trials
@@ -928,7 +968,8 @@ def build_notebook() -> NotebookNode:
         new_markdown_cell(TRAINING_TEXT),
         new_code_cell(TRAINING),
         new_markdown_cell(SETUP_TEXT),
-        new_code_cell(SETUP),
+        new_code_cell(IMPORTS),
+        new_code_cell(TRAIN_IMPORTS),
         new_markdown_cell(PRIOR_TEXT),
         new_code_cell(SPATIAL),
         new_markdown_cell(FLOOR_TEXT),
@@ -988,11 +1029,15 @@ def set_parameters(nb: NotebookNode, values: Mapping[str, Any]) -> NotebookNode:
 
 
 def execute_notebook(
-    nb: NotebookNode, cache_root: Path, overrides: Mapping[str, Any] | None = None
+    nb: NotebookNode,
+    cache_root: Path,
+    overrides: Mapping[str, Any] | None = None,
+    root_name: str = "CACHE_ROOT",
 ) -> NotebookNode:
-    """Run a copy of `nb` in a fresh kernel with CACHE_ROOT and the `overrides` set; the source
-    `nb` gains no outputs. A failing cell raises (nbclient.exceptions.CellExecutionError)."""
-    values = {"CACHE_ROOT": str(cache_root), **(overrides or {})}
+    """Run a copy of `nb` in a fresh kernel with the parameter `root_name` (CACHE_ROOT, or the
+    sweep ROOT of the grid notebook) and the `overrides` set; the source `nb` gains no outputs.
+    A failing cell raises (nbclient.exceptions.CellExecutionError)."""
+    values = {root_name: str(cache_root), **(overrides or {})}
     client = NotebookClient(
         set_parameters(nb, values),
         timeout=EXECUTE_TIMEOUT_S,
@@ -1019,11 +1064,14 @@ def build_main(
     description: str,
     set_example: str,
     argv: list[str] | None = None,
+    root_name: str = "CACHE_ROOT",
+    root_help: str = "directory for the cached runs",
 ) -> int:
-    """The command line shared by the notebook builders that take a CACHE_ROOT and `--set`
-    overrides: build the notebook, execute it unless --no-execute, write it."""
+    """The command line shared by the notebook builders that take a root directory (the
+    notebook parameter `root_name`) and `--set` overrides: build the notebook, execute it
+    unless --no-execute, write it."""
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("cache_root", nargs="?", type=Path, help="directory for the cached runs")
+    parser.add_argument("cache_root", nargs="?", type=Path, metavar=root_name, help=root_help)
     parser.add_argument(
         "--set",
         dest="overrides",
@@ -1039,8 +1087,8 @@ def build_main(
     nb = build()
     if not args.no_execute:
         if args.cache_root is None:
-            parser.error("give a CACHE_ROOT")
-        nb = execute_notebook(nb, args.cache_root, dict(args.overrides))
+            parser.error(f"give a {root_name}")
+        nb = execute_notebook(nb, args.cache_root, dict(args.overrides), root_name)
     out = args.out or (source_out if args.no_execute else executed_out)
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"wrote {write_notebook(nb, out)}")
