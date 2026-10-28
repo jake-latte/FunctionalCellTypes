@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from fct.config import (
     IMPORTANCE_FIELDS,
     LEGACY_SOLVER_FIELDS,
+    STEP_CONTROL_FIELDS,
+    STEP_CONTROL_LEGACY,
     UNHASHED_SOLVER_FIELDS,
     Config,
     MeanFieldConfig,
@@ -219,7 +221,7 @@ def test_unknown_meanfield_key_still_raises():
 
 
 def test_every_solver_field_has_a_hash_rule():
-    rules = (LEGACY_SOLVER_FIELDS, IMPORTANCE_FIELDS, UNHASHED_SOLVER_FIELDS)
+    rules = (LEGACY_SOLVER_FIELDS, IMPORTANCE_FIELDS, UNHASHED_SOLVER_FIELDS, STEP_CONTROL_FIELDS)
     assert set(SolverConfig.model_fields) == set().union(*rules)
     assert sum(len(r) for r in rules) == len(SolverConfig.model_fields)  # disjoint
 
@@ -228,6 +230,27 @@ def test_the_final_residual_check_does_not_enter_the_hash():
     a, b = default_config(), default_config()
     b.meanfield.solver.tilt_tripwire_resid = 0.5
     assert a.section_hash("meanfield") == b.section_hash("meanfield")
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"inner_step_control": "health"},
+        {"eta_max_phihat": 0.5},
+        {"phi_step_scale": "trace"},
+        {"inner_start": "previous"},
+    ],
+)
+def test_step_control_makes_the_result_stale(setting):
+    cfg = default_config()
+    other = _with_solver(cfg, **setting)
+    assert other.section_hash(*RESULT_SECTIONS) != cfg.section_hash(*RESULT_SECTIONS)
+
+
+def test_step_control_at_its_plain_values_stays_out_of_the_hash():
+    payload = MeanFieldConfig(**STEP_CONTROL_LEGACY).hash_payload()
+    assert not set(STEP_CONTROL_FIELDS) & set(payload)
+    assert set(STEP_CONTROL_FIELDS) <= set(MeanFieldConfig().hash_payload())
 
 
 def test_hmc_hash_ignores_the_importance_settings():

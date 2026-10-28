@@ -79,8 +79,10 @@ CKPT_PREFIX, CKPT_WIDTH, FINAL_NAME = "ckpt_", 5, "final.pt"
 # rho1); the is_* keys are NaN under HMC.
 HISTORY_KEYS = (
     "outer_step", "time", "inner_steps", "inner_residual", "inner_grad_rel", "inner_converged",
-    "step_clipped", "eta_phi", "eta_phihat", "n_backtrack_inner", "n_backtrack_outer",
+    "step_clipped", "eta_phi", "eta_phihat", "n_backtrack_inner", "n_accepted_inner",
+    "n_rejected_inner", "n_backtrack_outer",
     "outer_grad_rel", "phihat_fp_resid_stein", "phihat_fp_resid_direct", "stein_vs_direct",
+    "picard_resid",
     "trace_term", "learning_term", "train_mse_theory", "train_mse_net",
     "phi_lambda_min", "n_pd_clamped", "norm_margin",
     "hmc_accept", "hmc_eps", "hmc_div", "hmc_reset", "hmc_max_abs_dH", "hmc_rho1", "hmc_ess_frac",
@@ -91,7 +93,7 @@ NET_KEYS = ("align_net", "dist_net")
 # Keys whose per-step entry is a per-layer numpy array (saved as a list, restored on load).
 _ARRAY_KEYS = frozenset(HISTORY_KEYS) - {
     "outer_step", "time", "inner_steps", "inner_converged", "eta_phi", "n_backtrack_outer",
-    "trace_term", "learning_term", "train_mse_theory", "train_mse_net",
+    "trace_term", "learning_term", "train_mse_theory", "train_mse_net", "picard_resid",
 }  # fmt: skip
 
 History = dict[str, list]
@@ -366,7 +368,7 @@ def _init_from_net(prob: _Problem, Phi, Phi_hat, net_Phi, net_H) -> None:
     Φ̂_l = sym(Φ_l⁻¹ ⟨h uᵀ⟩_{l+1}) (Eq. 31b, Stein form)."""
     Phi[:] = net_Phi
     A = torch.linalg.solve(prob.alpha * prob.eye + Phi[-1], prob.eye)
-    Phi_hat[-1] = -2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A
+    Phi_hat[-1] = _last_stein_target(prob, A)
     dphi = phi_prime(prob.phi)
     for l in range(prob.L - 2, -1, -1):
         h = net_H[:, l + 1].T  # (N, P)
@@ -550,6 +552,11 @@ def _tilt_step(
     return projected, relative_fro(projected, new) if new.norm().item() > 0 else 0.0
 
 
+def _last_stein_target(prob: _Problem, A: torch.Tensor) -> torch.Tensor:
+    """-2c A Y Yᵀ A, the last layer's Stein target, for A = (αI + Φ_L)⁻¹ (Eq. 31c)."""
+    return -2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A
+
+
 def _learning_pieces(prob: _Problem, Phi_last: torch.Tensor):
     """A = (αI + Φ_L)⁻¹, AY, the learning term c Tr[Yᵀ A Y] and the train MSE of the
     theory's kernel predictor f = Φ_L A Y."""
@@ -564,68 +571,145 @@ def _learning_pieces(prob: _Problem, Phi_last: torch.Tensor):
 # ----------------------------------------------------------------------------- inner ascent
 @dataclass
 class _InnerResult:
-    residual: np.ndarray  # ||⟨ψψᵀ⟩ - Φ|| / ||Φ|| per layer
+    residual: np.ndarray  # ||⟨ψψᵀ⟩ - Φ|| / ||Φ|| per layer, at the last accepted point
+    first_residual: np.ndarray  # the same at the ascent's starting tilt, per layer
     grad_rel: np.ndarray  # ||∂S/∂Φ̂|| / ||Φ|| per layer
-    n_backtrack: np.ndarray  # reverted steps per layer
+    n_backtrack: np.ndarray  # steps reverted because they broke the sampler, per layer
+    n_accepted: np.ndarray  # steps validated and kept, per layer
+    n_rejected: np.ndarray  # steps reverted because they raised the residual, per layer
+    best_residual: np.ndarray  # smallest residual accepted so far in this ascent, per layer
     projected_rel: np.ndarray  # largest relative change by the tilt projection, per layer
     converged: bool
     n_steps: int
 
 
+class _PendingStep(NamedTuple):
+    """An inner step taken on one layer and not yet validated, with the point it left."""
+
+    state: Any  # sampler state before the step
+    hat: torch.Tensor  # Φ̂_l before the step
+    grad: torch.Tensor  # ∂S/∂Φ̂_l measured there
+    tol: float  # the convergence tolerance there (`_inner_tol`)
+
+
+# Under inner_step_control="progress", the Monte Carlo part of the inner tolerance is capped at
+# this: a kernel off by half its size is not converged however noisy its estimate, and a run
+# whose MC error is that large cannot resolve the residual, so the ascent runs on and reports
+# the layer unconverged instead of calling a pure-noise layer converged.
+INNER_TOL_MC_CAP = 0.5
+
+
+def _inner_tol(cfg: SolverConfig, diag: dict) -> float:
+    """The inner residual below which a layer counts as converged: below
+    inner_tol_mc × its own Monte Carlo error the residual is noise (that part capped at
+    INNER_TOL_MC_CAP under inner_step_control="progress")."""
+    mc = cfg.inner_tol_mc * diag["psi_psi_rel_mc_err"]
+    if cfg.inner_step_control == "progress":
+        mc = min(mc, INNER_TOL_MC_CAP)
+    return max(cfg.inner_tol, mc)
+
+
+def _eta_hat_floor(cfg: SolverConfig) -> float:
+    """The smallest inner step size inner_step_control="progress" halves down to."""
+    return cfg.eta_min_rel * cfg.eta_phihat
+
+
+def _no_progress(
+    cfg: SolverConfig, residual: float, best: float, step: _PendingStep, eta: float
+) -> bool:
+    """Whether inner_step_control="progress" rejects a step after which the residual is
+    `residual`: it exceeds `best`, the smallest residual accepted so far in this ascent, by
+    more than the convergence tolerance of the point before the step. Against the smallest,
+    not the last, so a run of small accepted rises cannot let the residual creep up. The
+    tolerance is the margin because the residuals are Monte Carlo estimates (and `best` a
+    lucky low one), so a strict "did not rise" would reject sound steps on noise alone. A step
+    already at the floor `_eta_hat_floor` is never rejected, so noise cannot stall the ascent."""
+    rose = residual > best + step.tol
+    return cfg.inner_step_control == "progress" and rose and eta > _eta_hat_floor(cfg)
+
+
+def _retry_half_step(prob: _Problem, st: _SolverState, l: int, step: _PendingStep, res) -> None:
+    """Revert layer l's pending inner step (tilt and chain state) and take it again from the
+    same point with half the step size. Under inner_step_control="progress" the halving stops
+    at `_eta_hat_floor`, for a step reverted for sampler health as for one reverted for lack
+    of progress: a step that still breaks the sampler at the floor is retried there until
+    max_backtrack raises."""
+    cfg, s = prob.solver, st.samplers[l]
+    floor = _eta_hat_floor(cfg) if cfg.inner_step_control == "progress" else 0.0
+    st.eta_hat[l] = max(st.eta_hat[l] * 0.5, floor)
+    st.Phi_hat[l], rel = _tilt_step(prob, st, l, step.hat, step.grad, st.eta_hat[l])
+    res.projected_rel[l] = max(res.projected_rel[l], rel)
+    s.set_tilt(st.Phi_hat[l])
+    s.set_state(step.state)
+
+
 def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResult) -> dict:
-    """One ascent step on Φ̂_l.  The sampler run at its top also validates the previous step
-    (retrospective backtracking): if that step broke the sampler it is reverted and retried
-    with half the step size.  Updates `pending[l]` and `res` in place; returns the run's
-    diagnostics."""
+    """One ascent step on Φ̂_l.  The sampler run at its top also validates the pending step
+    (retrospective backtracking): if that step broke the sampler, or (inner_step_control
+    "progress", `_no_progress`) raised the residual ||⟨ψψᵀ⟩ - Φ_l|| / ||Φ_l||, it is reverted
+    and retried with half the step size; the step size grows only after an accepted step.
+    Updates `pending[l]` and `res` in place; returns the run's diagnostics."""
     cfg, s = prob.solver, st.samplers[l]
     moments, diag = s.run(cfg.n_trans)
-    if pending[l] is not None and not _healthy(
-        diag, st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg
-    ):
-        state0, hat0, grad0 = pending[l]
-        res.n_backtrack[l] += 1
-        st.eta_hat[l] *= 0.5
-        st.Phi_hat[l], rel = _tilt_step(prob, st, l, hat0, grad0, st.eta_hat[l])
-        res.projected_rel[l] = max(res.projected_rel[l], rel)
-        s.set_tilt(st.Phi_hat[l])
-        s.set_state(state0)
-        if res.n_backtrack[l] > cfg.max_backtrack * (inner + 1):
-            raise RuntimeError(
-                f"layer {l}: inner step keeps breaking the sampler (eta_phihat={st.eta_hat[l]:.2e})"
-            )
-        return diag
+    residual = relative_fro(moments["psi_psi"], st.Phi[l])
+    if inner == 0:
+        res.first_residual[l] = residual
+    step = pending[l]
+    if step is not None:
+        if not _healthy(diag, st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg):
+            res.n_backtrack[l] += 1
+            _retry_half_step(prob, st, l, step, res)
+            if res.n_backtrack[l] > cfg.max_backtrack * (inner + 1):
+                raise RuntimeError(
+                    f"layer {l}: inner step keeps breaking the sampler "
+                    f"(eta_phihat={st.eta_hat[l]:.2e})"
+                )
+            return diag
+        if _no_progress(cfg, residual, res.best_residual[l], step, st.eta_hat[l]):
+            res.n_rejected[l] += 1
+            _retry_half_step(prob, st, l, step, res)
+            return diag
     _accept_point(prob, st, l, diag, f"outer step {st.outer}, inner step {inner}")
-    if pending[l] is not None:
-        st.eta_hat[l] = min(st.eta_hat[l] * cfg.eta_grow, cfg.eta_max)
+    if step is not None:
+        res.n_accepted[l] += 1
+        st.eta_hat[l] = min(st.eta_hat[l] * cfg.eta_grow, cfg.eta_max_phihat)
     grad_hat = 0.5 * (moments["psi_psi"] - st.Phi[l])
-    res.residual[l] = relative_fro(moments["psi_psi"], st.Phi[l])
+    res.residual[l] = residual
+    res.best_residual[l] = min(res.best_residual[l], residual)
     res.grad_rel[l] = grad_hat.norm().item() / max(st.Phi[l].norm().item(), 1e-300)
-    pending[l] = (s.get_state(), st.Phi_hat[l].clone(), grad_hat)
+    pending[l] = _PendingStep(s.get_state(), st.Phi_hat[l].clone(), grad_hat, _inner_tol(cfg, diag))
     st.Phi_hat[l], rel = _tilt_step(prob, st, l, st.Phi_hat[l], grad_hat, st.eta_hat[l])
     res.projected_rel[l] = max(res.projected_rel[l], rel)
     s.set_tilt(st.Phi_hat[l])
     return diag
 
 
-def _inner_ascent(prob: _Problem, st: _SolverState) -> _InnerResult:
-    """Gradient ascent on Φ̂ at fixed Φ, ∂S/∂Φ̂_l = ½(⟨ψψᵀ⟩_l - Φ_l), until every layer's
-    residual is below max(inner_tol, inner_tol_mc × its own MC error) or n_inner_max steps."""
-    cfg, L = prob.solver, prob.L
-    res = _InnerResult(
+def _new_inner_result(L: int) -> _InnerResult:
+    """The record of an inner ascent before its first step."""
+    return _InnerResult(
         residual=np.full(L, np.nan),
+        first_residual=np.full(L, np.nan),
         grad_rel=np.full(L, np.nan),
         n_backtrack=np.zeros(L, dtype=int),
+        n_accepted=np.zeros(L, dtype=int),
+        n_rejected=np.zeros(L, dtype=int),
+        best_residual=np.full(L, np.inf),
         projected_rel=np.zeros(L),
         converged=False,
         n_steps=0,
     )
-    pending = [None] * L  # (state_before, hat_before, grad_before) of each layer's last step
+
+
+def _inner_ascent(prob: _Problem, st: _SolverState) -> _InnerResult:
+    """Gradient ascent on Φ̂ at fixed Φ, ∂S/∂Φ̂_l = ½(⟨ψψᵀ⟩_l - Φ_l), until every layer's
+    residual is below max(inner_tol, inner_tol_mc × its own MC error) or n_inner_max steps."""
+    cfg, L = prob.solver, prob.L
+    res = _new_inner_result(L)
+    pending: list[_PendingStep | None] = [None] * L
     for inner in range(cfg.n_inner_max):
         diags = [_inner_layer_step(prob, st, l, inner, pending, res) for l in range(L)]
         res.n_steps = inner + 1
-        tol = np.array(
-            [max(cfg.inner_tol, cfg.inner_tol_mc * d["psi_psi_rel_mc_err"]) for d in diags]
-        )
+        tol = np.array([_inner_tol(cfg, d) for d in diags])
         if np.isfinite(res.residual).all() and (res.residual < tol).all():
             res.converged = True
             break
@@ -668,7 +752,7 @@ def _outer_gradients(prob: _Problem, st: _SolverState) -> _OuterGradients:
             out.stein_vs_direct.append(relative_fro(hat_stein, hat_direct))
             out.fp_direct.append(relative_fro(st.Phi_hat[l], hat_direct))
         else:
-            hat_stein = -2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A
+            hat_stein = _last_stein_target(prob, A)
             out.stein_vs_direct.append(float("nan"))
             out.fp_direct.append(float("nan"))
         out.fp_stein.append(relative_fro(st.Phi_hat[l], hat_stein))
@@ -684,15 +768,40 @@ class _OuterStep:
     n_backtrack: int
 
 
+def _phi_step(
+    cfg: SolverConfig, eta: float, grad: torch.Tensor, Phi_at: torch.Tensor, Phi_now: torch.Tensor
+) -> torch.Tensor:
+    """The descent step of Φ_l, before clipping, from ∂S/∂Φ_l (units of Φ̂, i.e. 1/Φ) at Φ_at.
+    "kernel": η Φ_at ∂S/∂Φ_l Φ_at, the Newton direction of a Gaussian layer (its tilt follows
+    the kernel as dΦ̂ = -Φ⁻¹ dΦ Φ⁻¹, so η = 2 is a full Newton step), which moves every
+    eigendirection of Φ at its own rate; "trace": η ∂S/∂Φ_l c_l² with c_l = tr(Φ_now)/P, the
+    same step when Φ = c I, and far too small along the top eigenvectors of a low-rank kernel.
+    Φ_now is the current Φ_l (the last attempted step when backtracking), which "trace" reads."""
+    if cfg.phi_step_scale == "trace":
+        return eta * grad * _c2(Phi_now)
+    return eta * sym(Phi_at @ grad @ Phi_at)
+
+
+def _phi_step_rel(
+    cfg: SolverConfig, grad: torch.Tensor, Phi_prev: torch.Tensor, Phi_now: torch.Tensor
+) -> float:
+    """||ΔΦ_l|| / ||Φ_l|| per unit η before clipping (history["outer_grad_rel"])."""
+    if cfg.phi_step_scale == "trace":
+        size = grad.norm().item() * _c2(Phi_now)
+    else:
+        size = _phi_step(cfg, 1.0, grad, Phi_prev, Phi_now).norm().item()
+    return size / max(Phi_prev.norm().item(), 1e-300)
+
+
 def _trust_region_step(
     prob: _Problem, st: _SolverState, grads: list[torch.Tensor], Phi_prev: torch.Tensor
 ) -> tuple[list[int], list[float], list[bool]]:
-    """Φ_l ← Π_PD(Φ_l^prev - η ∂S/∂Φ_l c_l²), the step clipped to max_rel_step ||Φ_l^prev||.
-    c_l is read from the current Φ_l, i.e. the last attempted step when backtracking."""
+    """Φ_l ← Π_PD(Φ_l^prev - ΔΦ_l) with ΔΦ_l = `_phi_step` at Φ_l^prev, clipped to
+    max_rel_step ||Φ_l^prev||."""
     cfg = prob.solver
     n_clamped, lam_min, clipped = [], [], []
     for l in range(prob.L):
-        step = st.eta * grads[l] * _c2(st.Phi[l])
+        step = _phi_step(cfg, st.eta, grads[l], Phi_prev[l], st.Phi[l])
         cap = cfg.max_rel_step * Phi_prev[l].norm().item()
         sn = step.norm().item()
         clipped.append(sn > cap)
@@ -773,15 +882,17 @@ def _record(
         "eta_phihat": st.eta_hat.copy(),
         "n_backtrack_inner": inner.n_backtrack.copy(),
         "n_backtrack_outer": step.n_backtrack,
+        "n_accepted_inner": inner.n_accepted.copy(),
+        "n_rejected_inner": inner.n_rejected.copy(),
         "outer_grad_rel": np.array(
-            [
-                og.grads[l].norm().item() * _c2(Phi[l]) / max(Phi_prev[l].norm().item(), 1e-300)
-                for l in range(L)
-            ]
+            [_phi_step_rel(prob.solver, og.grads[l], Phi_prev[l], Phi[l]) for l in range(L)]
         ),
         "phihat_fp_resid_stein": np.array(og.fp_stein),
         "phihat_fp_resid_direct": np.array(og.fp_direct),
         "stein_vs_direct": np.array(og.stein_vs_direct),
+        "picard_resid": (
+            float(inner.first_residual[-1]) if prob.solver.inner_start == "target" else float("nan")
+        ),
         "trace_term": -0.5 * sum((Phi[l] * Phi_hat[l]).sum().item() for l in range(L)),
         "learning_term": og.learning,
         "train_mse_theory": og.mse_theory,
@@ -834,9 +945,11 @@ def _format_step(
         f"inner={inner.n_steps:3d}{'' if inner.converged else '*'} "
         f"res_in={fmt(inner.residual)} grad_out={fmt(rec['outer_grad_rel'])} "
         f"fp(Φ̂)={fmt(rec['phihat_fp_resid_stein'])} "
-        f"mse={rec['train_mse_theory']:.3e}"
+        + (f"picard={rec['picard_resid']:.2e} " if prob.solver.inner_start == "target" else "")
+        + f"mse={rec['train_mse_theory']:.3e}"
         + (f" (net {mse_net:.3e})" if mse_net is not None else "")
         + f" | eta={st.eta:.1e}/{fmt(st.eta_hat)} bt={inner.n_backtrack.tolist()}/{step.n_backtrack}"
+        + f" rej={inner.n_rejected.tolist()}"
         + (
             f" | IS ess={fmt(rec['hmc_ess_frac'])} max_w={fmt(rec['is_max_weight'])} "
             if sampler == "importance"
@@ -853,7 +966,39 @@ def _format_step(
         msg += f" | PD-clamped={step.n_clamped}"
     if any(step.clipped):
         msg += f" | step-clipped={[int(c) for c in step.clipped]}"
+    if prob.solver.inner_step_control == "progress":
+        at_floor = [l for l, e in enumerate(st.eta_hat) if e <= _eta_hat_floor(prob.solver)]
+        if at_floor:
+            msg += f" | eta_phihat at its floor in layers {at_floor}"
     return msg
+
+
+def _start_last_tilt_at_target(prob: _Problem, st: _SolverState) -> float:
+    """Φ̂_L ← Π(T), T = -2c A Y Yᵀ A the last layer's Stein target at the current Φ_L (exact,
+    a function of Φ_L only; Π the tilt projection), as the start of the inner ascent; returns
+    ||Π(T) - T|| / ||T||.
+
+    The inner residual pins Φ̂_L only along directions the kernel responds to. Along the others
+    (most of them, for a low-rank kernel or a saturating φ) every inner step adds Monte Carlo
+    noise that nothing removes, and continued from step to step it piles up. Restarted at T,
+    it cannot. What the iteration then is: the ascent validates each step at the next run, so
+    it ends with at least one step past its last measurement, and the outer gradient run sees
+    Φ̂_L = T + Δ, Δ = the inner steps from T (one step, η̂ (⟨ψψᵀ⟩_T - Φ_L) / (2 c²), whenever
+    the residual at T is already below tolerance). The outer step ΔΦ_L = (η/2) Φ_L Δ Φ_L is a
+    damped stochastic Picard step towards ⟨ψψᵀ⟩ under T, and the recorded fixed-point residual
+    ||Φ̂_L - T|| / ||T|| measures Δ, which scales with η̂: it is not a convergence measure for
+    this layer. history["picard_resid"], the residual ||⟨ψψᵀ⟩_T - Φ_L|| / ||Φ_L|| of the
+    ascent's first run, is."""
+    A, _, _, _ = _learning_pieces(prob, st.Phi[-1])
+    target = sym(_last_stein_target(prob, A))
+    rel = 0.0
+    if prob.solver.project_tilt:
+        projected = st.samplers[-1].project_tilt(target, prob.solver.tilt_floor)
+        rel = relative_fro(projected, target) if target.norm().item() > 0 else 0.0
+        target = projected
+    st.Phi_hat[-1] = target
+    st.samplers[-1].set_tilt(target)
+    return rel
 
 
 def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> None:
@@ -861,7 +1006,11 @@ def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> N
     Advances st.outer by one."""
     outer = st.outer
     Phi_prev, Phi_hat_prev = st.Phi.clone(), st.Phi_hat.clone()
+    start_projected = 0.0
+    if prob.solver.inner_start == "target":
+        start_projected = _start_last_tilt_at_target(prob, st)
     inner = _inner_ascent(prob, st)
+    inner.projected_rel[-1] = max(inner.projected_rel[-1], start_projected)
     og = _outer_gradients(prob, st)
     step = _outer_descent(prob, st, og.grads, Phi_prev, outer, log)
     rec = _record(prob, st, outer, time.time() - t_start, inner, og, step, Phi_prev, Phi_hat_prev)
@@ -991,14 +1140,21 @@ def solve(
 
     Step sizes are dimensionless: with c_l = tr(Φ_l)/P,
         Φ̂_l += eta_phihat_l · ∂S/∂Φ̂_l / c_l²      (Φ̂ has units of 1/Φ)
-        Φ_l  -= eta_phi      · ∂S/∂Φ_l  · c_l²     (clipped to ||ΔΦ_l|| ≤ max_rel_step ||Φ_l||)
-    and are adapted: every sampler run also validates the step taken before it.  If the
-    HMC chains show divergences (> max_div_frac of transitions) or resets, the importance
-    ESS fraction drops below min_ess_drop times that of the point before, or the sample scale
-    ||h||²/P jumps by more than max_h2_growth, the step is reverted (kernel and chain state)
-    and its step size
-    halved; otherwise the step size grows by eta_grow up to eta_max.  This keeps the
-    iteration on the normalisable side of the tilt.  The settings are cfg.solver's.
+        Φ_l  -= eta_phi      · Φ_l ∂S/∂Φ_l Φ_l      (clipped to ||ΔΦ_l|| ≤ max_rel_step ||Φ_l||)
+    (solver.phi_step_scale="trace": Φ_l -= eta_phi · ∂S/∂Φ_l · c_l², the same step when
+    Φ_l = c_l I), and are adapted: every sampler run also validates the step taken before it.
+    If the HMC chains show divergences (> max_div_frac of transitions) or resets, the
+    importance ESS fraction drops below min_ess_drop times that of the point before, or the
+    sample scale ||h||²/P jumps by more than max_h2_growth, the step is reverted (kernel and
+    chain state) and its step size halved; so is an inner step that raised the layer's inner
+    residual by more than the convergence tolerance of the point before it
+    (inner_step_control="progress"; not below eta_min_rel · eta_phihat). Otherwise the step
+    size grows by eta_grow up to eta_max (outer) or eta_max_phihat (inner).  This keeps the
+    iteration on the normalisable side of the tilt.  With inner_start="target" every inner
+    ascent of the last layer starts from its Stein target -2c A Y Yᵀ A at the current Φ_L,
+    which makes the last layer's outer step a damped stochastic Picard step; its convergence
+    measure is then history["picard_resid"] (`_start_last_tilt_at_target`).
+    The settings are cfg.solver's.
     Under importance sampling every accepted point (the initial one, each validated inner
     step, each outer-gradient run) must have ESS fraction >= min_ess_frac, else
     InadequateSamplerError: the prior proposal does not suit the problem.

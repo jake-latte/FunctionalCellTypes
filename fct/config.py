@@ -136,7 +136,7 @@ class SolverConfig(StrictModel):
     inner_tol_mc: PosFloat = 2.0
     eta_phi: PosFloat = 0.05
     eta_phihat: PosFloat = 0.05
-    eta_max: PosFloat = 1.0
+    eta_max: PosFloat = 0.25
     eta_grow: PosFloat = 1.1
     max_backtrack: PosInt = 8
     eta_min_rel: NonNegFloat = 1e-3
@@ -147,6 +147,23 @@ class SolverConfig(StrictModel):
     project_tilt: bool = True
     tilt_floor: Annotated[float, Field(ge=0, lt=1)] = 0.05
     max_rel_step: PosFloat = 0.1
+    # Step control (`fct.meanfield`). inner_step_control "progress" also rejects an inner step
+    # after which a layer's inner residual exceeds the smallest one accepted in that ascent by
+    # more than the convergence tolerance, whose Monte Carlo part it caps at 0.5; "health"
+    # validates a step on sampler health alone. eta_max caps only the outer step size;
+    # eta_max_phihat caps each layer's inner one. phi_step_scale "kernel" steps Phi_l along
+    # Phi_l dS/dPhi_l Phi_l, the Newton direction of a Gaussian layer (eta = 2 is a full Newton
+    # step there; a bounded phi responds several times more weakly, hence the cap of 0.25),
+    # "trace" along c_l^2 dS/dPhi_l with c_l = tr(Phi_l)/P. inner_start "target" restarts every
+    # inner ascent of the last layer at its Stein target -2c A Y Y^T A (exact, no sampling), so
+    # directions of Phi_hat_L the kernel barely responds to cannot collect Monte Carlo noise
+    # across outer steps; the last layer's outer step is then a damped stochastic Picard step,
+    # whose convergence measure is history["picard_resid"]. "previous" continues from the last
+    # tilt. STEP_CONTROL_LEGACY with eta_max = 1 is the plain Algorithm 1.
+    inner_step_control: Literal["health", "progress"] = "progress"
+    eta_max_phihat: PosFloat = 0.25
+    phi_step_scale: Literal["trace", "kernel"] = "kernel"
+    inner_start: Literal["previous", "target"] = "target"
     # A tripwire for a lost tilt, not a convergence test: `solve` raises UnconvergedSolveError
     # instead of returning (and writing final.pt) when, in some layer, the largest Stein
     # fixed-point residual of Phi_hat over the last tilt_tripwire_steps outer steps is >=
@@ -211,6 +228,16 @@ IMPORTANCE_FIELDS = (
 
 # Solver fields left out of every hash: they check a result and never change a number of it.
 UNHASHED_SOLVER_FIELDS = ("tilt_tripwire_resid", "tilt_tripwire_steps")
+# The step-control fields, at the values under which the iteration is the plain Algorithm 1
+# (with eta_max = 1, which LEGACY_SOLVER_FIELDS hashes). A field enters the hash only when it
+# differs from its value here, as IMPORTANCE_FIELDS enter only off "hmc": a config set to
+# these values keeps the hash it had before the fields existed, and one that leaves them
+# unset gets the defaults and a new hash.
+STEP_CONTROL_LEGACY: dict[str, Any] = {
+    "inner_step_control": "health", "eta_max_phihat": 1.0, "phi_step_scale": "trace",
+    "inner_start": "previous",
+}  # fmt: skip
+STEP_CONTROL_FIELDS = tuple(STEP_CONTROL_LEGACY)
 
 
 class MeanFieldConfig(StrictModel):
@@ -255,11 +282,14 @@ class MeanFieldConfig(StrictModel):
 
     def hash_payload(self) -> dict[str, Any]:
         """The section as it enters a cache hash: the problem fields and LEGACY_SOLVER_FIELDS
-        in one flat dict (the pre-split layout), plus IMPORTANCE_FIELDS when the sampler is
-        "importance"."""
+        in one flat dict (the pre-split layout), plus each of STEP_CONTROL_FIELDS that differs
+        from STEP_CONTROL_LEGACY, plus IMPORTANCE_FIELDS when the sampler is "importance"."""
         solver = self.solver.model_dump()
         payload = self.model_dump(exclude={"solver"})
         payload.update({k: solver[k] for k in LEGACY_SOLVER_FIELDS})
+        payload.update(
+            {k: solver[k] for k in STEP_CONTROL_FIELDS if solver[k] != STEP_CONTROL_LEGACY[k]}
+        )
         if self.solver.sampler != "hmc":
             payload.update({k: solver[k] for k in IMPORTANCE_FIELDS})
         return payload

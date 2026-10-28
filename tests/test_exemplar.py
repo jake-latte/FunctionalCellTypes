@@ -293,6 +293,7 @@ def summary_history():
     history["train_mse_net"] = [0.2, 0.2, 0.2]
     history["hmc_ess_frac"] = [[0.5, 0.4], [0.3, 0.9], [0.8, 0.6]]
     history["align_net"] = [[0.1, 0.2], [0.3, 0.4], [0.9, 0.8]]
+    history["picard_resid"] = [0.5, 0.25, 0.125]
     return history
 
 
@@ -306,6 +307,15 @@ def test_the_solve_summary_reports_what_was_measured():
     assert "net kernels: largest eigenvalue 5, 5, mean diagonal 1, 1" in text
     assert "theory 0.125, trained net 0.2" in text
     assert "alignment with the net per layer: 0.900, 0.800" in text
+    assert (
+        "Stein target (its convergence measure): 0.5 at the first step, 0.125 at the last" in text
+    )
+
+
+def test_the_solve_summary_omits_the_target_residual_when_it_was_not_recorded():
+    history = summary_history()
+    history["picard_resid"] = [float("nan")] * 3  # inner_start="previous"
+    assert "Stein target" not in exemplar.solve_summary(history, "hmc")
 
 
 def test_the_solve_summary_states_a_rising_residual_as_rising():

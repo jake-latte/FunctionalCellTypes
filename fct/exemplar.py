@@ -209,10 +209,10 @@ def solve_summary(
 ) -> str:
     """One markdown paragraph on a finished solve, every number measured from it (layers
     counted from 1): the fixed-point residual of Φ̂ at the first and last outer step and
-    whether it fell, the smallest sampler ESS fraction and where it occurred, the largest
-    eigenvalue and mean diagonal of the solved kernels `Phi` (and of the net's `net_Phi`, if
-    given), the final train MSE (theory and, if the solve had a net, the net's) and the final
-    kernel alignment with the net."""
+    whether it fell, the last layer's residual at its Stein target (if recorded), the smallest
+    sampler ESS fraction and where it occurred, the largest eigenvalue and mean diagonal of the
+    solved kernels `Phi` (and of the net's `net_Phi`, if given), the final train MSE (theory
+    and, if the solve had a net, the net's) and the final kernel alignment with the net."""
     first = np.asarray(history["phihat_fp_resid_stein"][0], dtype=float)
     last = np.asarray(history["phihat_fp_resid_stein"][-1], dtype=float)
     parts = [
@@ -222,6 +222,13 @@ def solve_summary(
             f"{_per_layer(last)} at the last, so it {_trend(first, last)}."
         ),
     ]
+    picard = np.asarray(history.get("picard_resid", []), dtype=float)
+    if picard.size and np.isfinite(picard).all():
+        parts.append(
+            "Residual of the last layer's kernel at its Stein target (its convergence measure): "
+            f"{picard[0]:.3g} at the first step, {picard[-1]:.3g} at the last, largest over the "
+            f"last three {picard[-3:].max():.3g}."
+        )
     ess = np.asarray(history["hmc_ess_frac"], dtype=float)
     step, layer = np.unravel_index(np.nanargmin(ess), ess.shape)
     parts.append(
