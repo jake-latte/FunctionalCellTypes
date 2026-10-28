@@ -53,15 +53,15 @@ $\\lambda_w / 2$ (one half only for unit prior scale). The solver's defaults are
 the theory is that of the distribution the net was sampled from.
 
 **Is the solve converged?** Judge it by the numbers printed under the final figures, not by the
-figures alone: the residual of the $\\hat\\Phi$ fixed point over the last outer steps, whether
-the inner loop converged at every outer step (the solver-health panels), the sampler's effective
-sample size, and the kernel scales of the theory and the net. At the defaults the residual
-settles at 0.06 to 0.2 under HMC and mostly below 0.1 under importance sampling (with isolated
-rises to 0.3 or 0.4), after a transient in the first steps while the iteration leaves the net's
-kernels; that is its Monte Carlo floor with 512 chains, not 0.01. The default `INIT = "net"` starts at the net's own kernels, but
-`INIT = "lazy"` ends at the same point: the agreement of scale is not inherited from the start.
-The train MSE of the theory is that of the mean predictor, which is below that of one sampled
-net, whose weights fluctuate at temperature $1/\\beta$.
+figures alone: the residual of the $\\hat\\Phi$ fixed point over the last outer steps, whether the
+inner loop converged at every outer step (the solver-health panels), the sampler's effective sample
+size, and the kernel scales of the theory and the net. At the defaults the residual settles at 0.06
+to 0.2 under HMC and mostly below 0.1 under importance sampling (with isolated rises to 0.3 or 0.4),
+after a transient in the first steps while the iteration leaves the net's kernels; that is its Monte
+Carlo floor with 512 chains, not 0.01. The default `INIT = "net"` starts at the net's own kernels,
+but `INIT = "lazy"` ends at the same point: the agreement of scale is not inherited from the start.
+The train MSE of the theory is that of the mean predictor, which is below that of one sampled net,
+whose weights fluctuate at temperature $1/\\beta$.
 
 **Sizes.** The defaults are tiny, so that training and a solve each take seconds on a CPU: $P = 20$
 points, 6 features, 2 latents, one hidden layer of 128 units, $\\beta = 10$. The importance

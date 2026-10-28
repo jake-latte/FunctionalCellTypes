@@ -534,20 +534,21 @@ def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor
 ```
 
 Step control (`SolverConfig` defaults; each part can be switched back, see the config section):
-- Inner step (`inner_step_control="progress"`): a sampler run validates the inner step before it on sampler health and,
-  in addition, on progress: a step after which the layer's inner residual ||<psi psi^T> - Phi|| / ||Phi|| exceeds the
-  smallest residual accepted so far in that ascent by more than the convergence tolerance of the point before the step,
-  max(inner_tol, min(inner_tol_mc x MC error, 0.5)), is reverted (tilt and chain state) and retried with half the step
-  size, not below eta_min_rel x eta_phihat (a step at the floor is accepted, so Monte Carlo noise cannot stall the
-  ascent; the floor also bounds halvings after a health revert, so a step that still breaks the sampler at the floor
-  is retried there until max_backtrack raises; under "health" halving has no floor; the log says when a layer sits at
-  it). The reference is the smallest accepted residual, not the last, so a run of small accepted rises cannot let the
-  residual creep up; the margin is the tolerance because the residuals are noisy estimates (the smallest a lucky low
-  one), and a strict "did not rise" ratchets eta_phihat down to its floor. The Monte Carlo part of the tolerance is capped at 0.5
-  (`meanfield.INNER_TOL_MC_CAP`): a kernel off by half its size is not converged however noisy its estimate, and
-  uncapped, a pure-noise layer (MC error 0.98, residual 0.999) was reported converged. The step size grows by eta_grow
-  only after an accepted step, up to `eta_max_phihat` (0.25) per layer. Without the progress test a step that took the
-  residual from 0.04 to 0.42 was accepted, the chains lagged the tilt and the exemplar diverged.
+- Inner step (`inner_step_control="progress"`): a sampler run validates the inner step before it on sampler health
+  and, in addition, on progress: a step after which the layer's inner residual ||<psi psi^T> - Phi|| / ||Phi|| exceeds
+  the smallest residual accepted so far in that ascent by more than the convergence tolerance of the point before the
+  step, max(inner_tol, min(inner_tol_mc x MC error, 0.5)), is reverted (tilt and chain state) and retried with half
+  the step size, not below eta_min_rel x eta_phihat (a step at the floor is accepted, so Monte Carlo noise cannot
+  stall the ascent; the floor also bounds halvings after a health revert, so a step that still breaks the sampler at
+  the floor is retried there until max_backtrack raises; under "health" halving has no floor; the log says when a
+  layer sits at it). The reference is the smallest accepted residual, not the last, so a run of small accepted rises
+  cannot let the residual creep up; the margin is the tolerance because the residuals are noisy estimates (the
+  smallest a lucky low one), and a strict "did not rise" ratchets eta_phihat down to its floor. The Monte Carlo part
+  of the tolerance is capped at 0.5 (`meanfield.INNER_TOL_MC_CAP`): a kernel off by half its size is not converged
+  however noisy its estimate, and uncapped, a pure-noise layer (MC error 0.98, residual 0.999) was reported converged.
+  The step size grows by eta_grow only after an accepted step, up to `eta_max_phihat` (0.25) per layer. Without the
+  progress test a step that took the residual from 0.04 to 0.42 was accepted, the chains lagged the tilt and the
+  exemplar diverged.
 - Outer step (`phi_step_scale="kernel"`): Phi_l -= eta Phi_l dS/dPhi_l Phi_l instead of eta c_l^2 dS/dPhi_l
   (c_l = tr Phi_l / P). For a Gaussian layer the tilt follows the kernel as dPhi_hat = -Phi^-1 dPhi Phi^-1, so this is
   the Newton direction for Phi_hat(Phi) = T at fixed T (eta = 2 a full Newton step; a test checks it), and the two scales
