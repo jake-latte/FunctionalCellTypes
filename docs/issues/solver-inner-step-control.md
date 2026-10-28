@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: todo
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -45,3 +45,7 @@ Diagnosis (reviewer's experiments, logs in the worker's worktree `tmp/review/`):
 - `notebooks/build_exemplar.py` executes at its defaults; the solve's last-k residual is
   below the tripwire and the inner loop converged at every outer step.
 - No pinned Gaussian-layer result moves beyond the stated tolerance; tests CPU only; ruff clean.
+
+## PI confirmation (2026-10-29)
+Confirmed as planned. Starts once `prior-scaling-convention` is merged (it moves the solver's
+default constants); runs in parallel with `relu-tilt-rule` (different functions of the solver).

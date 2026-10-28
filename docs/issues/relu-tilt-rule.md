@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: todo
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -36,3 +36,16 @@ but not sufficient.
   rule with the default config; the exemplar's relu variant and one relu setting of the
   modularity grid solve under the tripwire; the rule and its regime are stated in
   `docs/design.md`.
+
+## PI confirmation (2026-10-29)
+Confirmed. The PI did not name an option; the PM's choice, to be corrected if wrong: **option 2
+as the rule, option 3 as the oracle.** For relu, `tilt_rule` uses the Gaussian (all-active
+orthant) condition `Sigma^-1 + M + lambda_r I > 0` (necessary; keeps the learning tilt), relying
+on the existing Stein-mismatch / ESS backstops and the tilt tripwire to catch a non-normalisable
+density; and an exact per-orthant check (Schur complement per sign pattern, batched, feasible
+for P <= ~20) is implemented as a diagnostic / test oracle only, used to validate the rule on
+the exemplar's relu problem (P 20) and in tests. Acceptance: the analytic relu checks pass under
+the default config; the exemplar's relu variant and one relu setting of the modularity grid
+solve under the tripwire; the oracle agrees with the rule on the exemplar problem (or the
+disagreement is reported, with the fraction of orthants violated); the rule, its regime and the
+oracle's cost are stated in `docs/design.md`. Starts once `prior-scaling-convention` is merged.
