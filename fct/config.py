@@ -148,17 +148,18 @@ class SolverConfig(StrictModel):
     tilt_floor: Annotated[float, Field(ge=0, lt=1)] = 0.05
     max_rel_step: PosFloat = 0.1
     # Step control (`fct.meanfield`). inner_step_control "progress" also rejects an inner step
-    # that raised a layer's inner residual by more than the convergence tolerance of the point
-    # before it; "health" validates a step on sampler health alone. eta_max caps the outer
-    # step size, eta_max_phihat each layer's inner one. phi_step_scale "kernel" steps Phi_l
-    # along Phi_l dS/dPhi_l Phi_l, the Newton direction of a Gaussian layer (eta = 2 is a full
-    # Newton step there; a bounded phi responds several times more weakly, hence the cap of
-    # 0.25), "trace" along c_l^2 dS/dPhi_l with c_l = tr(Phi_l)/P. inner_start "target" starts
-    # every inner ascent of the last layer from its Stein target -2c A Y Y^T A (exact, no
-    # sampling), so directions of Phi_hat_L the kernel barely responds to cannot collect
-    # Monte Carlo noise from one outer step to the next; "previous" continues from the last
-    # tilt. "health", "trace", "previous" with eta_max = eta_max_phihat = 1 is the solver
-    # before step control.
+    # after which a layer's inner residual exceeds the smallest one accepted in that ascent by
+    # more than the convergence tolerance, whose Monte Carlo part it caps at 0.5; "health"
+    # validates a step on sampler health alone. eta_max caps only the outer step size;
+    # eta_max_phihat caps each layer's inner one. phi_step_scale "kernel" steps Phi_l along
+    # Phi_l dS/dPhi_l Phi_l, the Newton direction of a Gaussian layer (eta = 2 is a full Newton
+    # step there; a bounded phi responds several times more weakly, hence the cap of 0.25),
+    # "trace" along c_l^2 dS/dPhi_l with c_l = tr(Phi_l)/P. inner_start "target" restarts every
+    # inner ascent of the last layer at its Stein target -2c A Y Y^T A (exact, no sampling), so
+    # directions of Phi_hat_L the kernel barely responds to cannot collect Monte Carlo noise
+    # across outer steps; the last layer's outer step is then a damped stochastic Picard step,
+    # whose convergence measure is history["picard_resid"]. "previous" continues from the last
+    # tilt. STEP_CONTROL_LEGACY with eta_max = 1 is the plain Algorithm 1.
     inner_step_control: Literal["health", "progress"] = "progress"
     eta_max_phihat: PosFloat = 0.25
     phi_step_scale: Literal["trace", "kernel"] = "kernel"

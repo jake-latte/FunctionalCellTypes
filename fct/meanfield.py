@@ -82,6 +82,7 @@ HISTORY_KEYS = (
     "step_clipped", "eta_phi", "eta_phihat", "n_backtrack_inner", "n_accepted_inner",
     "n_rejected_inner", "n_backtrack_outer",
     "outer_grad_rel", "phihat_fp_resid_stein", "phihat_fp_resid_direct", "stein_vs_direct",
+    "picard_resid",
     "trace_term", "learning_term", "train_mse_theory", "train_mse_net",
     "phi_lambda_min", "n_pd_clamped", "norm_margin",
     "hmc_accept", "hmc_eps", "hmc_div", "hmc_reset", "hmc_max_abs_dH", "hmc_rho1", "hmc_ess_frac",
@@ -92,7 +93,7 @@ NET_KEYS = ("align_net", "dist_net")
 # Keys whose per-step entry is a per-layer numpy array (saved as a list, restored on load).
 _ARRAY_KEYS = frozenset(HISTORY_KEYS) - {
     "outer_step", "time", "inner_steps", "inner_converged", "eta_phi", "n_backtrack_outer",
-    "trace_term", "learning_term", "train_mse_theory", "train_mse_net",
+    "trace_term", "learning_term", "train_mse_theory", "train_mse_net", "picard_resid",
 }  # fmt: skip
 
 History = dict[str, list]
@@ -566,6 +567,7 @@ def _learning_pieces(prob: _Problem, Phi_last: torch.Tensor):
 @dataclass
 class _InnerResult:
     residual: np.ndarray  # ||⟨ψψᵀ⟩ - Φ|| / ||Φ|| per layer, at the last accepted point
+    first_residual: np.ndarray  # the same at the ascent's starting tilt, per layer
     grad_rel: np.ndarray  # ||∂S/∂Φ̂|| / ||Φ|| per layer
     n_backtrack: np.ndarray  # steps reverted because they broke the sampler, per layer
     n_accepted: np.ndarray  # steps validated and kept, per layer
@@ -645,6 +647,8 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
     cfg, s = prob.solver, st.samplers[l]
     moments, diag = s.run(cfg.n_trans)
     residual = relative_fro(moments["psi_psi"], st.Phi[l])
+    if inner == 0:
+        res.first_residual[l] = residual
     step = pending[l]
     if step is not None:
         if not _healthy(diag, st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg):
@@ -679,6 +683,7 @@ def _new_inner_result(L: int) -> _InnerResult:
     """The record of an inner ascent before its first step."""
     return _InnerResult(
         residual=np.full(L, np.nan),
+        first_residual=np.full(L, np.nan),
         grad_rel=np.full(L, np.nan),
         n_backtrack=np.zeros(L, dtype=int),
         n_accepted=np.zeros(L, dtype=int),
@@ -880,6 +885,9 @@ def _record(
         "phihat_fp_resid_stein": np.array(og.fp_stein),
         "phihat_fp_resid_direct": np.array(og.fp_direct),
         "stein_vs_direct": np.array(og.stein_vs_direct),
+        "picard_resid": (
+            float(inner.first_residual[-1]) if prob.solver.inner_start == "target" else float("nan")
+        ),
         "trace_term": -0.5 * sum((Phi[l] * Phi_hat[l]).sum().item() for l in range(L)),
         "learning_term": og.learning,
         "train_mse_theory": og.mse_theory,
@@ -932,7 +940,8 @@ def _format_step(
         f"inner={inner.n_steps:3d}{'' if inner.converged else '*'} "
         f"res_in={fmt(inner.residual)} grad_out={fmt(rec['outer_grad_rel'])} "
         f"fp(Φ̂)={fmt(rec['phihat_fp_resid_stein'])} "
-        f"mse={rec['train_mse_theory']:.3e}"
+        + (f"picard={rec['picard_resid']:.2e} " if prob.solver.inner_start == "target" else "")
+        + f"mse={rec['train_mse_theory']:.3e}"
         + (f" (net {mse_net:.3e})" if mse_net is not None else "")
         + f" | eta={st.eta:.1e}/{fmt(st.eta_hat)} bt={inner.n_backtrack.tolist()}/{step.n_backtrack}"
         + f" rej={inner.n_rejected.tolist()}"
@@ -960,14 +969,21 @@ def _format_step(
 
 
 def _start_last_tilt_at_target(prob: _Problem, st: _SolverState) -> float:
-    """Φ̂_L ← Π(-2c A Y Yᵀ A), the last layer's Stein target at the current Φ_L (Π the tilt
-    projection), as the start of the inner ascent; returns ||Π(x) - x|| / ||x||.
+    """Φ̂_L ← Π(T), T = -2c A Y Yᵀ A the last layer's Stein target at the current Φ_L (exact,
+    a function of Φ_L only; Π the tilt projection), as the start of the inner ascent; returns
+    ||Π(T) - T|| / ||T||.
 
-    The inner residual pins Φ̂_L only along directions the kernel responds to. Along the
-    others (most of them, for a low-rank kernel or a saturating φ) every inner step adds Monte
-    Carlo noise that nothing removes, and the noise piles up over the outer steps. Started at
-    the target, those directions stay at their fixed-point value and the ascent moves Φ̂_L
-    only as far as the residual requires; at the saddle point the target is the solution."""
+    The inner residual pins Φ̂_L only along directions the kernel responds to. Along the others
+    (most of them, for a low-rank kernel or a saturating φ) every inner step adds Monte Carlo
+    noise that nothing removes, and continued from step to step it piles up. Restarted at T,
+    it cannot. What the iteration then is: the ascent validates each step at the next run, so
+    it ends with at least one step past its last measurement, and the outer gradient run sees
+    Φ̂_L = T + Δ, Δ = the inner steps from T (one step, η̂ (⟨ψψᵀ⟩_T - Φ_L) / (2 c²), whenever
+    the residual at T is already below tolerance). The outer step ΔΦ_L = (η/2) Φ_L Δ Φ_L is a
+    damped stochastic Picard step towards ⟨ψψᵀ⟩ under T, and the recorded fixed-point residual
+    ||Φ̂_L - T|| / ||T|| measures Δ, which scales with η̂: it is not a convergence measure for
+    this layer. history["picard_resid"], the residual ||⟨ψψᵀ⟩_T - Φ_L|| / ||Φ_L|| of the
+    ascent's first run, is."""
     A, _, _, _ = _learning_pieces(prob, st.Phi[-1])
     target = sym(-2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A)
     rel = 0.0
@@ -1130,7 +1146,9 @@ def solve(
     (inner_step_control="progress"; not below eta_min_rel · eta_phihat). Otherwise the step
     size grows by eta_grow up to eta_max (outer) or eta_max_phihat (inner).  This keeps the
     iteration on the normalisable side of the tilt.  With inner_start="target" every inner
-    ascent of the last layer starts from its Stein target -2c A Y Yᵀ A at the current Φ_L.
+    ascent of the last layer starts from its Stein target -2c A Y Yᵀ A at the current Φ_L,
+    which makes the last layer's outer step a damped stochastic Picard step; its convergence
+    measure is then history["picard_resid"] (`_start_last_tilt_at_target`).
     The settings are cfg.solver's.
     Under importance sampling every accepted point (the initial one, each validated inner
     step, each outer-gradient run) must have ESS fraction >= min_ess_frac, else

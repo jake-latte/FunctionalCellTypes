@@ -13,7 +13,7 @@ L, P = 2, 5
 HMC_ONLY = ("hmc_accept", "hmc_eps", "hmc_div", "hmc_reset", "hmc_max_abs_dH", "hmc_rho1")
 SCALAR_KEYS = {
     "outer_step", "time", "inner_steps", "inner_converged", "eta_phi", "n_backtrack_outer",
-    "trace_term", "learning_term", "train_mse_theory", "train_mse_net",
+    "trace_term", "learning_term", "train_mse_theory", "train_mse_net", "picard_resid",
 }  # fmt: skip
 
 
@@ -138,6 +138,7 @@ def test_the_full_dashboard_keeps_its_panels_and_zero_based_layers():
         "inner residual  ||⟨ψψᵀ⟩-Φ||/||Φ||",
         "outer step size  ||ΔΦ||/||Φ|| (before clipping)",
         "fixed-point residual of Φ̂  (Eq. 31b/c)",
+        "last layer at its Stein target  ||⟨ψψᵀ⟩-Φ||/||Φ||",
         "Stein vs direct estimate of Φ̂  (sampler equilibrium)",
         "train MSE: theory (lines) vs net (dashed)",
         "adaptive step sizes  η̂ (lines), η (black)",

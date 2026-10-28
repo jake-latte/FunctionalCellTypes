@@ -171,7 +171,8 @@ def test_the_log_says_when_an_inner_step_size_sits_at_its_floor():
     prob, st, _ = layer(0.8, eta=100.0, eta_min_rel=0.9, eta_max_phihat=1e3)  # floor 90
     st.eta_hat[0] = 90.0
     assert mf._eta_hat_floor(prob.solver) == 90.0
-    rec = {"outer_step": 0, "time": 0.0, "train_mse_net": None, "train_mse_theory": 0.1}
+    rec = {"outer_step": 0, "time": 0.0, "train_mse_net": None, "train_mse_theory": 0.1,
+           "picard_resid": 0.1}  # fmt: skip
     rec |= {k: np.zeros(1) for k in ("inner_residual", "outer_grad_rel", "phihat_fp_resid_stein",
             "hmc_accept", "hmc_eps", "hmc_rho1", "hmc_mc_err", "hmc_stein_mismatch",
             "hmc_h2_ratio", "norm_margin", "tilt_projected_rel")}  # fmt: skip
@@ -274,14 +275,17 @@ def weak_tanh():
 
 
 def weak_cfg(**overrides) -> MeanFieldConfig:
-    return MeanFieldConfig(
-        **WEAK_CONSTANTS, rate_tilt=0.0, n_outer=30, n_chains=512, n_trans=5, n_trans_outer=10,
-        warmup_trans=50, init="lazy", sample_dtype="float64", seed=0, **overrides,
-    )  # fmt: skip
+    base = {
+        **WEAK_CONSTANTS, "rate_tilt": 0.0, "n_outer": 30, "n_chains": 512, "n_trans": 5,
+        "n_trans_outer": 10, "warmup_trans": 50, "init": "lazy", "sample_dtype": "float64",
+        "seed": 0,
+    }  # fmt: skip
+    return MeanFieldConfig(**{**base, **overrides})
 
 
-def solve_weak(problem: WeakTanh, cfg: MeanFieldConfig) -> mf.SolveResult:
-    return mf.solve(problem.X, problem.Y, 1, 1.0, 0.0, torch.tanh, 1.0, cfg, log=lambda _m: None)
+def solve_weak(problem: WeakTanh, cfg: MeanFieldConfig, on_outer=None) -> mf.SolveResult:
+    return mf.solve(problem.X, problem.Y, 1, 1.0, 0.0, torch.tanh, 1.0, cfg, log=lambda _m: None,
+                    on_outer=on_outer)  # fmt: skip
 
 
 def test_the_weak_response_reference_is_a_weak_response_fixed_point(weak_tanh):
@@ -299,10 +303,23 @@ def test_the_weak_response_reference_is_a_weak_response_fixed_point(weak_tanh):
 
 
 def test_a_weak_response_tanh_layer_converges_within_thirty_outer_steps(weak_tanh):
-    """Under the default tilt tripwire (solve raises if Φ̂ ends far from its fixed point)."""
-    result = solve_weak(weak_tanh, weak_cfg())
+    """Under the default tilt tripwire (solve raises if Φ̂ ends far from its fixed point).
+    history["picard_resid"], the last layer's residual at its Stein target, is the Picard
+    residual ||⟨ψψᵀ⟩_T(Φ) - Φ|| / ||Φ|| of the kernel entering the step: near convergence it
+    matches the quadrature value to its Monte Carlo error (0.02 here). Early on it reads low,
+    as the chains equilibrated under the previous tilt lag the restart at the target."""
+    p, entering = weak_tanh, []
+    result = solve_weak(p, weak_cfg(), on_outer=lambda snap: entering.append(snap.Phi[0]))
     assert all(result.history["inner_converged"])
-    assert relative_fro(result.Phi[0], weak_tanh.Phi_star) < 0.07
+    assert relative_fro(result.Phi[0], p.Phi_star) < 0.07
+    exact = np.array([relative_fro(p.moments(p.target(Phi)), Phi) for Phi in entering[:-1]])
+    recorded = np.array(result.history["picard_resid"][1:])
+    assert np.abs(recorded - exact)[-10:].max() < 0.04
+
+
+def test_without_the_target_start_no_target_residual_is_recorded(weak_tanh):
+    cfg = weak_cfg(n_outer=2, inner_start="previous", tilt_tripwire_resid=1e9)
+    assert np.isnan(solve_weak(weak_tanh, cfg).history["picard_resid"]).all()
 
 
 def test_the_legacy_step_control_does_not_converge_on_it(weak_tanh):

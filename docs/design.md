@@ -536,40 +536,55 @@ def load_meanfield(cache_dir: Path, cfg: Config, device) -> tuple[Tensor, Tensor
 Step control (`SolverConfig` defaults; each part can be switched back, see the config section):
 - Inner step (`inner_step_control="progress"`): a sampler run validates the inner step before it on sampler health and,
   in addition, on progress: a step after which the layer's inner residual ||<psi psi^T> - Phi|| / ||Phi|| exceeds the
-  residual of the point before it by more than that point's convergence tolerance max(inner_tol, inner_tol_mc x MC error)
-  is reverted (tilt and chain state) and retried with half the step size, not below eta_min_rel x eta_phihat (a step at
-  the floor is accepted, so Monte Carlo noise cannot stall the ascent). The margin is the tolerance because the residual
-  before the step is itself a noisy estimate, and the lucky low one among retries: a strict "did not rise" ratchets
-  eta_phihat down to its floor. The step size grows by eta_grow only after an accepted step, up to `eta_max_phihat`
-  (0.25) per layer. Without it a step that took the residual from 0.04 to 0.42 was accepted, the chains lagged the tilt
-  and the exemplar diverged.
+  smallest residual accepted so far in that ascent by more than the convergence tolerance of the point before the step,
+  max(inner_tol, min(inner_tol_mc x MC error, 0.5)), is reverted (tilt and chain state) and retried with half the step
+  size, not below eta_min_rel x eta_phihat (a step at the floor is accepted, so Monte Carlo noise cannot stall the
+  ascent; the floor also bounds halvings after a health revert; the log says when a layer sits at it). The reference is
+  the smallest accepted residual, not the last, so a run of small accepted rises cannot let the residual creep up; the
+  margin is the tolerance because the residuals are noisy estimates (the smallest a lucky low one), and a strict "did
+  not rise" ratchets eta_phihat down to its floor. The Monte Carlo part of the tolerance is capped at 0.5
+  (`meanfield.INNER_TOL_MC_CAP`): a kernel off by half its size is not converged however noisy its estimate, and
+  uncapped, a pure-noise layer (MC error 0.98, residual 0.999) was reported converged. The step size grows by eta_grow
+  only after an accepted step, up to `eta_max_phihat` (0.25) per layer. Without the progress test a step that took the
+  residual from 0.04 to 0.42 was accepted, the chains lagged the tilt and the exemplar diverged.
 - Outer step (`phi_step_scale="kernel"`): Phi_l -= eta Phi_l dS/dPhi_l Phi_l instead of eta c_l^2 dS/dPhi_l
-  (c_l = tr Phi_l / P). For a Gaussian layer the tilt follows the kernel as dPhi_hat = -Phi^-1 dPhi Phi^-1, so this is its
-  Newton direction (eta = 2 a full Newton step; a test checks it), and the two scales coincide when Phi_l = c_l I (a test
-  checks that too). The trace scale was far too small along the top eigenvectors of a low-rank kernel (the exemplar's tanh
-  kernel: eigenvalues 4.4 and 2.1, the rest below 0.07, c^2 = 0.1). `eta_max` caps the outer step size at 0.25: a bounded
-  phi responds to the tilt several times more weakly than a Gaussian (0.3 of it at the exemplar's kernel, measured), so
-  its Newton step is near eta = 0.6, and at eta = 1 the exemplar's kernel wandered by up to 13 %.
-- Last-layer start (`inner_start="target"`): every inner ascent of the last layer starts from its Stein target
-  Pi(-2c A Y Y^T A) at the current Phi_L (exact; Pi the tilt projection, whose change enters `tilt_projected_rel`). The
-  inner residual pins Phi_hat_L only along directions the kernel responds to; along the others every inner step adds
-  Monte Carlo noise that nothing removes, and over 80 outer steps it grew the exemplar's ||Phi_hat_L|| from 0.44 to 0.8-1.4
-  against a fixed point of 0.41 (Frobenius fixed-point residual 1 to 3) while Phi itself sat within 2 to 4 % of an
-  independent reference. Started at the target, those directions keep their fixed-point value and the ascent moves
-  Phi_hat_L only as far as the residual requires; together with the kernel scale the outer step is then a damped,
-  preconditioned Picard step Phi <- Phi + (eta / 2) (<psi psi^T>_target - Phi) for a Gaussian layer. Hidden layers
-  continue from their previous tilt (their target is itself a Monte Carlo estimate). Not solved by any of this: a
-  bounded phi at L >= 2. The exemplar at L = 2 ends in `UnconvergedSolveError` under the legacy and the new control
-  alike; the hidden layer's Stein target sym(<u h^T>_{l+1} Phi_l^-1) inverts a nearly rank-two kernel (eigenvalues
-  floored only at inv_floor_rel x lambda_max), and its fixed-point residual is about 1200 already at the net's kernels.
+  (c_l = tr Phi_l / P). For a Gaussian layer the tilt follows the kernel as dPhi_hat = -Phi^-1 dPhi Phi^-1, so this is
+  the Newton direction for Phi_hat(Phi) = T at fixed T (eta = 2 a full Newton step; a test checks it), and the two scales
+  coincide exactly when Phi_l = c_l I (a test checks that too). The trace scale was far too small along the top
+  eigenvectors of a low-rank kernel (the exemplar's tanh kernel: eigenvalues 4.4 and 2.1, the rest below 0.07,
+  c^2 = 0.1). `eta_max`, which caps only the outer step size (`eta_max_phihat` caps the inner one), defaults to 0.25: a
+  bounded phi responds to the tilt several times more weakly than a Gaussian (0.3 of it at the exemplar's kernel,
+  measured), so its Newton step is near eta = 0.6, and at eta = 1 the exemplar's kernel wandered by up to 13 %.
+- Last-layer start (`inner_start="target"`): every inner ascent of the last layer restarts at T = Pi(-2c A Y Y^T A),
+  its Stein target at the current Phi_L (exact, a function of Phi_L only; Pi the tilt projection, whose change enters
+  `tilt_projected_rel`). The inner residual pins Phi_hat_L only along directions the kernel responds to; along the
+  others every inner step adds Monte Carlo noise that nothing removes, and continued across outer steps it grew the
+  exemplar's ||Phi_hat_L|| from 0.44 to 0.8-1.4 against a fixed point of 0.41 (Frobenius fixed-point residual 1 to 3)
+  while Phi itself sat within 2 to 4 % of an independent reference. Restarted at T it cannot pile up. What the iteration
+  then is: steps are validated at the next run, so the ascent always ends with at least one step past its last
+  measurement, and the outer gradient run sees Phi_hat_L = T + D, D the inner steps from T; on most outer steps the
+  residual at T is already below tolerance and D is the single step eta_hat (<psi psi^T>_T - Phi_L) / (2 c^2). The outer
+  step (eta / 2) Phi_L D Phi_L is then a damped stochastic Picard step of Phi_L towards <psi psi^T> under T (for a
+  Gaussian layer, Phi <- Phi + (eta eta_hat / 4) (<psi psi^T>_T - Phi) up to the c^2 factor). So the recorded
+  fixed-point residual ||Phi_hat_L - T|| / ||T|| of the last layer measures D and scales with eta_hat: it is not that
+  layer's convergence measure. `history["picard_resid"]` is: ||<psi psi^T>_T - Phi_L|| / ||Phi_L||, the inner
+  residual of the ascent's first run (the log prints it as `picard=`, the solver-health figure and the exemplar's
+  summary show it). Near convergence it matches the exact value to its Monte Carlo error; after a large move of T it
+  reads low for a step or two, because the chains, equilibrated under the previous tilt, lag the restart (the
+  weak-response test measures both). Hidden layers continue from their previous tilt (their target is itself a Monte
+  Carlo estimate). Not solved by any of this: a bounded phi at L >= 2. The exemplar at L = 2 ends in
+  `UnconvergedSolveError` under the legacy and the new control alike; the hidden layer's Stein target
+  sym(<u h^T>_{l+1} Phi_l^-1) inverts a nearly rank-two kernel (eigenvalues floored only at inv_floor_rel x lambda_max),
+  and its fixed-point residual is about 1200 already at the net's kernels.
 - What it costs a Gaussian layer: with eta capped at 0.25 the L = 1 linear test problem approaches its analytic saddle
   more slowly than with the legacy control (distance 0.054 after 10 outer steps against 0.019) and ends as close (0.015
   against 0.013 after 40; `tests/test_meanfield_step_control.py` pins a lag below 0.1 at every step and the end points
-  within 0.01). A weak-response tanh layer with a quadrature reference (same file) converges to within 0.05 in 30 outer
-  steps, where the legacy control stays 0.11 to 0.18 away.
+  within 0.01). A weak-response tanh layer with a quadrature reference (same file) ends 0.042 to 0.046 from it after 30
+  outer steps (five seeds), where the legacy control stays 0.110 to 0.119 away.
 
 History values are stored per outer step; arrays become lists for saving. The
-history keys are those of the notebook's `keys` list plus `is_max_weight`, `n_accepted_inner` / `n_rejected_inner` (per
+history keys are those of the notebook's `keys` list plus `is_max_weight`, `picard_resid` (a scalar: the last
+layer's residual at its Stein target, NaN unless `inner_start="target"`; see Step control), `n_accepted_inner` / `n_rejected_inner` (per
 layer, the inner steps of that outer step accepted, and reverted because the residual rose; `n_backtrack_inner` counts
 those reverted for sampler health) and `tilt_projected_rel` (per layer, the largest
 relative change ||Pi(x) - x|| / ||x|| the tilt projection made to an inner step of that outer step, or to the last layer's
@@ -691,7 +706,8 @@ fig_solver_history(history) -> Figure                 # the notebook's plot_hist
                                                       # "eigenvalues raised to the PD floor" (n_backtrack_inner/outer, n_pd_clamped) joined the dashboard with the live view; layers are labelled from 0 here
 plot_example_trial(dataset, ax=None); fig_example(dataset, cfg) -> Figure   # independent of results: targets y scatter + x embedding of a few points
 fig_solver_health(history); fig_sampler_health(history)   # the live view's two groups of solver_history panels, layers labelled from 1 like fig_layer_kernels (SOLVER_HEALTH_KEYS: residuals, outer step size,
-                                                      # fixed-point residual, train MSE theory vs net, step sizes, backtracking, rejected inner steps (n_rejected_inner),
+                                                      # fixed-point residual, last layer at its Stein target (picard_resid), train MSE theory vs net, step sizes,
+                                                      # backtracking, rejected inner steps (n_rejected_inner),
                                                       # PD clamping, normalisability margin, alignment; SAMPLER_HEALTH_KEYS: HMC acceptance /
                                                       # eps / divergences, ESS, importance max weight, MC error); panels the sampler does not record are omitted; ValueError if none are
 fig_layer_kernels({name: (L,P,P) stack}, title="")    # one row per name (e.g. Φ, Φ̂), one column per layer, each panel its own colour scale
