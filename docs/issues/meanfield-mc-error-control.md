@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: simple
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -142,3 +142,17 @@ instead of raising `UnhealthySolveError`.
 - Tanh exemplar at its defaults (HMC) still bit for bit main a7ba292 (last three 0.086 / 0.196
   / 0.105, inner loop converged at every step).
 - Full suite 1645 passed; both ruff checks clean. Importance exemplar also bit for bit main.
+
+## Re-review leftovers (recorded at merge, not fixed)
+- Wording: "only an unchecked first run can be accepted with a non-finite MC error" (here and in
+  the docstring of `test_an_accepted_point_without_a_usable_mc_error...`) is too narrow: a run
+  checked against an unusable reference also skips the MC check, so the run after a zero
+  reference can be accepted with a NaN error. The WARNING still fires (it keys on the accepted
+  value); only the wording is wrong.
+- `st.notes` is logged only after `_outer_gradients`; an `UnhealthySolveError` raised later in
+  the same outer step loses the warning that might explain it. Log notes before re-raising, or
+  put them in the error.
+- `_check_tilt_tripwire` against a zero Stein target (last relu layer off in every chain) reads
+  ~1e299 because `relative_fro` floors the denominator at 1e-300. Raising is right (the layer is
+  dead), but the message should name the zero target. Main could not practically reach it; this
+  branch can, because it now accepts noisy small-solve steps.
