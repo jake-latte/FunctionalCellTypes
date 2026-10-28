@@ -20,8 +20,8 @@ CPU, F64 = torch.device("cpu"), torch.float64
 # Hashes of the default config (adam), which the SGLD-only fields must not move. They are those
 # of LOSS_VERSION 4, MODEL_VERSION 2 without `meanfield.readout`; at MODEL_VERSION 1 the train hash is the one
 # written before the optimiser fields existed (test_spatial_prior pins it).
-DEFAULT_TRAIN_HASH = "c4d90ec0a373"
-DEFAULT_TRAIN_MEANFIELD_HASH = "8dccde2890a1"
+DEFAULT_TRAIN_HASH = "542a8cb8b9da"
+DEFAULT_TRAIN_MEANFIELD_HASH = "537a47c2faeb"
 
 
 # ---------------------------------------------------------------- the optimiser itself

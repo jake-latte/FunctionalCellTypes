@@ -42,16 +42,15 @@ Set `CACHE_ROOT` in the first code cell. Training and the solve are cached under
 directories named by hashes of the settings: re-running reloads a finished step, resumes an
 interrupted one, and changing a solver setting re-solves without retraining.
 
-**What the theory is compared with.** The loss puts the prior $\\frac{\\texttt{WEIGHT\\_LAMBDA}}{2\\beta}\\sum W^2$
-on the squared weights, so at equilibrium each weight has variance $1 / \\texttt{WEIGHT\\_LAMBDA}$
+**What the theory is compared with.** `PRIOR_COEFF` is the coefficient of the squared weights in the loss, and the library's
+`weight_lambda` is $\\lambda_w = 2\\beta\\,\\texttt{PRIOR\\_COEFF}$ ($\\beta = 1$ for Adam), so SGLD and Adam train the same loss.
+The loss puts the prior $\\frac{\\lambda_w}{2\\beta}\\sum W^2$
+on the squared weights, so at equilibrium each weight has variance $1 / \\lambda_w$
 for every $\\beta$; the readout acts as a Gaussian likelihood whose ridge is
-$\\alpha = \\texttt{WEIGHT\\_LAMBDA}\\,P\\,m / \\beta$, the rate penalty is a tilt
+$\\alpha = \\lambda_w\\,P\\,m / \\beta$, the rate penalty is a tilt
 $2\\beta\\,\\texttt{RATE\\_LAMBDA}$, and the data term of the action has prefactor
-$\\texttt{WEIGHT\\_LAMBDA} / 2$ (one half only for unit prior scale). The notebook gives the
-solver exactly these four constants (`fct.exemplar.sgld_theory_constants`), so the theory is
-that of the distribution the net was sampled from. The library's defaults for the prior scale
-and the ridge are the same; those for the rate tilt and the prefactor agree only at
-$\\beta = 1/2$ and $\\texttt{WEIGHT\\_LAMBDA} = 1$.
+$\\lambda_w / 2$ (one half only for unit prior scale). The solver's defaults are exactly these four constants (`fct.meanfield.network_constants`), so
+the theory is that of the distribution the net was sampled from.
 
 **Is the solve converged?** Judge it by the numbers printed under the final figures, not by the
 figures alone: the residual of the $\\hat\\Phi$ fixed point (it should fall towards its Monte
@@ -85,7 +84,7 @@ PHI = "tanh"  # "tanh", "relu" or "sigmoid"
 G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights
-WEIGHT_LAMBDA = 0.2  # weight prior: WEIGHT_LAMBDA / (2 BETA) * sum of squared weights
+PRIOR_COEFF = 1e-2  # coefficient of the sum of squared weights in the loss
 RATE_LAMBDA = 1e-3  # rate penalty"""
 
 TRAINING = """OPTIMIZER = "sgld"  # "sgld" (Langevin noise of variance 2 * LR / BETA per step) or "adam"
@@ -125,7 +124,7 @@ TRAIN = """CFG = exemplar_config(
     g=G,
     data_seed=DATA_SEED,
     net_seed=NET_SEED,
-    weight_lambda=WEIGHT_LAMBDA,
+    weight_lambda=PRIOR_COEFF * 2 * (1.0 if OPTIMIZER != "sgld" else BETA),
     rate_lambda=RATE_LAMBDA,
     optimizer=OPTIMIZER,
     beta=BETA,

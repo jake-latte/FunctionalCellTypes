@@ -46,33 +46,6 @@ EXAMPLE_SEED = 0
 Show = Callable[[Sequence[Figure]], None]
 
 
-def sgld_theory_constants(
-    beta: float, weight_lambda: float, rate_lambda: float, n_points: int, d_out: int
-) -> dict[str, float]:
-    """The `MeanFieldConfig` constants (prior_scale, alpha, rate_tilt, learning_prefactor) under
-    which the theory describes the stationary law exp(-beta L) of SGLD on the repo loss L (see
-    `fct.sgld`), whose weight prior is weight_lambda / (2 beta) ||theta||^2 (`prior_coefficient`).
-
-    The beta in the prior cancels the beta of the law, so each standard-normal-parametrised
-    weight has variance 1 / weight_lambda for every beta: that is the prior scale, and the
-    solver's default. The 1/N-scaled readout turns the data term into a Gaussian likelihood of
-    precision beta N / (P d_out) on the outputs, which makes the ridge
-    alpha = P d_out / (beta prior_scale) = weight_lambda P d_out / beta (also the solver's
-    default). The rate penalty beta rate_lambda sum(phi^2) is the tilt
-    exp(-rate_tilt phi^T phi / 2), so rate_tilt = 2 beta rate_lambda. The solver's kernels are
-    unscaled (Sigma = prior_scale Phi0), so the data-term prefactor of the action, which is 1/2
-    for prior_scale = 1, is learning_prefactor = 1 / (2 prior_scale) = weight_lambda / 2.
-    The solver's own defaults (rate_tilt = rate_lambda, learning_prefactor = 1/2) agree with
-    these only at beta = 1/2 and weight_lambda = 1 respectively; they are exact for prior_scale
-    and alpha."""
-    return {
-        "prior_scale": 1.0 / weight_lambda,
-        "alpha": weight_lambda * n_points * d_out / beta,
-        "rate_tilt": 2.0 * beta * rate_lambda,
-        "learning_prefactor": 0.5 * weight_lambda,
-    }
-
-
 def exemplar_config(
     *,
     P: int,
@@ -94,20 +67,15 @@ def exemplar_config(
 ) -> Config:
     """The linear-teacher config of the notebook's settings, on the CPU in float64
     (`fct.spatial_view.make_config` without a spatial prior). All P training points enter the
-    solve. With SGLD the mean-field constants are those of `sgld_theory_constants`, so the
-    theory describes the distribution the net was sampled from; with Adam there is no such
-    distribution and the library defaults stand. The solver settings are `with_solver`'s."""
+    solve. The mean-field constants are left to follow the network (`fct.meanfield.
+    network_constants`), so under SGLD the theory describes the distribution the net was
+    sampled from (under Adam the solver's beta is 1: there is no Gibbs law). The solver settings are `with_solver`'s."""
     cfg = make_config(
         P=P, m=m, k=k, N=N, L=L, phi=phi, g=g, data_seed=data_seed, net_seed=net_seed,
         weight_lambda=weight_lambda, rate_lambda=rate_lambda, optimizer=optimizer, beta=beta,
         lr=lr, n_epochs=n_epochs, train_seed=train_seed, spatial=None, device="cpu",
     )  # fmt: skip
-    constants = (
-        sgld_theory_constants(beta, weight_lambda, rate_lambda, P, m)  # D_out = m
-        if optimizer == "sgld"
-        else {}
-    )
-    meanfield = cfg.meanfield.model_copy(update={"n_points": P, "beta": beta, **constants})
+    meanfield = cfg.meanfield.model_copy(update={"n_points": P})
     return cfg.model_copy(update={"meanfield": meanfield})
 
 

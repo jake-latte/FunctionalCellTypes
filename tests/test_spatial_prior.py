@@ -57,14 +57,14 @@ SMALL = Config(
 TRAIN = ("data", "net", "train")
 ANALYSIS = ("data", "net", "train", "analysis")
 HASH_PINS = [
-    (default_config(), {TRAIN: "c4d90ec0a373", ANALYSIS: "a2010d9b34a2"}),
+    (default_config(), {TRAIN: "542a8cb8b9da", ANALYSIS: "bd9eb0126f20"}),
     (
         Config(train=TrainConfig(optimizer="sgld", beta=2.0)),
-        {TRAIN: "7d1987640713", ANALYSIS: "edaa1556e61c"},
+        {TRAIN: "90fbfc347a8b", ANALYSIS: "d15368ec62ec"},
     ),
-    (SMALL, {TRAIN: "ca5df8b176b4", ANALYSIS: "7ab5ae0ed32b"}),
+    (SMALL, {TRAIN: "5a456f800eb7", ANALYSIS: "4eb572dcf97e"}),
 ]
-# compute_loss on the SMALL net (weight_lambda=0.1, rate_lambda=1e-3) and the squared norm of
+# compute_loss on the SMALL net (prior coefficient 0.1, rate_lambda=1e-3) and the squared norm of
 # each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output V^T phi(h^L) / N).
 LOSS_PIN = "0x1.f4f7158364a70p+5"
 GRAD_SQ_PINS = {

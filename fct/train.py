@@ -55,14 +55,14 @@ def compute_loss(
     net: MLP,
     x: Tensor,
     y: Tensor,
-    weight_lambda: float,
+    prior_coefficient: float,
     rate_lambda: float,
     weight_penalty: WeightPenalty = MLP.weight_l2,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    """0.5*N*mse + weight_lambda*weight_l2 + rate_lambda*rate_l2, plus its parts.
+    """0.5*N*mse + prior_coefficient*weight_l2 + rate_lambda*rate_l2, plus its parts.
 
-    `weight_lambda` is the coefficient of the prior's quadratic form as the loss uses it, which
-    callers take from `prior_coefficient(train_config)` (= lambda_w / (2 beta)), not the raw
+    `prior_coefficient` multiplies the prior's quadratic form: callers pass
+    `prior_coefficient(train_config)` (= weight_lambda / (2 beta)), never the raw
     `train.weight_lambda`.
 
     `rate_l2` is the squared rates phi(h) summed over samples, neurons and layers, so it grows
@@ -77,7 +77,7 @@ def compute_loss(
     mse = (y - z).square().mean()
     weight_l2 = weight_penalty(net)
     rate_l2 = net.phi(h).square().sum()
-    loss = 0.5 * net.N * mse + weight_lambda * weight_l2 + rate_lambda * rate_l2
+    loss = 0.5 * net.N * mse + prior_coefficient * weight_l2 + rate_lambda * rate_l2
     parts = {"mse": mse, "weight_l2": weight_l2, "rate_l2": rate_l2, "loss": loss}
     return loss, {k: v.detach() for k, v in parts.items()}
 

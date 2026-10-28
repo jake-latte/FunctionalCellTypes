@@ -68,7 +68,7 @@ def test_training_minimises_the_loss_with_that_coefficient(tmp_path):
     assert hist["loss"][0] == pytest.approx(first.item(), rel=1e-12)
 
 
-def _stiffest_step(cfg: Config) -> bool:
+def _sgld_step_is_accepted(cfg: Config) -> bool:
     """True if `make_weight_penalty` accepts the config's SGLD step."""
     _, net = _setup(cfg)
     try:
@@ -84,9 +84,9 @@ def test_the_sgld_stability_bound_is_lr_times_the_scaled_coefficient_times_lambd
     weight_lambda = 1 and beta = 50 give lr * coefficient * lambda_max = 4 >= 1 (rejected), and
     beta = 500 gives 0.4 (accepted)."""
     base = _train_cfg(optimizer="sgld", weight_lambda=1.0)  # beta = 50
-    assert not _stiffest_step(base)
+    assert not _sgld_step_is_accepted(base)
     softer = base.model_copy(update={"train": base.train.model_copy(update={"beta": 500.0})})
-    assert _stiffest_step(softer)
+    assert _sgld_step_is_accepted(softer)
 
 
 def test_a_run_made_under_loss_version_3_is_stale(tmp_path, monkeypatch):

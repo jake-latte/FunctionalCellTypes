@@ -54,9 +54,9 @@ LEGACY_CONFIG_FILE = FIXTURES / "legacy_config.json"
 LEGACY_OVERRIDES = {
     "data": {"P": 64, "D_in": 8},
     "net": {"N": 16, "L": 2},
-    "train": {"rate_lambda": 1e-2},
+    "train": {"rate_lambda": 1e-2, "weight_lambda": 1e-4},
     "meanfield": {
-        "n_points": 20, "beta": 1e3, "rate_tilt": 1e-4, "alpha": 0.3,
+        "n_points": 20, "beta": 1e3, "rate_tilt": 1e-4, "alpha": 0.3, "learning_prefactor": 0.5,
         "n_chains": 64, "eps0": 0.1, "init": "gaussian", "log_int": 1, "save_int": 3,
         "precondition": False, "seed": 4,
     },

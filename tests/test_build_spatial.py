@@ -118,7 +118,7 @@ def test_source_notebook_exposes_task_net_training_and_spatial_parameters():
     nb = build_notebook()
     cells = [c.source for c in nb.cells if c.cell_type == "code"]
     # task and net hyperparameters are one cell at the top
-    for name in ("P =", "M_IN =", "K_LATENTS =", "N =", "L =", "PHI =", "G =", "WEIGHT_LAMBDA ="):
+    for name in ("P =", "M_IN =", "K_LATENTS =", "N =", "L =", "PHI =", "G =", "PRIOR_COEFF ="):
         assert name in cells[0]
     assert "OPTIMIZER =" in cells[1] and "BETA =" in cells[1] and "N_EPOCHS =" in cells[1]
     spatial = next(c for c in cells if "INPUT =" in c)

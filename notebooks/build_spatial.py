@@ -67,7 +67,7 @@ what is plotted.
 - Loss (`fct/train.py`):
   $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \frac{\lambda_w}{2\beta} \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \lambda_r \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
   with $\mathrm{mse} = \frac{1}{P m} \sum_\mu \lVert y_\mu - \hat y_\mu \rVert^2$,
-  $\lambda_w$ = `WEIGHT_LAMBDA`, $\lambda_r$ = `RATE_LAMBDA`, $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
+  $\lambda_w = 2\beta\,$`PRIOR_COEFF` (derived from the loss coefficient `PRIOR_COEFF` $= \lambda_w / 2\beta$, so SGLD and Adam train the same loss), $\lambda_r$ = `RATE_LAMBDA`, $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
   defined in the spatial prior section.
 
 Set `CACHE_ROOT` in the first cell. The run is cached under it in a directory named by a hash of
@@ -87,7 +87,7 @@ PHI = "tanh"  # "tanh", "relu" or "sigmoid"
 G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights
-WEIGHT_LAMBDA = 60.0  # spatial weight prior: WEIGHT_LAMBDA / (2 BETA) * penalty
+PRIOR_COEFF = 3e-3  # coefficient of the spatial weight penalty in the loss
 RATE_LAMBDA = 1e-4  # multiplies the rate penalty
 DEVICE = "cpu"  # "cpu", "cuda" or "auto"; these nets are tiny"""
 
@@ -184,7 +184,7 @@ CFG = make_config(
     g=G,
     data_seed=DATA_SEED,
     net_seed=NET_SEED,
-    weight_lambda=WEIGHT_LAMBDA,
+    weight_lambda=PRIOR_COEFF * 2 * (1.0 if OPTIMIZER != "sgld" else BETA),
     rate_lambda=RATE_LAMBDA,
     optimizer=OPTIMIZER,
     beta=BETA,
@@ -209,11 +209,11 @@ $$\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) < 1 \quad \text{f
 At the defaults (rings of 12 input, 16 hidden and 12 output units, $\ell = 0.15$, $A = 1$,
 $\epsilon = 10^{-2}$), $\lambda_{\max}(K) \approx 4.51$ for 12 units and $6.02$ for 16, so
 $\lambda_{\max}(M_l) \approx 1 / (\epsilon^2 \cdot 4.51 \cdot 6.02) = 1 / (10^{-4} \cdot 4.51 \cdot 6.02) \approx 368$ and
-$\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 10^{-2} \cdot \frac{60}{2 \cdot 10^{4}} \cdot 368 \approx 0.011$:
+$\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 10^{-2} \cdot 3 \cdot 10^{-3} \cdot 368 \approx 0.011$ (`PRIOR_COEFF` $= 3 \cdot 10^{-3}$):
 both optimisers are stable and 2000 epochs take seconds on a CPU. The library default
 $\epsilon = 10^{-6}$ would make both $10^8$ times larger ($\lambda_{\max}(M_l) \approx 3.7 \cdot 10^{10}$,
 $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 1.1 \cdot 10^6$); a larger network or a lower floor needs a
-smaller `LR` or `WEIGHT_LAMBDA`, or a larger `BETA`. The tables give the numbers for the current settings."""
+smaller `LR` or `PRIOR_COEFF`. The tables give the numbers for the current settings."""
 
 FLOOR = r"""def top_eigenvalue(matrix):
     return torch.linalg.eigvalsh(matrix)[-1].item()
@@ -242,7 +242,7 @@ layer_table = [
     "|---|---|---|",
     *(
         f"| {s.layer + 1} ({s.pre.name} to {s.post.name}) | {stiffness(s):.3g} "
-        f"| {LR * WEIGHT_LAMBDA / (2 * BETA) * stiffness(s):.3g} |"
+        f"| {LR * PRIOR_COEFF * stiffness(s):.3g} |"
         for s in SPACES
     ),
 ]

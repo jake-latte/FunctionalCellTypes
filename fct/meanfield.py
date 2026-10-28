@@ -16,17 +16,16 @@ expectation under that density, which a per-layer sampler provides: `SingleSiteH
     ∂S/∂Φ_l = -½ Φ̂_l + ½ sym(⟨u hᵀ⟩_{l+1} Φ_l⁻¹)        (Stein form of Eq. 31b)
     ∂S/∂Φ_L = -½ Φ̂_L - c A Y Yᵀ A,  A = (αI + Φ_L)⁻¹      (Eq. 31c)
 
-Mapping of the network's (β, λ_w, λ_r) onto the action (overridable in MeanFieldConfig):
-prior_scale = 1/λ_w, α = λ_w P D_out / β, c = learning_prefactor = ½.  The loss carries the weight
-prior as λ_w/(2β)‖θ‖² (`fct.train.prior_coefficient`, β = 1 for Adam), so the stationary law
-exp(-βL) of SGLD at inverse temperature β has weights N(0, 1/λ_w) for every β: prior_scale and α
-are exact when the solver's `beta` is the training β.  The other two defaults are not: the rate
-penalty λ_r Σφ² enters the law as exp(-β λ_r Σφ²), a tilt of 2βλ_r (the default λ_r is exact
-only at β = ½), and the data-term prefactor is 1/(2 prior_scale) = λ_w/2 for the unscaled
-kernels (the default ½ is exact only at λ_w = 1).  `fct.exemplar.sgld_theory_constants` returns
-all four exact values.  The rate tilt multiplies φᵀφ summed over the P solved points, a
-per-sample coefficient; `solve` takes the default as `lambda_r`, and
-`MeanFieldConfig.rate_tilt`, when set, overrides it.
+Mapping of the network's (β, λ_w, λ_r) onto the action (`network_constants`; each constant can be
+overridden in MeanFieldConfig): prior_scale = 1/λ_w, α = λ_w P D_out / β, rate tilt 2βλ_r,
+c = learning_prefactor = λ_w/2, with β = train.beta for SGLD and 1 for Adam
+(`resolve_beta`).  The loss carries the weight prior as λ_w/(2β)‖θ‖² (`fct.train.prior_coefficient`),
+so the stationary law exp(-βL) of SGLD has weights N(0, 1/λ_w) for every β; the readout is a
+Gaussian likelihood of precision βN/(P D_out); the rate penalty λ_r Σφ² enters the law as
+exp(-βλ_r Σφ²), a tilt of 2βλ_r (the tilt multiplies φᵀφ summed over the P solved points, a
+per-sample coefficient, as the rate penalty is); and the kernels are unscaled (Σ = prior_scale Φ0),
+so the data-term prefactor is 1/(2 prior_scale).  Under Adam there is no Gibbs distribution and
+β = 1 is the convention of the loss.
 
 Layers: `solve` is the computation (it touches disk only when given a checkpoint_dir),
 `run_meanfield` / `load_meanfield` are the cache-directory I/O.  The outer loop mutates one
@@ -224,6 +223,13 @@ def _make_problem(
     X, Y = X.to(F64), Y.to(F64)
     P, D_in = X.shape
     D_out = Y.shape[1]
+    # `run_meanfield` resolves an unset beta from the network; a direct `solve` has no network,
+    # so it takes beta = 1, the Adam convention of the loss.
+    derived = network_constants(1.0 if cfg.beta is None else cfg.beta, lambda_w, lambda_r, P, D_out)
+
+    def pick(explicit: float | None, name: str) -> float:
+        return derived[name] if explicit is None else explicit
+
     return _Problem(
         X=X,
         Y=Y,
@@ -233,12 +239,34 @@ def _make_problem(
         cfg=cfg,
         Phi0=X @ X.T / D_in,
         eye=torch.eye(P, device=X.device, dtype=F64),
-        alpha=lambda_w * P * D_out / cfg.beta if cfg.alpha is None else cfg.alpha,
-        prior_scale=1.0 / lambda_w if cfg.prior_scale is None else cfg.prior_scale,
-        rate_tilt=lambda_r if cfg.rate_tilt is None else cfg.rate_tilt,
-        lp=cfg.learning_prefactor,
+        alpha=pick(cfg.alpha, "alpha"),
+        prior_scale=pick(cfg.prior_scale, "prior_scale"),
+        rate_tilt=pick(cfg.rate_tilt, "rate_tilt"),
+        lp=pick(cfg.learning_prefactor, "learning_prefactor"),
         sample_dtype=resolve_dtype(cfg.solver.sample_dtype),
     )
+
+
+def network_constants(
+    beta: float, weight_lambda: float, rate_lambda: float, n_points: int, d_out: int
+) -> dict[str, float]:
+    """The action's constants (prior_scale, alpha, rate_tilt, learning_prefactor) under which the
+    theory describes the stationary law exp(-beta L) of the repo loss L (see the module docstring
+    and `fct.train.prior_coefficient`); `beta` is the network's (`resolve_beta`)."""
+    return {
+        "prior_scale": 1.0 / weight_lambda,
+        "alpha": weight_lambda * n_points * d_out / beta,
+        "rate_tilt": 2.0 * beta * rate_lambda,
+        "learning_prefactor": 0.5 * weight_lambda,
+    }
+
+
+def resolve_beta(cfg: Config) -> float:
+    """The inverse temperature of the action: `meanfield.beta` if set, else the network's
+    (train.beta for SGLD, 1 for Adam)."""
+    if cfg.meanfield.beta is not None:
+        return cfg.meanfield.beta
+    return cfg.train.beta if cfg.train.optimizer == "sgld" else 1.0
 
 
 def _prior_cov(prob: _Problem, l: int, Phi: torch.Tensor) -> torch.Tensor:
@@ -1073,7 +1101,8 @@ def run_meanfield(
 ) -> SolveResult:
     """Solve on the first cfg.meanfield.n_points training points, caching under
     CACHE_DIR/meanfield (returns final.pt if present, resumes from a checkpoint otherwise).
-    The rate tilt is train.rate_lambda unless meanfield.rate_tilt overrides it.
+    The constants of the action follow the network (`network_constants`, beta from
+    `resolve_beta`) unless `meanfield` sets them.
     `on_outer` is passed to `solve`.
     Raises SpatialPriorUnsupportedError if cfg.spatial is set (checked before any file access)."""
     if cfg.spatial is not None:
@@ -1081,6 +1110,7 @@ def run_meanfield(
             "the mean-field solver has no spatial prior; unset `spatial` in the config"
         )
     X, Y = _solver_inputs(dataset, cfg)
+    meanfield = cfg.meanfield.model_copy(update={"beta": resolve_beta(cfg)})
     return solve(
         X,
         Y,
@@ -1089,7 +1119,7 @@ def run_meanfield(
         cfg.train.rate_lambda,
         get_phi(cfg.net.phi),
         cfg.net.g,
-        cfg.meanfield,
+        meanfield,
         net=net,
         log=log,
         checkpoint_dir=cache_paths(cache_dir).meanfield,

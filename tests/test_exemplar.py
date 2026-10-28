@@ -7,6 +7,7 @@ import torch
 from pydantic import ValidationError
 
 from fct import exemplar
+from fct.meanfield import network_constants
 from fct.meanfield import OuterSnapshot
 from tests.test_draw_live import synthetic_history
 
@@ -22,7 +23,7 @@ def config(**overrides):
     return exemplar.exemplar_config(**{**SETTINGS, **overrides})
 
 
-def test_the_config_carries_every_setting_and_ties_both_betas():
+def test_the_config_carries_every_setting():
     cfg = config()
     assert (cfg.data.task, cfg.data.P, cfg.data.D_in, cfg.data.n_latents) == (
         "linear_teacher",
@@ -33,19 +34,18 @@ def test_the_config_carries_every_setting_and_ties_both_betas():
     assert (cfg.net.N, cfg.net.L, cfg.net.phi, cfg.net.g) == (16, 1, "tanh", 1.0)
     assert (cfg.data.seed, cfg.net.seed, cfg.train.seed) == (1, 2, 3)
     assert (cfg.train.weight_lambda, cfg.train.rate_lambda) == (1e-2, 1e-3)
-    assert (cfg.train.optimizer, cfg.train.beta, cfg.meanfield.beta) == ("sgld", 5.0, 5.0)
+    assert (cfg.train.optimizer, cfg.train.beta) == ("sgld", 5.0)
+    assert cfg.meanfield.beta is None  # follows train.beta
     assert cfg.meanfield.n_points == 8
     assert (cfg.device, cfg.dtype) == ("cpu", "float64")
     assert cfg.spatial is None
 
 
-def test_sgld_theory_constants_follow_the_stationary_law_of_the_loss():
+def test_network_constants_follow_the_stationary_law_of_the_loss():
     """The loss prior weight_lambda / (2 beta) ||theta||^2 makes exp(-beta L) put variance
     1 / weight_lambda on each weight; the likelihood precision beta N / (P d_out) gives the ridge
     weight_lambda P d_out / beta; the tilt is 2 beta lambda_r and the prefactor weight_lambda / 2."""
-    c = exemplar.sgld_theory_constants(
-        beta=5.0, weight_lambda=1e-2, rate_lambda=1e-3, n_points=8, d_out=4
-    )
+    c = network_constants(beta=5.0, weight_lambda=1e-2, rate_lambda=1e-3, n_points=8, d_out=4)
     assert c["prior_scale"] == pytest.approx(100.0)
     assert c["alpha"] == pytest.approx(0.064)
     assert c["rate_tilt"] == pytest.approx(1e-2)
@@ -54,27 +54,45 @@ def test_sgld_theory_constants_follow_the_stationary_law_of_the_loss():
     assert c["alpha"] == pytest.approx(8 * 4 / (5.0 * c["prior_scale"]))  # P d_out / (beta s)
 
 
+def _problem_run_meanfield_solves(cfg, tmp_path, monkeypatch):
+    """The `_Problem` of the arguments `run_meanfield` hands to `solve` for `cfg`."""
+    import fct.meanfield as mf
+
+    seen = {}
+
+    def spy(X, Y, L, lambda_w, lambda_r, phi, g, meanfield, **kwargs):
+        seen["problem"] = mf._make_problem(X, Y, L, lambda_w, lambda_r, phi, g, meanfield)
+
+    monkeypatch.setattr(mf, "solve", spy)
+    run = exemplar.train_exemplar(cfg, tmp_path, **QUIET)
+    mf.run_meanfield(cfg, run.dataset, run.net, tmp_path / "solve", log=lambda message: None)
+    return seen["problem"]
+
+
 @pytest.mark.parametrize("beta", [0.1, 1.0, 5.0, 1e3])
-def test_the_solver_defaults_for_prior_scale_and_alpha_are_the_sgld_constants(beta):
-    """Exact for every beta; the rate tilt and the prefactor defaults are not (docstring of
-    `sgld_theory_constants`), which is why the exemplar config overrides all four."""
-    from fct.config import MeanFieldConfig
-    from fct.meanfield import _make_problem
-
-    c = exemplar.sgld_theory_constants(beta, 0.03, 1e-3, n_points=8, d_out=4)
-    X, Y = torch.randn(8, 4, dtype=torch.float64), torch.randn(8, 4, dtype=torch.float64)
-    prob = _make_problem(X, Y, 1, 0.03, 1e-3, torch.tanh, 1.0, MeanFieldConfig(beta=beta))
-    assert prob.prior_scale == pytest.approx(c["prior_scale"])
-    assert prob.alpha == pytest.approx(c["alpha"])
+def test_run_meanfield_defaults_are_the_network_constants_under_sgld(beta, tmp_path, monkeypatch):
+    cfg = config(n_epochs=1, beta=beta, weight_lambda=0.03)
+    prob = _problem_run_meanfield_solves(cfg, tmp_path, monkeypatch)
+    c = network_constants(beta, 0.03, 1e-3, n_points=8, d_out=4)
+    assert (prob.prior_scale, prob.alpha) == pytest.approx((c["prior_scale"], c["alpha"]))
+    assert (prob.rate_tilt, prob.lp) == pytest.approx((c["rate_tilt"], c["learning_prefactor"]))
 
 
-def test_the_config_sets_those_constants_for_sgld_and_leaves_adam_at_the_defaults():
-    sgld = config().meanfield
-    assert (sgld.prior_scale, sgld.alpha, sgld.rate_tilt) == pytest.approx((100.0, 0.064, 1e-2))
-    assert sgld.learning_prefactor == pytest.approx(0.005)
-    adam = config(optimizer="adam").meanfield
-    assert (adam.prior_scale, adam.alpha, adam.rate_tilt) == (None, None, None)
-    assert adam.learning_prefactor == 0.5
+def test_run_meanfield_defaults_use_beta_one_under_adam(tmp_path, monkeypatch):
+    cfg = config(n_epochs=1, optimizer="adam", beta=5.0, weight_lambda=0.03)
+    prob = _problem_run_meanfield_solves(cfg, tmp_path, monkeypatch)
+    c = network_constants(1.0, 0.03, 1e-3, n_points=8, d_out=4)
+    assert (prob.prior_scale, prob.alpha) == pytest.approx((c["prior_scale"], c["alpha"]))
+    assert (prob.rate_tilt, prob.lp) == pytest.approx((c["rate_tilt"], c["learning_prefactor"]))
+
+
+def test_explicit_meanfield_constants_win_over_the_network_ones(tmp_path, monkeypatch):
+    cfg = config(n_epochs=1)
+    meanfield = cfg.meanfield.model_copy(update={"prior_scale": 3.0, "rate_tilt": 0.25})
+    cfg = cfg.model_copy(update={"meanfield": meanfield})
+    prob = _problem_run_meanfield_solves(cfg, tmp_path, monkeypatch)
+    assert (prob.prior_scale, prob.rate_tilt) == (3.0, 0.25)
+    assert prob.lp == pytest.approx(0.005)  # unset constants still follow the network
 
 
 # (beta, weight_lambda) with lr * weight_lambda / beta = 0.04, so the weights equilibrate in
@@ -94,7 +112,7 @@ def test_sgld_weights_in_data_free_directions_have_the_variance_prior_scale(
     _, _, directions = torch.linalg.svd(run.dataset.x.double())
     free = directions[cfg.data.n_latents :]  # right singular vectors outside the data's span
     variance = (run.net.U.detach().double() @ free.T).var(unbiased=False).item()
-    assert variance == pytest.approx(cfg.meanfield.prior_scale, rel=0.3)
+    assert variance == pytest.approx(1 / weight_lambda, rel=0.3)
 
 
 def test_an_impossible_setting_fails_at_config_time():
