@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in review
+status: blocked
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -97,3 +97,13 @@ An exact relu rule would project onto the copositive cone of each orthant, which
 prior of low rank r (the exemplar: r = 2), scan the r-dimensional range of Sigma, exact and cheap for r <= 3; (b) keep the
 all-active rule and its backstops, knowing they missed non-normalisable tilts on the exemplar; (c) a stricter relu margin
 than delta (keep tilts off the floor), which cuts more. Not decided here.
+
+## Merged with status `blocked` (PM, 2026-10-29)
+The rule (all-active orthant condition), the per-orthant oracle, the plane-scan diagnostic and
+the pinned record are merged. The item is blocked on the PI's decision about the rule, because
+the review refuted the bet behind option 2: the rule admitted non-normalisable tilts in the
+eta_max 0.1 solve and the backstops did not catch them. PM recommendation: keep the rule and add
+a runtime guard in `solver-inner-step-control`'s backtracking that rejects an inner step whose
+chains escape the prior scale (absolute h2/prior bound) and shrinks the tilt's negative part;
+fallback: restore the sufficient floor as the default. "Relu solves under the tripwire" is
+re-tested after both land.
