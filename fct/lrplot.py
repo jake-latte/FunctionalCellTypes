@@ -12,7 +12,7 @@ from matplotlib.figure import Figure
 from fct.draw import FIG_WIDTH, STYLE_RC, _styled
 from fct.lrtune import Row, collapse_seeds
 
-PHI_COLOURS = {"tanh": "#0072B2", "relu": "#D55E00"}  # colour-blind safe
+PHI_COLOURS = {"tanh": "#0072B2", "relu": "#D55E00", "id": "#009E73"}  # colour-blind safe
 LINESTYLES = ("-", "--", ":", "-.")  # one per rate_lambda present, in increasing order
 THICK_FACTOR = 1.5  # tanh is drawn thicker so a coinciding relu line stays visible
 MIN_REL_SPAN = 0.05  # smallest y-range shown, as a fraction of the largest value
