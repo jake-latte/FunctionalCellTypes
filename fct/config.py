@@ -142,6 +142,11 @@ class SolverConfig(StrictModel):
     eta_min_rel: NonNegFloat = 1e-3
     max_div_frac: NonNegFloat = 0.02
     max_h2_growth: PosFloat = 10.0
+    # A run whose sample scale ||h||^2/P exceeds max_h2_prior_ratio times the prior's (mean
+    # diagonal of Sigma) is unhealthy, however it got there: max_h2_growth bounds only the jump
+    # from the point before, so a scale can climb by steps or start a run already escaped.
+    # Legitimate solves sit at 1 to 6; escaped HMC chains on a non-normalisable tilt at 3e3.
+    max_h2_prior_ratio: PosFloat = 100.0
     max_mc_err: PosFloat = 1.0
     eps_collapse: NonNegFloat = 1e-2
     project_tilt: bool = True
@@ -238,6 +243,12 @@ STEP_CONTROL_LEGACY: dict[str, Any] = {
     "inner_start": "previous",
 }  # fmt: skip
 STEP_CONTROL_FIELDS = tuple(STEP_CONTROL_LEGACY)
+# Health bounds, each hashed only when it differs from its default here. A bound changes a
+# solve only where it trips, and at these defaults it trips only on a run whose chains have
+# escaped the prior's scale; every other solve is bit for bit what it was before the bound
+# existed, so its cached result keeps its hash.
+HEALTH_BOUND_DEFAULTS: dict[str, Any] = {"max_h2_prior_ratio": 100.0}
+HEALTH_BOUND_FIELDS = tuple(HEALTH_BOUND_DEFAULTS)
 
 
 class MeanFieldConfig(StrictModel):
@@ -283,12 +294,16 @@ class MeanFieldConfig(StrictModel):
     def hash_payload(self) -> dict[str, Any]:
         """The section as it enters a cache hash: the problem fields and LEGACY_SOLVER_FIELDS
         in one flat dict (the pre-split layout), plus each of STEP_CONTROL_FIELDS that differs
-        from STEP_CONTROL_LEGACY, plus IMPORTANCE_FIELDS when the sampler is "importance"."""
+        from STEP_CONTROL_LEGACY and each of HEALTH_BOUND_FIELDS that differs from
+        HEALTH_BOUND_DEFAULTS, plus IMPORTANCE_FIELDS when the sampler is "importance"."""
         solver = self.solver.model_dump()
         payload = self.model_dump(exclude={"solver"})
         payload.update({k: solver[k] for k in LEGACY_SOLVER_FIELDS})
         payload.update(
             {k: solver[k] for k in STEP_CONTROL_FIELDS if solver[k] != STEP_CONTROL_LEGACY[k]}
+        )
+        payload.update(
+            {k: solver[k] for k in HEALTH_BOUND_FIELDS if solver[k] != HEALTH_BOUND_DEFAULTS[k]}
         )
         if self.solver.sampler != "hmc":
             payload.update({k: solver[k] for k in IMPORTANCE_FIELDS})
