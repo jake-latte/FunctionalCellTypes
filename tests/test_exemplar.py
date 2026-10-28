@@ -7,8 +7,7 @@ import torch
 from pydantic import ValidationError
 
 from fct import exemplar
-from fct.meanfield import network_constants
-from fct.meanfield import OuterSnapshot
+from fct.meanfield import OuterSnapshot, network_constants
 from tests.test_draw_live import synthetic_history
 
 SETTINGS = {
