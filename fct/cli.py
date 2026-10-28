@@ -53,6 +53,7 @@ from fct.meanfield import (
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
 from fct.sweep import (
+    FIXED_GRID_PRESETS,
     GRID_PRESETS,
     PRESET_NAMES,
     STAGES,
@@ -341,7 +342,7 @@ def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
     if axes and tree["grid"] is None:
         raise CliError(
             f"preset {preset_name!r} is the modularity grid, which has no editable axes; "
-            f"--axis needs one of {list(GRID_PRESETS)}"
+            f"--axis needs one of {[*GRID_PRESETS, *FIXED_GRID_PRESETS]}"
         )
     for item in axes:
         key, sep, text = item.partition("=")

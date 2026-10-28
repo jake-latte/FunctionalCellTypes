@@ -278,10 +278,8 @@ def test_solve_on_a_spatial_cache_fails_with_one_line_and_writes_nothing(tmp_pat
 
 
 def test_sweep_run_stage_solve_maps_the_spatial_error_to_a_cli_error(tmp_path, monkeypatch, capsys):
-    """A spatial sweep setting cannot be run end to end yet: `_label_part` embeds the whole
-    dumped SpatialConfig in the setting's directory name (File name too long). A later item gives
-    the sweep a `spatial` field and short labels. Until then run_setting is replaced by a stub
-    that raises the solver's error, to test the mapping in cmd_sweep_run."""
+    """run_setting is replaced by a stub that raises the solver's error, to test the mapping
+    in cmd_sweep_run alone (tests/test_sweep_spatial.py runs a real spatial setting)."""
     from fct import cli
 
     def refuse(*args, **kwargs):

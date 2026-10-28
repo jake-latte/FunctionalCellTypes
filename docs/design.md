@@ -651,6 +651,12 @@ class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monito
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), grid: dict[str, list] | None = None
+    # Shared network and loss fields (library defaults, so a sweep without them builds the configs it always did): L, g, phi, weight_lambda,
+    # rate_lambda, optimizer, beta; an axis of the same name wins. spatial: SpatialConfig | None = None, the spatial weight prior of every setting
+    # (written to Config.spatial; training hashes change with it, grid_hash does not). A `spatial.<path>` axis varies a field of the section and
+    # is rejected at load ("set the sweep's spatial section first") when the sweep has none; `spatial` itself is a valid axis only while the
+    # section is None (its values are whole dumps, or None). A dict- or list-valued axis value (or one whose text exceeds MAX_LABEL_VALUE = 24 characters) is labelled in directory names as `<axis>-<6 hex of the
+    # sha256 of its sorted JSON>`, so names stay short; the solve stage raises SpatialPriorUnsupportedError per spatial setting
     # meanfield: the problem fields plus the `solver` group, library defaults (rate_tilt None: follows train.rate_lambda). It reaches every setting's
     # Config.meanfield but never enters a training hash or a directory name, so a sweep.json without it (legacy) loads with the defaults and keeps both;
     # its n_points must not exceed P, checked when a setting is solved (SweepError), not at load, so a train-only sweep with a small P still loads;
@@ -660,9 +666,11 @@ class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monito
     # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles (change the
     # sweep field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
     # build the same Config, so [0, 0.0] is a repeat), then every combination is built into a Config, so a bad axis name or value fails
-    # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the TrainConfig default (1e-4) unless it is an axis
+    # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the sweep's `weight_lambda` field (the TrainConfig default 1e-4 unless set) unless it is an axis
 def preset(name: str, n_lambda: int | None = None) -> SweepConfig   # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full" and "modularity": N=256, P=4096, 15000 epochs (placeholders to tune), the modularity grid;
                                                                     # "phase_transition": the sizes of "full" + phase_transition(n_lambda); n_lambda is required there and rejected elsewhere; ValueError otherwise
+def spatial_tiny() -> SweepConfig                    # presets without lambda axes (FIXED_GRID_PRESETS; n_lambda is rejected): grid net.N [4, 8], P 16, linear teacher m 6 k 2, L 1, tanh, SGLD (beta 1e3, weight_lambda 0.2 = 2 beta x 1e-4), 6 epochs, CPU, spatial prior with grid embeddings, length scale 0.15, min_rel_eig 1e-2, meanfield.n_points 16
+def spatial_n_scan() -> SweepConfig                   # grid net.N [64, 128, 256, 512, 1024] (directories s000i_N<N>): P 164, m 64, k 2, L 1, tanh, g 1, weight_lambda 60 (under the lambda_w / (2 beta) convention; 3e-3 under the old lambda_w x form), rate_lambda 0, SGLD beta 1e4, lr 1e-2, 250000 epochs, float64, monitor every 5000 (8 bins, 5 shuffles), same spatial prior
 def phase_transition(n_lambda) -> SweepConfig             # linear teacher; grid net.L [1,2], net.phi [tanh, relu], train.rate_lambda and train.weight_lambda both np.logspace(-6, 0, n_lambda): 4 * n_lambda**2 settings
 def save_sweep(sweep, root) / load_sweep(root) -> SweepConfig   # ROOT/sweep.json; load raises FileNotFoundError naming the path
 def expand(sweep) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given sweep.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow a grid in a fresh ROOT)

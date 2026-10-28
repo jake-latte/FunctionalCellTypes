@@ -82,11 +82,15 @@ class DataConfig(StrictModel):
         return self
 
 
+Phi = Literal["relu", "tanh", "sigmoid"]
+Optimizer = Literal["adam", "sgld"]
+
+
 class NetConfig(StrictModel):
     N: PosInt = 100
     L: PosInt = 3
     g: PosFloat = 1.0
-    phi: Literal["relu", "tanh", "sigmoid"] = "relu"
+    phi: Phi = "relu"
     seed: int = 0
 
 
@@ -106,7 +110,7 @@ class TrainConfig(StrictModel):
     # "sgld" adds Gaussian noise of variance 2 * lr / beta to every step (see fct.sgld). `beta`
     # is read only by SGLD; both fields enter the hash only for SGLD (`section_hash`), so
     # adam runs keep the hashes they had before these fields existed.
-    optimizer: Literal["adam", "sgld"] = "adam"
+    optimizer: Optimizer = "adam"
     beta: PosFloat = 1.0
 
 
