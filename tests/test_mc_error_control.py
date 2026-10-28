@@ -17,6 +17,7 @@ import pytest
 
 import fct.meanfield as mf
 from fct.config import MeanFieldConfig
+from tests.pinned_runs import pinned_solve
 from tests.test_meanfield_step_control import ExactGaussianSampler, layer, tilt
 from tests.test_outer_run_health import end_of_ascent, hmc_diag
 
@@ -24,11 +25,13 @@ NAN = float("nan")
 
 
 def mc_failures(mc_err: float, mc_before: float, n_tr: int = 1, **solver) -> list[str]:
-    """`_health_failures` of a run sound in every other way, MC error `mc_err` over n_tr
-    transitions, against an accepted point whose per-transition MC error is `mc_before`."""
+    """The failure messages of `_health_failures` for a run sound in every other way, MC error
+    `mc_err` over n_tr transitions, against an accepted point whose per-transition MC error is
+    `mc_before`."""
     cfg = MeanFieldConfig(**solver).solver
     diag = hmc_diag(1.0) | {"psi_psi_rel_mc_err": mc_err}
-    return mf._health_failures(diag, 1.0, NAN, mc_before, n_tr, 1.0, cfg)
+    before = mf._RunReference(1.0, NAN, mc_before, 1.0)
+    return [f.message for f in mf._health_failures(diag, before, n_tr, cfg)]
 
 
 # ----------------------------------------------------------------------------- the rule
@@ -57,9 +60,11 @@ def test_runs_of_different_length_are_compared_per_transition():
     assert mc_failures(6.0, 1.0, n_tr=4) == ["MC error 6 > max_mc_err_growth x before = 5"]
 
 
-def test_without_an_accepted_mc_error_before_there_is_nothing_to_compare():
-    """The warm-up collects no moments, so the first run with moments has no reference."""
-    assert mc_failures(40.0, NAN) == []
+@pytest.mark.parametrize("mc_before", [NAN, 0.0, math.inf])
+def test_without_a_usable_reference_there_is_nothing_to_compare(mc_before):
+    """No reference after the warm-up (it collects no moments); none at an MC error of 0
+    (⟨ψψᵀ⟩ = 0: a relu layer off in every chain), from which any growth is infinite."""
+    assert mc_failures(40.0, mc_before) == []
 
 
 def test_a_nan_mc_error_fails():
@@ -70,7 +75,7 @@ def test_a_run_without_moments_has_no_mc_error_to_check():
     """The outer step's probe runs collect no moments (`_probe_samplers`)."""
     cfg = MeanFieldConfig().solver
     diag = {k: v for k, v in hmc_diag(1.0).items() if k != "psi_psi_rel_mc_err"}
-    assert mf._health_failures(diag, 1.0, NAN, 1e-3, 1, 1.0, cfg) == []
+    assert mf._health_failures(diag, mf._RunReference(1.0, NAN, 1e-3, 1.0), 1, cfg) == []
 
 
 def test_the_bound_is_configurable():
@@ -78,8 +83,7 @@ def test_the_bound_is_configurable():
     assert mc_failures(2.1, 1.0, max_mc_err_growth=2.0) != []
 
 
-def test_the_absolute_mc_error_bound_is_gone():
-    """max_mc_err (an absolute bound of 1) rejected every inner step of a small solve."""
+def test_there_is_no_absolute_mc_error_bound():
     assert "max_mc_err" not in type(MeanFieldConfig().solver).model_fields
 
 
@@ -89,6 +93,24 @@ def test_an_accepted_point_records_its_mc_error_per_transition():
     pending, res = [None], mf._new_inner_result(1)
     mf._inner_layer_step(prob, st, 0, 0, pending, res)
     assert st.mc_ref[0] == pytest.approx(0.02 * math.sqrt(4))
+
+
+@pytest.mark.parametrize("mc_err", [0.0, NAN])
+def test_an_accepted_point_without_a_usable_mc_error_leaves_no_reference(mc_err):
+    """A NaN MC error at an accepted point (only an unchecked first run can be accepted with one)
+    is logged at the end of the outer step; an MC error of 0 is legitimate and is not."""
+    prob, st, _ = layer(0.8, eta=0.1, mc_err=mc_err)
+    pending, res = [None], mf._new_inner_result(1)
+    mf._inner_layer_step(prob, st, 0, 0, pending, res)
+    assert math.isnan(st.mc_ref[0])
+    if math.isnan(mc_err):
+        warning = (
+            "WARNING: layer 0: the run accepted at outer step 0, inner step 0 has MC error nan; "
+            "the next step's MC error is not checked"
+        )
+        assert st.notes == [warning]
+    else:
+        assert st.notes == []
 
 
 def test_an_inner_step_whose_mc_error_jumps_is_reverted():
@@ -169,3 +191,21 @@ def test_an_inner_ascent_whose_step_keeps_breaking_the_sampler_raises():
     assert "inner step 4 (3 reverts since the last accepted point" in str(err.value)
     assert "max_backtrack=3" in str(err.value)
     assert "h2/prior" in str(err.value)
+
+
+# ----------------------------------------------------------------------------- the real sampler
+def test_a_relu_layer_off_in_every_chain_does_not_stop_the_solve():
+    """Regression: from outer step 10 of this solve the last relu layer is often off in every
+    chain, its MC error 0, and a reference of 0 made every later run fail (10 x 0 = 0) until
+    the outer-run retries raised. The tripwire is off: with that layer off, the hidden layer's
+    Stein target is 0 and its relative fixed-point residual about 1e299."""
+    result = pinned_solve("gaussian_phi_f64", n_outer=15, n_inner_max=10, tilt_tripwire_resid=1e308)
+    assert len(result.history["outer_step"]) == 15
+    assert min(min(layers) for layers in result.history["hmc_mc_err"]) == 0.0
+
+
+def test_the_inner_give_up_fires_on_the_real_sampler():
+    """A bound no run can meet: every checked inner run fails, and after max_backtrack reverts
+    since the last accepted point the solve stops."""
+    with pytest.raises(mf.UnhealthySolveError, match=r"8 reverts since the last accepted point"):
+        pinned_solve("gaussian_phi_f64", max_mc_err_growth=1e-9, n_inner_max=30)

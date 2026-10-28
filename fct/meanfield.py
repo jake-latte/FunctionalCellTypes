@@ -38,9 +38,9 @@ The problem constants come from `MeanFieldConfig`, everything about how it is so
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
 import torch
@@ -423,12 +423,14 @@ class _SolverState:
     eps_ref: list[float]  # warm-up HMC step size per layer (collapse test; NaN for importance)
     ess_ref: list[float]  # ESS fraction of the last accepted point per layer (NaN for HMC)
     # MC error per transition (`_mc_err_per_transition`) of the last accepted point per layer;
-    # NaN until a run with moments is accepted (the warm-up collects none)
+    # NaN when it has none that is usable (`_usable_mc_reference`; the warm-up collects none)
     mc_ref: list[float]
     history: History
     mse_net: float | None
     net_Phi: torch.Tensor | None
     elapsed: float  # seconds spent in solve before this state, for history["time"]
+    # warnings raised during the outer step being run, logged at its end (not checkpointed)
+    notes: list[str] = field(default_factory=list)
 
 
 def _empty_history(with_net: bool) -> History:
@@ -515,7 +517,13 @@ def _accept_point(
     tilt), not of the step, so backtracking cannot cure it, and carrying on would only freeze
     the iteration at a point the sampler cannot represent."""
     st.h2_last[l] = diag["h2_mean"]
-    st.mc_ref[l] = _mc_err_per_transition(diag, n_tr)
+    mc = _mc_err_per_transition(diag, n_tr)
+    st.mc_ref[l] = mc if _usable_mc_reference(mc) else float("nan")
+    if "psi_psi_rel_mc_err" in diag and not math.isfinite(mc):
+        st.notes.append(
+            f"WARNING: layer {l}: the run accepted at {where} has MC error {mc:.3g}; the next "
+            "step's MC error is not checked"
+        )
     c = prob.solver
     if c.sampler != "importance":
         return
@@ -544,78 +552,106 @@ def _mc_err_per_transition(diag: dict, n_tr: int) -> float:
     return diag.get("psi_psi_rel_mc_err", float("nan")) * math.sqrt(n_tr)
 
 
+def _usable_mc_reference(mc: float) -> bool:
+    """Whether an MC error per transition can be a reference: finite and above 0. It is exactly
+    0 when ⟨ψψᵀ⟩ = 0 (a relu layer off in every chain), and any growth from 0 is infinite."""
+    return math.isfinite(mc) and mc > 0
+
+
+class _RunReference(NamedTuple):
+    """What a run validating a step is judged against: layer l's accepted point before the step
+    (sample scale ||h||²/P, importance ESS fraction, MC error per transition; NaN where there is
+    none) and its warm-up HMC step size (NaN for importance sampling)."""
+
+    h2: float
+    ess: float
+    mc: float
+    eps: float
+
+
+def _reference(st: _SolverState, l: int) -> _RunReference:
+    return _RunReference(st.h2_last[l], st.ess_ref[l], st.mc_ref[l], st.eps_ref[l])
+
+
+class _Failure(NamedTuple):
+    """A failed check of `_healthy`: which one, and its value against its limit."""
+
+    check: Literal[
+        "h2_growth", "h2_prior", "ess_drop", "divergences", "resets", "eps_collapse", "mc_growth"
+    ]
+    message: str
+
+
+# The checks a sample scale far above the prior's fails: chains escaped on a tilt whose density
+# is not normalisable.
+_ESCAPE_CHECKS = ("h2_growth", "h2_prior")
+
+
+def _failure_text(failures: list[_Failure]) -> str:
+    return "; ".join(f.message for f in failures)
+
+
 def _mc_err_check(
     diag: dict, mc_before: float, n_tr: int, cfg: SolverConfig
-) -> tuple[bool, str] | None:
-    """(passed, message) of the MC-error check, or None when there is nothing to compare: a
-    run without moments (an outer step's probe), or no accepted point with moments before."""
-    if "psi_psi_rel_mc_err" not in diag or math.isnan(mc_before):
+) -> tuple[bool, str, str] | None:
+    """(passed, check, message) of the MC-error check, or None when there is nothing to
+    compare: a run without moments (an outer step's probe), or no usable reference."""
+    if "psi_psi_rel_mc_err" not in diag or not _usable_mc_reference(mc_before):
         return None
     mc_err, limit = diag["psi_psi_rel_mc_err"], cfg.max_mc_err_growth * mc_before
     limit_here = limit / math.sqrt(n_tr)  # in this run's own terms, for the message
     return (
         _mc_err_per_transition(diag, n_tr) <= limit,
+        "mc_growth",
         f"MC error {mc_err:.3g} > max_mc_err_growth x before = {limit_here:.3g}",
     )
 
 
 def _health_failures(
-    diag: dict,
-    h2_before: float,
-    ess_before: float,
-    mc_before: float,
-    n_tr: int,
-    eps_ref_l: float,
-    cfg: SolverConfig,
-) -> list[str]:
+    diag: dict, before: _RunReference, n_tr: int, cfg: SolverConfig
+) -> list[_Failure]:
     """The checks of `_healthy` the run (of n_tr transitions) fails, each with its value and
-    limit (a NaN value fails its check). h2_before, ess_before and mc_before (per transition)
-    are those of the accepted point before the step."""
-    growth, ratio = diag["h2_mean"] / max(h2_before, 1e-300), _h2_prior_ratio(diag)
+    limit (a NaN value fails its check)."""
+    growth, ratio = diag["h2_mean"] / max(before.h2, 1e-300), _h2_prior_ratio(diag)
     checks = [
         (
             growth <= cfg.max_h2_growth,
+            "h2_growth",
             f"h2 growth {growth:.3g} > max_h2_growth={cfg.max_h2_growth:g}",
         ),
         (
             ratio <= cfg.max_h2_prior_ratio,
+            "h2_prior",
             f"h2/prior {ratio:.3g} > max_h2_prior_ratio={cfg.max_h2_prior_ratio:g}",
         ),
     ]
     if cfg.sampler == "importance":
-        ess, floor = diag["ess_frac"], cfg.min_ess_drop * ess_before
-        checks.append(
-            (ess >= floor, f"ESS fraction {ess:.3g} < min_ess_drop x before = {floor:.3g}")
-        )
+        ess, floor = diag["ess_frac"], cfg.min_ess_drop * before.ess
+        message = f"ESS fraction {ess:.3g} < min_ess_drop x before = {floor:.3g}"
+        checks.append((ess >= floor, "ess_drop", message))
     else:
         div_frac = diag["n_divergent"] / (cfg.n_chains * n_tr)
-        eps_min = cfg.eps_collapse * eps_ref_l
+        eps_min = cfg.eps_collapse * before.eps
         checks += [
             (
                 div_frac <= cfg.max_div_frac,
+                "divergences",
                 f"divergent fraction {div_frac:.3g} > max_div_frac={cfg.max_div_frac:g}",
             ),
-            (diag["n_reset"] == 0, f"{diag['n_reset']} chain resets"),
+            (diag["n_reset"] == 0, "resets", f"{diag['n_reset']} chain resets"),
             (
                 diag["eps"] >= eps_min,
+                "eps_collapse",
                 f"HMC step size {diag['eps']:.3g} < eps_collapse x warm-up = {eps_min:.3g}",
             ),
         ]
-    mc_check = _mc_err_check(diag, mc_before, n_tr, cfg)
+    mc_check = _mc_err_check(diag, before.mc, n_tr, cfg)
     if mc_check is not None:
         checks.append(mc_check)
-    return [message for ok, message in checks if not ok]
+    return [_Failure(check, message) for ok, check, message in checks if not ok]
 
 
-def _healthy(
-    diag: dict,
-    h2_before: float,
-    ess_before: float,
-    mc_before: float,
-    n_tr: int,
-    eps_ref_l: float,
-    cfg: SolverConfig,
-) -> bool:
+def _healthy(diag: dict, before: _RunReference, n_tr: int, cfg: SolverConfig) -> bool:
     """The step before a run (validated by an inner run or the outer-gradient run, or an outer
     step probed) left the sampler healthy: the sample scale ||h||²/P has not blown up (grown
     more than max_h2_growth-fold since the accepted point before, or reached
@@ -623,10 +659,11 @@ def _healthy(
     no step-size collapse; for importance sampling, its ESS fraction has not dropped below
     min_ess_drop times that of the accepted point before (the MC error cannot see a weight
     collapse, see fct.importance); and, if it collected moments, its MC error per transition
-    has not grown beyond max_mc_err_growth times that of the accepted point before. All are
-    relative to the point before but the h2/prior bound: the size of the MC error, of the
-    ESS, is a property of the sample size and the point, which no revert of a step cures."""
-    return not _health_failures(diag, h2_before, ess_before, mc_before, n_tr, eps_ref_l, cfg)
+    has not grown beyond max_mc_err_growth times that of the accepted point before (a
+    backstop: the other checks normally fire first). All are relative to the point before but
+    the h2/prior bound: the size of the MC error, of the ESS, is a property of the sample size
+    and the point, which no revert of a step cures."""
+    return not _health_failures(diag, before, n_tr, cfg)
 
 
 def _tilt_step(
@@ -752,8 +789,7 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
         res.first_residual[l] = residual
     step = pending[l]
     if step is not None:
-        args = (st.h2_last[l], st.ess_ref[l], st.mc_ref[l], cfg.n_trans, st.eps_ref[l], cfg)
-        failures = _health_failures(diag, *args)
+        failures = _health_failures(diag, _reference(st, l), cfg.n_trans, cfg)
         if failures:
             # Counted per step, not per inner index: the ascent runs each layer once per index.
             if res.n_unhealthy[l] == cfg.max_backtrack:
@@ -761,7 +797,7 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
                     f"layer {l}: the inner step keeps breaking the sampler at outer step "
                     f"{st.outer}, inner step {inner} ({res.n_unhealthy[l]} reverts since the "
                     f"last accepted point, max_backtrack={cfg.max_backtrack}, "
-                    f"eta_phihat={st.eta_hat[l]:.2e}); last run: " + "; ".join(failures)
+                    f"eta_phihat={st.eta_hat[l]:.2e}); last run: " + _failure_text(failures)
                 )
             res.n_backtrack[l] += 1
             res.n_unhealthy[l] += 1
@@ -854,15 +890,15 @@ class _OuterRun(NamedTuple):
 
 
 def _unhealthy_outer_run_message(
-    l: int, outer: int, n_retry: int, at: str, failures: list[str]
+    l: int, outer: int, n_retry: int, at: str, failures: list[_Failure]
 ) -> str:
     """UnhealthySolveError's message for layer l's outer-gradient run: the failed checks, and
     a hint on escaped chains when an h2 check is among them."""
     message = (
         f"layer {l}: the outer-gradient run of outer step {outer} is unhealthy after "
-        f"{_retries(n_retry)}; the failing run was at {at}: " + "; ".join(failures)
+        f"{_retries(n_retry)}; the failing run was at {at}: " + _failure_text(failures)
     )
-    if any(f.startswith(("h2 growth", "h2/prior")) for f in failures):
+    if any(f.check in _ESCAPE_CHECKS for f in failures):
         message += (
             ". Chains far above the prior's scale mean a tilt whose density is not "
             "normalisable; lower solver.eta_max / eta_max_phihat, or see docs/design.md on the "
@@ -886,10 +922,7 @@ def _outer_run(prob: _Problem, st: _SolverState, l: int, inner: _InnerResult) ->
     dropped = False
     for n_retry in range(cfg.max_backtrack + 1):
         moments, diag = s.run(cfg.n_trans_outer)
-        args = (
-            st.h2_last[l], st.ess_ref[l], st.mc_ref[l], cfg.n_trans_outer, st.eps_ref[l], cfg
-        )  # fmt: skip
-        failures = _health_failures(diag, *args)
+        failures = _health_failures(diag, _reference(st, l), cfg.n_trans_outer, cfg)
         if not failures:
             where = f"outer step {st.outer} (outer-gradient run)"
             _accept_point(prob, st, l, diag, cfg.n_trans_outer, where)
@@ -1002,8 +1035,7 @@ def _probe_samplers(prob, st: _SolverState) -> bool:
     for l in range(1, prob.L):
         st.samplers[l].set_prior(_prior_cov(prob, l, st.Phi))
         _, d = st.samplers[l].run(c.n_trans, collect=False)
-        reference = (st.h2_last[l], st.ess_ref[l], st.mc_ref[l])
-        ok = ok and _healthy(d, *reference, c.n_trans, st.eps_ref[l], c)
+        ok = ok and _healthy(d, _reference(st, l), c.n_trans, c)
     return ok
 
 
@@ -1209,6 +1241,9 @@ def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> N
     og = _outer_gradients(prob, st, inner)
     if any(og.n_retry):
         log(_outer_run_warning(outer, og))
+    for note in st.notes:
+        log(f"[{outer:04d}] {note}")
+    st.notes.clear()
     step = _outer_descent(prob, st, og.grads, Phi_prev, outer, log)
     rec = _record(prob, st, outer, time.time() - t_start, inner, og, step, Phi_prev, Phi_hat_prev)
     for k in st.history:
@@ -1299,8 +1334,8 @@ def _restore_state(
         # HMC checkpoints written before the importance sampler existed have no ess_ref, and
         # HMC never reads it.
         ess_ref=list(payload.get("ess_ref", [float("nan")] * prob.L)),
-        # Older checkpoints have no mc_ref; the next inner ascent's first run sets it before
-        # any step is judged against it.
+        # Older checkpoints have no mc_ref. The next inner ascent's first run sets it before
+        # any step is judged against it, so it is saved for completeness only.
         mc_ref=list(payload.get("mc_ref", [float("nan")] * prob.L)),
         history=_history_from_lists(payload["history"]),
         mse_net=payload["mse_net"],

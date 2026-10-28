@@ -163,8 +163,11 @@ class SolverConfig(StrictModel):
     # so runs of different length compare), exceeds max_mc_err_growth times that of the
     # accepted point before it is unhealthy: the step made the sampler mix worse. The size of
     # the MC error is a property of the sample size, which no revert cures, so only its growth
-    # is held against a step. The estimate is itself noisy (fourth moments, the lag-1 ESS
-    # estimate): sound relu runs differ by up to 6x from the point before, tanh ones by 1.3x.
+    # is held against a step. A backstop: a ratio of 10 is about a hundredfold ESS drop under
+    # HMC, where the h2, divergence and step-size checks normally fire first, and under
+    # importance sampling it overlaps min_ess_drop. Not lower: the estimate is itself noisy
+    # (fourth moments, the lag-1 ESS estimate), and sound relu runs differ by up to 6x from the
+    # point before (tanh ones by 1.3x).
     max_mc_err_growth: PosFloat = 10.0
     eps_collapse: NonNegFloat = 1e-2
     project_tilt: bool = True
@@ -245,8 +248,8 @@ class SolverConfig(StrictModel):
 # The solver fields that existed before the sampler choice. They enter the mean-field result
 # hash exactly as they did then (flat, next to the problem fields), so results solved before
 # the sampler choice existed stay valid. log_int and save_int change no number but are among
-# them: dropping them would change every existing hash. So was max_mc_err, now among
-# RETIRED_SOLVER_FIELDS.
+# them: dropping them would change every existing hash (RETIRED_SOLVER_FIELDS holds those
+# that are no longer settings).
 LEGACY_SOLVER_FIELDS = (
     "n_outer", "n_inner_max", "inner_tol", "inner_tol_mc", "eta_phi", "eta_phihat", "eta_max",
     "eta_grow", "max_backtrack", "eta_min_rel", "max_div_frac", "max_h2_growth",

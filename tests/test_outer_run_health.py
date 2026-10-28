@@ -58,29 +58,31 @@ def test_a_run_whose_scale_exceeds_the_bound_times_the_prior_is_unhealthy(h2, he
     cfg = MeanFieldConfig(sampler=sampler).solver
     assert cfg.max_h2_prior_ratio == 100.0
     diag = hmc_diag(h2) | {"ess_frac": 0.5}
-    assert mf._healthy(diag, h2, 0.5, NAN, cfg.n_trans, 1.0, cfg) is healthy
+    assert mf._healthy(diag, mf._RunReference(h2, 0.5, NAN, 1.0), cfg.n_trans, cfg) is healthy
 
 
 def test_the_bound_is_relative_to_the_prior_scale():
     cfg = MeanFieldConfig(max_h2_prior_ratio=10.0).solver
     diag = hmc_diag(50.0) | {"prior_h2": 10.0}
-    assert mf._healthy(diag, 50.0, NAN, NAN, cfg.n_trans, 1.0, cfg)
-    assert not mf._healthy(diag | {"prior_h2": 4.0}, 50.0, NAN, NAN, cfg.n_trans, 1.0, cfg)
+    before = mf._RunReference(50.0, NAN, NAN, 1.0)
+    assert mf._healthy(diag, before, cfg.n_trans, cfg)
+    assert not mf._healthy(diag | {"prior_h2": 4.0}, before, cfg.n_trans, cfg)
 
 
 def test_the_failures_name_each_check_with_its_value():
     """Divergences, resets and a step-size collapse, not the scale: each is reported."""
     cfg = MeanFieldConfig(max_div_frac=0.01, n_chains=100).solver
     diag = hmc_diag(1.0) | {"n_divergent": 5, "n_reset": 2, "eps": 1e-4}
-    assert mf._health_failures(diag, 1.0, NAN, NAN, 1, 1.0, cfg) == [
-        "divergent fraction 0.05 > max_div_frac=0.01",
-        "2 chain resets",
-        "HMC step size 0.0001 < eps_collapse x warm-up = 0.01",
+    assert mf._health_failures(diag, mf._RunReference(1.0, NAN, NAN, 1.0), 1, cfg) == [
+        ("divergences", "divergent fraction 0.05 > max_div_frac=0.01"),
+        ("resets", "2 chain resets"),
+        ("eps_collapse", "HMC step size 0.0001 < eps_collapse x warm-up = 0.01"),
     ]
     importance = MeanFieldConfig(sampler="importance").solver
     diag = hmc_diag(1.0) | {"ess_frac": 0.01}
-    assert mf._health_failures(diag, 1.0, 0.5, NAN, 1, NAN, importance) == [
-        "ESS fraction 0.01 < min_ess_drop x before = 0.05"
+    before = mf._RunReference(1.0, 0.5, NAN, NAN)
+    assert mf._health_failures(diag, before, 1, importance) == [
+        ("ess_drop", "ESS fraction 0.01 < min_ess_drop x before = 0.05")
     ]
 
 
@@ -196,10 +198,13 @@ def test_an_inner_step_that_keeps_breaking_the_sampler_raises_unhealthy_solve_er
 # ----------------------------------------------------------------------------- the message
 def test_the_escaped_chains_hint_follows_only_an_h2_failure():
     """The hint on escaped chains follows a failed h2 check only, not divergences or resets."""
-    h2 = mf._unhealthy_outer_run_message(0, 3, 1, "x", ["h2/prior 200 > max_h2_prior_ratio=100"])
-    assert "Chains far above the prior's scale" in h2
-    growth = mf._unhealthy_outer_run_message(0, 3, 1, "x", ["h2 growth 20 > max_h2_growth=10"])
-    assert "Chains far above the prior's scale" in growth
-    divergent = mf._unhealthy_outer_run_message(0, 3, 1, "x", ["2 chain resets"])
-    assert "Chains far above" not in divergent
-    assert divergent.endswith("at x: 2 chain resets")
+
+    def message(*checks: str) -> str:
+        failures = [mf._Failure(check, f"{check} failed") for check in checks]
+        return mf._unhealthy_outer_run_message(0, 3, 1, "x", failures)
+
+    for escaped in (["h2_prior"], ["h2_growth"], ["divergences", "h2_growth"]):
+        assert "Chains far above the prior's scale" in message(*escaped)
+    for other in (["resets"], ["divergences", "eps_collapse"], ["ess_drop"], ["mc_growth"]):
+        assert "Chains far above" not in message(*other)
+    assert message("resets", "mc_growth").endswith("at x: resets failed; mc_growth failed")
