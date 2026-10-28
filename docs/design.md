@@ -168,8 +168,11 @@ class SolverConfig(BaseModel):        # how it is solved
     n_outer: int = 300; n_inner_max: int = 30; inner_tol: float = 1e-2; inner_tol_mc: float = 2.0
     eta_phi: float = 0.05; eta_phihat: float = 0.05; eta_max: float = 0.25; eta_grow: float = 1.1
     max_backtrack: int = 8; eta_min_rel: float = 1e-3; max_div_frac: float = 0.02
-    max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
+    max_h2_growth: float = 10.0; eps_collapse: float = 1e-2
     max_h2_prior_ratio: float = 100.0   # ||h||^2/P above this x the prior's is unhealthy (hashed only off 100)
+    max_mc_err_growth: float = 10.0  # MC error per transition above this x the point before's
+    # is unhealthy (hashed only off 10). max_mc_err (an absolute MC-error bound, 1) is retired:
+    # RETIRED_SOLVER_FIELDS keeps it in the hash at 1; a config.json holding it loads only at 1
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
     # step control (STEP_CONTROL_FIELDS, hashed when not at STEP_CONTROL_LEGACY; see meanfield.py "Step control").
     # eta_max caps only the outer step size; the inner one is capped by eta_max_phihat, so a smaller inner step is set
@@ -516,8 +519,11 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # A sampler run validates the step before it (backtracking): HMC on divergences / resets / step-size collapse,
     # importance on an ESS drop (ess_frac < min_ess_drop x the ess_frac of the accepted point before the step), both on
     # ||h||^2/P blow-up (growth > max_h2_growth since the point before, or above max_h2_prior_ratio x the prior's) and
-    # MC error > max_mc_err. The outer-gradient run validates the inner ascent's trailing step the same way, MC error
-    # excepted (see "Outer-run health guard" below). When backtracking cannot cure a run, inner or outer,
+    # an MC-error jump (per transition, > max_mc_err_growth x that of the point before; see
+    # "Monte Carlo error" below). The outer-gradient run validates the inner ascent's trailing
+    # step the same way (see "Outer-run health guard" below). An inner step is reverted at most
+    # max_backtrack times since the layer's last accepted point. When backtracking cannot cure
+    # a run, inner or outer,
     # UnhealthySolveError (a RuntimeError, a one-line error in the CLI, naming the failed checks and their values) is
     # raised before any final.pt is written.
     # Under importance sampling every accepted point (the initial point after
@@ -601,8 +607,9 @@ Step control (`SolverConfig` defaults; each part can be switched back, see the c
   outer steps (five seeds), where the legacy control stays 0.110 to 0.119 away.
 - Outer-run health guard (`max_h2_prior_ratio`, `meanfield._outer_run`): a step is validated by the run after it, so
   every inner ascent ends with a step it never measured, and the outer-gradient run is the first run at that tilt. That
-  run is held to the step validation (`_sampler_sound`: h^2 growth and the absolute bound, HMC divergences / resets /
-  step-size collapse, importance ESS drop); when it fails, the trailing step is reverted (tilt and chain state) and
+  run is held to the step validation (`_healthy`: h^2 growth and the absolute bound, HMC
+  divergences / resets / step-size collapse, importance ESS drop, MC-error jump); when it
+  fails, the trailing step is reverted (tilt and chain state) and
   retaken at half the step size, up to max_backtrack times. Under inner_step_control="progress" halving stops at
   eta_min_rel x eta_phihat; a step that still fails there is dropped (back to the validated point before it). A run
   that fails with nothing left to try (after max_backtrack retries, at that validated point, or with no trailing step)
@@ -611,9 +618,9 @@ Step control (`SolverConfig` defaults; each part can be switched back, see the c
   layer in `history["n_retry_outer_run"]` and `history["outer_run_dropped"]` and logged as a WARNING line; the inner
   loop's own reverts stay in `n_backtrack_inner`, and `tilt_projected_rel` keeps the projection change of a dropped
   step (it was an inner step of that outer step). (An importance test with eta_phihat 1e4 reaches the floor: its
-  trailing step collapses the ESS at every size down to it.) The MC error is not checked there: it is a property of
-  the sample size, not of the step, so no revert cures it (the pinned 32-chain solves sit at 1.75 to 4.31 in every
-  outer run, above max_mc_err = 1). Why the outer run: on the exemplar's relu problem with eta_max = 0.1 (see "The relu tilt
+  trailing step collapses the ESS at every size down to it.) The message's hint on escaped
+  chains is added only when an h^2 check failed.
+  Why the outer run: on the exemplar's relu problem with eta_max = 0.1 (see "The relu tilt
   rule" above) the inner loop of outer step 5 had converged and its trailing step went to a tilt that is not
   normalisable; an unchecked outer-gradient run samples it at h^2/prior 2977, and its gradients drive the residual
   from 1.3 to 92 (the replay with `max_h2_prior_ratio` and the outer check absent). Progress-based inner acceptance cannot see this: the inner rule never sees that run. Why an absolute
@@ -623,6 +630,39 @@ Step control (`SolverConfig` defaults; each part can be switched back, see the c
   binds on the tanh exemplar at its defaults (both samplers, measured: largest h^2/prior 1.33 over every run checked,
   no retries), the analytic Gaussian saddle tests or the weak-response tanh test (all three assert it; largest
   outer-run h^2/prior 1.1 to 1.3).
+- Monte Carlo error (`max_mc_err_growth`, `meanfield._health_failures`): a run validating a step, an
+  inner run or the outer-gradient run, is unhealthy when its relative MC error of <psi psi^T> per
+  transition (MC error x sqrt(transitions)) exceeds max_mc_err_growth (10) times that of the
+  accepted point before the step. Relative, like the ESS-drop rule: the size of the MC error is a
+  property of the sample size (chains, transitions) and of the point, which no revert of a step
+  cures; only a rise blames the step (its chains mix worse there, n_eff = draws x ESS fraction). Per
+  transition: at a fixed point the MC error falls as 1/sqrt(transitions), and the outer-gradient run
+  is longer than the inner runs it is compared with. Why 10 (a hundredfold ESS drop), not the 3.2 of
+  a tenfold one like min_ess_drop: the MC error is itself an estimate (from fourth moments and the
+  lag-1 ESS estimate), and on the exemplar's relu problem at the default step control (40 outer
+  steps, growth unbounded) the runs sound in every other way rose up to 6.3x over the accepted point
+  before (99th percentile 3.2, 9 of 579 above 3); at 3 a sound step is reverted that often, and a
+  lucky-low reference can keep rejecting at the step-size floor until the inner give-up raises. On
+  the eta_max = 0.1 relu replay (below) a bound of 3 also rejects steps at outer step 2 on the MC
+  error alone (five of its nine reverts), which changes the trajectory; at 10 it is that of the code
+  before. The first run of each inner ascent has no step to judge; the warm-up and an outer step's
+  probe runs collect no moments, so a solve's first point has no reference. The absolute bound it
+  replaces, max_mc_err = 1, rejected every inner step of a solve with few chains: the pinned
+  32-chain solves (`tests/fixtures/hmc_solve_*.pt`) sit at MC error 1.75 to 5.3 in every run; they
+  accepted no inner step, and their eta_phihat halved 0.05 -> 0.0125 -> 0.0031 -> 0.00078 over three
+  outer steps. They now accept two inner steps per layer and outer step (fixtures regenerated; the
+  `_legacy_steps` ones, whose inner ascents end before a checked step, are bit for bit unchanged).
+  Noise of the ratio, per transition, measured: up to 1.66 in the 32-chain solves; 1.31 (HMC) and
+  1.15 (importance) on the tanh exemplar at its defaults, which the rule leaves bit for bit
+  unchanged (both samplers, 80 outer steps). Hash: max_mc_err_growth enters only off 10, and
+  max_mc_err stays in it at 1 (`fct.config.RETIRED_SOLVER_FIELDS`), so no hash moves; a cached solve
+  whose inner steps max_mc_err rejected (MC error above 1: few chains) keeps its hash but is not
+  what the solver now gives (the hash-scope note at `fct.config.HEALTH_BOUND_DEFAULTS`).
+- Inner give-up: an inner step that keeps breaking the sampler is reverted and retaken at half
+  size (not below the floor under "progress") up to max_backtrack times since the layer's
+  last accepted point; the next failure raises `UnhealthySolveError`. Counted per step, not
+  per inner index: the ascent runs each layer once per index, so a budget of
+  max_backtrack x (index + 1) was never spent, and the ascent ran on to n_inner_max.
 
 History values are stored per outer step; arrays become lists for saving. The
 history keys are those of the notebook's `keys` list plus `is_max_weight`, `picard_resid` (a scalar: the last
