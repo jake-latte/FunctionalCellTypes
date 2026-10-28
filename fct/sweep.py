@@ -48,6 +48,7 @@ from fct.config import (
     DataConfig,
     MeanFieldConfig,
     NetConfig,
+    NonNegFloat,
     NonNegInt,
     PosFloat,
     PosInt,
@@ -61,11 +62,15 @@ from fct.config import (
 from fct.data import Dataset, get_dataset, task_dims
 from fct.meanfield import meanfield_hash, run_meanfield
 from fct.monitor import make_mir_monitor
+from fct.spatial import KernelSpec, PopulationSpec, SpatialConfig
 from fct.train import load_trained, train_from_config
 
 SWEEP_FILE = "sweep.json"
 SETTING_FILE = "setting.json"
 TASK_AXIS = "data.task"
+SPATIAL_PREFIX = "spatial."
+# Length of the hash that stands for a dict-valued axis value in a directory name.
+LABEL_HASH_LENGTH = 6
 # Setting directories are ROOT/<task>/<name>: `expand` builds `relpath` that way, and the lookups
 # below find them with this glob.
 SETTING_DIRS_GLOB = "*/*"
@@ -167,6 +172,10 @@ class SweepConfig(StrictModel):
     `meanfield` is the mean-field problem and its solver (`MeanFieldConfig`, library defaults;
     the rate tilt follows `train.rate_lambda` unless set). It is read by the solve stage only:
     changing it never makes a trained setting stale.
+
+    `spatial` is the spatial weight prior (`fct.spatial.SpatialConfig`) shared by every setting;
+    a `spatial.<path>` axis varies one of its fields and needs the section to be set. The solve
+    stage refuses a spatial setting (the solver knows only the iid prior).
     """
 
     N: PosInt
@@ -186,6 +195,17 @@ class SweepConfig(StrictModel):
     device: Literal["auto", "cpu", "cuda"] = "auto"
     # The base task, used unless `data.task` is a grid axis.
     task: Literal["linear_teacher", "object_action", "what_where"] = "linear_teacher"
+    # Shared network and loss fields, the library defaults unless set; any of them may be an axis.
+    L: PosInt = NetConfig().L
+    g: PosFloat = NetConfig().g
+    phi: Literal["relu", "tanh", "sigmoid"] = NetConfig().phi
+    weight_lambda: NonNegFloat = TrainConfig().weight_lambda
+    rate_lambda: NonNegFloat = TrainConfig().rate_lambda
+    optimizer: Literal["adam", "sgld"] = TrainConfig().optimizer
+    beta: PosFloat = TrainConfig().beta
+    # The spatial weight prior of every setting (`Config.spatial`); None trains under the iid
+    # prior (the plain weight L2). Its fields may be axes (`spatial.hidden.kernel.length_scale`).
+    spatial: SpatialConfig | None = None
     meanfield: MeanFieldConfig = MeanFieldConfig()
     grid: dict[str, list[Any]] | None = None
 
@@ -259,6 +279,78 @@ _SIZE_PRESETS: dict[str, SweepConfig] = {
 }
 
 
+_SPATIAL_POPULATION = PopulationSpec(kernel=KernelSpec(length_scale=0.15))
+_SPATIAL_PRIOR = SpatialConfig(
+    input=_SPATIAL_POPULATION,
+    hidden=_SPATIAL_POPULATION,
+    output=_SPATIAL_POPULATION,
+    min_rel_eig=1e-2,
+)
+
+
+def spatial_tiny() -> SweepConfig:
+    """Seconds per setting on a CPU, for checking the spatial pipeline (not for results): a
+    linear teacher, one hidden layer of N in {4, 8} units under the spatial prior, SGLD."""
+    return SweepConfig(
+        N=8,
+        P=16,
+        n_epochs=6,
+        lr=1e-2,
+        log_int=2,
+        save_int=2,
+        monitor_int=2,
+        monitor_bins=4,
+        monitor_shuffles=2,
+        linear_teacher=LinearTeacherParams(n_features=6, n_latents=2, latent_range=1.0),
+        object_action=ObjectActionParams(grid_size=3, max_objects=2),
+        what_where=WhatWhereParams(n_motifs=4),
+        L=1,
+        phi="tanh",
+        optimizer="sgld",
+        beta=1e3,
+        meanfield=MeanFieldConfig(n_points=16),  # at most P, so a solve reaches the solver
+        spatial=_SPATIAL_PRIOR,
+        device="cpu",
+        grid={"net.N": [4, 8]},
+    )
+
+
+def spatial_n_scan() -> SweepConfig:
+    """Width scan of a spatially embedded linear-teacher net: N in {64, ..., 1024}, one hidden
+    layer, SGLD, float64, with the MIR monitor."""
+    return SweepConfig(
+        N=64,
+        P=164,
+        n_epochs=250_000,
+        lr=1e-2,
+        log_int=1000,
+        save_int=5000,
+        monitor_int=5000,
+        monitor_bins=8,
+        monitor_shuffles=5,
+        linear_teacher=LinearTeacherParams(n_features=64, n_latents=2, latent_range=1.0),
+        object_action=ObjectActionParams(grid_size=5, max_objects=3),
+        what_where=WhatWhereParams(n_motifs=8),
+        L=1,
+        g=1.0,
+        phi="tanh",
+        weight_lambda=3e-3,
+        rate_lambda=0.0,
+        optimizer="sgld",
+        beta=1e4,
+        spatial=_SPATIAL_PRIOR,
+        dtype="float64",
+        grid={"net.N": [64, 128, 256, 512, 1024]},
+    )
+
+
+# Presets with their own grid and no lambda axes, by name; each takes no argument.
+FIXED_GRID_PRESETS: dict[str, Callable[[], SweepConfig]] = {
+    "spatial_tiny": spatial_tiny,
+    "spatial_n_scan": spatial_n_scan,
+}
+
+
 def with_grid(sweep: SweepConfig, grid: dict[str, list]) -> SweepConfig:
     """A validated copy of `sweep` over `grid`."""
     return SweepConfig.model_validate({**sweep.model_dump(), "grid": grid})
@@ -282,7 +374,7 @@ def phase_transition(n_lambda: int) -> SweepConfig:
 
 # Presets with an explicit grid, by name; each takes n_lambda, the points per lambda axis.
 GRID_PRESETS: dict[str, Callable[[int], SweepConfig]] = {"phase_transition": phase_transition}
-PRESET_NAMES = ("tiny", "full", "modularity", *GRID_PRESETS)
+PRESET_NAMES = ("tiny", "full", "modularity", *GRID_PRESETS, *FIXED_GRID_PRESETS)
 
 
 def preset(name: str, n_lambda: int | None = None) -> SweepConfig:
@@ -290,6 +382,8 @@ def preset(name: str, n_lambda: int | None = None) -> SweepConfig:
     is `full`); the grid presets need `n_lambda`, the others reject it."""
     if name not in PRESET_NAMES:
         raise ValueError(f"unknown preset {name!r}; valid: {sorted(PRESET_NAMES)}")
+    if name in FIXED_GRID_PRESETS and n_lambda is None:
+        return FIXED_GRID_PRESETS[name]()
     if name in GRID_PRESETS:
         if n_lambda is None:
             raise ValueError(f"preset {name!r} needs n_lambda (points per lambda axis)")
@@ -346,10 +440,14 @@ def _base_config(sweep: SweepConfig, task: str) -> Config:
     """The shared part of every setting's `Config`; grid axes are written over it."""
     return Config(
         data=data_config(sweep, task),
-        net=NetConfig(N=sweep.N, seed=sweep.seeds.net),
+        net=NetConfig(N=sweep.N, L=sweep.L, g=sweep.g, phi=sweep.phi, seed=sweep.seeds.net),
         train=TrainConfig(
             n_epochs=sweep.n_epochs,
             lr=sweep.lr,
+            weight_lambda=sweep.weight_lambda,
+            rate_lambda=sweep.rate_lambda,
+            optimizer=sweep.optimizer,
+            beta=sweep.beta,
             log_int=sweep.log_int,
             save_int=sweep.save_int,
             seed=sweep.seeds.train,
@@ -358,6 +456,7 @@ def _base_config(sweep: SweepConfig, task: str) -> Config:
             monitor_shuffles=sweep.monitor_shuffles,
         ),
         meanfield=sweep.meanfield,
+        spatial=sweep.spatial,
         dtype=sweep.dtype,
         device=sweep.device,
     )
@@ -389,6 +488,8 @@ def _validate_axis(sweep: SweepConfig, axis: str, values: list) -> None:
     a valid Config, and no two build the same one (so `[0, 0.0]` counts as a repeat).
     Each value is built under the sweep's base task, so a task-specific value that is valid
     only under a task named on a `data.task` axis is rejected here (loudly, naming the axis)."""
+    if axis.startswith(SPATIAL_PREFIX) and sweep.spatial is None:
+        raise ValueError(f"grid axis {axis!r}: set the sweep's spatial section first")
     if axis in SWEEP_OWNED_AXES:
         raise ValueError(
             f"grid axis {axis!r} is set by the sweep's own {SWEEP_OWNED_AXES[axis]}; "
@@ -422,10 +523,15 @@ def _validate_grid(sweep: SweepConfig, grid: dict[str, list]) -> None:
 
 
 def _label_part(axis: str, value: Any) -> str:
-    """`<last part of the axis path><value>` for a directory name, e.g. `rate_lambda1e-06`.
+    """`<last part of the axis path><value>` for a directory name, e.g. `rate_lambda1e-06`; a
+    dict value is shown as a short hash of its contents.
     Characters outside letters, digits and `._+-` become `-` so the name is a safe path
     component. The label is for people; uniqueness comes from the index prefix."""
-    text = f"{value:g}" if isinstance(value, float) else str(value)
+    if isinstance(value, dict):  # a whole section: its dump is far longer than NAME_MAX
+        digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+        text = f"-{digest[:LABEL_HASH_LENGTH]}"
+    else:
+        text = f"{value:g}" if isinstance(value, float) else str(value)
     return re.sub(r"[^A-Za-z0-9._+-]", "-", axis.rsplit(".", 1)[-1] + text)
 
 
