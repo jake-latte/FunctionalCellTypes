@@ -101,7 +101,7 @@ and the solver fields that existed before the sampler choice (`config.LEGACY_SOL
 included) in one flat dict, which is exactly how the section was hashed before it was split, so every existing meanfield
 result keeps its hash. `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
 `sampler="importance"`: switching sampler makes a result stale, importance settings never touch an HMC result. Every
-solver field is in exactly one of the two lists or in `config.UNHASHED_SOLVER_FIELDS` (`max_final_resid`, a check on
+solver field is in exactly one of the two lists or in `config.UNHASHED_SOLVER_FIELDS` (`tilt_tripwire_resid`, `tilt_tripwire_steps`, a check on
 the result that changes no number of it; a test enforces it), so a new field has to be given a hash rule explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
 cache stale.
 
@@ -159,7 +159,7 @@ class SolverConfig(BaseModel):        # how it is solved
     max_backtrack: int = 8; eta_min_rel: float = 1e-3; max_div_frac: float = 0.02
     max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
-    max_final_resid: float = 0.9        # not hashed: solve raises UnconvergedSolveError if the last Stein residual of Phi_hat is >= this
+    tilt_tripwire_resid: float = 0.9; tilt_tripwire_steps: int = 3   # not hashed: the tilt tripwire (see solve), not a convergence test
     pd_floor_rel: float = 1e-8; inv_floor_rel: float = 1e-4
     # sampler runs (HMC-only: n_chains, n_leap, eps0, target_accept, adapt_rate, precondition; also max_div_frac, eps_collapse)
     n_chains: int = 2048; n_trans: int = 2; n_trans_outer: int = 5; n_leap: int = 10
@@ -436,8 +436,12 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # warm-up, each validated inner step, each outer-gradient run) must have ess_frac >= min_ess_frac, else
     # InadequateSamplerError (a RuntimeError) is raised before any final.pt is written: the ESS is a property of the
     # point, so backtracking cannot cure it, and carrying on would freeze the iteration at its start.
-    # A solve whose last outer step has a Stein fixed-point residual of Phi_hat >= solver.max_final_resid in any layer
-    # raises UnconvergedSolveError (a RuntimeError) instead of returning, so no final.pt is written (the checkpoints stay).
+    # Tilt tripwire: when, in some layer, the largest Stein fixed-point residual of Phi_hat over the last
+    # solver.tilt_tripwire_steps outer steps is >= solver.tilt_tripwire_resid, solve raises UnconvergedSolveError (a
+    # RuntimeError) instead of returning, so no final.pt is written (the checkpoints stay). It catches a lost tilt (Phi_hat
+    # near 0 has residual near 1), not non-convergence: an unconverged solve below it passes. The CLI (`solve`, `sweep run`)
+    # reports it as a one-line error. history["phihat_change_rel"] is NaN for a step from a zero tilt; the log prints
+    # margin=n/a for a bounded phi.
     # With project_tilt, phi needs a tilt_rule (ValueError up front otherwise).
     # If checkpoint_dir is given, return its final.pt if present, else
     # resume from its latest ckpt_*.pt (ValueError if it was written with a net and `net` is None, or vice
