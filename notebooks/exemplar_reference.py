@@ -82,11 +82,14 @@ def exemplar_reference(cfg: Config, dataset: Dataset, **kw) -> tuple[torch.Tenso
             f"the Picard reference is for one hidden layer, the config has {cfg.net.L}"
         )
     phi = get_phi(cfg.net.phi)
-    # No tilt projection is applied here, so only activations for which every tilt the
-    # iteration produces is normalisable are accepted.
-    if known_tilt_class(phi) not in ("bounded", "linear"):
+    # No tilt projection is applied here, so only a bounded phi is accepted: its tilt stays
+    # bounded and every density is normalisable. For a linear or relu phi the Stein target
+    # -2c A Y Y^T A is negative semi-definite and can make the density non-normalisable, after
+    # which the iteration diverges without any sign of it.
+    if known_tilt_class(phi) != "bounded":
         raise ValueError(
-            f"the Picard reference applies no tilt projection; phi={cfg.net.phi!r} needs one"
+            f"the Picard reference applies no tilt projection, so it needs a bounded phi; "
+            f"got phi={cfg.net.phi!r}"
         )
     X, Y = _solver_inputs(dataset, cfg)
     meanfield = cfg.meanfield.model_copy(update={"beta": resolve_beta(cfg)})

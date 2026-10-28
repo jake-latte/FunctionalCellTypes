@@ -2,11 +2,12 @@
 quadrature (the weak-response tanh problem of tests/weak_tanh.py), and is wired to the
 solver's own problem.
 
-The bound is 0.01: over seeds 0-9 the reference lands 0.002 to 0.007 from the quadrature fixed
-point, while a learning prefactor off by 20 % or a prior scale off by 10 % lands 0.012 to 0.034
-from it, so the bound tells a correct target from a slightly wrong one. Each run takes about
-1.5 s at this budget, far below the script's own (8192 chains, 100 + 100 transitions, 30
-iterations), which this 8-point problem does not need."""
+The bound is 0.015. Over seeds 0-19 `exemplar_reference` lands 0.0016 to 0.0112 from the
+quadrature fixed point (seeds 0-9 of `picard_reference` on the same problem 0.002 to 0.007),
+while with the learning prefactor 20 % low it lands 0.025 to 0.038 from it, so the bound tells
+a correct target from a slightly wrong one. Each run takes about 1.5 s at this budget, far
+below the script's own (8192 chains, 100 + 100 transitions, 30 iterations), which this
+8-point problem does not need."""
 
 import pytest
 import torch
@@ -18,7 +19,7 @@ from notebooks.exemplar_reference import exemplar_reference, picard_reference
 from tests.weak_tanh import WEAK_CONSTANTS, WEAK_P, weak_tanh_problem
 
 BUDGET = {"n_chains": 1024, "warmup_trans": 30, "n_trans": 30, "n_iter": 12}
-BOUND = 0.01
+BOUND = 0.015
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +70,8 @@ def test_the_exemplar_reference_solves_the_configured_problem(weak_tanh):
     ("net", "n_points", "match"),
     [
         (NetConfig(L=2, phi="tanh"), WEAK_P, "one hidden layer"),
-        (NetConfig(L=1, phi="relu"), WEAK_P, "no tilt projection"),
+        (NetConfig(L=1, phi="relu"), WEAK_P, "needs a bounded phi"),
+        (NetConfig(L=1, phi="id"), WEAK_P, "needs a bounded phi"),
         (NetConfig(L=1, phi="tanh"), WEAK_P + 1, "exceeds the dataset size"),
     ],
 )
