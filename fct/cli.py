@@ -46,6 +46,7 @@ from fct.meanfield import (
     InadequateSamplerError,
     SpatialPriorUnsupportedError,
     UnconvergedSolveError,
+    UnhealthySolveError,
     load_meanfield,
     net_kernels,
     run_meanfield,
@@ -192,6 +193,7 @@ USER_FIXABLE_ERRORS = (
     InadequateSamplerError,
     SpatialPriorUnsupportedError,
     UnconvergedSolveError,
+    UnhealthySolveError,
 )
 
 

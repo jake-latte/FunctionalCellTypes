@@ -19,7 +19,13 @@ from fct.activations import identity
 from fct.config import MeanFieldConfig
 from fct.hmc import relative_fro
 from tests.pinned_runs import LEGACY_STEP_CONTROL
-from tests.test_meanfield import LAMBDA_W, analytic_saddle, linear_cfg, make_linear_problem
+from tests.test_meanfield import (
+    LAMBDA_W,
+    analytic_saddle,
+    assert_the_scale_bound_never_binds,
+    linear_cfg,
+    make_linear_problem,
+)
 from tests.weak_tanh import WEAK_CONSTANTS, WeakTanh, weak_tanh_problem
 
 F64 = {"device": "cpu", "dtype": torch.float64}
@@ -29,10 +35,12 @@ EYE = torch.eye(P, **F64)
 
 class ExactGaussianSampler:
     """Stands in for a layer's sampler on a linear layer without rate tilt: `run` returns the
-    exact ⟨ψψᵀ⟩ = (Σ⁻¹ + M)⁻¹ with a fixed Monte Carlo error, and the state is a counter of
-    runs, so a reverted step is visible."""
+    exact ⟨ψψᵀ⟩ = (Σ⁻¹ + M)⁻¹ with a fixed Monte Carlo error, and the sample scale ||h||²/P
+    and the prior's (h = ψ: their traces over P); the state is a counter of runs, so a reverted
+    step is visible."""
 
     def __init__(self, Sigma: torch.Tensor, mc_err: float):
+        self.prior_h2 = Sigma.diagonal().mean().item()
         self.Sigma_inv = torch.linalg.inv(Sigma)
         self.M = torch.zeros_like(Sigma)
         self.mc_err = mc_err
@@ -52,12 +60,12 @@ class ExactGaussianSampler:
 
     def run(self, n_trans, collect=True):
         self.state += 1
-        moments = {"psi_psi": torch.linalg.inv(self.Sigma_inv + self.M)}
+        psi_psi = torch.linalg.inv(self.Sigma_inv + self.M)
         diag = {
-            "h2_mean": 1.0, "psi_psi_rel_mc_err": self.mc_err, "n_divergent": 0, "n_reset": 0,
-            "eps": 1.0,
+            "h2_mean": psi_psi.diagonal().mean().item(), "prior_h2": self.prior_h2,
+            "psi_psi_rel_mc_err": self.mc_err, "n_divergent": 0, "n_reset": 0, "eps": 1.0,
         }  # fmt: skip
-        return moments, diag
+        return {"psi_psi": psi_psi}, diag
 
 
 def residual_at(x: float) -> float:
@@ -270,6 +278,7 @@ def test_a_weak_response_tanh_layer_converges_within_thirty_outer_steps(weak_tan
     result = solve_weak(p, weak_cfg(), on_outer=lambda snap: entering.append(snap.Phi[0]))
     assert all(result.history["inner_converged"])
     assert relative_fro(result.Phi[0], p.Phi_star) < 0.07
+    assert_the_scale_bound_never_binds(result.history)
     exact = np.array([relative_fro(p.moments(p.target(Phi)), Phi) for Phi in entering[:-1]])
     recorded = np.array(result.history["picard_resid"][1:])
     assert np.abs(recorded - exact)[-10:].max() < 0.04
