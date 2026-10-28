@@ -39,7 +39,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
-| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
+| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_grid.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
 | `jobs/fct_sweep.sh` | SLURM array script for the sweep (train stage) |
 | `jobs/fct_solve.sh` | the same array job at the solve stage (mean-field saddle points) |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
@@ -192,6 +192,24 @@ source notebook is committed.
 uv run python notebooks/build_spatial.py CACHE_ROOT                       # execute -> tmp/spatial.ipynb
 uv run python notebooks/build_spatial.py CACHE_ROOT --set OPTIMIZER=\'adam\' --set N_EPOCHS=500
 uv run python notebooks/build_spatial.py --no-execute                     # rebuild the committed source notebook
+```
+
+The spatial-prior notebook draws its spatially indexed kernels Phi^(l) (the data kernels A^(l) next to the latent
+kernel B = Z Z^T / k, the chosen trials, the pair grids) and its example outputs from the held-out test set, the
+3^k points of the latent lattice (one per sign pattern), not from the training samples.
+
+**Spatial-grid notebook.** The same figures for one setting of an already-run spatial sweep (for instance
+`python -m fct sweep init ROOT --preset spatial_n_scan`, then `sweep run`): give the sweep ROOT and the axis values
+of the setting, `SETTING = {"net.N": 256}` (a subset of the axes is enough when it picks one). The notebook lists the
+grid with each setting's status, loads the setting's trained net, and shows the spatial notebook's figures with
+the Phi kernels and example outputs computed on the test set. A setting of the grid that is not trained is reported in
+the cells and only its prior is drawn; a setting that is not in the grid is an error. The cells are the spatial
+notebook's (`build_spatial_grid.py` imports them), so both build the same figures. Only the source notebook is committed.
+
+```sh
+uv run python notebooks/build_spatial_grid.py ROOT --set 'SETTING={"net.N": 256}'   # execute -> tmp/spatial_grid.ipynb
+uv run python notebooks/build_spatial_grid.py ROOT --set 'SETTING={"net.N": 8}' --set DEVICE=\'cuda\'
+uv run python notebooks/build_spatial_grid.py --no-execute                          # rebuild the committed source notebook
 ```
 
 ## Python library: single runs and the mean-field solver

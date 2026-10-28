@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: in progress
+status: in review
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -43,3 +43,20 @@ removed from the equations and titles). Example outputs and R^2 are shown on the
 ## PI confirmation (2026-10-28)
 Confirmed. Starts once `spatial-sweep`, `readout-post-activations` and `prior-scaling-convention`
 are merged (it needs the spatial presets, the phi(h^L) readout and the final loss).
+
+## Implementation (branch `spatial-grid-notebook`)
+- `fct/spatial_grid.py`: `select_setting` (through `find_setting_dir`; a grid setting that was never run
+  is status "missing", a value outside the grid is a `LookupError`), `settings_table`, `load_grid_run`
+  (net, history, training set and the 3^k test set), `prior_coeff`. `fct.spatial.latent_kernel` is B = Z Z^T / k.
+- `notebooks/build_spatial_grid.py` builds `notebooks/spatial_grid.ipynb`; its cells are `build_spatial.py`'s
+  module constants. Cells that need the trained net keep their plotting function at the top level and run
+  the rest under `if TRAINED:`, else they repeat the "not trained" note; the prior kernels and floor
+  tables need only the config and are always drawn.
+- `build_spatial.py` (and so `spatial.ipynb`): `TEST_DATASET` in the train cell; A^(l), the trial picks, the pair
+  grids and the example outputs (with R^2) read it; `plot_data_kernels` draws B first. `execute_notebook` and
+  `build_main` take the name of the root parameter (`ROOT` here).
+- Decisions to confirm: the example outputs of `spatial.ipynb` also moved to the test set (the cell is shared;
+  the issue only asked for it in the grid notebook); the tuning, overlaps, weights and kernel comparison stay
+  on the training samples; a partly trained setting counts as not trained (only `done` is drawn).
+- Tests: `tests/test_spatial_grid.py`, `tests/test_build_spatial_grid.py` (executes on a `spatial_tiny` sweep with one
+  trained and one never-run setting), additions to `tests/test_build_spatial.py`.
