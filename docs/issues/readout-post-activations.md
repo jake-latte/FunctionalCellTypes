@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in progress
+status: in review
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -47,3 +47,39 @@ readout: in the model, the solver and every notebook.
 Confirmed as planned (the model, the solver and every notebook read out phi(h^L)). The PI cancelled
 the `pt_sweep_big` arrays because this change invalidates them, so the hazard above is gone: merge
 as soon as reviewed. The notebook part of the "figures only" alternative is moot.
+
+## Implementation (branch `readout-post-activations`)
+- `MLP.forward` returns `Z = V^T phi(h^L) / N`. `config.MODEL_VERSION = 2` is folded into every
+  section hash that holds `net` (train, meanfield and analysis caches, sweep settings), so a run
+  or solve of the h-readout model raises `StaleCacheError` / shows as `stale`.
+- `MeanFieldConfig.readout` is gone; a config.json carrying it fails with a ValidationError
+  naming `readout`. `readout_activities(H, phi)` and `empirical_kernels(net, X)` use phi(h) on
+  every layer; the solver always samples with psi = phi. The samplers keep their `psi_is_phi`
+  argument: psi = h is a Gaussian tilt with closed-form moments that the sampler tests use.
+- Fixtures: `hmc_solve_lazy_net_f32.pt` (it had a net read out from h) and
+  `meanfield_hashes.json` were regenerated; `readout` was deleted by hand from the flat
+  `legacy_config.json`. `hmc_solve_gaussian_phi_f64.pt` (already the phi readout, no net) is
+  untouched and still reproduces bit for bit, which checks that the phi path of the solver did
+  not move.
+- Notebooks: `spatial` (network and output equations, the psi cases of the kernel section, the
+  panel titles and `data_kernels` / `plot_data_kernels` signatures) and `exemplar` (psi of the
+  kernel figure) regenerated from their builders. `phase_transition` and `modularity` contain no
+  readout equation or case, so they are unchanged.
+- `MODEL_VERSION` 1 is left out of the hash, so a version-1 hash is the one the earlier code wrote
+  (the modularity-sweep and spatial hash pins hold at version 1, which the tests set).
+
+## Open: the tilt projection removes the learning term of the read-out layer (needs a PI decision)
+With `solver.project_tilt = True` (the default) every inner step projects Phi_hat_l onto
+normalisable tilts. For psi = phi that projection is `M + lambda_r I >= tilt_floor * lambda_r I`,
+independent of the prior Sigma (the ReLU orthant condition). The learning tilt of the read-out
+layer, Phi_hat_L = -2c A Y Y^T A, is negative semidefinite, so it is cut to at most
+`(1 - tilt_floor) lambda_r` in size: with `rate_tilt = 0` it is removed entirely, and on a
+random P = 20 relu example its norm falls to 2e-6 of itself at lambda_r = 1e-3 (1.7e-4 at 0.1);
+the psi = h projection used before (`Sigma^{1/2} M Sigma^{1/2} >= -(1 - tilt_floor) I`) kept
+3%. The same held before for `readout = "phi"`; this item makes it the only case. So, until the
+projection changes, a default solve cannot represent learning in the last layer. The analytic
+L = 1 tests and the ESS-floor test now set `project_tilt = False` (with it off the analytic
+saddle is recovered to 1.3e-2). Candidate fixes, for the PI: the Sigma-aware sufficient
+condition `lambda_min(M) >= -(1 - delta) lambda_min(Sigma^-1)` that `normalisability_margin`
+already uses for psi = phi; no projection for bounded phi (tanh, sigmoid); or `project_tilt =
+False` by default.
