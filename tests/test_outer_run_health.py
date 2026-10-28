@@ -2,8 +2,9 @@
 
 An inner ascent ends with a step it has not validated (steps are validated by the next run).
 The outer-gradient run is that next run: it must pass `_sampler_sound` (`_healthy` but for the
-Monte Carlo error, which no revert can cure), and if it does not, the trailing step is reverted and retaken at half the step size, up to max_backtrack
-times, after which the solve raises. `_healthy` also fails a run whose sample scale ||h||²/P
+Monte Carlo error, which no revert can cure), and if it does not, the trailing step is
+reverted and retaken at half the step size (dropped, if that size is already the floor), up to
+max_backtrack times, after which the solve raises. `_sampler_sound` also fails a run whose sample scale ||h||²/P
 exceeds max_h2_prior_ratio times the prior's, whatever the growth since the point before.
 
 The stubbed layer is that of tests/test_meanfield_step_control.py: Σ = I, Φ = ½ I, and a tilt
