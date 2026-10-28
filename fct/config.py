@@ -83,7 +83,7 @@ class DataConfig(StrictModel):
         return self
 
 
-Phi = Literal["relu", "tanh", "sigmoid"]
+Phi = Literal["relu", "tanh", "sigmoid", "id"]
 Optimizer = Literal["adam", "sgld"]
 
 

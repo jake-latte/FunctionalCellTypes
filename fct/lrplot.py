@@ -12,9 +12,12 @@ from matplotlib.figure import Figure
 from fct.draw import FIG_WIDTH, STYLE_RC, _styled
 from fct.lrtune import Row, collapse_seeds
 
-PHI_COLOURS = {"tanh": "#0072B2", "relu": "#D55E00"}  # colour-blind safe
+PHI_COLOURS = {"tanh": "#0072B2", "relu": "#D55E00", "id": "#009E73"}  # colour-blind safe
 LINESTYLES = ("-", "--", ":", "-.")  # one per rate_lambda present, in increasing order
-THICK_FACTOR = 1.5  # tanh is drawn thicker so a coinciding relu line stays visible
+# Line width relative to the default. Lines of different activations can coincide (at depth 1 phi
+# acts only through the rate regulariser); drawing the widest first and the thinnest last keeps
+# every one visible.
+WIDTH_FACTOR = {"tanh": 2.0, "relu": 1.5, "id": 1.0}
 MIN_REL_SPAN = 0.05  # smallest y-range shown, as a fraction of the largest value
 FAILURE_MARKER_Y = 0.96  # axes fraction at which a diverged run is marked
 ROW_HEIGHT = 3.4  # inches per row of panels
@@ -22,7 +25,7 @@ ROW_HEIGHT = 3.4  # inches per row of panels
 
 def _draw_order(pair: tuple[str, float]) -> tuple:
     phi, rate = pair
-    return (phi != "tanh", phi, rate)
+    return (-WIDTH_FACTOR[phi], phi, rate)
 
 
 def _keep_span(ax: Axes, values: Sequence[float], rel: float = MIN_REL_SPAN) -> None:
@@ -51,9 +54,9 @@ def plot_metric_vs_lr(
 
     Several seeds are collapsed to their median. A diverged run is a red cross at the top of
     the axes at its lr, since it has no value to draw; `best_lr` adds a vertical guide. At
-    depth 1 phi acts only through the rate regulariser, so the tanh and relu lines coincide for
-    rate_lambda = 0: tanh is drawn thicker so both stay visible. ValueError for a task and
-    depth without rows or a phi without a colour.
+    depth 1 phi acts only through the rate regulariser, so the lines of every phi coincide for
+    rate_lambda = 0: they are drawn in decreasing width (tanh, relu, id) so all stay visible.
+    ValueError for a task and depth without rows or a phi without a colour.
     """
     cells = [r for r in collapse_seeds(rows, (key,)) if r["task"] == task and r["L"] == L]
     if not cells:
@@ -68,7 +71,7 @@ def plot_metric_vs_lr(
         with plt.rc_context(STYLE_RC):
             _, ax = plt.subplots(layout="constrained")
     width = plt.rcParams["lines.linewidth"]
-    # tanh first, so its thick line lies under a coinciding relu line
+    # widest first, so its line lies under a coinciding thinner one
     for phi, rate in sorted({(r["phi"], r["rate_lambda"]) for r in cells}, key=_draw_order):
         line = sorted(
             (r for r in cells if r["phi"] == phi and r["rate_lambda"] == rate),
@@ -80,7 +83,7 @@ def plot_metric_vs_lr(
             [r[key] for r in ok],
             LINESTYLES[rates.index(rate)],
             marker="o",
-            lw=width * THICK_FACTOR if phi == "tanh" else width,
+            lw=width * WIDTH_FACTOR[phi],
             color=PHI_COLOURS[phi],
             label=f"{phi}, r={rate:g}",
         )

@@ -136,7 +136,7 @@ class DataConfig(BaseModel):      # model_config = ConfigDict(extra="forbid") on
     seed: int = 0
 class NetConfig(BaseModel):
     N: int = 100; L: int = 3; g: float = 1.0
-    phi: Literal["relu", "tanh", "sigmoid"] = "relu"
+    phi: Literal["relu", "tanh", "sigmoid", "id"] = "relu"   # "id": phi(h) = h, a linear net
     seed: int = 0
 class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
@@ -211,9 +211,9 @@ def resolve_dtype(name: str) -> torch.dtype
 ## activations.py
 
 ```python
-PHI: dict[str, Callable]   # {"relu": torch.relu, "tanh": torch.tanh, "sigmoid": torch.sigmoid}
+PHI: dict[str, Callable]   # {"relu": torch.relu, "tanh": torch.tanh, "sigmoid": torch.sigmoid, "id": identity}
 def get_phi(name: str) -> Callable          # KeyError with the valid names
-def phi_prime(phi: Callable) -> Callable    # the notebook's _phi_prime_factory: analytic for relu/tanh/sigmoid, autograd otherwise
+def phi_prime(phi: Callable) -> Callable    # the notebook's _phi_prime_factory: analytic for relu/tanh/sigmoid/id (phi' = 1), autograd otherwise
 ```
 
 ## cache.py (I/O layer)

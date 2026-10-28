@@ -81,7 +81,7 @@ DATA_SEED = 0
 # network
 N = 128  # hidden units per layer
 L = 1  # hidden layers
-PHI = "tanh"  # "tanh", "relu" or "sigmoid"
+PHI = "tanh"  # "tanh", "relu", "sigmoid" or "id" (linear)
 G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights

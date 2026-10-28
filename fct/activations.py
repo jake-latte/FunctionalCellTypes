@@ -7,19 +7,25 @@ import torch
 
 Activation = Callable[[torch.Tensor], torch.Tensor]
 
-PHI: dict[str, Activation] = {"relu": torch.relu, "tanh": torch.tanh, "sigmoid": torch.sigmoid}
+
+def identity(h: torch.Tensor) -> torch.Tensor:
+    """The linear activation, registered as "id": a net with it is linear in its input. It is also
+    the Gaussian case of the single-site density, whose moments are known in closed form."""
+    return h
+
+
+PHI: dict[str, Activation] = {
+    "relu": torch.relu,
+    "tanh": torch.tanh,
+    "sigmoid": torch.sigmoid,
+    "id": identity,
+}
 
 
 def get_phi(name: str) -> Activation:
     if name not in PHI:
         raise KeyError(f"unknown activation {name!r}; valid names: {sorted(PHI)}")
     return PHI[name]
-
-
-def identity(h: torch.Tensor) -> torch.Tensor:
-    """The linear activation: not a net activation (not in PHI), but the Gaussian case of the
-    single-site density, whose moments are known in closed form."""
-    return h
 
 
 def _identity_prime(h: torch.Tensor) -> torch.Tensor:

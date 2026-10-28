@@ -15,7 +15,7 @@ def test_unknown_name_lists_valid_names():
         assert name in str(err.value)
 
 
-@pytest.mark.parametrize("name", ["relu", "tanh", "sigmoid"])
+@pytest.mark.parametrize("name", ["relu", "tanh", "sigmoid", "id"])
 def test_phi_prime_matches_autograd(name):
     phi = get_phi(name)
     h = torch.randn(200, dtype=torch.float64, generator=torch.Generator().manual_seed(0))
