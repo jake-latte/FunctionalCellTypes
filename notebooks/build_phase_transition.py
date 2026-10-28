@@ -59,7 +59,7 @@ RESULTS = load_results(ROOT)
 show([overview_text(RESULTS)])"""
 
 SELECTOR = """L = 1  # hidden layers
-PHI = "tanh"  # activation, exactly as in the sweep
+PHI = "tanh"  # activation ("tanh", "relu", "sigmoid" or "id"), exactly as in the sweep
 LAMBDA_R = 1e-3  # rate regulariser, snapped to the nearest grid value
 LAMBDA_W = 1e-3  # weight regulariser, snapped to the nearest grid value
 MIR_KIND = "corrected"  # "corrected" (shuffle-bias-corrected) or "raw"; used below
