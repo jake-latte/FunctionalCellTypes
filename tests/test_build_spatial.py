@@ -75,6 +75,10 @@ def _text_outputs(nb) -> str:
     return "\n".join(chunks)
 
 
+def _n_figures_in(nb) -> int:
+    return sum(_n_figures(cell) for cell in nb.cells)
+
+
 def _n_figures(cell) -> int:
     return sum("image/png" in out.get("data", {}) for out in cell.get("outputs", []))
 
@@ -231,6 +235,22 @@ def test_example_outputs_show_each_example_and_a_scatter(notebook_functions, tmp
     assert last.xaxis.get_tick_params()["labelbottom"]
 
 
+def test_example_outputs_take_their_r2_from_everything_when_given(notebook_functions):
+    from fct.analyse import ExampleOutputs
+
+    y = torch.tensor([[1.0, -1.0], [0.0, 2.0], [3.0, 0.5], [-2.0, 1.0]])
+    shown = ExampleOutputs(torch.tensor([0, 1]), torch.zeros(2, 4), y[:2], y[:2])  # perfect
+    everything = ExampleOutputs(torch.arange(4), torch.zeros(4, 4), y, torch.zeros_like(y))
+    fig = notebook_functions["plot_example_outputs"](shown, "t", everything)
+    scatter = fig.axes[-1]
+    assert len(scatter.collections[0].get_offsets()) == y.numel()  # every test entry
+    assert (
+        "$R^2$ = -0.14" in scatter.get_legend_handles_labels()[1][0]
+    )  # predicting 0 everywhere: 1 - 20.25 / 17.72
+    default = notebook_functions["plot_example_outputs"](shown, "t")
+    assert "$R^2$ = 1.00" in default.axes[-1].get_legend_handles_labels()[1][0]
+
+
 def test_kernel_comparison_and_weights_render_on_a_ring(notebook_functions, tmp_path):
     space = build_spaces(SpatialConfig(), m=6, N=8, L=1, n_out=2)[0]
     W = torch.randn(8, 6, generator=torch.Generator().manual_seed(0), dtype=torch.float64)
@@ -274,6 +294,36 @@ def test_data_kernels_one_panel_per_layer_titled_with_the_kernel_scale(
     # each panel has its own scale, symmetric about zero: layer 0 spans 1, layer 1 spans 2
     assert panels[0].images[0].get_clim() == (-1.0, 1.0)
     assert panels[1].images[0].get_clim() == (-2.0, 2.0)
+
+
+def test_data_kernels_draw_the_latent_kernel_first_when_given(notebook_functions, tmp_path):
+    z = torch.tensor([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0], [1.0, 1.0], [0.0, 0.0]])
+    B = (z @ z.T / 2).to(torch.float64)
+    fig = notebook_functions["plot_data_kernels"](_block_kernels(), np.arange(6), "", B)
+    assert_png(fig, tmp_path)
+    panels = [ax for ax in fig.axes if ax.images]
+    assert len(panels) == 3  # B, then one per hidden layer
+    assert "latent kernel" in panels[0].get_title() and "hidden layer 1" in panels[1].get_title()
+    assert np.array_equal(panels[0].images[0].get_array(), B.numpy())
+    assert "= 0.5" in panels[0].get_title()  # tr B / P = (4 x 0.5 + 1 + 0) / 6
+
+
+def test_data_kernels_refuse_a_latent_kernel_over_other_samples(notebook_functions):
+    with pytest.raises(ValueError, match="B is"):
+        notebook_functions["plot_data_kernels"](_block_kernels(), np.arange(6), "", torch.eye(4))
+
+
+def test_the_phi_and_example_cells_use_the_test_set_not_the_training_samples():
+    cells = {
+        c.source.split("\n", 1)[0]: c.source
+        for c in build_notebook().cells
+        if c.cell_type == "code"
+    }
+    phi = [c for c in cells.values() if "plot_data_kernels" in c or "plot_trial_latents" in c]
+    examples = [c for c in cells.values() if "plot_example_outputs" in c]
+    assert len(phi) == 2 and len(examples) == 1
+    for source in phi + examples:
+        assert "TEST_DATASET" in source and "RUN.dataset" not in source
 
 
 def test_data_kernels_sorting_permutes_rows_and_columns_together(notebook_functions):
@@ -640,6 +690,7 @@ def test_executes_on_a_tiny_configuration(tmp_path, optimizer):
             assert "$" in _previous_markdown(nb, i)
     assert list(tmp_path.glob("spatial_*/train/final.pt"))  # trained through the normal cache
     assert "SGLD needs < 1" in text  # the step-size table
+    assert "test set: 9 points, data kernels A of shape (9, 9)" in text  # 3^k, k = 2
     assert f"Trained with {'SGLD' if optimizer == 'sgld' else 'Adam'}" in text
 
 

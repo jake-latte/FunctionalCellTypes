@@ -20,7 +20,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
 - `unset VIRTUAL_ENV; export UV_CACHE_DIR=/ceph/scratch/jlaherty/Projects/FunctionalCellTypes/.uv-cache`
   before any `uv`; never write outside the project (pytest's temp dir is pinned to `tmp/pytest` in pyproject.toml;
   scratch in `tmp/`); unit tests are CPU only (`CUDA_VISIBLE_DEVICES=""`), `uv run pytest -q`,
-  `uv run ruff check fct tests && uv run ruff format --check fct tests`.
+  `uv run ruff check fct tests notebooks && uv run ruff format --check fct tests`.
 - GPUs for small local runs (PI, 2026-10-20): either, but pin by UUID and check `nvidia-smi` first.
   T1000 `GPU-71887a86-0384-411b-29cf-b76af75d0ab8`; RTX 4500 `GPU-e058dce4-5227-fc65-8fd3-fc5604ac22e8`
   (torch `cuda:0` = RTX 4500). An unrelated 5.5 GB idle process of the PI sits on the RTX 4500: keep
@@ -54,6 +54,16 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
   `MeanFieldConfig` fields win. All four are exact for SGLD (a test on the exemplar's weight variance per beta, and one on `run_meanfield`'s defaults with the
   library's own `meanfield.beta = None`, which follows `train.beta`, or 1 under Adam). Every earlier mean-field result is stale. Still open: the `phase_transition` preset's `weight_lambda` axis
   (log-spaced 1e-6..1) was not rescaled.
+- **Relu tilt rule (PI confirmed the item 2026-10-29; the PM chose the option; `relu-tilt-rule`).** For relu the tilt
+  projection enforces positive definiteness of Sigma^-1 + M + lambda_r I, the all-active orthant's Gaussian condition
+  (option 2), replacing the sufficient orthant floor; `fct.hmc.relu_orthant_check` is the per-orthant oracle (option 3), a
+  diagnostic only (about 15 s at P = 20; refuses P > 20). Found while validating, for the PI: the condition is neither
+  necessary nor sufficient. It over-cuts normalisable learning tilts of mixed sign (on the exemplar's relu problem it keeps 59 %
+  of one where the floor kept 31 %, not ~100 %), and it admits non-normalisable tilts: in the exemplar's relu solve with
+  eta_max 0.1 it did at step 5 and on 17 of steps 55 to 79 (riding the delta floor), and the Stein / ESS / h^2 backstops did
+  not catch them; that runaway is rule-driven. The other relu runaways checked (default steps, eta_phi 0.01, eta_max 0.1 from
+  the net start, a tiny grid relu setting) look like step control (`solver-inner-step-control`). All end in the tilt tripwire.
+  Details in docs/design.md, "The relu tilt rule".
 - Exemplar notebook: the solves are not converged at the default 40/80 outer steps (residual still falling);
   the importance sampler only works for small P (default P = 20; raises at 24).
 - Grid solve: `jobs/fct_solve.sh` duplicates the sbatch header of `jobs/fct_sweep.sh` (keep them in step by hand).

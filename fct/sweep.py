@@ -666,6 +666,13 @@ def setting_status(
     return _artefact_status(paths.meanfield, meanfield_hash(cfg))
 
 
+def setting_statuses(
+    root: Path, sweep: SweepConfig, stage: Stage = "train"
+) -> list[tuple[int, Setting, Status]]:
+    """`(index, setting, status)` for every setting of the grid, in grid order."""
+    return [(i, s, setting_status(root, sweep, s, stage)) for i, s in enumerate(expand(sweep))]
+
+
 def _done_without_net(paths: CachePaths, cfg: Config) -> bool:
     """A solve finished under the CURRENT config that ran with no net, while a trained net now
     exists. The hash matches (so a solve of another config is never taken for this case); only
