@@ -7,7 +7,8 @@ import torch
 
 from fct.cli import main
 from fct.config import Config, NetConfig, TrainConfig
-from fct.spatial import SpatialConfig
+from fct.data import make_dataset, task_dims
+from fct.spatial import SpatialConfig, build_spaces
 from fct.sweep import (
     SweepConfig,
     _label_part,
@@ -23,6 +24,7 @@ from fct.sweep import (
     setting_status,
     with_grid,
 )
+from fct.tasks import latent_lattice_dataset
 from fct.train import load_trained
 
 LENGTH_AXIS = "spatial.hidden.kernel.length_scale"
@@ -340,12 +342,52 @@ def test_spatial_grid_trains_id_tanh_relu_at_the_smallest_length_scale(tmp_path)
     }
     small = preset("spatial_grid").model_copy(update=shrink)
     settings = expand(small)
-    # axes in order: phi slowest, then n_latents, then length; index 0 of a phi block is 0.05
-    for block, phi in enumerate(PHIS):
-        index = block * len(LATENTS) * len(LENGTHS)
+    # axes in order: phi slowest, then n_latents, then length; index 0 of a block is (k 2, 0.05).
+    # The last case is tanh with 4 latents, so the axis (not the base value 2) reaches the data.
+    block = len(LATENTS) * len(LENGTHS)
+    cases = [
+        (0, "id", 2),
+        (block, "tanh", 2),
+        (2 * block, "relu", 2),
+        (block + len(LENGTHS), "tanh", 4),
+    ]
+    for index, phi, k in cases:
         config = setting_config(small, settings[index])
-        assert (config.net.phi, config.spatial.hidden.kernel.length_scale) == (phi, 0.05)
+        assert (config.net.phi, config.data.n_latents) == (phi, k)
+        assert config.spatial.hidden.kernel.length_scale == 0.05
         run_setting(small, index, tmp_path, log=lambda line: None)
         cache = setting_dir(tmp_path, settings[index])
         _, history = load_trained(cache, config, torch.device("cpu"), torch.float64)
         assert np.isfinite(history["loss"]).all()
+
+
+def _grid_config(phi: str, n_latents: int, length: float):
+    sweep = preset("spatial_grid")
+    (setting,) = [
+        s
+        for s in expand(sweep)
+        if s.axes
+        == {
+            "net.phi": phi,
+            "data.n_latents": n_latents,
+            "spatial.hidden.kernel.length_scale": length,
+        }
+    ]
+    return setting_config(sweep, setting)
+
+
+def test_spatial_grid_four_latents_gives_four_factors_and_a_3_to_the_4_test_set():
+    cfg = _grid_config("tanh", 4, 0.1)
+    dataset = make_dataset(cfg.data, torch.device("cpu"), torch.float64)
+    assert sorted(dataset.factors) == ["z0", "z1", "z2", "z3"]
+    assert latent_lattice_dataset(cfg.data, dataset).x.shape[0] == 3**4
+
+
+@pytest.mark.parametrize("length", LENGTHS)
+def test_spatial_grid_spaces_give_the_hidden_population_the_axis_length_scale(length):
+    cfg = _grid_config("relu", 2, length)
+    m, n_out = task_dims(cfg.data)
+    (u_space, v_space) = build_spaces(cfg.spatial, m, cfg.net.N, cfg.net.L, n_out)
+    assert u_space.post is not None and v_space.pre is not None
+    assert u_space.post.kernel.length_scale == v_space.pre.kernel.length_scale == length
+    assert u_space.pre.kernel.length_scale == v_space.post.kernel.length_scale == 0.15
