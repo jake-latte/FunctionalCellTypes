@@ -27,6 +27,14 @@ from fct.tasks import TASK_SPECS
 # the rate penalty over the samples, 2 averaged it over them, 3 sums it again.
 LOSS_VERSION = 3
 
+# Version of the network definition (`fct.model.MLP`), folded into every hash that holds the
+# net section, for the same reason: a trained net or a mean-field result made with another
+# forward pass is rejected as stale. History: 1 read the output from the pre-activation,
+# V^T h^L / N; 2 reads it from the post-activation, V^T phi(h^L) / N. Version 1 is the code
+# from before the version was hashed, so it is left out of the hash: version-1 hashes are the
+# ones that code wrote.
+MODEL_VERSION = 2
+
 
 class DataConfig(StrictModel):
     """Data settings. `task` selects the generator and only that task's fields are read: the
@@ -200,7 +208,6 @@ class MeanFieldConfig(StrictModel):
 
     n_points: PosInt = 100  # solve on the first n_points training points
     beta: PosFloat = 1e6
-    readout: Literal["h", "phi"] = "h"
     prior_scale: PosFloat | None = None
     alpha: PosFloat | None = None
     learning_prefactor: PosFloat = 0.5
@@ -264,7 +271,8 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `LOSS_VERSION` when "train" is among the sections, and
+        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections,
+        `LOSS_VERSION` when "train" is, and
         `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser. The
         `spatial` section enters with "train" only when it is set, so runs without a spatial
         prior keep the hashes they had before the section existed. The meanfield section
@@ -279,6 +287,8 @@ class Config(StrictModel):
         hashed = self.model_dump(include={*sections, "dtype"})
         if "meanfield" in sections:
             hashed["meanfield"] = self.meanfield.hash_payload()
+        if "net" in sections and MODEL_VERSION != 1:  # the forward pass belongs to the net
+            hashed["model_version"] = MODEL_VERSION
         if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes

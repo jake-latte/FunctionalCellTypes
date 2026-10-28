@@ -5,8 +5,8 @@ configurable), extracted with `git archive e1492ca fct | tar -x -C tmp/old` and 
 `PYTHONPATH=tmp/old`: `modularity_sweep.json` is its `tiny` preset as serialised, and
 `modularity_settings.json` holds, for each of the 36 settings it expanded to (in order), the
 directory, the swept values and `train_hash`, the `section_hash("data", "net", "train")` of the
-setting's config (at LOSS_VERSION 2, which the hash test pins so a later loss change does not
-make it fail).
+setting's config (at LOSS_VERSION 2 and MODEL_VERSION 1, which the hash test pins so a later
+loss or model change does not make it fail).
 """
 
 import json
@@ -27,7 +27,7 @@ from fct.sweep import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-FIXTURE_LOSS_VERSION = 2
+FIXTURE_LOSS_VERSION, FIXTURE_MODEL_VERSION = 2, 1
 ROOT = Path("root")
 
 
@@ -85,6 +85,7 @@ def test_it_builds_the_same_configs(tmp_path):
 
 def test_its_train_hashes_are_those_of_the_pre_grid_code(tmp_path, monkeypatch):
     monkeypatch.setattr(fct.config, "LOSS_VERSION", FIXTURE_LOSS_VERSION)
+    monkeypatch.setattr(fct.config, "MODEL_VERSION", FIXTURE_MODEL_VERSION)
     sweep = _sweep(tmp_path)
     hashes = [setting_config(sweep, s).section_hash("data", "net", "train") for s in expand(sweep)]
     assert hashes == [row["train_hash"] for row in _rows()]

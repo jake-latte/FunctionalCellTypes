@@ -34,16 +34,16 @@ def _cfg(n_grid: int = N_GRID, embedding: str = "linear", L: int = 1) -> Config:
 
 
 def _identity_net(cfg: Config, dataset):
-    """Net with Z == y exactly: H0[:, :2] = y (U = sqrt(D_in) Q^T) and V[:2] = N * I.
-
-    The readout acts on the pre-activation H, so no nonlinearity gets in the way.
-    """
+    """Net with Z == y exactly: H0[:, :2] = y and H0[:, 2:4] = -y (U = +-sqrt(D_in) Q^T), and
+    V[:2] = N * I, V[2:4] = -N * I, so the relu readout gives relu(y) - relu(-y) = y."""
     net = make_net(cfg.net, D_IN, 2, CPU, F64)
+    eye = N_NET * torch.eye(2, dtype=F64)
     with torch.no_grad():
         net.U.zero_()
         net.U[:2] = math.sqrt(D_IN) * dataset.Q.T
+        net.U[2:4] = -math.sqrt(D_IN) * dataset.Q.T
         net.V.zero_()
-        net.V[:2] = N_NET * torch.eye(2, dtype=F64)
+        net.V[:2], net.V[2:4] = eye, -eye
     return net
 
 

@@ -10,6 +10,7 @@ from functools import partial
 import pytest
 import torch
 
+import fct.config
 from fct.cache import StaleCacheError, cache_paths, latest_checkpoint
 from fct.config import (
     LOSS_VERSION,
@@ -44,8 +45,9 @@ CPU, F64 = torch.device("cpu"), torch.float64
 
 # ---------------------------------------------------------------- pins of runs without the prior
 
-# Section hashes of three configs, written by the code before `Config.spatial` existed: a run
-# without a spatial prior must keep its caches.
+# Section hashes of three configs, written by the code before `Config.spatial` existed (that
+# is, at MODEL_VERSION 1, which the hash leaves out): a run without a spatial prior must keep
+# its caches.
 SMALL = Config(
     data=DataConfig(P=16, D_in=4, d=2, embedding="linear", seed=1),
     net=NetConfig(N=8, L=2, g=1.0, phi="tanh", seed=2),
@@ -64,12 +66,12 @@ HASH_PINS = [
     (SMALL, {TRAIN: "b03d959af82e", ANALYSIS: "314b5c6191a3"}),
 ]
 # compute_loss on the SMALL net (weight_lambda=0.1, rate_lambda=1e-3) and the squared norm of
-# each parameter's gradient, as float.hex, from the same code.
-LOSS_PIN = "0x1.f2fd0476077f9p+5"
+# each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output V^T phi(h^L) / N).
+LOSS_PIN = "0x1.f4f7158364a70p+5"
 GRAD_SQ_PINS = {
-    "U": "0x1.2c8058b160712p+2",
-    "V": "0x1.e79a6655c4412p+2",
-    "J.0": "0x1.a72dff2cbbd3ep+3",
+    "U": "0x1.043d22892c3e3p+2",
+    "V": "0x1.4b0c010b89e84p+2",
+    "J.0": "0x1.1cf291f264d20p+3",
 }
 
 
@@ -79,7 +81,8 @@ def _small_net_and_data():
     return net, ds
 
 
-def test_hashes_without_a_spatial_prior_are_unchanged():
+def test_hashes_without_a_spatial_prior_are_unchanged(monkeypatch):
+    monkeypatch.setattr(fct.config, "MODEL_VERSION", 1)
     for cfg, pins in HASH_PINS:
         for sections, want in pins.items():
             assert cfg.section_hash(*sections) == want, sections

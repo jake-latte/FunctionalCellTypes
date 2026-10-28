@@ -142,6 +142,27 @@ def test_resolve_dtype():
         resolve_dtype("float16")
 
 
+def test_a_config_with_a_readout_field_fails_to_load_naming_it(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"meanfield": {"readout": "h"}}))
+    with pytest.raises(ValidationError, match="readout"):
+        load_config(path)
+
+
+def test_model_definition_enters_every_hash_with_the_net_section_only(monkeypatch):
+    import fct.config
+
+    cfg = default_config()
+    sections = ("data", "net", "train", "meanfield")
+    before = {s: cfg.section_hash(s) for s in sections}
+    combined = cfg.section_hash("data", "net", "train")  # the training cache key
+    monkeypatch.setattr(fct.config, "MODEL_VERSION", fct.config.MODEL_VERSION + 1)
+    after = {s: cfg.section_hash(s) for s in sections}
+    assert after["net"] != before["net"]
+    assert all(after[s] == before[s] for s in ("data", "train", "meanfield"))
+    assert cfg.section_hash("data", "net", "train") != combined
+
+
 def test_loss_definition_enters_the_train_hash_only(monkeypatch):
     import fct.config
 
@@ -158,7 +179,7 @@ def test_loss_definition_enters_the_train_hash_only(monkeypatch):
 
 # ----------------------------------------------------------------------------- meanfield split
 PROBLEM_FIELDS = {
-    "n_points", "beta", "readout", "prior_scale", "alpha", "learning_prefactor", "rate_tilt",
+    "n_points", "beta", "prior_scale", "alpha", "learning_prefactor", "rate_tilt",
 }  # fmt: skip
 RESULT_SECTIONS = ("data", "net", "train", "meanfield")
 
