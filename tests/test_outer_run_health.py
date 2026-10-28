@@ -4,8 +4,9 @@ An inner ascent ends with a step it has not validated (steps are validated by th
 The outer-gradient run is that next run: it must pass `_sampler_sound` (`_healthy` but for the
 Monte Carlo error, which no revert can cure), and if it does not, the trailing step is
 reverted and retaken at half the step size (dropped, if that size is already the floor), up to
-max_backtrack times, after which the solve raises. `_sampler_sound` also fails a run whose sample scale ||h||²/P
-exceeds max_h2_prior_ratio times the prior's, whatever the growth since the point before.
+max_backtrack times, after which the solve raises. `_sampler_sound` also fails a run whose
+sample scale ||h||²/P exceeds max_h2_prior_ratio times the prior's, whatever the growth since
+the point before.
 
 The stubbed layer is that of tests/test_meanfield_step_control.py: Σ = I, Φ = ½ I, and a tilt
 x I gives ⟨ψψᵀ⟩ = I / (1 + x), so the sample scale is h² = 1 / (1 + x) against a prior's 1.
@@ -67,11 +68,27 @@ def test_the_bound_is_relative_to_the_prior_scale():
     assert not mf._healthy(diag | {"prior_h2": 4.0}, 50.0, NAN, cfg.n_trans, 1.0, cfg)
 
 
+def test_the_failures_name_each_check_with_its_value():
+    """Divergences, resets and a step-size collapse, not the scale: each is reported."""
+    cfg = MeanFieldConfig(max_div_frac=0.01, n_chains=100).solver
+    diag = hmc_diag(1.0) | {"n_divergent": 5, "n_reset": 2, "eps": 1e-4}
+    assert mf._soundness_failures(diag, 1.0, NAN, 1, 1.0, cfg) == [
+        "divergent fraction 0.05 > max_div_frac=0.01",
+        "2 chain resets",
+        "HMC step size 0.0001 < eps_collapse x warm-up = 0.01",
+    ]
+    importance = MeanFieldConfig(sampler="importance").solver
+    diag = hmc_diag(1.0) | {"ess_frac": 0.01}
+    assert mf._soundness_failures(diag, 1.0, 0.5, 1, NAN, importance) == [
+        "ESS fraction 0.01 < min_ess_drop x before = 0.05"
+    ]
+
+
 # ----------------------------------------------------------------------------- the outer run
 def test_a_healthy_outer_run_keeps_the_trailing_step():
     prob, st, sampler, inner = end_of_ascent(0.2)
     og = mf._outer_gradients(prob, st, inner)
-    assert inner.n_backtrack[0] == 0 and st.eta_hat[0] == 1.0
+    assert og.n_retry == [0] and og.dropped == [False] and st.eta_hat[0] == 1.0
     assert tilt(st) == pytest.approx(0.2) and sampler.state == 1
     assert st.h2_last[0] == pytest.approx(h2_at(0.2))
     assert og.hmc_diag[0]["h2_mean"] == pytest.approx(h2_at(0.2))
@@ -83,7 +100,8 @@ def test_an_outer_run_above_the_bound_reverts_the_trailing_step_and_retries_at_h
     prob, st, sampler, inner = end_of_ascent(-0.995, max_h2_growth=1e6)
     assert h2_at(-0.995) > prob.solver.max_h2_prior_ratio
     og = mf._outer_gradients(prob, st, inner)
-    assert inner.n_backtrack[0] == 1
+    assert og.n_retry == [1] and og.dropped == [False]
+    assert inner.n_backtrack[0] == 0  # the inner loop's backtracks are counted apart
     assert st.eta_hat[0] == 0.5
     assert tilt(st) == pytest.approx(-0.4975, rel=1e-12)
     assert sampler.state == 1  # run once, reverted to the point before the step, run again
@@ -99,8 +117,8 @@ def test_the_outer_run_is_checked_for_growth_too():
     """Below the absolute bound (h² 20 times the prior's) but a growth of 20 since the point
     before, above max_h2_growth = 10: the outer run is held to all of `_sampler_sound`."""
     prob, st, _, inner = end_of_ascent(-0.95)
-    mf._outer_gradients(prob, st, inner)
-    assert inner.n_backtrack[0] == 1 and tilt(st) == pytest.approx(-0.475)
+    og = mf._outer_gradients(prob, st, inner)
+    assert og.n_retry == [1] and tilt(st) == pytest.approx(-0.475)
 
 
 def test_a_large_monte_carlo_error_alone_does_not_reject_an_outer_run():
@@ -109,43 +127,51 @@ def test_a_large_monte_carlo_error_alone_does_not_reject_an_outer_run():
     prob, st, sampler, inner = end_of_ascent(0.2, max_mc_err=0.5)
     sampler.mc_err = 2.0
     _, diag = sampler.run(1)
-    assert not mf._healthy(diag, 1.0, NAN, 1, 1.0, prob.solver)
+    assert mf._health_failures(diag, 1.0, NAN, 1, 1.0, prob.solver) == [
+        "MC error 2 > max_mc_err=0.5"
+    ]
     sampler.state = 0
-    mf._outer_gradients(prob, st, inner)
-    assert inner.n_backtrack[0] == 0 and tilt(st) == pytest.approx(0.2)
+    og = mf._outer_gradients(prob, st, inner)
+    assert og.n_retry == [0] and tilt(st) == pytest.approx(0.2)
 
 
 def test_an_outer_run_that_stays_above_the_bound_raises_with_the_ratio():
     """Every run is 1e3 times a (stubbed) prior scale of 1e-3: halving cannot cure it, and after
-    max_backtrack retries the solve stops, saying by how much the bound was exceeded."""
+    max_backtrack retries the solve stops, saying by how much the bound was exceeded, and at
+    which tilt."""
     prob, st, sampler, inner = end_of_ascent(-0.995, max_h2_growth=1e6, max_backtrack=3)
     sampler.prior_h2 = 1e-3
-    with pytest.raises(mf.UnhealthySolveError, match="max_h2_prior_ratio") as err:
+    with pytest.raises(mf.UnhealthySolveError, match="after 3 retries;") as err:
         mf._outer_gradients(prob, st, inner)
-    assert inner.n_backtrack[0] == 3
-    x_last = -0.995 / 2**3
-    ratio = float(re.search(r"h2/prior ([0-9.e+]+)", str(err.value)).group(1))
-    assert ratio == pytest.approx(h2_at(x_last) / 1e-3, rel=1e-2)
+    message = str(err.value)
+    assert "the trailing step retaken at eta_phihat=1.25e-01" in message
+    ratio = float(re.search(r"h2/prior ([0-9.e+]+) > max_h2_prior_ratio=100", message).group(1))
+    assert ratio == pytest.approx(h2_at(-0.995 / 2**3) / 1e-3, rel=1e-2)
+    assert "max_h2_growth" not in message  # only the checks that failed
     assert isinstance(err.value, RuntimeError)
 
 
 def test_a_trailing_step_that_fails_at_the_step_size_floor_is_dropped():
     """Halving stops at eta_min_rel x eta_phihat (here 1, where the step already is): retaking
-    the step there would only repeat it, so it is dropped, back to the validated tilt 0."""
+    the step there would only repeat it, so it is dropped, back to the validated tilt 0. The
+    projection record keeps the dropped step's change: it was an inner step of this outer step."""
     prob, st, sampler, inner = end_of_ascent(-0.995, max_h2_growth=1e6, eta_min_rel=1.0)
+    inner.projected_rel[0] = 0.3
     assert mf._eta_hat_floor(prob.solver) == st.eta_hat[0] == 1.0
     og = mf._outer_gradients(prob, st, inner)
-    assert inner.n_backtrack[0] == 1 and st.eta_hat[0] == 1.0
+    assert og.n_retry == [1] and og.dropped == [True] and st.eta_hat[0] == 1.0
     assert tilt(st) == 0.0 and sampler.state == 1
     assert og.hmc_diag[0]["h2_mean"] == pytest.approx(1.0)
+    assert inner.projected_rel[0] == 0.3
 
 
 def test_a_run_that_fails_after_the_step_is_dropped_raises():
     prob, st, sampler, inner = end_of_ascent(-0.995, max_h2_growth=1e6, eta_min_rel=1.0)
     sampler.prior_h2 = 1e-3
-    with pytest.raises(mf.UnhealthySolveError, match="after 1 retries"):
+    with pytest.raises(mf.UnhealthySolveError, match="after 1 retry;") as err:
         mf._outer_gradients(prob, st, inner)
-    assert inner.n_backtrack[0] == 1 and tilt(st) == 0.0
+    assert "at the validated point before the trailing step (dropped" in str(err.value)
+    assert tilt(st) == 0.0
 
 
 def test_an_unhealthy_outer_run_with_no_trailing_step_raises_at_once():
@@ -153,6 +179,29 @@ def test_an_unhealthy_outer_run_with_no_trailing_step_raises_at_once():
     prob, st, sampler, inner = end_of_ascent(0.0, max_h2_growth=1e6)
     inner.pending[0] = None
     sampler.prior_h2 = 1e-3
-    with pytest.raises(mf.UnhealthySolveError, match="h2/prior"):
+    with pytest.raises(mf.UnhealthySolveError, match="after 0 retries;") as err:
         mf._outer_gradients(prob, st, inner)
-    assert inner.n_backtrack[0] == 0 and math.isclose(tilt(st), 0.0)
+    assert "at the ascent's last point" in str(err.value)
+    assert math.isclose(tilt(st), 0.0)
+
+
+def test_retries_and_drops_are_logged_as_a_warning():
+    og = mf._OuterGradients([], [], [], [], 0.0, 0.0, [], [0, 1, 3], [False, True, False])
+    line = mf._outer_run_warning(7, og)
+    assert line.startswith("[0007] WARNING: outer-gradient run unsound")
+    assert "layer 1: 1 retry, trailing step dropped; layer 2: 3 retries" in line
+    assert "layer 0" not in line
+
+
+# ----------------------------------------------------------------------------- the inner run
+def test_an_inner_step_that_keeps_breaking_the_sampler_raises_unhealthy_solve_error():
+    """Every inner run is 1e3 times the (stubbed) prior's scale. Driven at a fixed inner index
+    (budget max_backtrack x 2 = 4), the backtracking gives up with the failure list."""
+    prob, st, sampler = layer(0.0, eta=1.0, max_backtrack=2, max_h2_growth=1e6)
+    sampler.prior_h2 = 1e-3
+    pending, res = [None], mf._new_inner_result(1)
+    mf._inner_layer_step(prob, st, 0, 0, pending, res)  # the start: accepted unchecked
+    with pytest.raises(mf.UnhealthySolveError, match=r"keeps breaking.*h2/prior .* > max_h2"):
+        for _ in range(10):
+            mf._inner_layer_step(prob, st, 0, 1, pending, res)
+    assert res.n_backtrack[0] == 5

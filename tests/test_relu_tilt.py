@@ -240,26 +240,26 @@ def test_the_guard_rejects_the_non_normalisable_tilt_the_rule_admits_at_step_5(
     normalisable (plane minimum -0.007): along the scan's minimising ray the solver's own
     exponent -log p = 1/2 h^T Sigma^-1 h + U(h) falls without bound, as -r^2. The
     outer-gradient run validates that step: its chains escape the prior's scale, the step is
-    reverted and retaken at half size, and the tilt the solve goes on with is normalisable.
-    Without the guard the run was accepted (h^2 / prior about 3e3) and the residual ran away."""
+    reverted and retaken at half size, and the tilt the solve goes on with is normalisable
+    (a run at the unrevised tilt samples h^2 / prior about 3e3)."""
     runs = []
     outer_run = mf._outer_run
 
     def spy(prob, st, l, inner):
-        before, n_before = st.Phi_hat[l].clone(), int(inner.n_backtrack[l])
+        before = st.Phi_hat[l].clone()
         out = outer_run(prob, st, l, inner)
-        n_retry = int(inner.n_backtrack[l]) - n_before
-        runs.append(OuterRun(st.outer, before, st.Phi_hat[l].clone(), n_retry))
+        runs.append(OuterRun(st.outer, before, st.Phi_hat[l].clone(), out.n_retry))
         return out
 
     monkeypatch.setattr(mf, "_outer_run", spy)
     # The incident's settings: health-only inner steps, the trace-scaled outer step and both
-    # step caps at 0.1 (steps 0 to 4 are those of the incident bit for bit).
+    # step caps at 0.1.
     snapshots = relu_solve(
         exemplar, 6, **{**LEGACY_STEP_CONTROL, "eta_max": 0.1, "eta_max_phihat": 0.1}
     )
     step5 = runs[5]
     assert [r.n_retry for r in runs[:5]] == [0] * 5 and step5.n_retry >= 1
+    assert snapshots[5].history["n_retry_outer_run"][5][0] == step5.n_retry
     assert margin(exemplar, step5.before) > 0.1  # admitted by the rule
     scan = plane_scan(exemplar, step5.before)
     assert scan.min_exponent < 0  # and not normalisable

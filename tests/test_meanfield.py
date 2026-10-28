@@ -217,6 +217,7 @@ def assert_the_scale_bound_never_binds(history) -> None:
     print(f"largest h2/prior of an outer-gradient run: {ratio:.3g}")
     assert ratio < 0.1 * MeanFieldConfig().solver.max_h2_prior_ratio
     assert sum(int(np.sum(b)) for b in history["n_backtrack_inner"]) == 0
+    assert sum(int(np.sum(n)) for n in history["n_retry_outer_run"]) == 0
 
 
 def test_linear_solve_recovers_analytic_saddle(linear_problem, linear_solution):

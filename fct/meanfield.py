@@ -80,7 +80,7 @@ CKPT_PREFIX, CKPT_WIDTH, FINAL_NAME = "ckpt_", 5, "final.pt"
 HISTORY_KEYS = (
     "outer_step", "time", "inner_steps", "inner_residual", "inner_grad_rel", "inner_converged",
     "step_clipped", "eta_phi", "eta_phihat", "n_backtrack_inner", "n_accepted_inner",
-    "n_rejected_inner", "n_backtrack_outer",
+    "n_rejected_inner", "n_backtrack_outer", "n_retry_outer_run", "outer_run_dropped",
     "outer_grad_rel", "phihat_fp_resid_stein", "phihat_fp_resid_direct", "stein_vs_direct",
     "picard_resid",
     "trace_term", "learning_term", "train_mse_theory", "train_mse_net",
@@ -125,9 +125,13 @@ class InadequateSamplerError(RuntimeError):
 
 
 class UnhealthySolveError(RuntimeError):
-    """An outer-gradient run stayed unhealthy (`_sampler_sound` failed) after max_backtrack
-    retries of the inner ascent's trailing step: typically chains escaped the prior's scale on
-    a tilt whose density is not normalisable."""
+    """A sampler run failed its health checks and backtracking could not cure it: an inner
+    step still broke the sampler after max_backtrack halvings per inner step, or an
+    outer-gradient run stayed unsound (`_sampler_sound`) with nothing left to try, which is
+    after max_backtrack retries of the inner ascent's trailing step, at once when there is no
+    trailing step, or at the validated point after the step was dropped at the step-size floor.
+    Typically chains escaped the prior's scale on a tilt whose density is not normalisable; the
+    message names the checks that failed and their values."""
 
 
 class UnconvergedSolveError(RuntimeError):
@@ -524,6 +528,65 @@ def _h2_prior_ratio(diag: dict) -> float:
     return diag["h2_mean"] / diag["prior_h2"]
 
 
+def _soundness_failures(
+    diag: dict,
+    h2_before: float,
+    ess_before: float,
+    n_tr: int,
+    eps_ref_l: float,
+    cfg: SolverConfig,
+) -> list[str]:
+    """The checks of `_sampler_sound` the run fails, each with its value and limit (a NaN
+    value fails its check)."""
+    growth, ratio = diag["h2_mean"] / max(h2_before, 1e-300), _h2_prior_ratio(diag)
+    checks = [
+        (
+            growth <= cfg.max_h2_growth,
+            f"h2 growth {growth:.3g} > max_h2_growth={cfg.max_h2_growth:g}",
+        ),
+        (
+            ratio <= cfg.max_h2_prior_ratio,
+            f"h2/prior {ratio:.3g} > max_h2_prior_ratio={cfg.max_h2_prior_ratio:g}",
+        ),
+    ]
+    if cfg.sampler == "importance":
+        ess, floor = diag["ess_frac"], cfg.min_ess_drop * ess_before
+        checks.append(
+            (ess >= floor, f"ESS fraction {ess:.3g} < min_ess_drop x before = {floor:.3g}")
+        )
+    else:
+        div_frac = diag["n_divergent"] / (cfg.n_chains * n_tr)
+        eps_min = cfg.eps_collapse * eps_ref_l
+        checks += [
+            (
+                div_frac <= cfg.max_div_frac,
+                f"divergent fraction {div_frac:.3g} > max_div_frac={cfg.max_div_frac:g}",
+            ),
+            (diag["n_reset"] == 0, f"{diag['n_reset']} chain resets"),
+            (
+                diag["eps"] >= eps_min,
+                f"HMC step size {diag['eps']:.3g} < eps_collapse x warm-up = {eps_min:.3g}",
+            ),
+        ]
+    return [message for ok, message in checks if not ok]
+
+
+def _health_failures(
+    diag: dict,
+    h2_before: float,
+    ess_before: float,
+    n_tr: int,
+    eps_ref_l: float,
+    cfg: SolverConfig,
+) -> list[str]:
+    """The checks of `_healthy` the run fails: `_soundness_failures` and the MC error."""
+    failures = _soundness_failures(diag, h2_before, ess_before, n_tr, eps_ref_l, cfg)
+    mc_err = diag.get("psi_psi_rel_mc_err", 0.0)
+    if not mc_err <= cfg.max_mc_err:
+        failures.append(f"MC error {mc_err:.3g} > max_mc_err={cfg.max_mc_err:g}")
+    return failures
+
+
 def _sampler_sound(
     diag: dict,
     h2_before: float,
@@ -538,17 +601,7 @@ def _sampler_sound(
     and no step-size collapse; for importance sampling, its ESS fraction has not dropped below
     min_ess_drop times that of the accepted point before the step (the MC error cannot see a
     weight collapse, see fct.importance)."""
-    growth = diag["h2_mean"] / max(h2_before, 1e-300)
-    scale_ok = growth <= cfg.max_h2_growth and _h2_prior_ratio(diag) <= cfg.max_h2_prior_ratio
-    if cfg.sampler == "importance":
-        return scale_ok and diag["ess_frac"] >= cfg.min_ess_drop * ess_before
-    div_frac = diag["n_divergent"] / (cfg.n_chains * n_tr)
-    return (
-        scale_ok
-        and (div_frac <= cfg.max_div_frac)
-        and diag["n_reset"] == 0
-        and diag["eps"] >= cfg.eps_collapse * eps_ref_l
-    )
+    return not _soundness_failures(diag, h2_before, ess_before, n_tr, eps_ref_l, cfg)
 
 
 def _healthy(
@@ -561,8 +614,7 @@ def _healthy(
 ) -> bool:
     """A sampler run validating an inner step, or probing an outer one, is healthy if
     `_sampler_sound` and (if moments were collected) its MC error is at most max_mc_err."""
-    sound = _sampler_sound(diag, h2_before, ess_before, n_tr, eps_ref_l, cfg)
-    return sound and diag.get("psi_psi_rel_mc_err", 0.0) <= cfg.max_mc_err
+    return not _health_failures(diag, h2_before, ess_before, n_tr, eps_ref_l, cfg)
 
 
 def _tilt_step(
@@ -684,13 +736,16 @@ def _inner_layer_step(prob, st: _SolverState, l, inner, pending, res: _InnerResu
         res.first_residual[l] = residual
     step = pending[l]
     if step is not None:
-        if not _healthy(diag, st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg):
+        args = (st.h2_last[l], st.ess_ref[l], cfg.n_trans, st.eps_ref[l], cfg)
+        failures = _health_failures(diag, *args)
+        if failures:
             res.n_backtrack[l] += 1
             _retry_half_step(prob, st, l, step, res)
             if res.n_backtrack[l] > cfg.max_backtrack * (inner + 1):
-                raise RuntimeError(
-                    f"layer {l}: inner step keeps breaking the sampler "
-                    f"(eta_phihat={st.eta_hat[l]:.2e})"
+                raise UnhealthySolveError(
+                    f"layer {l}: the inner step keeps breaking the sampler at outer step "
+                    f"{st.outer}, inner step {inner} ({res.n_backtrack[l]} backtracks, "
+                    f"eta_phihat={st.eta_hat[l]:.2e}); last run: " + "; ".join(failures)
                 )
             return diag
         if _no_progress(cfg, residual, res.best_residual[l], step, st.eta_hat[l]):
@@ -754,21 +809,12 @@ class _OuterGradients:
     learning: float
     mse_theory: float
     hmc_diag: list[dict]  # sampler diagnostics of the fresh n_trans_outer run
+    n_retry: list[int]  # per layer, unsound runs before the accepted one (`_outer_run`)
+    dropped: list[bool]  # per layer, whether the trailing inner step was dropped
 
 
-def _unhealthy_outer_run_message(
-    prob: _Problem, st: _SolverState, l: int, diag: dict, n_retry: int
-) -> str:
-    cfg = prob.solver
-    growth, ratio = diag["h2_mean"] / max(st.h2_last[l], 1e-300), _h2_prior_ratio(diag)
-    return (
-        f"layer {l}: the outer-gradient run of outer step {st.outer} is unhealthy after "
-        f"{n_retry} retries of the inner ascent's trailing step: h2/prior {ratio:.3g} "
-        f"(max_h2_prior_ratio={cfg.max_h2_prior_ratio:g}), h2 growth {growth:.3g} "
-        f"(max_h2_growth={cfg.max_h2_growth:g}), eta_phihat={st.eta_hat[l]:.2e}. Chains far "
-        "above the prior's scale mean a tilt whose density is not normalisable; lower "
-        "solver.eta_max / eta_max_phihat, or see docs/design.md on the tilt projection"
-    )
+def _retries(n: int) -> str:
+    return f"{n} {'retry' if n == 1 else 'retries'}"
 
 
 def _drop_trailing_step(st: _SolverState, l: int, step: _PendingStep) -> None:
@@ -779,37 +825,56 @@ def _drop_trailing_step(st: _SolverState, l: int, step: _PendingStep) -> None:
     st.samplers[l].set_state(step.state)
 
 
-def _outer_run(prob: _Problem, st: _SolverState, l: int, inner: _InnerResult):
-    """Layer l's outer-gradient run, (moments, diagnostics), held to `_sampler_sound`: it is
-    the run that validates the inner ascent's trailing step, which the ascent took and never
-    measured. A run that is not sound reverts that step (tilt and chain state) and retakes it
-    at half the step size (`_retry_half_step`, counted in inner.n_backtrack). Under
-    inner_step_control="progress" halving stops at `_eta_hat_floor`; a step that still fails
-    there is dropped, back to the validated point before it, and a run that fails at that
-    point raises UnhealthySolveError, as do max_backtrack failed retries or a failure with no
-    step to revert.
+class _OuterRun(NamedTuple):
+    moments: dict
+    diag: dict
+    n_retry: int  # unsound runs before this one
+    dropped: bool  # the trailing inner step was dropped (the run is at the point before it)
+
+
+def _outer_run(prob: _Problem, st: _SolverState, l: int, inner: _InnerResult) -> _OuterRun:
+    """Layer l's outer-gradient run, held to `_sampler_sound`: it is the run that validates the
+    inner ascent's trailing step, which the ascent took and never measured. A run that is not
+    sound reverts that step (tilt and chain state) and retakes it at half the step size
+    (`_retry_half_step`). Under inner_step_control="progress" halving stops at
+    `_eta_hat_floor`; a step that still fails there is dropped, back to the validated point
+    before it. UnhealthySolveError when a run fails with nothing left to try: after
+    max_backtrack retries, at that validated point, or at once with no trailing step.
     Not `_healthy`: its MC error is a property of the sample size, not of the step, so a
     revert cannot cure it (small solves sit above max_mc_err at every run), and the outer
     gradients' MC error is recorded instead (history["hmc_mc_err"]).
-    A sound first run consumes nothing more than before, so it changes no number."""
+    A sound first run draws no extra random numbers."""
     cfg, s = prob.solver, st.samplers[l]
     step = inner.pending[l]
+    at = "the inner ascent's trailing step" if step is not None else "the ascent's last point"
+    dropped = False
     for n_retry in range(cfg.max_backtrack + 1):
         moments, diag = s.run(cfg.n_trans_outer)
         args = (st.h2_last[l], st.ess_ref[l], cfg.n_trans_outer, st.eps_ref[l], cfg)
-        if _sampler_sound(diag, *args):
+        failures = _soundness_failures(diag, *args)
+        if not failures:
             _accept_point(prob, st, l, diag, f"outer step {st.outer} (outer-gradient run)")
-            return moments, diag
+            return _OuterRun(moments, diag, n_retry, dropped)
         if step is None or n_retry == cfg.max_backtrack:
             break
-        inner.n_backtrack[l] += 1
-        at_floor = st.eta_hat[l] <= _eta_hat_floor(cfg)
-        if cfg.inner_step_control == "progress" and at_floor:
+        if cfg.inner_step_control == "progress" and st.eta_hat[l] <= _eta_hat_floor(cfg):
             _drop_trailing_step(st, l, step)
-            step = None
+            step, dropped = None, True
+            at = (
+                "the validated point before the trailing step (dropped at the step-size floor "
+                f"eta_phihat={st.eta_hat[l]:.2e})"
+            )
         else:
             _retry_half_step(prob, st, l, step, inner)
-    raise UnhealthySolveError(_unhealthy_outer_run_message(prob, st, l, diag, n_retry))
+            at = f"the trailing step retaken at eta_phihat={st.eta_hat[l]:.2e}"
+    raise UnhealthySolveError(
+        f"layer {l}: the outer-gradient run of outer step {st.outer} is unhealthy after "
+        f"{_retries(n_retry)}; the failing run was at {at}: "
+        + "; ".join(failures)
+        + ". Chains far above the prior's scale mean a tilt whose density is not "
+        "normalisable; lower solver.eta_max / eta_max_phihat, or see docs/design.md on the "
+        "tilt projection"
+    )
 
 
 def _outer_gradients(prob: _Problem, st: _SolverState, inner: _InnerResult) -> _OuterGradients:
@@ -820,10 +885,13 @@ def _outer_gradients(prob: _Problem, st: _SolverState, inner: _InnerResult) -> _
     l = L: -½Φ̂_L - c A Y Yᵀ A                 (Eq. 31c)."""
     cfg, L = prob.solver, prob.L
     runs = [_outer_run(prob, st, l, inner) for l in range(L)]
-    moments, hmc_diag = [m for m, _ in runs], [d for _, d in runs]
+    moments, hmc_diag = [r.moments for r in runs], [r.diag for r in runs]
     A, _, learning, mse_theory = _learning_pieces(prob, st.Phi[-1])
     scale = prob.prior_scale * prob.g**2
-    out = _OuterGradients([], [], [], [], learning, mse_theory, hmc_diag)
+    out = _OuterGradients(
+        [], [], [], [], learning, mse_theory, hmc_diag,
+        [r.n_retry for r in runs], [r.dropped for r in runs],
+    )  # fmt: skip
     for l in range(L):
         if l < L - 1:
             Phi_inv = _reg_inv(st.Phi[l], cfg.inv_floor_rel)
@@ -963,6 +1031,8 @@ def _record(
         "eta_phihat": st.eta_hat.copy(),
         "n_backtrack_inner": inner.n_backtrack.copy(),
         "n_backtrack_outer": step.n_backtrack,
+        "n_retry_outer_run": np.array(og.n_retry),
+        "outer_run_dropped": np.array(og.dropped),
         "n_accepted_inner": inner.n_accepted.copy(),
         "n_rejected_inner": inner.n_rejected.copy(),
         "outer_grad_rel": np.array(
@@ -1082,6 +1152,18 @@ def _start_last_tilt_at_target(prob: _Problem, st: _SolverState) -> float:
     return rel
 
 
+def _outer_run_warning(outer: int, og: _OuterGradients) -> str:
+    layers = [
+        f"layer {l}: {_retries(n)}" + (", trailing step dropped" if dropped else "")
+        for l, (n, dropped) in enumerate(zip(og.n_retry, og.dropped))
+        if n
+    ]
+    return (
+        f"[{outer:04d}] WARNING: outer-gradient run unsound, inner ascent's trailing step "
+        "retaken (" + "; ".join(layers) + ")"
+    )
+
+
 def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> None:
     """One iteration of Algorithm 1: inner ascent on Φ̂, one descent step on Φ, diagnostics.
     Advances st.outer by one."""
@@ -1093,6 +1175,8 @@ def _outer_step(prob: _Problem, st: _SolverState, t_start: float, log: Log) -> N
     inner = _inner_ascent(prob, st)
     inner.projected_rel[-1] = max(inner.projected_rel[-1], start_projected)
     og = _outer_gradients(prob, st, inner)
+    if any(og.n_retry):
+        log(_outer_run_warning(outer, og))
     step = _outer_descent(prob, st, og.grads, Phi_prev, outer, log)
     rec = _record(prob, st, outer, time.time() - t_start, inner, og, step, Phi_prev, Phi_hat_prev)
     for k in st.history:
@@ -1232,10 +1316,11 @@ def solve(
     tolerance of the point before it (inner_step_control="progress"; not below
     eta_min_rel · eta_phihat). Otherwise the step size grows by eta_grow up to eta_max (outer)
     or eta_max_phihat (inner).  The outer-gradient run validates the inner ascent's last step
-    in the same way (but for the Monte Carlo error, which no revert cures) and raises
-    UnhealthySolveError when max_backtrack halvings do not cure it.  This keeps the
-    iteration on the normalisable side of the tilt.  With inner_start="target" every inner
-    ascent of the last layer starts from its Stein target -2c A Y Yᵀ A at the current Φ_L,
+    in the same way (but for the Monte Carlo error, which no revert cures); at the step-size
+    floor of inner_step_control="progress" the step is dropped, back to the validated point
+    before it. UnhealthySolveError when backtracking cannot cure a run (inner or outer).
+    This keeps the iteration on the normalisable side of the tilt.  With inner_start="target"
+    every inner ascent of the last layer starts from its Stein target -2c A Y Yᵀ A at the current Φ_L,
     which makes the last layer's outer step a damped stochastic Picard step; its convergence
     measure is then history["picard_resid"] (`_start_last_tilt_at_target`).
     The settings are cfg.solver's.

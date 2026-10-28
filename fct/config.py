@@ -243,10 +243,12 @@ STEP_CONTROL_LEGACY: dict[str, Any] = {
     "inner_start": "previous",
 }  # fmt: skip
 STEP_CONTROL_FIELDS = tuple(STEP_CONTROL_LEGACY)
-# Health bounds, each hashed only when it differs from its default here. A bound changes a
-# solve only where it trips, and at these defaults it trips only on a run whose chains have
-# escaped the prior's scale; every other solve is bit for bit what it was before the bound
-# existed, so its cached result keeps its hash.
+# Health bounds, each hashed only when it differs from its default here, so a default config
+# keeps its hash. That hash does not cover the solver's health checks themselves: a cached
+# solve keyed by it may have been written by code without the check of the outer-gradient run
+# (meanfield._outer_run) or without this bound, and a solve those checks would have changed
+# (any outer run with escaped chains, divergences, resets, a step-size collapse or an ESS drop)
+# keeps its hash. Solves they never trip are unchanged by them.
 HEALTH_BOUND_DEFAULTS: dict[str, Any] = {"max_h2_prior_ratio": 100.0}
 HEALTH_BOUND_FIELDS = tuple(HEALTH_BOUND_DEFAULTS)
 
