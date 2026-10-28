@@ -263,8 +263,9 @@ _UNREADABLE = (OSError, ValueError, TypeError, RuntimeError, EOFError, pickle.Un
 
 
 STALE_NOTE = (
-    "train/final.pt was written under a different config or loss definition (an older "
-    "LOSS_VERSION, or another weight_lambda or setting); rerun in a fresh sweep ROOT"
+    "train/final.pt was written under a different config, model or loss definition (an "
+    "older MODEL_VERSION or LOSS_VERSION, or another weight_lambda or setting); rerun in a "
+    "fresh sweep ROOT"
 )
 
 

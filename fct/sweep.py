@@ -667,8 +667,8 @@ def find_setting_dir(root: Path, sweep: SweepConfig, values: Mapping[str, Any]) 
 
 _STAGE_DIRS = {"train": "train", "solve": "meanfield"}
 _STAGE_SECTIONS = {
-    "train": "(data, net or train sections, or loss definition)",
-    "solve": "(data, net, train or meanfield sections, or loss definition)",
+    "train": "(data, net or train sections, or model or loss definition)",
+    "solve": "(data, net, train or meanfield sections, or model or loss definition)",
 }
 
 
