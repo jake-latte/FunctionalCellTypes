@@ -4,13 +4,22 @@ or by exact importance sampling from the prior, never from the sampler itself.
 Each sampler and reference gets its own seeded generator, so no test's statistics depend on
 which other tests ran or in what order."""
 
+import itertools
 import math
 
 import pytest
 import torch
 
 from fct.activations import identity
-from fct.hmc import SingleSiteHMC, kernel_alignment, project_pd, relative_fro, sym
+from fct.hmc import (
+    SingleSiteHMC,
+    kernel_alignment,
+    normalisability_margin,
+    project_pd,
+    relative_fro,
+    relu_orthant_check,
+    sym,
+)
 
 P, N_CHAINS, WARMUP, N_TRANS = 20, 2048, 300, 200
 N_SMALL = 64
@@ -204,15 +213,27 @@ def test_load_state_dict_rejects_chain_shape_mismatch(warmed_small, Sigma, M):
 
 # ----------------------------------------------------------------------------- project_tilt
 @pytest.mark.parametrize("delta", [0.1, 0.5])
-def test_project_tilt_relu_meets_the_sigma_aware_certificate(Sigma, delta):
-    s = make_sampler(Sigma, torch.zeros(P, P, **F64), 0.1, torch.relu, seed=6, n_chains=8)
-    out = s.project_tilt(-3.0 * torch.eye(P, **F64), delta)
-    lam_s = torch.linalg.eigvalsh(s.Sigma_inv).min().item()
-    T = out + s.lambda_r * torch.eye(P, **F64)
-    assert torch.linalg.eigvalsh(T).min() >= -(1 - delta) * lam_s - 1e-9
-    # the margin reads the same certificate: what the projection leaves is delta * lam_s
+def test_project_tilt_relu_is_the_all_active_orthant_condition(Sigma, delta):
+    lambda_r = 0.1
+    s = make_sampler(Sigma, torch.zeros(P, P, **F64), lambda_r, torch.relu, seed=6, n_chains=8)
+    out = s.project_tilt(-5.0 * torch.linalg.inv(s.Sigma), delta)
+    root = torch.linalg.cholesky(s.Sigma)
+    T = out + lambda_r * torch.eye(P, **F64)  # on the all-active orthant the rate tilt is quadratic
+    assert torch.linalg.eigvalsh(root.T @ T @ root).min() >= -(1 - delta) - 1e-9
+    # the margin reads the same condition, lambda_min(Sigma^-1 + M + lambda_r I)
     s.set_tilt(out)
-    assert s.normalisability_margin() == pytest.approx(delta * lam_s, rel=1e-9)
+    expected = torch.linalg.eigvalsh(s.Sigma_inv + T).min().item()
+    assert s.normalisability_margin() == pytest.approx(expected, rel=1e-9)
+    assert s.normalisability_margin() > 0
+
+
+def test_project_tilt_relu_keeps_a_tilt_below_the_sufficient_floor(Sigma):
+    """lambda_min(M + lambda_r I) = -3/4 lambda_max(Sigma^-1) is far below the orthant floor
+    -lambda_min(Sigma^-1), yet Sigma^-1 + M + lambda_r I > 0: the rule leaves it whole."""
+    s = make_sampler(Sigma, torch.zeros(P, P, **F64), 0.0, torch.relu, seed=6, n_chains=8)
+    M = -0.75 * s.Sigma_inv
+    assert torch.linalg.eigvalsh(M).min() < -torch.linalg.eigvalsh(s.Sigma_inv).min()
+    torch.testing.assert_close(s.project_tilt(M, 0.05), sym(M), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("phi", [torch.tanh, torch.sigmoid])
@@ -300,3 +321,67 @@ def test_tilt_and_grad_is_the_tilt_exponent_and_its_gradient(Sigma, M, psi_is_ph
     U, u = s.tilt_and_grad(h.detach())
     torch.testing.assert_close(U, U_ref.detach())
     torch.testing.assert_close(u, u_ref)
+
+
+# ----------------------------------------------------------------------------- relu orthant oracle
+def _orthant_min_eigs_by_loop(Sigma_inv, M, lambda_r):
+    """lambda_min((Sigma_SS)^-1 + (M + lambda_r I)_SS) for every non-empty active set S, one
+    sub-matrix at a time (the reference for the batched oracle)."""
+    Sigma = torch.linalg.inv(Sigma_inv)
+    T = M + lambda_r * torch.eye(M.shape[0], **F64)
+    eigs = []
+    for size in range(1, M.shape[0] + 1):
+        for S in itertools.combinations(range(M.shape[0]), size):
+            idx = torch.tensor(S)
+            K = torch.linalg.inv(Sigma[idx][:, idx]) + T[idx][:, idx]
+            eigs.append(torch.linalg.eigvalsh(K).min().item())
+    return eigs
+
+
+def test_relu_orthant_check_matches_the_sub_matrix_loop():
+    B = torch.randn(5, 5, generator=seeded(110), **F64)
+    Sigma_inv = torch.linalg.inv(B @ B.T / 5 + 0.2 * torch.eye(5, **F64))
+    C = torch.randn(5, 5, generator=seeded(111), **F64)
+    M = -0.6 * C @ C.T / 5
+    eigs = _orthant_min_eigs_by_loop(Sigma_inv, M, 0.1)
+    check = relu_orthant_check(Sigma_inv, M, 0.1)
+    assert check.n_orthants == 2**5
+    assert 0 < check.n_violated < 2**5 - 1  # the test exercises both outcomes
+    assert check.n_violated == sum(e <= 0 for e in eigs)
+    assert check.fraction_violated == check.n_violated / 2**5
+    assert check.worst_min_eig == pytest.approx(min(eigs), rel=1e-9)
+
+
+def test_relu_orthant_check_passes_a_positive_semidefinite_tilt(Sigma, M):
+    block = slice(0, 10)  # 2^10 orthants: the full P = 20 costs seconds
+    check = relu_orthant_check(torch.linalg.inv(Sigma[block, block]), M[block, block], 0.1)
+    assert check.n_violated == 0 and check.fraction_violated == 0.0
+    assert check.worst_min_eig > 0
+
+
+def test_the_all_active_condition_can_admit_a_non_normalisable_relu_tilt():
+    """Sigma^-1 + M + lambda_r I > 0 (the rule admits M), yet on the orthant h1 > 0 > h2 the
+    exponent is negative along h = (1, -0.8): the oracle finds that orthant, the rule cannot."""
+    Sigma_inv = torch.tensor([[1.0, 0.8], [0.8, 1.0]], **F64)
+    M = torch.tensor([[-0.5, 0.0], [0.0, 10.0]], **F64)
+    assert normalisability_margin(M, Sigma_inv, 0.0, torch.relu, True) > 0
+    h = torch.tensor([1.0, -0.8], **F64)
+    exponent = h @ Sigma_inv @ h + torch.relu(h) @ M @ torch.relu(h)
+    assert exponent < 0  # a ray of growing density: not normalisable
+    check = relu_orthant_check(Sigma_inv, M, 0.0)
+    assert check.n_violated == 1 and check.fraction_violated == 0.25  # S = {1} of 4 orthants
+    assert check.worst_min_eig == pytest.approx(1.0 - 0.8**2 - 0.5)  # (Sigma_11)^-1 + M_11
+
+
+def test_relu_orthant_check_is_sufficient_not_necessary():
+    """x^T (I + M) x with I + M = [[1, 2], [2, 1]] is indefinite but positive on the positive
+    quadrant (copositive), so the density is normalisable; the per-orthant eigenvalue check
+    still flags the all-active orthant. A pass certifies, a violation only flags."""
+    Sigma_inv = torch.eye(2, **F64)
+    M = torch.tensor([[0.0, 2.0], [2.0, 0.0]], **F64)
+    assert relu_orthant_check(Sigma_inv, M, 0.0).n_violated == 1
+
+
+def test_relu_orthant_check_refuses_a_large_P():
+    with pytest.raises(ValueError, match="2\\^30 orthants"):
+        relu_orthant_check(torch.eye(30, **F64), torch.zeros(30, 30, **F64), 0.0, max_P=20)

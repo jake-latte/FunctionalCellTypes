@@ -141,15 +141,19 @@ def test_the_linear_solve_is_not_changed_by_the_projection(linear_solution):
     assert all(r[0] == 0.0 for r in h["tilt_projected_rel"][-5:])
 
 
-def test_relu_projection_keeps_part_of_a_learning_tilt():
-    """The relu certificate allows M + lambda_r I down to -(1 - delta) lambda_min(Sigma^-1):
-    a learning tilt within that bound passes unchanged, which the prior-blind floor did not."""
+def test_relu_projection_keeps_a_learning_tilt_the_all_active_orthant_admits():
+    """A rank-2 negative learning tilt that takes 90 % of the prior precision in its plane:
+    lambda_min(M) is far below -lambda_min(Sigma^-1) (the orthant floor would cut it), but
+    Sigma^-1 + M = Sigma^-1/2 (I - 0.9 U U^T) Sigma^-1/2 > 0, so the relu rule keeps it whole."""
     X, Y = relu_problem(6, 8, seed=56)
     Sigma = X @ X.T / 8 + 0.1 * torch.eye(6, **F64)
-    s = torch.linalg.eigvalsh(torch.linalg.inv(Sigma)).min().item()
-    Mh = -0.5 * s * Y @ Y.T / torch.linalg.eigvalsh(Y @ Y.T).max()  # lambda_min = -s / 2
-    out = project_tilt(Mh, 0.05, 0.0, torch.relu, True, torch.linalg.cholesky(Sigma),
-                       torch.linalg.inv(Sigma))  # fmt: skip
+    Sigma_inv = torch.linalg.inv(Sigma)
+    w, V = torch.linalg.eigh(Sigma_inv)
+    root_inv = (V * w.sqrt()) @ V.T
+    U, _ = torch.linalg.qr(Y)
+    Mh = -0.9 * root_inv @ U @ U.T @ root_inv
+    assert torch.linalg.eigvalsh(Mh).min() < -2 * w.min()
+    out = project_tilt(Mh, 0.05, 0.0, torch.relu, True, torch.linalg.cholesky(Sigma), Sigma_inv)
     torch.testing.assert_close(out, mf.sym(Mh), rtol=0, atol=0)
 
 

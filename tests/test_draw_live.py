@@ -150,7 +150,7 @@ def test_the_full_dashboard_keeps_its_panels_and_zero_based_layers():
         "lag-1 autocorrelation of ||h||²/P",
         "chain scale  ⟨||h||²⟩ / prior diag",
         "Stein identity mismatch",
-        "normalisability margin (sufficient cond.)",
+        "normalisability margin (necessary cond.)",
         "kernel alignment with the trained net",
         "eigenvalues raised to the PD floor",
         "λ_min(Φ) before PD floor",
