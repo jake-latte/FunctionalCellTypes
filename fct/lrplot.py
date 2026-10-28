@@ -55,8 +55,8 @@ def plot_metric_vs_lr(
     Several seeds are collapsed to their median. A diverged run is a red cross at the top of
     the axes at its lr, since it has no value to draw; `best_lr` adds a vertical guide. At
     depth 1 phi acts only through the rate regulariser, so the lines of every phi coincide for
-    rate_lambda = 0: they are drawn in decreasing width (tanh, relu, id) so all stay visible. ValueError for a task and
-    depth without rows or a phi without a colour.
+    rate_lambda = 0: they are drawn in decreasing width (tanh, relu, id) so all stay visible.
+    ValueError for a task and depth without rows or a phi without a colour.
     """
     cells = [r for r in collapse_seeds(rows, (key,)) if r["task"] == task and r["L"] == L]
     if not cells:
