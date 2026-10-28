@@ -227,8 +227,16 @@ IMPORTANCE_FIELDS = (
 
 # Solver fields left out of every hash: they check a result and never change a number of it.
 UNHASHED_SOLVER_FIELDS = ("tilt_tripwire_resid", "tilt_tripwire_steps")
-# The step-control fields change the iteration and so the result: they enter every hash.
-STEP_CONTROL_FIELDS = ("inner_step_control", "eta_max_phihat", "phi_step_scale", "inner_start")
+# The step-control fields, at the values under which the iteration is the plain Algorithm 1
+# (with eta_max = 1, which LEGACY_SOLVER_FIELDS hashes). A field enters the hash only when it
+# differs from its value here, as IMPORTANCE_FIELDS enter only off "hmc": a config set to
+# these values keeps the hash it had before the fields existed, and one that leaves them
+# unset gets the defaults and a new hash.
+STEP_CONTROL_LEGACY: dict[str, Any] = {
+    "inner_step_control": "health", "eta_max_phihat": 1.0, "phi_step_scale": "trace",
+    "inner_start": "previous",
+}  # fmt: skip
+STEP_CONTROL_FIELDS = tuple(STEP_CONTROL_LEGACY)
 
 
 class MeanFieldConfig(StrictModel):
@@ -272,13 +280,15 @@ class MeanFieldConfig(StrictModel):
         return {**rest, "solver": {**group, **flat}}
 
     def hash_payload(self) -> dict[str, Any]:
-        """The section as it enters a cache hash: the problem fields, LEGACY_SOLVER_FIELDS and
-        STEP_CONTROL_FIELDS in one flat dict (the pre-split layout), plus IMPORTANCE_FIELDS
-        when the sampler is "importance"."""
+        """The section as it enters a cache hash: the problem fields and LEGACY_SOLVER_FIELDS
+        in one flat dict (the pre-split layout), plus each of STEP_CONTROL_FIELDS that differs
+        from STEP_CONTROL_LEGACY, plus IMPORTANCE_FIELDS when the sampler is "importance"."""
         solver = self.solver.model_dump()
         payload = self.model_dump(exclude={"solver"})
         payload.update({k: solver[k] for k in LEGACY_SOLVER_FIELDS})
-        payload.update({k: solver[k] for k in STEP_CONTROL_FIELDS})
+        payload.update(
+            {k: solver[k] for k in STEP_CONTROL_FIELDS if solver[k] != STEP_CONTROL_LEGACY[k]}
+        )
         if self.solver.sampler != "hmc":
             payload.update({k: solver[k] for k in IMPORTANCE_FIELDS})
         return payload

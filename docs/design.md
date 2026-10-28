@@ -99,10 +99,12 @@ enters the hash by value.
 
 The meanfield section enters every hash as `MeanFieldConfig.hash_payload()`, not as its nested dump: the problem fields
 and the solver fields that existed before the sampler choice (`config.LEGACY_SOLVER_FIELDS`, `log_int` and `save_int`
-included) in one flat dict, which is how the section was hashed before it was split, plus the step-control fields
-(`config.STEP_CONTROL_FIELDS`: `inner_step_control`, `eta_max_phihat`, `phi_step_scale`, `inner_start`), which change the
-iteration and so the result and enter every hash. Step control (and the default `eta_max`, 1 -> 0.25) changed every
-meanfield hash, so every result solved before it is stale. `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
+included) in one flat dict, which is how the section was hashed before it was split. The step-control fields
+(`config.STEP_CONTROL_FIELDS`: `inner_step_control`, `eta_max_phihat`, `phi_step_scale`, `inner_start`) are added each
+only when it differs from its value in `config.STEP_CONTROL_LEGACY` (`health`, 1, `trace`, `previous`: with
+`eta_max = 1` the plain Algorithm 1): a config that sets those values explicitly keeps the hash it had before the
+fields existed (`tests/fixtures/legacy_config.json` does), while one that leaves them unset gets the new defaults, a
+different iteration, and a new hash, as does every config with the new default `eta_max` (0.25). `sampler` and the importance fields (`config.IMPORTANCE_FIELDS`) are added only when
 `sampler="importance"`: switching sampler makes a result stale, importance settings never touch an HMC result. Every
 solver field is in exactly one of the three lists or in `config.UNHASHED_SOLVER_FIELDS` (`tilt_tripwire_resid`, `tilt_tripwire_steps`, a check on
 the result that changes no number of it; a test enforces it), so a new field has to be given a hash rule explicitly. The train and analysis hashes never include the meanfield section, so solver settings never make a training
@@ -162,10 +164,12 @@ class SolverConfig(BaseModel):        # how it is solved
     max_backtrack: int = 8; eta_min_rel: float = 1e-3; max_div_frac: float = 0.02
     max_h2_growth: float = 10.0; max_mc_err: float = 1.0; eps_collapse: float = 1e-2
     project_tilt: bool = True; tilt_floor: float = 0.05; max_rel_step: float = 0.1
-    # step control (STEP_CONTROL_FIELDS, hashed; see meanfield.py "Step control"); eta_max caps the outer step size
+    # step control (STEP_CONTROL_FIELDS, hashed when not at STEP_CONTROL_LEGACY; see meanfield.py "Step control").
+    # eta_max caps only the outer step size; the inner one is capped by eta_max_phihat (eta_max capped both before
+    # eta_max_phihat existed, so a config that relied on eta_max for the inner step must set eta_max_phihat too)
     inner_step_control: Literal["health", "progress"] = "progress"; eta_max_phihat: float = 0.25
     phi_step_scale: Literal["trace", "kernel"] = "kernel"; inner_start: Literal["previous", "target"] = "target"
-    # "health", "trace", "previous" with eta_max = eta_max_phihat = 1 is the solver before step control
+    # STEP_CONTROL_LEGACY ("health", 1, "trace", "previous") with eta_max = 1 is the plain Algorithm 1
     # (tests/pinned_runs.LEGACY_STEP_CONTROL reproduces its pinned solves bit for bit)
     tilt_tripwire_resid: float = 0.9; tilt_tripwire_steps: int = 3   # not hashed: the tilt tripwire (see solve), not a convergence test
     pd_floor_rel: float = 1e-8; inv_floor_rel: float = 1e-4

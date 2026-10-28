@@ -10,11 +10,12 @@ them only when that behaviour is meant to change, and say so in the commit.
 
 Provenance: the solves `hmc_solve_*.pt` and `meanfield_hashes.json` are written by code whose
 net reads its output as V^T phi(h^L) / N (MODEL_VERSION 2) and whose tilt projection follows
-`fct.hmc.tilt_rule`; `hmc_solve_<problem>.pt` by the step-controlled solver at its defaults,
-`hmc_solve_<problem>_legacy_steps.pt` by the solver before step control (`LEGACY_STEP_CONTROL`
-reproduces them). `write_fixtures` rewrites all of them. `legacy_config.json` is the flat layout of the code before the solver
-sub-section (commit d1d3091) with the `readout` key deleted by hand: `write_fixtures` would save
-it in the current nested layout, so restore it from git after running it.
+`fct.hmc.tilt_rule`: `hmc_solve_<problem>.pt` at the solver's default step control,
+`hmc_solve_<problem>_legacy_steps.pt` at `LEGACY_STEP_CONTROL` (the plain Algorithm 1).
+`write_fixtures` rewrites all of them. `legacy_config.json` is the flat layout of the code
+before the solver sub-section (commit d1d3091), edited by hand: the `readout` key deleted and
+the step-control fields added at their `LEGACY_STEP_CONTROL` values. `write_fixtures` would
+save it in the current nested layout, so restore it from git after running it.
 
 Only flat `MeanFieldConfig` keyword arguments are used here, which both the old flat schema and
 the split one accept, so the same code produced the fixtures and checks them.
@@ -24,6 +25,8 @@ import json
 from pathlib import Path
 
 import torch
+
+from fct.config import STEP_CONTROL_LEGACY
 
 FIXTURES = Path(__file__).parent / "fixtures"
 F64 = {"device": "cpu", "dtype": torch.float64}
@@ -48,14 +51,9 @@ _PROBLEMS = {
         },
     },
 }  # fmt: skip
-# The step control of the solver before inner steps were validated on progress, the outer step
-# scaled by the kernel and the last layer's inner ascent started at its target
-# (`fct.config.SolverConfig`): the `*_legacy_steps` fixtures were written by that solver, and
-# these settings still reproduce them bit for bit.
-LEGACY_STEP_CONTROL = {
-    "inner_step_control": "health", "phi_step_scale": "trace", "inner_start": "previous",
-    "eta_max": 1.0, "eta_max_phihat": 1.0,
-}  # fmt: skip
+# The plain Algorithm 1 (`fct.config.STEP_CONTROL_LEGACY` with eta_max = 1), which wrote the
+# `*_legacy_steps` fixtures and reproduces them bit for bit.
+LEGACY_STEP_CONTROL = {**STEP_CONTROL_LEGACY, "eta_max": 1.0}
 PINNED_SOLVES = _PROBLEMS | {
     f"{name}_legacy_steps": spec | {"meanfield": spec["meanfield"] | LEGACY_STEP_CONTROL}
     for name, spec in _PROBLEMS.items()
@@ -63,8 +61,8 @@ PINNED_SOLVES = _PROBLEMS | {
 LAMBDA_W, LAMBDA_R, P_PIN, D_IN_PIN = 1e-3, 1e-3, 6, 4
 
 # A config.json in the flat pre-split layout, with non-default values in both the problem
-# and the solver fields of the meanfield section. The file is a full dump, so it also holds
-# the defaults of its time: eta_max = 1 is one, set here so that the two stay the same config.
+# and the solver fields of the meanfield section. Its solver runs the plain Algorithm 1, so
+# its hashes are those of the code before the step-control fields existed.
 LEGACY_CONFIG_FILE = FIXTURES / "legacy_config.json"
 LEGACY_OVERRIDES = {
     "data": {"P": 64, "D_in": 8},
@@ -73,7 +71,7 @@ LEGACY_OVERRIDES = {
     "meanfield": {
         "n_points": 20, "beta": 1e3, "rate_tilt": 1e-4, "alpha": 0.3, "learning_prefactor": 0.5,
         "n_chains": 64, "eps0": 0.1, "init": "gaussian", "log_int": 1, "save_int": 3,
-        "precondition": False, "seed": 4, "eta_max": 1.0,
+        "precondition": False, "seed": 4, **LEGACY_STEP_CONTROL,
     },
     "device": "cpu",
 }  # fmt: skip

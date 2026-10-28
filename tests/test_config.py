@@ -8,6 +8,7 @@ from fct.config import (
     IMPORTANCE_FIELDS,
     LEGACY_SOLVER_FIELDS,
     STEP_CONTROL_FIELDS,
+    STEP_CONTROL_LEGACY,
     UNHASHED_SOLVER_FIELDS,
     Config,
     MeanFieldConfig,
@@ -244,6 +245,12 @@ def test_step_control_makes_the_result_stale(setting):
     cfg = default_config()
     other = _with_solver(cfg, **setting)
     assert other.section_hash(*RESULT_SECTIONS) != cfg.section_hash(*RESULT_SECTIONS)
+
+
+def test_step_control_at_its_plain_values_stays_out_of_the_hash():
+    payload = MeanFieldConfig(**STEP_CONTROL_LEGACY).hash_payload()
+    assert not set(STEP_CONTROL_FIELDS) & set(payload)
+    assert set(STEP_CONTROL_FIELDS) <= set(MeanFieldConfig().hash_payload())
 
 
 def test_hmc_hash_ignores_the_importance_settings():
