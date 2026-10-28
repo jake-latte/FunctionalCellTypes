@@ -14,6 +14,7 @@ The oracle cannot use that structure and only certifies.
 import math
 from typing import NamedTuple
 
+import numpy as np
 import pytest
 import torch
 
@@ -224,31 +225,55 @@ def test_the_oracle_passes_the_last_default_step_on_the_first_12_units(exemplar,
     assert check.n_violated == 0
 
 
-def test_the_rule_admits_a_non_normalisable_tilt_in_a_solve_with_eta_max_0_1(exemplar):
-    """The rule under-cuts: with solver.eta_max = 0.1, outer step 5 admits a tilt (margin
-    +0.19) whose density is not normalisable (plane minimum -0.007): along the scan's minimising
-    ray the solver's own exponent -log p = 1/2 h^T Sigma^-1 h + U(h) falls without bound,
-    as -r^2. That step's HMC Stein mismatch (0.06) does not flag it; its h^2 / prior jumps to
-    about 3e3 and the next step backtracks, but the solve carries on (and later rides the
-    delta floor with the projection firing every step and the density often non-normalisable)."""
+class OuterRun(NamedTuple):
+    outer: int
+    before: torch.Tensor  # the tilt the inner ascent left, its trailing step included
+    after: torch.Tensor  # the tilt the outer-gradient run accepted
+    n_retry: int  # times the outer-gradient run retook the trailing step
+
+
+def test_the_guard_rejects_the_non_normalisable_tilt_the_rule_admits_at_step_5(
+    exemplar, monkeypatch
+):
+    """The rule under-cuts: with solver.eta_max = 0.1, the inner ascent of outer step 5 ends
+    with a trailing step to a tilt the rule admits (margin +0.19) whose density is not
+    normalisable (plane minimum -0.007): along the scan's minimising ray the solver's own
+    exponent -log p = 1/2 h^T Sigma^-1 h + U(h) falls without bound, as -r^2. The
+    outer-gradient run validates that step: its chains escape the prior's scale, the step is
+    reverted and retaken at half size, and the tilt the solve goes on with is normalisable.
+    Without the guard the run was accepted (h^2 / prior about 3e3) and the residual ran away."""
+    runs = []
+    outer_run = mf._outer_run
+
+    def spy(prob, st, l, inner):
+        before, n_before = st.Phi_hat[l].clone(), int(inner.n_backtrack[l])
+        out = outer_run(prob, st, l, inner)
+        n_retry = int(inner.n_backtrack[l]) - n_before
+        runs.append(OuterRun(st.outer, before, st.Phi_hat[l].clone(), n_retry))
+        return out
+
+    monkeypatch.setattr(mf, "_outer_run", spy)
     # The incident's settings: health-only inner steps, the trace-scaled outer step and both
-    # step caps at 0.1, under which this solve is replayed exactly.
+    # step caps at 0.1 (steps 0 to 4 are those of the incident bit for bit).
     snapshots = relu_solve(
         exemplar, 6, **{**LEGACY_STEP_CONTROL, "eta_max": 0.1, "eta_max_phihat": 0.1}
     )
-    Phi_hat = snapshots[5].Phi_hat[0]
-    assert margin(exemplar, Phi_hat) > 0.1
-    scan = plane_scan(exemplar, Phi_hat)
-    assert scan.min_exponent < 0
+    step5 = runs[5]
+    assert [r.n_retry for r in runs[:5]] == [0] * 5 and step5.n_retry >= 1
+    assert margin(exemplar, step5.before) > 0.1  # admitted by the rule
+    scan = plane_scan(exemplar, step5.before)
+    assert scan.min_exponent < 0  # and not normalisable
     radii = torch.tensor([1.0, 10.0, 100.0], dtype=F64)
     h = radii[:, None] * scan.h
     U, _ = tilt_and_grad(
-        h, Phi_hat, exemplar.prob.rate_tilt, torch.relu, phi_prime(torch.relu), True
+        h, step5.before, exemplar.prob.rate_tilt, torch.relu, phi_prime(torch.relu), True
     )
     neg_log_p = 0.5 * ((h @ exemplar.Sigma_inv) * h).sum(1) + U
     torch.testing.assert_close(neg_log_p, 0.5 * scan.min_exponent * radii**2, rtol=1e-3, atol=0)
-    assert stein_mismatch_at(snapshots[5]) < 0.1
-
-
-def stein_mismatch_at(snap: mf.OuterSnapshot) -> float:
-    return float(snap.history["hmc_stein_mismatch"][-1][0])
+    # what the solve went on with, at every step: normalisable, chains at the prior's scale
+    for snap in snapshots:
+        assert plane_scan(exemplar, snap.Phi_hat[0]).min_exponent > 0, f"step {snap.outer}"
+        torch.testing.assert_close(snap.Phi_hat[0], runs[snap.outer].after, rtol=0, atol=0)
+    h2_ratio = np.array(snapshots[-1].history["hmc_h2_ratio"])
+    print(f"\neta_max 0.1 under the guard, h2/prior per step: {np.round(h2_ratio[:, 0], 2)}")
+    assert h2_ratio.max() < 10
