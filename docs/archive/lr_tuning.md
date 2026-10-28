@@ -1,7 +1,9 @@
 # Learning-rate tuning of the modularity sweep
 
-Item: `docs/issues/tune-learning-rate.md`. Code: `fct/lrtune.py`, `fct/lrplot.py`, `fct.tasks.resample`
-(interfaces in `docs/design.md`). Results table: `docs/lr_tuning_results.csv`. Raw runs and logs were
+> Archived 2026-10-28: first-program material (LOSS_VERSION 1 era, superseded; kept for the record).
+
+Item: `docs/issues/archive/tune-learning-rate.md`. Code: `fct/lrtune.py`, `fct/lrplot.py`, `fct.tasks.resample`
+(interfaces in `docs/design.md`). Results table: `docs/archive/lr_tuning_results.csv`. Raw runs and logs were
 written to `tmp/lr_tune*/` (git-ignored).
 
 ## Recommendation
@@ -13,7 +15,7 @@ other 12 grid settings were not run, and lr = 1e-4 was not run at 15000 epochs (
 The PI accepted lr = 1e-3 as good enough and asked for no further tuning. All runs here used the loss
 as it was when they were made (rate penalty summed over the P samples, `weight_lambda = 1e-3`). The PI
 then averaged the rate penalty over P (LOSS_VERSION 2) and lowered the default `weight_lambda` to 1e-4
-(`docs/issues/average-rate-penalty.md`). The current loss (LOSS_VERSION 3) sums the penalty again, so
+(`docs/issues/archive/average-rate-penalty.md`). The current loss (LOSS_VERSION 3) sums the penalty again, so
 those runs are reproducible with `--set train.weight_lambda=1e-3`; the learning rate was not re-tuned
 at the new default `weight_lambda`. The finding below that the summed penalty at `rate_lambda = 1e-3`
 collapsed linear teacher and object-action at `weight_lambda = 1e-3` is relevant again now that the
@@ -80,7 +82,7 @@ loss = 0.5 N mean(y^2)): linear teacher with `rate_lambda = 1e-3` (4), object-ac
 `rate_lambda = 1e-3` except relu L=1 (3), and all 8 what-where settings. Their converged losses are the same
 for every lr >= 1e-3 (15.06 what-where, 36.26 object-action, 42.55 linear teacher with rate 1e-3), and the
 60000-epoch run at 1e-4 ends at the same values as 1e-3 at 6000 epochs. Per-setting values:
-`python -m fct.lrtune report docs/lr_tuning_results.csv --n-epochs 15000 --lrs 0.001` and the CSV.
+`python -m fct.lrtune report docs/archive/lr_tuning_results.csv --n-epochs 15000 --lrs 0.001` and the CSV.
 
 The corrected MIR of a collapsed net is not zero: for what-where at lr = 1e-3, 15000 epochs it is up to
 0.60 (L=5, relu, rate 1e-3, last layer; 0.67 at 3e-3), read off tiny but rank-structured activations;
@@ -89,7 +91,7 @@ factor). `n_dead` is not a CSV column.
 
 ### 6000 epochs, seed 0, 8 learning rates
 
-Recipe for every table in this subsection: `python -m fct.lrtune report docs/lr_tuning_results.csv
+Recipe for every table in this subsection: `python -m fct.lrtune report docs/archive/lr_tuning_results.csv
 --n-epochs 6000 --seeds 0` plus the flags named.
 
 *Regularised loss* (`--key loss`), by task and depth:
@@ -105,11 +107,11 @@ Recipe for every table in this subsection: `python -m fct.lrtune report docs/lr_
 
 All 24 settings: mean ranks 8.0, 7.0, 6.0, 5.0, 2.79, 2.33, 2.44, 2.44; worst gap 5% at 1e-3, 0% at 3e-3,
 49% at 1e-2 and 50% at 3e-2. The 49-50% is relu, L=5, linear teacher, `rate_lambda = 0`, which ends in a
-worse solution (held-out MSE 0.083 against 0.0016). Figure: `docs/figures/loss_vs_lr_6000.png`.
+worse solution (held-out MSE 0.083 against 0.0016). Figure: `docs/archive/figures/loss_vs_lr_6000.png`.
 
 *Held-out MSE, all 24 settings* (`--key heldout_mse`): mean ranks 4.69, 3.92, 4.02, 4.38, 4.54, 4.69, 4.81,
 4.96, best 3e-5; for what-where the lowest held-out MSE is at the smallest lrs (0.112 at 1e-4, L = 1).
-Figure: `docs/figures/heldout_mse_vs_lr_6000.png` (the grey line marks the lowest tied "best" lr of the panel).
+Figure: `docs/archive/figures/heldout_mse_vs_lr_6000.png` (the grey line marks the lowest tied "best" lr of the panel).
 No verdict is printed for this ranking.
 
 *Held-out MSE, the 9 settings that learn* (`--key heldout_mse --learned-only`): mean ranks 8.0, 7.0, 4.94,
@@ -118,7 +120,7 @@ No verdict is printed for this ranking.
 
 ### Seeds, 6000 epochs, lr in {3e-4, 1e-3, 3e-3}
 
-Recipe: `report docs/lr_tuning_results.csv --n-epochs 6000 --lrs 0.0003 0.001 0.003 [--seeds S]
+Recipe: `report docs/archive/lr_tuning_results.csv --n-epochs 6000 --lrs 0.0003 0.001 0.003 [--seeds S]
 [--key loss | --key heldout_mse --learned-only]`.
 
 - Loss, every one of seeds 0, 1, 2 (and the median over the three): mean ranks 3e-4 3.00, 1e-3 1.62, 3e-3 1.38;
@@ -131,8 +133,8 @@ Recipe: `report docs/lr_tuning_results.csv --n-epochs 6000 --lrs 0.0003 0.001 0.
 
 ### 15000 epochs, seed 0, lr in {3e-4, 1e-3, 3e-3}
 
-Recipe: `report docs/lr_tuning_results.csv --n-epochs 15000 --key loss` (or `--key heldout_mse`, with
-`--learned-only` for the last row). Figure: `docs/figures/loss_vs_lr_15000.png`.
+Recipe: `report docs/archive/lr_tuning_results.csv --n-epochs 15000 --key loss` (or `--key heldout_mse`, with
+`--learned-only` for the last row). Figure: `docs/archive/figures/loss_vs_lr_15000.png`.
 
 | criterion | 3e-4 | 1e-3 | 3e-3 | worst gap of any lr |
 |---|---|---|---|---|

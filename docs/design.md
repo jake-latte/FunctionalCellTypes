@@ -773,7 +773,7 @@ into `cli.py` is not planned for now). Every trial is a normal sweep: one ROOT p
 lr, seed)` = `BASE/lr_<lr:g>_seed<seed>`, written with `sweep.run_setting`, so tuning uses the production path.
 
 ```python
-# result rows: dict with the keys of COLUMNS (also the CSV schema, docs/lr_tuning_results.csv)
+# result rows: dict with the keys of COLUMNS (also the CSV schema, docs/archive/lr_tuning_results.csv)
 COLUMNS = task, L, phi, rate_lambda, lr, seed, n_epochs, diverged, train_mse, heldout_mse, null_mse (held-out
           MSE of the zero net), loss (final regularised loss on the training data), max_spike, tail_drop,
           mir_corrected (final corrected MIR per layer, ';'-joined)
