@@ -368,7 +368,7 @@ def _init_from_net(prob: _Problem, Phi, Phi_hat, net_Phi, net_H) -> None:
     Φ̂_l = sym(Φ_l⁻¹ ⟨h uᵀ⟩_{l+1}) (Eq. 31b, Stein form)."""
     Phi[:] = net_Phi
     A = torch.linalg.solve(prob.alpha * prob.eye + Phi[-1], prob.eye)
-    Phi_hat[-1] = -2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A
+    Phi_hat[-1] = _last_stein_target(prob, A)
     dphi = phi_prime(prob.phi)
     for l in range(prob.L - 2, -1, -1):
         h = net_H[:, l + 1].T  # (N, P)
@@ -550,6 +550,11 @@ def _tilt_step(
         return new, 0.0
     projected = st.samplers[l].project_tilt(new, c.tilt_floor)
     return projected, relative_fro(projected, new) if new.norm().item() > 0 else 0.0
+
+
+def _last_stein_target(prob: _Problem, A: torch.Tensor) -> torch.Tensor:
+    """-2c A Y Yᵀ A, the last layer's Stein target, for A = (αI + Φ_L)⁻¹ (Eq. 31c)."""
+    return -2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A
 
 
 def _learning_pieces(prob: _Problem, Phi_last: torch.Tensor):
@@ -747,7 +752,7 @@ def _outer_gradients(prob: _Problem, st: _SolverState) -> _OuterGradients:
             out.stein_vs_direct.append(relative_fro(hat_stein, hat_direct))
             out.fp_direct.append(relative_fro(st.Phi_hat[l], hat_direct))
         else:
-            hat_stein = -2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A
+            hat_stein = _last_stein_target(prob, A)
             out.stein_vs_direct.append(float("nan"))
             out.fp_direct.append(float("nan"))
         out.fp_stein.append(relative_fro(st.Phi_hat[l], hat_stein))
@@ -985,7 +990,7 @@ def _start_last_tilt_at_target(prob: _Problem, st: _SolverState) -> float:
     this layer. history["picard_resid"], the residual ||⟨ψψᵀ⟩_T - Φ_L|| / ||Φ_L|| of the
     ascent's first run, is."""
     A, _, _, _ = _learning_pieces(prob, st.Phi[-1])
-    target = sym(-2.0 * prob.lp * A @ prob.Y @ prob.Y.T @ A)
+    target = sym(_last_stein_target(prob, A))
     rel = 0.0
     if prob.solver.project_tilt:
         projected = st.samplers[-1].project_tilt(target, prob.solver.tilt_floor)

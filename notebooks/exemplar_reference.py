@@ -20,12 +20,22 @@ from pathlib import Path
 
 import torch
 
-from fct.activations import get_phi
+from fct.activations import get_phi, known_tilt_class
 from fct.cache import cache_paths
 from fct.config import Config, load_config
+from fct.data import Dataset
 from fct.exemplar import train_exemplar
 from fct.hmc import SingleSiteHMC, relative_fro
-from fct.meanfield import FINAL_NAME, net_kernels, network_constants, resolve_beta
+from fct.meanfield import (
+    FINAL_NAME,
+    _last_stein_target,
+    _learning_pieces,
+    _make_problem,
+    _prior_cov,
+    _solver_inputs,
+    net_kernels,
+    resolve_beta,
+)
 
 F64 = torch.float64
 
@@ -62,29 +72,31 @@ def picard_reference(
     return Phi, change
 
 
-def exemplar_reference(cfg: Config, X: torch.Tensor, Y: torch.Tensor, **kw) -> torch.Tensor:
-    """`picard_reference` for the exemplar config `cfg` on its solver inputs (X, Y): the action's
-    constants as `fct.meanfield.run_meanfield` takes them (explicit meanfield values, otherwise
-    `network_constants`)."""
+def exemplar_reference(cfg: Config, dataset: Dataset, **kw) -> tuple[torch.Tensor, float]:
+    """`picard_reference` for the config `cfg` on its solver inputs from `dataset`, and the
+    relative change of its last iteration. The prior, the constants of the action and the Stein
+    target are the solver's own (`fct.meanfield.run_meanfield`'s inputs and problem), so the
+    reference differs from a solve only in how it reaches the fixed point."""
     if cfg.net.L != 1:
         raise ValueError(
             f"the Picard reference is for one hidden layer, the config has {cfg.net.L}"
         )
-    X, Y = X.to(F64), Y.to(F64)
-    derived = network_constants(resolve_beta(cfg), cfg.train.weight_lambda, cfg.train.rate_lambda,
-                                X.shape[0], Y.shape[1])  # fmt: skip
-    mf = cfg.meanfield
-    const = {k: derived[k] if getattr(mf, k) is None else getattr(mf, k) for k in derived}
-    eye = torch.eye(X.shape[0], dtype=F64)
-    Sigma = const["prior_scale"] * X @ X.T / X.shape[1]
+    phi = get_phi(cfg.net.phi)
+    # No tilt projection is applied here, so only activations for which every tilt the
+    # iteration produces is normalisable are accepted.
+    if known_tilt_class(phi) not in ("bounded", "linear"):
+        raise ValueError(
+            f"the Picard reference applies no tilt projection; phi={cfg.net.phi!r} needs one"
+        )
+    X, Y = _solver_inputs(dataset, cfg)
+    meanfield = cfg.meanfield.model_copy(update={"beta": resolve_beta(cfg)})
+    prob = _make_problem(X, Y, 1, cfg.train.weight_lambda, cfg.train.rate_lambda, phi,
+                         cfg.net.g, meanfield)  # fmt: skip
 
     def target(Phi: torch.Tensor) -> torch.Tensor:
-        A = torch.linalg.inv(const["alpha"] * eye + Phi)
-        return -2.0 * const["learning_prefactor"] * A @ Y @ Y.T @ A
+        return _last_stein_target(prob, _learning_pieces(prob, Phi)[0])
 
-    Phi, change = picard_reference(Sigma, target, const["rate_tilt"], get_phi(cfg.net.phi), **kw)
-    print(f"  Picard reference: last relative change {change:.1e}")
-    return Phi
+    return picard_reference(_prior_cov(prob, 0, None), target, prob.rate_tilt, phi, **kw)
 
 
 def _scales(Phi: torch.Tensor) -> str:
@@ -100,9 +112,9 @@ def report(cache_root: Path) -> None:
             print(f"{run_dir.name}: L = {cfg.net.L}, skipped")
             continue
         run = train_exemplar(cfg, cache_root, log=lambda _m: None)
-        X, Y = run.dataset.x[: cfg.meanfield.n_points], run.dataset.y[: cfg.meanfield.n_points]
         print(f"{run_dir.name}:")
-        ref = exemplar_reference(cfg, X, Y)
+        ref, change = exemplar_reference(cfg, run.dataset)
+        print(f"  Picard reference: last relative change {change:.1e}")
         net_Phi = net_kernels(run.net, run.dataset, cfg)[0]
         print(f"  reference: {_scales(ref)}; net {relative_fro(net_Phi, ref):.4f} from it")
         for final in sorted(run_dir.glob(f"solve-*/meanfield/{FINAL_NAME}")):
