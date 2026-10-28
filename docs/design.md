@@ -637,16 +637,20 @@ Step control (`SolverConfig` defaults; each part can be switched back, see the c
   property of the sample size (chains, transitions) and of the point, which no revert of a step
   cures; only a rise blames the step (its chains mix worse there, n_eff = draws x ESS fraction). Per
   transition: at a fixed point the MC error falls as 1/sqrt(transitions), and the outer-gradient run
-  is longer than the inner runs it is compared with. Why 10 (a hundredfold ESS drop), not the 3.2 of
-  a tenfold one like min_ess_drop: the MC error is itself an estimate (from fourth moments and the
-  lag-1 ESS estimate), and on the exemplar's relu problem at the default step control (40 outer
-  steps, growth unbounded) the runs sound in every other way rose up to 6.3x over the accepted point
-  before (99th percentile 3.2, 9 of 579 above 3); at 3 a sound step is reverted that often, and a
-  lucky-low reference can keep rejecting at the step-size floor until the inner give-up raises. On
-  the eta_max = 0.1 relu replay (below) a bound of 3 also rejects steps at outer step 2 on the MC
-  error alone (five of its nine reverts), which changes the trajectory; at 10 it is that of the code
-  before. The first run of each inner ascent has no step to judge; the warm-up and an outer step's
-  probe runs collect no moments, so a solve's first point has no reference. The absolute bound it
+  is longer than the inner runs it is compared with. The rule is a backstop: a ratio of 10 is about
+  a hundredfold ESS drop under HMC, where the h2, divergence and step-size checks normally fire
+  first, and under importance sampling it overlaps min_ess_drop. Why 10, not the 3.2 of a tenfold
+  one like min_ess_drop: the MC error is itself an estimate (from fourth moments and the lag-1 ESS
+  estimate), and on the exemplar's relu problem at the default step control (40 outer steps, growth
+  unbounded) the runs sound in every other way rose up to 6.3x over the accepted point before (99th
+  percentile 3.2, 9 of 579 above 3); at 3 a sound step is reverted that often, and a lucky-low
+  reference can keep rejecting at the step-size floor until the inner give-up raises. On the eta_max
+  = 0.1 relu replay (below) a bound of 3 also rejects steps at outer step 2 on the MC error alone
+  (five of its nine reverts), which changes the trajectory; at 10 it is that of the code before. The
+  first run of each inner ascent has no step to judge; the warm-up and an outer step's probe runs
+  collect no moments, so a solve's first point has no reference. Nor is there one at an MC error of
+  0 (<psi psi^T> = 0: a relu layer off in every chain, from which any growth is infinite), or at a
+  non-finite one, which is logged as a WARNING at the end of the outer step. The absolute bound it
   replaces, max_mc_err = 1, rejected every inner step of a solve with few chains: the pinned
   32-chain solves (`tests/fixtures/hmc_solve_*.pt`) sit at MC error 1.75 to 5.3 in every run; they
   accepted no inner step, and their eta_phihat halved 0.05 -> 0.0125 -> 0.0031 -> 0.00078 over three

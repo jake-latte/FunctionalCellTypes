@@ -115,6 +115,30 @@ instead of raising `UnhealthySolveError`.
   accepted, layer 2's Stein fixed-point residual is 1.1e4 to 1.6e4 (was 800 falling to 50 while
   eta_phihat collapsed). A regression pin far from convergence, not a quality measure; noted
   because it moved.
-- Not changed: the first run of each inner ascent is accepted without a health check (it has
-  no pending step), including the restart of the last layer at its Stein target under
-  inner_start="target"; it also sets the MC-error reference for that ascent.
+- The first run of each inner ascent (the last layer's restart at its Stein target included) is
+  accepted unchecked and sets mc_ref; the previous outer-gradient run's mc_ref could check at
+  least the target restart. The checkpointed mc_ref is never read before it is overwritten
+  (saved for completeness). Recorded by the review; not implemented.
+
+## After the review (2026-10-28)
+- Fixed (blocking): an accepted point with MC error 0 (<psi psi^T> = 0, a relu layer off in
+  every chain) set mc_ref = 0, and every later run failed (10 x 0 = 0) until the outer-run
+  retries raised. A reference must be finite and above 0 (`_usable_mc_reference`), else the
+  next step's MC error is not checked; a non-finite MC error at an accepted point (only an
+  unchecked first run can be accepted with one) is logged as a WARNING at the end of the outer
+  step (`_SolverState.notes`). Regression test: the reviewer's reproducer,
+  `pinned_solve("gaussian_phi_f64", n_outer=15, n_inner_max=10)`, now runs its 15 steps
+  (tripwire off: with the last layer off the hidden layer's Stein target is 0 and its relative
+  residual about 1e299); it raised at outer step 10 before the fix.
+- Reference noise: kept a single point. At the backstop default of 10 the measured noise (6.3 at
+  most, relu) is cleared; a second reference (e.g. the max with the previous outer run's) adds
+  state for a case the default already covers. Worth revisiting if the bound is lowered.
+- Real-sampler give-up test: `pinned_solve("gaussian_phi_f64", max_mc_err_growth=1e-9,
+  n_inner_max=30)` raises UnhealthySolveError after 8 reverts since the last accepted point.
+- Default 10 labelled a backstop in config.py, `_healthy` and design.md.
+- Style: `_health_failures(diag, before: _RunReference, n_tr, cfg)` returns `_Failure(check,
+  message)` records; the escaped-chains hint follows `check in ("h2_growth", "h2_prior")`;
+  history phrasing removed from config.py and the tests.
+- Tanh exemplar at its defaults (HMC) still bit for bit main a7ba292 (last three 0.086 / 0.196
+  / 0.105, inner loop converged at every step).
+- Full suite 1645 passed; both ruff checks clean. Importance exemplar also bit for bit main.
