@@ -24,9 +24,10 @@ def _assert_identical(got, want, where: str) -> None:
         assert type(got) is type(want) and got == want, where
 
 
+@pytest.mark.parametrize("net_kw", [{}, {"B": 1}], ids=["B unset", "B=1"])
 @pytest.mark.parametrize("name", ["adam", "sgld"])
-def test_single_network_run_is_bitwise_pinned(tmp_path, name):
+def test_single_network_run_is_bitwise_pinned(tmp_path, name, net_kw):
     want = torch.load(FIXTURES / f"train_{name}.pt", weights_only=True)
-    got = run_pinned(name, tmp_path)
+    got = run_pinned(name, tmp_path, **net_kw)
     assert set(want["files"]) == {"ckpt_000003.pt", "ckpt_000006.pt", "final.pt"}
     _assert_identical(got, want, name)
