@@ -147,9 +147,9 @@ def make_weight_penalty(cfg: Config, net: Net) -> WeightPenalty:
     """The weight term `cfg` asks for: the net's `weight_l2` (`MLP.weight_l2`, or
     `EnsembleMLP.weight_l2` per member) without a spatial prior, else the spatial prior
     (per member for an ensemble) with the penalty matrices built for `net`'s sizes (float64
-    on the CPU) and then cast to its dtype and device. They are built here, once per run, and are not
-    parameters: a resumed run rebuilds the same matrices from the config. For SGLD it raises
-    if `train.lr` cannot resolve the prior (`_check_sgld_step_resolves_the_prior`).
+    on the CPU) and then cast to its dtype and device. They are built here, once per run, and
+    are not parameters: a resumed run rebuilds the same matrices from the config. For SGLD it
+    raises if `train.lr` cannot resolve the prior (`_check_sgld_step_resolves_the_prior`).
     """
     if cfg.spatial is None:
         return type(net).weight_l2
