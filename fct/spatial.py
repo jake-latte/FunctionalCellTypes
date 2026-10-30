@@ -107,7 +107,7 @@ class SpatialConfig(StrictModel):
     min_rel_eig: RelEig = 1e-6
     # When set, every population kernel is rescaled to this top eigenvalue (see `_make_population`)
     # and `kernel.amplitude` is not used, so it must stay 1; `Config` also requires weight_lambda = 1.
-    lambda_max: PosFloat | None = None
+    lambda_max: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
 
     @model_validator(mode="after")
     def _amplitude_is_one_under_lambda_max(self) -> Self:
@@ -117,7 +117,7 @@ class SpatialConfig(StrictModel):
             amplitude = getattr(self, name).kernel.amplitude
             if amplitude != 1.0:
                 raise ValueError(
-                    f"{name}.kernel.amplitude is {amplitude:g} but lambda_max is set, which "
+                    f"{name}.kernel.amplitude is {amplitude!r} but lambda_max is set, which "
                     "overwrites the amplitude; leave it at 1"
                 )
         return self

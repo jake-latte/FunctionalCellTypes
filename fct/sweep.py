@@ -223,6 +223,11 @@ class SweepConfig(StrictModel):
     def _grid_is_valid(self) -> Self:
         if self.grid is not None:
             _validate_grid(self, self.grid)
+        elif self.spatial is not None:
+            # The built-in grid: every setting must still build a valid Config (the spatial
+            # section ties weight_lambda to lambda_max). Sweeps without one have no such
+            # cross-field rule, and the module-level presets are built before these helpers exist.
+            _validate_combinations(self)
         return self
 
 
