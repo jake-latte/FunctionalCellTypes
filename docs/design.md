@@ -319,7 +319,10 @@ def latent_lattice_dataset(cfg, reference: Dataset) -> Dataset
 class MLP(nn.Module)   # the notebook's net: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None); forward(x) -> (H (P,L,N), Z (P,D_out)) with Z = phi(H[:, -1]) @ V / N, a linear readout of the last layer's post-activations (MODEL_VERSION 2); weight_l2()
 class EnsembleMLP(nn.Module)   # B MLPs batched over a leading member axis: U (B,N,D_in), J_k (B,N,N), V (B,N,D_out); __init__(members: Sequence[MLP]) copies and stacks them
     # forward(x (P,D_in)) -> (H (B,P,L,N), Z (B,P,D_out)); weight_l2() -> (B,); member(b) -> MLP (a copy of member b's weights); B, device, dtype properties
-Net = MLP | EnsembleMLP                                  # MLP.B = 1 (class attribute), so `net.B` works for both
+    # forward: batched matmuls with contiguous (B,P,.) results, each scale factor on the smaller of weight and result
+Net = MLP | EnsembleMLP                                  # MLP.B = 1 (class attribute), so `net.B` works for both;
+    # member_axes: leading axes indexing members (MLP 0, EnsembleMLP 1), which train.per_member reduces around
+MLP.from_weights(U, J, V, g, phi) -> MLP                 # an MLP holding the given weights (no copy, no random draw); member() uses it
 def member_seed(seed: int, b: int) -> int                # member 0: seed itself; b > 0: first 8 bytes (little-endian) of sha256("fct.model.member:<seed>:<b>")
 def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> Net   # cfg.B = 1: an MLP, weights drawn on CPU from a local torch.Generator seeded with cfg.seed;
     # cfg.B > 1: an EnsembleMLP whose member b is drawn from a generator seeded with member_seed(cfg.seed, b); then moved to device (no global RNG touched); phi = get_phi(cfg.phi)
@@ -335,7 +338,8 @@ def compute_loss(net, x, y, prior_coefficient, rate_lambda, weight_penalty=None)
     # weight_l2 = weight_penalty(net): the sum of squares of every parameter by default, the spatial prior
     #   sum_l tr(M_post W_l M_pre W_l^T) from make_weight_penalty when cfg.spatial is set (see "Spatial weight prior in training")
     # rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
-WeightPenalty = Callable[[MLP], Tensor]
+WeightPenalty = Callable[[Net], Tensor]   # 0-d for an MLP, (B,) for an ensemble
+def per_member(net, t, reduce=torch.sum) -> Tensor   # reduce over every axis but the member axis (all axes for an MLP)
 def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None, else the spatial prior for net's sizes, dtype and device
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
@@ -372,7 +376,13 @@ prior, written before `net.B` existed, bit for bit (hash, every checkpoint, fina
 changed every state_dict shape and cache. Readers that analyse one network call `select_member` and so refuse an
 ensemble unless given a member: `spatial_grid.load_grid_run(chosen, member=None)` takes one; the CLI's trained-net
 commands, `report.load_setting_result`, `grid_view.load_setting_data` and `lrtune.evaluate_setting` refuse; the
-mean-field `solve` raises for an ensemble, and the sweep's solve stage raises `SweepError` for a trained one.
+mean-field `solve` raises for an ensemble, and the sweep's solve stage raises `SweepError` for an ensemble setting
+before writing anything, trained or not (its solve status stays "missing").
+
+Cost: an ensemble is one batched run, measured in `docs/issues/ensemble-training.md` (`jobs/bench_ensemble.py`). It is
+faster than B singles on the GPU and at the phase-transition preset's sizes on the CPU, but SLOWER than a loop of B
+singles on the CPU when the activations are large (P 2048: about 2x slower; deep tanh nets: on par), because its
+elementwise passes over (B, P, N) tensors leave the cache.
 
 SGLD (`train.optimizer = "sgld"`, `fct/sgld.py`). The `SGLD(params, lr, beta, member_axis=False, noise=torch.randn_like)` optimiser takes the full-batch
 Euler-Maruyama step `theta <- theta - lr * grad L + sqrt(2 * lr / beta) * N(0, I)` with `dt = lr`, where `L` is the
@@ -1151,7 +1161,7 @@ periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post
 wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
 penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, fraction_floored, n_negative, cond_before, cond_after))
 build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
-weight_quadratic_form(W, M_rows, M_cols) -> Tensor        # tr(M_rows W M_cols W^T), any dtype/device; identity factors give W.square().sum() exactly
+weight_quadratic_form(W, M_rows, M_cols) -> Tensor        # tr(M_rows W M_cols W^T), any dtype/device; identity factors give W.square().sum() exactly; W (..., r, c) gives one value per matrix
 parameter_factors(spaces) -> {"U" | "J.k" | "V": (M_rows, M_cols)}   # factors of each MLP weight in its STORED orientation (V: (M_pre, M_post))
 data_kernel(psi (P, n_pre), K_pre (n_pre, n_pre)) -> (P, P)           # A = psi K_pre psi^T / n_pre: the data factor of the paper's Phi^{mu nu}_ij = K^post_ij A_{mu nu} (eq. phi-diagonalised); K_pre = I gives psi psi^T / n_pre
 spatial_kernel_pairs(A (P, P), K_post (n, n), trials) -> (S, S, n, n)   # block [s, t] = A[trials[s], trials[t]] * K_post; ValueError on non-square inputs and on trials empty or outside 0..P-1

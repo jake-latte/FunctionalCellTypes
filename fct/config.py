@@ -378,13 +378,12 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections,
-        `LOSS_VERSION` when "train" is, and
-        `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser, and
-        `net.B` when it is 1. The
-        `spatial` section enters with "train" only when it is set, so runs without a spatial
-        prior keep the hashes they had before the section existed. The meanfield section
-        enters as `MeanFieldConfig.hash_payload()`, not as its dump.
+        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and
+        `LOSS_VERSION` when "train" is. `train.optimizer` / `train.beta` are left out of the
+        hash for the adam optimiser, and `net.B` when it is 1. The `spatial` section enters
+        with "train" only when it is set, so runs without a spatial prior keep the hashes they
+        had before the section existed. The meanfield section enters as
+        `MeanFieldConfig.hash_payload()`, not as its dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
