@@ -370,6 +370,20 @@ class Config(StrictModel):
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
 
+    @model_validator(mode="after")
+    def _lambda_max_is_the_only_scale(self) -> Self:
+        # lambda_max sets the prior's overall scale, so weight_lambda must not add another.
+        if (
+            self.spatial is not None
+            and self.spatial.lambda_max is not None
+            and self.train.weight_lambda != 1.0
+        ):
+            raise ValueError(
+                f"train.weight_lambda is {self.train.weight_lambda!r} but spatial.lambda_max "
+                "is set; weight_lambda must be exactly 1"
+            )
+        return self
+
     def section_hash(self, *sections: str) -> str:
         """Hash of the named sections, so an artefact can tell which config it came from.
 
@@ -377,7 +391,8 @@ class Config(StrictModel):
         belongs to no section. So is `MODEL_VERSION` when "net" is among the sections,
         `LOSS_VERSION` when "train" is, and
         `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser. The
-        `spatial` section enters with "train" only when it is set, so runs without a spatial
+        `spatial` section enters with "train" only when it is set (without its `lambda_max` while that
+        is None), so runs without a spatial
         prior keep the hashes they had before the section existed. The meanfield section
         enters as `MeanFieldConfig.hash_payload()`, not as its dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
@@ -398,6 +413,10 @@ class Config(StrictModel):
                 del hashed["train"]["optimizer"], hashed["train"]["beta"]
             if self.spatial is not None:  # the weight prior is part of the training loss
                 hashed["spatial"] = self.spatial.model_dump()
+                if (
+                    self.spatial.lambda_max is None
+                ):  # omitted while None: configs without it hash as before
+                    del hashed["spatial"]["lambda_max"]
         canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 

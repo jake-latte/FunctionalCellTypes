@@ -1109,7 +1109,7 @@ is stated once, in the module docstring of `fct/spatial.py`.
 EmbeddingSpec(kind="grid"|"random", shape=None, seed=0)   # grid shape must multiply to n, None -> n points for d = 1; random takes no shape
 KernelSpec(length_scale=0.1, amplitude=1.0)               # length_scale in the same units as box
 PopulationSpec(embedding, kernel)
-SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6)   # hidden 1..L share `hidden`; grid in d > 1 needs a shape
+SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6, lambda_max=None)   # hidden 1..L share `hidden`; grid in d > 1 needs a shape; lambda_max > 0 or None (see "lambda_max")
 
 # pure computation (float64, CPU)
 make_embedding(spec, n, d, box, index=0) -> Embedding(positions (n, d), box)   # local generator: global RNG untouched
@@ -1136,6 +1136,15 @@ eigenvalues below that: at the defaults (`length_scale = 0.1`, `min_rel_eig = 1e
 floored. So the floor is where the prior's near-zero-variance directions are capped, and it defines `M` on that subspace;
 `FloorReport` gives the floored fraction and `n_negative` (eigenvalues below `-1e-10` times the largest, which is an error:
 `penalty_matrix` raises). Whether to replace the floor by a nugget, `M = (K + sigma^2 I)^{-1}`, is pending a PI decision.
+
+The scale `lambda_max`. With `SpatialConfig.lambda_max` set, every population's kernel is `K = lambda_max * G / lambda_max(G)`,
+where `G` is the unit-amplitude wrapped Gaussian of that population and `lambda_max(G)` its top eigenvalue (computed per
+population: random embeddings differ between populations and seeds). Each `K` then has top eigenvalue `lambda_max`, and layer l's
+prior `K^post (x) K^pre` has `lambda_max^2`. The floor and `penalty_matrix` act on the scaled `K` unchanged, and `Population.scale`
+records the factor applied (1.0 when unset). `lambda_max` absorbs the overall scale of the prior, so `Config` requires
+`train.weight_lambda == 1` and `SpatialConfig` requires every `kernel.amplitude == 1`; each error names its field. A `spatial.lambda_max`
+sweep axis works as any spatial axis (the sweep's `weight_lambda` must be 1). While unset, the field is left out of the section hash,
+so every hash from before it existed is unchanged.
 
 ## Spatial weight prior in training
 
