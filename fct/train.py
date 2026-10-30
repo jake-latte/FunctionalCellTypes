@@ -82,12 +82,8 @@ def compute_loss(
     sync every epoch, so the caller converts only when it logs.
     """
     h, z = net(x)
-    if isinstance(net, EnsembleMLP):  # reduce over everything but the member axis
-        mse = (y - z).square().mean(dim=(1, 2))
-        rate_l2 = net.phi(h).square().sum(dim=(1, 2, 3))
-    else:
-        mse = (y - z).square().mean()
-        rate_l2 = net.phi(h).square().sum()
+    mse = per_member(net, (y - z).square(), torch.mean)
+    rate_l2 = per_member(net, net.phi(h).square())
     weight_l2 = (type(net).weight_l2 if weight_penalty is None else weight_penalty)(net)
     if weight_l2.shape != mse.shape:
         raise ValueError(
@@ -96,13 +92,13 @@ def compute_loss(
         )
     loss = 0.5 * net.N * mse + prior_coefficient * weight_l2 + rate_lambda * rate_l2
     parts = {"mse": mse, "weight_l2": weight_l2, "rate_l2": rate_l2, "loss": loss}
-    total = loss.sum() if isinstance(net, EnsembleMLP) else loss
-    return total, {k: v.detach() for k, v in parts.items()}
+    return loss.sum(), {k: v.detach() for k, v in parts.items()}
 
 
-def _member_quadratic_forms(W: Tensor, M_rows: Tensor, M_cols: Tensor) -> Tensor:
-    """(B,): `weight_quadratic_form` of every member of W (B, r, c)."""
-    return ((M_rows @ W @ M_cols) * W).sum(dim=(1, 2))
+def per_member(net: Net, t: Tensor, reduce: Callable[..., Tensor] = torch.sum) -> Tensor:
+    """`reduce` (sum, mean) of `t` over every axis but the net's member axis: 0-d for a
+    single network, (B,) for an ensemble, whose tensors carry the member axis first."""
+    return reduce(t, dim=tuple(range(net.member_axes, t.ndim)))
 
 
 def spatial_weight_penalty(net: Net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor:
@@ -110,11 +106,8 @@ def spatial_weight_penalty(net: Net, factors: dict[str, tuple[Tensor, Tensor]]) 
     in each parameter's stored orientation (`fct.spatial.parameter_factors`); per member,
     (B,), for an ensemble. Summed in parameter order like `MLP.weight_l2`, so identity
     factors reproduce it bit for bit."""
-    if isinstance(net, EnsembleMLP):
-        terms = [_member_quadratic_forms(p, *factors[n]) for n, p in net.named_parameters()]
-        return torch.stack(terms).sum(0)
     terms = [weight_quadratic_form(p, *factors[name]) for name, p in net.named_parameters()]
-    return torch.stack(terms).sum()
+    return torch.stack(terms).sum(0)
 
 
 def _check_sgld_step_resolves_the_prior(
@@ -273,7 +266,7 @@ def _record(history: History, epoch: int, parts: dict[str, float | list[float]])
 
 def _make_optimiser(net: Net, tc: TrainConfig) -> torch.optim.Optimizer:
     if tc.optimizer == "sgld":
-        member_axis = isinstance(net, EnsembleMLP)
+        member_axis = net.member_axes == 1
         return SGLD(net.parameters(), lr=tc.lr, beta=tc.beta, member_axis=member_axis)
     # Adam's moments are elementwise, so the members of an ensemble do not interact.
     return torch.optim.Adam(net.parameters(), lr=tc.lr)
@@ -281,9 +274,7 @@ def _make_optimiser(net: Net, tc: TrainConfig) -> torch.optim.Optimizer:
 
 def _grad_norm(net: Net) -> Tensor:
     """L2 norm of the full gradient; (B,), each member's, for an ensemble."""
-    if isinstance(net, EnsembleMLP):
-        return torch.sqrt(sum(p.grad.square().flatten(1).sum(1) for p in net.parameters()))
-    return torch.sqrt(sum(p.grad.square().sum() for p in net.parameters()))
+    return torch.sqrt(sum(per_member(net, p.grad.square()) for p in net.parameters()))
 
 
 def _step(
