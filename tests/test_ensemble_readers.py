@@ -87,6 +87,16 @@ def test_the_sweep_solve_stage_refuses_a_trained_ensemble(root):
     assert setting_dir(root, expand(sweep)[0]).is_dir()
 
 
+def test_the_sweep_solve_stage_refuses_an_ensemble_before_it_is_trained(tmp_path):
+    """A solve job that runs before training finishes must not solve (its result would read
+    as stale once the ensemble is trained): it refuses at once, writing nothing."""
+    sweep = with_grid(preset("tiny"), {"net.B": [B]})
+    save_sweep(sweep, tmp_path)
+    with pytest.raises(SweepError, match="ensemble"):
+        run_setting(sweep, 0, tmp_path, log=lambda _: None, stage="solve")
+    assert not setting_dir(tmp_path, expand(sweep)[0]).exists()
+
+
 def test_the_solver_refuses_an_ensemble():
     net = make_net(NetConfig(N=4, L=1, phi="relu", B=2), 3, 2, "cpu", torch.float64)
     X = torch.randn(4, 3, dtype=torch.float64, generator=torch.Generator().manual_seed(0))
