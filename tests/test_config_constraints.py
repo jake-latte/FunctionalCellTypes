@@ -140,6 +140,7 @@ def test_train_section_hashes_hold_the_loss_version(sections):
         "model_version": MODEL_VERSION,
     }
     del payload["train"]["optimizer"], payload["train"]["beta"]  # adam: SGLD fields not hashed
+    del payload["net"]["B"]  # a single network (B = 1): the ensemble size is not hashed
     if "meanfield" in sections:  # hashed in its flat pre-split layout, see hash_payload
         payload["meanfield"] = cfg.meanfield.hash_payload()
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
