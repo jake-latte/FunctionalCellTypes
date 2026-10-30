@@ -154,16 +154,15 @@ class EnsembleMLP(torch.nn.Module):
         if x.ndim != 2 or x.shape[1] != self.D_in:
             raise ValueError(f"x must have shape (P, D_in={self.D_in}), got {tuple(x.shape)}")
 
-        # The scale factors multiply the weights, not the (B, P, N) activations, and every
-        # product is a batched matmul with a contiguous (B, P, .) result: elementwise passes
-        # over the activations are what an ensemble pays for most (they leave the cache).
-        U = (1 / math.sqrt(self.D_in)) * self.U
-        H = [x @ U.transpose(1, 2)]
+        # Every product is a batched matmul with a contiguous (B, P, .) result, and each scale
+        # factor multiplies the smaller of weight and result: elementwise passes over large
+        # tensors are what an ensemble pays for most on a CPU (they leave the cache).
+        H = [_scaled_matmul(x, self.U.transpose(1, 2), 1 / math.sqrt(self.D_in))]
         for layer in range(self.L - 1):
-            J = (self.g / math.sqrt(self.N)) * self.J[layer]
-            H.append(self.phi(H[-1]) @ J.transpose(1, 2))
+            J = self.J[layer].transpose(1, 2)
+            H.append(_scaled_matmul(self.phi(H[-1]), J, self.g / math.sqrt(self.N)))
 
-        Z = self.phi(H[-1]) @ ((1 / self.N) * self.V)
+        Z = _scaled_matmul(self.phi(H[-1]), self.V, 1 / self.N)
         return torch.stack(H, dim=2) if self.L > 1 else H[0].unsqueeze(2), Z
 
     def weight_l2(self) -> torch.Tensor:
@@ -181,6 +180,14 @@ class EnsembleMLP(torch.nn.Module):
 
 
 Net = MLP | EnsembleMLP
+
+
+def _scaled_matmul(a: torch.Tensor, w: torch.Tensor, c: float) -> torch.Tensor:
+    """c * (a @ w) for activations a (P, n) or (B, P, n) and weights w (B, n, m), with c
+    applied to whichever of w and the (B, P, m) result is smaller."""
+    if w.numel() < w.shape[0] * a.shape[-2] * w.shape[-1]:
+        return a @ (c * w)
+    return c * (a @ w)
 
 
 def member_seed(seed: int, b: int) -> int:
