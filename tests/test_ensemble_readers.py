@@ -7,10 +7,12 @@ import torch
 
 from fct.cli import CliError, _load_net
 from fct.config import MeanFieldConfig, NetConfig, resolve_dtype
+from fct.grid_view import load_setting_data
+from fct.lrtune import evaluate_setting
 from fct.meanfield import solve
 from fct.model import EnsembleMLP, make_net
 from fct.monitor import MIR_MONITOR_KEYS
-from fct.report import load_setting_result
+from fct.report import SettingResult, load_setting_result
 from fct.spatial_grid import load_grid_run, select_setting
 from fct.spatial_view import train_in
 from fct.sweep import (
@@ -110,3 +112,19 @@ def test_the_spatial_view_refuses_to_train_an_ensemble(root, tmp_path):
     with pytest.raises(ValueError, match="net.B=3"):
         train_in(cfg, tmp_path)
     assert not any(tmp_path.iterdir())  # refused before writing anything
+
+
+def test_grid_view_refuses_an_ensemble(root):
+    sweep = load_sweep(root)
+    (setting,) = expand(sweep)
+    directory = setting_dir(root, setting).relative_to(root)
+    result = SettingResult(setting, "done", directory, history={})  # as if the report had loaded it
+    with pytest.raises(ValueError, match="ensemble of B=3"):
+        load_setting_data(root, result)
+
+
+def test_lrtune_evaluation_refuses_an_ensemble(root):
+    sweep = load_sweep(root)
+    (setting,) = expand(sweep)
+    with pytest.raises(ValueError, match="ensemble of B=3"):
+        evaluate_setting(root, sweep, setting, held_out_seed=1)

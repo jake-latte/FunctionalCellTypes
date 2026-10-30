@@ -12,11 +12,14 @@ from fct.monitor import MIR_MONITOR_KEYS, make_mir_monitor
 from fct.sgld import SGLD
 from fct.train import (
     MONITOR_EPOCH,
+    _grad_norm,
+    _step,
     compute_loss,
     load_latest_checkpoint,
     load_trained,
     make_weight_penalty,
     member_history,
+    prior_coefficient,
     select_member,
     spatial_weight_penalty,
     train,
@@ -121,6 +124,22 @@ def test_member_is_an_independent_copy_and_from_members_inverts_it():
     _assert_same_state(rebuilt.state_dict(), ens.state_dict())
 
 
+def test_member_draws_no_random_numbers():
+    ens = _ensemble(3)
+    state = torch.get_rng_state()
+    ens.member(2)
+    assert torch.equal(torch.get_rng_state(), state)
+
+
+def test_from_weights_holds_the_given_weights_and_rejects_misfits():
+    U, J, V = torch.randn(5, 3), [torch.randn(5, 5)], torch.randn(5, 2)
+    net = MLP.from_weights(U, J, V, 1.5, torch.tanh)
+    assert (net.N, net.L, net.D_in, net.D_out, net.g) == (5, 2, 3, 2, 1.5)
+    assert torch.equal(net.U, U) and torch.equal(net.J[0], J[0]) and torch.equal(net.V, V)
+    with pytest.raises(ValueError, match="do not make an MLP"):
+        MLP.from_weights(U, [torch.randn(4, 4)], V, 1.0, torch.tanh)
+
+
 @pytest.mark.parametrize("b", [-1, 3])
 def test_member_out_of_range_raises(b):
     with pytest.raises(IndexError, match="member"):
@@ -191,6 +210,20 @@ def test_spatial_prior_of_an_ensemble_is_the_members_penalties():
     for b in range(3):
         torch.testing.assert_close(per_member[b], single_penalty(ens.member(b)), rtol=1e-13, atol=0)
     assert penalty.func is spatial_weight_penalty
+
+
+def test_grad_norm_of_an_ensemble_is_each_members_with_the_spatial_prior():
+    cfg = pinned_config("sgld", B=3)
+    ens = make_net(cfg.net, D_IN, D_OUT, CPU, F64)
+    singles = [ens.member(b) for b in range(3)]
+    x, y = _x(), torch.randn(5, D_OUT, dtype=F64, generator=torch.Generator().manual_seed(3))
+    compute_loss(ens, x, y, 0.3, 0.1, make_weight_penalty(cfg, ens))[0].backward()
+    norms = _grad_norm(ens)
+    assert norms.shape == (3,)
+    single_penalty = make_weight_penalty(_with_B(cfg, 1), singles[0])
+    for b, single in enumerate(singles):
+        compute_loss(single, x, y, 0.3, 0.1, single_penalty)[0].backward()
+        torch.testing.assert_close(norms[b], _grad_norm(single), rtol=1e-12, atol=0)
 
 
 # ------------------------------------------------------------------ training
@@ -265,6 +298,33 @@ def test_sgld_ensemble_with_member_noise_streams_equals_separate_members():
                 p[b], dict(single.named_parameters())[name], rtol=1e-12, atol=1e-14
             )
         torch.testing.assert_close(optim.last_msd[b], single_optim.last_msd, rtol=1e-10, atol=0)
+
+
+def test_sgld_training_steps_with_the_spatial_prior_equal_separate_members():
+    """Through `fct.train._step` (what `train` runs each epoch) with the dense spatial prior;
+    `train` itself builds its SGLD with the global noise stream, so the fixed member streams
+    are injected by building the optimisers here."""
+    cfg = pinned_config("sgld", B=3)
+    ds, ens = _setup(cfg)
+    singles = [ens.member(b) for b in range(3)]
+    tc = cfg.train
+    gens = [torch.Generator().manual_seed(100 + b) for b in range(3)]
+    optim = SGLD(ens.parameters(), tc.lr, tc.beta, member_axis=True, noise=_member_noise(gens))
+    penalty = make_weight_penalty(cfg, ens)
+    parts = [_step(ens, optim, ds, tc, penalty) for _ in range(5)]
+    single_cfg = _with_B(cfg, 1)
+    for b, single in enumerate(singles):
+        gen = torch.Generator().manual_seed(100 + b)
+        single_optim = SGLD(single.parameters(), tc.lr, tc.beta, noise=_single_noise(gen))
+        single_penalty = make_weight_penalty(single_cfg, single)
+        single_parts = [_step(single, single_optim, ds, tc, single_penalty) for _ in range(5)]
+        for name, p in ens.named_parameters():
+            want = dict(single.named_parameters())[name]
+            torch.testing.assert_close(p[b], want, rtol=1e-12, atol=1e-14)
+        for got, want in zip(parts, single_parts, strict=True):
+            for key in ("loss", "weight_l2", "grad_norm", "param_msd"):
+                torch.testing.assert_close(got[key][b], want[key], rtol=1e-10, atol=0)
+    assert prior_coefficient(tc) > 0  # the prior is in the loss
 
 
 def test_sgld_member_noises_are_independent():
