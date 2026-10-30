@@ -137,7 +137,10 @@ def train_run(cfg: Config, root: Path, log: Callable[[str], None] = print) -> Tr
 
 
 def train_in(cfg: Config, cache_dir: Path, log: Callable[[str], None] = print) -> TrainRun:
-    """`train_run` with the cache directory given: write its config.json, then train or load."""
+    """`train_run` with the cache directory given: write its config.json, then train or load.
+    ValueError for an ensemble (net.B > 1): a `TrainRun` holds one network."""
+    if cfg.net.B != 1:
+        raise ValueError(f"a TrainRun holds one network, but net.B={cfg.net.B}; train with B = 1")
     save_config(cfg, cache_paths(cache_dir).config)
     dataset = get_dataset(cache_dir, cfg)
     net, history = train_from_config(cfg, dataset, cache_dir, log=log)

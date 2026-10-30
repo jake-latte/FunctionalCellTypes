@@ -71,7 +71,7 @@ from fct.sweep import (
     setting_statuses,
     sweep_path,
 )
-from fct.train import History, load_trained, train_from_config
+from fct.train import History, load_trained, select_member, train_from_config
 
 FIGURE_DPI = 150
 
@@ -157,10 +157,16 @@ def _load_inputs(cache_dir: Path) -> tuple[Config, Dataset]:
 
 
 def _load_net(cache_dir: Path, cfg: Config) -> tuple[MLP, History]:
+    """The trained single network; CliError for an ensemble (net.B > 1), which the analysis,
+    plot and solve commands do not support."""
     try:
-        return load_trained(cache_dir, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype))
+        net, history = load_trained(cache_dir, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype))
     except FileNotFoundError as err:
         raise CliError(f"{err}; run `python -m fct train {cache_dir}` first") from err
+    try:
+        return select_member(net, history)
+    except ValueError as err:
+        raise CliError(f"{cache_dir}: {err}; this command does not support ensembles") from err
 
 
 def _lazy_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]:

@@ -893,10 +893,15 @@ def _solve_setting(
     """Solve the setting's saddle point. The trained net, if train/final.pt exists, adds the
     comparison with the net to the history; without one the solve runs on its own. The choice
     is fixed when a solve starts: resuming a checkpoint needs the same (SweepError otherwise,
-    see `_check_checkpoint_matches_net`). An InadequateSamplerError propagates and leaves no
-    final.pt."""
+    see `_check_checkpoint_matches_net`). A trained ensemble (net.B > 1) is a SweepError: the
+    comparison takes one network. An InadequateSamplerError propagates and leaves no final.pt."""
     net = None
     if (cache_paths(directory).train / "final.pt").exists():
+        if cfg.net.B > 1:
+            raise SweepError(
+                f"setting {directory}: the solve compares with one trained network, but the "
+                f"run is an ensemble of net.B={cfg.net.B}; solving ensembles is not supported"
+            )
         net, _ = load_trained(directory, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype))
     else:
         log("no trained net: solving without the comparison with the net")
