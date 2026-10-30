@@ -370,6 +370,20 @@ class Config(StrictModel):
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
 
+    @model_validator(mode="after")
+    def _lambda_max_is_the_only_scale(self) -> Self:
+        # lambda_max sets the prior's overall scale, so weight_lambda must not add another.
+        if (
+            self.spatial is not None
+            and self.spatial.lambda_max is not None
+            and self.train.weight_lambda != 1.0
+        ):
+            raise ValueError(
+                f"train.weight_lambda is {self.train.weight_lambda:g} but spatial.lambda_max "
+                "is set; weight_lambda must be exactly 1"
+            )
+        return self
+
     def section_hash(self, *sections: str) -> str:
         """Hash of the named sections, so an artefact can tell which config it came from.
 
@@ -398,6 +412,8 @@ class Config(StrictModel):
                 del hashed["train"]["optimizer"], hashed["train"]["beta"]
             if self.spatial is not None:  # the weight prior is part of the training loss
                 hashed["spatial"] = self.spatial.model_dump()
+                if self.spatial.lambda_max is None:  # keeps the hashes from before the field
+                    del hashed["spatial"]["lambda_max"]
         canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
