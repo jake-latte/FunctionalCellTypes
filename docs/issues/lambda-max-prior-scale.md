@@ -1,53 +1,53 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: todo
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
      awaiting your confirmation -->
 
-# Set the weight-prior scale from lambda_max, the top eigenvalue of the hidden kernel
+# Scale every population kernel to a chosen top eigenvalue lambda_max
 
-The PI's parametrisation: the hidden-side connectivity kernel is
-K_ij = lambda_w^{-1} exp(-||x_i - x_j||^2 / (2 l^2)), and instead of choosing lambda_w we choose
-`lambda_max`, the largest eigenvalue of K, so lambda_w is derived:
-
-    lambda_w = lambda_max(G_hidden) / lambda_max,   G_hidden = the unit-amplitude hidden kernel.
+The PI's parametrisation: a connectivity kernel K_ij = lambda_w^{-1} exp(-||x_i - x_j||^2 / (2 l^2))
+is specified by its largest eigenvalue `lambda_max` rather than by lambda_w, which it absorbs.
 
 In fct the prior of layer l is vec(W^l) ~ N(0, (K^post (x) K^pre) / weight_lambda) (LOSS_VERSION 4,
-the lambda_w / (2 beta) convention), so lambda_w is `train.weight_lambda` and G is the population
-kernel at amplitude 1.
+the lambda_w / (2 beta) convention) and each population (input, hidden 1..L, output) has its own
+kernel K_pop = amplitude * G_pop (G at unit amplitude, the wrapped Gaussian of `fct.spatial`).
 
-PROPOSED plan (PI to confirm the reading - see the question in the PM's reply):
+DECIDED by the PI (2026-10-30): normalise EVERY population. With `lambda_max` set,
+
+    K_pop = lambda_max * G_pop / lambda_max(G_pop)      for every population,
+    weight_lambda = 1.
+
+So each population kernel has top eigenvalue lambda_max (layer l's full prior K^post (x) K^pre
+then has top eigenvalue lambda_max^2). The scale is computed per population from its own
+eigendecomposition (random embeddings give slightly different G per population and seed).
+
+Plan:
 - New field `SpatialConfig.lambda_max: float | None = None`, constrained to (0, inf); omitted from
-  the hash when None so every existing cache keeps its hash.
-- When it is set, `train.weight_lambda` is DERIVED, not chosen: `fct.spatial.derived_weight_lambda`
-  (pure; builds the hidden population's G and returns lambda_max(G) / lambda_max). "Applies to all
-  K matrices": in a net with several hidden layers every hidden population must give the same
-  derived value (true for grid embeddings; random embeddings differ, and the config is rejected
-  rather than picking one silently). The single lambda_w scales every layer, input and readout
-  factors included, as today.
-- Where the derivation happens: in `Config` validation, which writes the derived value into
-  `train.weight_lambda` so config.json, the training loss, `prior_coefficient`, the SGLD
-  stability check and `fct.meanfield.network_constants` all see one number. A config that sets
-  `spatial.lambda_max` AND an explicit `train.weight_lambda` that disagrees is rejected (two
-  sources of one number). `amplitude` of the hidden kernel must be 1 when lambda_max is set
-  (else G is ambiguous).
-- The eigenvalue floor (`min_rel_eig`) is unaffected: it raises small eigenvalues of K only.
+  the config hash when None so every existing cache keeps its hash (pinned test).
+- `fct.spatial._make_population` applies the scale when it is set; `penalty_matrix` and the
+  floor (`min_rel_eig`, relative to the top eigenvalue) then act on the scaled K unchanged.
+  `Population` records the scale applied (for the notebook and for checking).
+- Config validation: with lambda_max set, every population's `kernel.amplitude` must be 1 (it
+  would be overwritten, so another value is an error, not ignored) and `train.weight_lambda` must
+  be exactly 1 (one source for the overall scale). Both errors name the field.
+- A sweep axis `spatial.lambda_max` must work (the sweep's shared `weight_lambda` is then 1).
+- The SGLD stability check and the prior penalty need no change (they read the scaled M).
 
-Interfaces: `fct/spatial.py`, `fct/config.py` (validator, hash), `fct/sweep.py` (an axis
-`spatial.lambda_max` must work: the derived weight_lambda is per setting and must not be
-overridden by the sweep's shared `weight_lambda`), `docs/design.md`.
+Interfaces: `fct/spatial.py`, `fct/config.py` (validator, hash payload), `fct/sweep.py` only if
+the axis needs it, `docs/design.md` (spatial section).
 
 ## Acceptance criteria
-- For a grid embedding the derived lambda_w gives a hidden kernel K = G / lambda_w whose largest
-  eigenvalue (by `torch.linalg.eigvalsh`) is lambda_max to 1e-10 relative, for d = 1..4 and
-  several length scales.
-- A config with lambda_max set writes the derived weight_lambda into the saved config.json, and
-  `prior_coefficient` uses it; training a tiny net under it runs.
-- A sweep with `grid = {"spatial.d": [...], "spatial.lambda_max": [...]}` gives every setting
-  its own derived weight_lambda (checked per setting, not one shared value).
-- lambda_max None: every existing config hash is unchanged (test against a pinned hash).
-- Explicit disagreeing weight_lambda, non-unit hidden amplitude, or hidden populations whose
-  derived values differ: each raises naming the field.
+- For d = 1..4, random and grid embeddings, several length scales, every population built under
+  lambda_max has `eigvalsh(K).max() == lambda_max` to 1e-10 relative (computed independently in
+  the test, not read back from the recorded scale).
+- With lambda_max None, kernels, penalties and every config hash are bitwise those of `main`.
+- Amplitude != 1 with lambda_max, or weight_lambda != 1 with lambda_max: each raises naming the
+  field.
+- A sweep with `grid = {"spatial.d": [1, 2], "spatial.lambda_max": [0.1, 0.9]}` (random
+  embeddings) validates, and each setting's saved config.json rebuilds kernels with the right
+  top eigenvalue.
+- A tiny SGLD net trains under lambda_max end to end.
