@@ -19,6 +19,7 @@ class MLP(torch.nn.Module):
     """
 
     B = 1  # a single network: the ensemble size `fct.train` checks against `net.B`
+    member_axes = 0  # leading axes of parameters and outputs that index members (none)
 
     def __init__(
         self,
@@ -37,18 +38,38 @@ class MLP(torch.nn.Module):
         for name, size in {"D_in": D_in, "D_out": D_out, "N": N, "L": L}.items():
             if size < 1:
                 raise ValueError(f"{name} must be >= 1, got {size}")
-        self.D_in, self.D_out = D_in, D_out
-        self.N, self.g = N, g
-        self.L = L
-        self.phi = phi
 
-        def init(*shape: int) -> torch.nn.Parameter:
-            w = torch.randn(shape, device=device, dtype=dtype, generator=generator)
-            return torch.nn.Parameter(w)
+        def init(*shape: int) -> torch.Tensor:
+            return torch.randn(shape, device=device, dtype=dtype, generator=generator)
 
-        self.U = init(N, D_in)
-        self.V = init(N, D_out)
-        self.J = torch.nn.ParameterList([init(N, N) for _ in range(1, L)])
+        # Drawn in this order (U, V, then J) so a seed always gives the same weights.
+        U, V = init(N, D_in), init(N, D_out)
+        self._set(U, [init(N, N) for _ in range(1, L)], V, g, phi)
+
+    def _set(
+        self, U: torch.Tensor, J: list[torch.Tensor], V: torch.Tensor, g: float, phi: Activation
+    ) -> None:
+        """Hold U (N, D_in), each J (N, N) and V (N, D_out) as parameters, with g and phi."""
+        (self.N, self.D_in), self.D_out = U.shape, V.shape[1]
+        self.L, self.g, self.phi = len(J) + 1, g, phi
+        self.U = torch.nn.Parameter(U)
+        self.V = torch.nn.Parameter(V)
+        self.J = torch.nn.ParameterList([torch.nn.Parameter(w) for w in J])
+
+    @classmethod
+    def from_weights(
+        cls, U: torch.Tensor, J: list[torch.Tensor], V: torch.Tensor, g: float, phi: Activation
+    ) -> "MLP":
+        """An MLP holding the given weights as they are (no copy, no random draw): U (N, D_in),
+        each J (N, N), V (N, D_out). ValueError for shapes that do not fit together."""
+        N = U.shape[0]
+        if U.ndim != 2 or V.ndim != 2 or V.shape[0] != N or any(w.shape != (N, N) for w in J):
+            shapes = [tuple(w.shape) for w in (U, *J, V)]
+            raise ValueError(f"weights of shapes {shapes} do not make an MLP")
+        net = cls.__new__(cls)
+        torch.nn.Module.__init__(net)
+        net._set(U, list(J), V, g, phi)
+        return net
 
     # Derived from the parameters so they stay correct after net.to(...).
     @property
@@ -88,6 +109,8 @@ class EnsembleMLP(torch.nn.Module):
     and read back one at a time with `member(b)`, so every function written for a single `MLP`
     applies to a member unchanged. Parameter names match `MLP`'s ("U", "J.<k>", "V").
     """
+
+    member_axes = 1  # the leading axis of parameters and outputs indexes the members
 
     def __init__(self, members: Sequence[MLP]):
         super().__init__()
@@ -131,15 +154,17 @@ class EnsembleMLP(torch.nn.Module):
         if x.ndim != 2 or x.shape[1] != self.D_in:
             raise ValueError(f"x must have shape (P, D_in={self.D_in}), got {tuple(x.shape)}")
 
-        H = [(1 / math.sqrt(self.D_in)) * torch.einsum("bid, pd -> bpi", self.U, x)]
+        # The scale factors multiply the weights, not the (B, P, N) activations, and every
+        # product is a batched matmul with a contiguous (B, P, .) result: elementwise passes
+        # over the activations are what an ensemble pays for most (they leave the cache).
+        U = (1 / math.sqrt(self.D_in)) * self.U
+        H = [x @ U.transpose(1, 2)]
         for layer in range(self.L - 1):
-            z_prev = self.phi(H[-1])
-            J = self.J[layer]
-            h_next = (self.g / math.sqrt(self.N)) * torch.einsum("bij, bpj -> bpi", J, z_prev)
-            H.append(h_next)
+            J = (self.g / math.sqrt(self.N)) * self.J[layer]
+            H.append(self.phi(H[-1]) @ J.transpose(1, 2))
 
-        Z = (1 / self.N) * torch.einsum("bid, bpi -> bpd", self.V, self.phi(H[-1]))
-        return torch.stack(H, dim=2), Z
+        Z = self.phi(H[-1]) @ ((1 / self.N) * self.V)
+        return torch.stack(H, dim=2) if self.L > 1 else H[0].unsqueeze(2), Z
 
     def weight_l2(self) -> torch.Tensor:
         """(B,): each member's sum of squares of its parameters (`MLP.weight_l2` per member)."""
@@ -150,21 +175,9 @@ class EnsembleMLP(torch.nn.Module):
         it leaves the ensemble untouched."""
         if not 0 <= b < self.B:
             raise IndexError(f"member {b} out of range for an ensemble of B={self.B}")
-        # The throwaway generator keeps the global RNG untouched; the draw is overwritten.
-        scratch = torch.Generator(device=self.device)
-        net = MLP(
-            self.D_in,
-            self.D_out,
-            self.N,
-            self.L,
-            self.g,
-            self.phi,
-            self.device,
-            self.dtype,
-            scratch,
-        )
-        net.load_state_dict({name: p[b] for name, p in self.state_dict().items()})
-        return net
+        with torch.no_grad():
+            J = [w[b].clone() for w in self.J]
+            return MLP.from_weights(self.U[b].clone(), J, self.V[b].clone(), self.g, self.phi)
 
 
 Net = MLP | EnsembleMLP
