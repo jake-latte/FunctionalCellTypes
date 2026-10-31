@@ -450,7 +450,8 @@ def test_a_partly_trained_setting_is_drawn_and_labelled_provisional(root, tmp_pa
 # Wiring: the notebook's own cells are run in this process, and the arrays in the figures they
 # draw are compared with `fct.phase_view` computed independently here.
 
-DEFAULTS = {"n_bins": 8, "kind": "corrected", "n_shuffles": 5}
+# raw MIR: the corrected one is all zero on a net this small, which would make the checks vacuous
+DEFAULTS = {"n_bins": 8, "kind": "raw", "n_shuffles": 5}
 MEMBER, SORT = PARAMETERS["MEMBER"], PARAMETERS["SORT_DIM"]
 
 
@@ -458,7 +459,9 @@ class Session:
     """The namespace after running every code cell of the notebook, and the figures each drew."""
 
     def __init__(self, nb, root, setting, **parameters):
-        values = {"ROOT": str(root), "SETTING": setting, **PARAMETERS, **parameters}
+        values = {
+            "ROOT": str(root), "SETTING": setting, "MIR_KIND": "raw", **PARAMETERS, **parameters
+        }  # fmt: skip
         self.ns: dict = {}
         self.figures: list[tuple[str, mpl.figure.Figure]] = []
         plt.close("all")
@@ -556,7 +559,7 @@ def test_wiring_weight_kernels_are_the_prior_the_member_and_the_average(session,
             for prefix, pair in [
                 ("effective prior", priors[layer].effective_covariance),
                 (f"member {MEMBER}", reference.views[MEMBER].weight_kernels[layer]),
-                ("average", reference.mean.weight_kernels[layer]),
+                (f"average of {reference.run.net.B} members", reference.mean.weight_kernels[layer]),
             ]:
                 ax = _titled(fig, f"{prefix}: {which}")
                 assert np.allclose(_image(ax), _sorted(getattr(pair, which), order[which]))
@@ -571,7 +574,7 @@ def test_wiring_prior_matrices_use_the_order_of_their_own_population(session, re
         for which in ("post", "pre"):
             for name, pair in [
                 ("covariance", priors[layer].covariance),
-                ("effective covariance", priors[layer].effective_covariance),
+                ("effective covariance (floored, as trained)", priors[layer].effective_covariance),
                 ("penalty", priors[layer].penalty),
             ]:
                 ax = _titled(fig, f"{name}, {which}")
