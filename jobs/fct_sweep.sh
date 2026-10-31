@@ -6,7 +6,7 @@
 #  jobs/fct_solve.sh runs this same script with FCT_STAGE=solve, which solves the mean-field
 #  saddle point of each setting instead (see that file).
 #  The grid itself lives in ROOT/sweep.json (write it first with
-#  `python -m fct sweep init ROOT --preset full`, or `--preset phase_transition --n-lambda 8`);
+#  `python -m fct sweep init ROOT --preset full`, or `--preset lambda_grid --n-lambda 8`);
 #  this script only needs its size (`sweep count`).
 #
 #  Usage (ROOT = sweep root, as the first argument or in $FCT_SWEEP_ROOT):

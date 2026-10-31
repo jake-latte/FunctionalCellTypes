@@ -43,7 +43,7 @@ from fct.tuning import TuningCurves
 from tests.draw_helpers import FakeDeviceTensor, on_fake_device
 from tests.report_helpers import QUIET, tiny_phase_sweep
 
-LAMBDAS = [1e-6, 1.0]  # phase_transition(2)
+LAMBDAS = [1e-6, 1.0]  # lambda_grid(2)
 GLOBAL = {"depth": 1, "phi": "tanh", "kind": "corrected"}
 
 

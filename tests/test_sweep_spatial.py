@@ -14,8 +14,8 @@ from fct.sweep import (
     _label_part,
     data_config,
     expand,
+    lambda_grid,
     load_sweep,
-    phase_transition,
     preset,
     run_setting,
     save_sweep,
@@ -94,8 +94,8 @@ def test_the_modularity_grid_builds_the_configs_it_built_before(name):
         assert setting_config(sweep, setting) == _previous_config(sweep, setting.axes)
 
 
-def test_the_phase_transition_preset_builds_the_configs_it_built_before():
-    sweep = phase_transition(2)
+def test_the_lambda_grid_preset_builds_the_configs_it_built_before():
+    sweep = lambda_grid(2)
     for setting in expand(sweep):
         assert setting_config(sweep, setting) == _previous_config(sweep, setting.axes)
 
