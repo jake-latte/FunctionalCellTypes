@@ -73,7 +73,7 @@ overrides the shared value, except fields the sweep owns (data size, seeds, log/
 Presets: `tiny` (seconds per setting on a CPU, a pipeline check that learns nothing meaningful), `full` and
 `modularity` (cluster sizes, placeholders to tune; the 36-setting grid of 3 tasks x layers {1, 3, 5} x phi
 {tanh, relu} x rate regulariser {0, 1e-3}, directories `ROOT/<task>/L{L}_{phi}_r{rate}/`, weight regulariser at
-its library default), and `phase_transition --n-lambda N_LAMBDA` (linear teacher, L in {1, 2}, phi in {tanh, relu},
+its library default), and `lambda_grid --n-lambda N_LAMBDA` (linear teacher, L in {1, 2}, phi in {tanh, relu},
 `rate_lambda` and `weight_lambda` each `N_LAMBDA` log-spaced values in [1e-6, 1]). Other grids use directories
 `ROOT/<task>/s{index:04d}_<label>/`, each with a `setting.json` recording its axis values, so a notebook can
 find a setting from its values (`fct.sweep.find_setting_dir`). `--axis PATH=[values]` replaces or adds an axis.
@@ -90,7 +90,7 @@ fields the spatial presets set (`L`, `g`, `phi`, `weight_lambda`, `rate_lambda`,
 library values, and an axis of the same name wins. Presets: `spatial_tiny` (N in {4, 8}, P 16, one hidden layer,
 SGLD, 6 epochs: a CPU pipeline check) and `spatial_n_scan` (the width scan N in {64, 128, 256, 512, 1024}: linear
 teacher P 164, m 64, k 2, tanh, SGLD beta 1e4, weight_lambda 60 (= 2 beta x 3e-3: the prior term is lambda_w / (2 beta) times the prior form), 250 000 epochs, float64, grid embeddings of
-length scale 0.15 in d = 1, MIR monitor every 5000 epochs), and `spatial_grid` (24 settings: net.phi in
+length scale 0.15 in d = 1, MIR monitor every 5000 epochs), and `phase_transition` (20 settings: spatial.d in {1, 2, 3, 4} x spatial.lambda_max in {0.1, 0.5, 0.75, 0.9, 0.99}, linear, L = 1, random embeddings of length scale 0.15, an ensemble of B = 8, otherwise as `spatial_grid`), and `spatial_grid` (24 settings: net.phi in
 {id, tanh, relu} x data.n_latents in {2, 4} x hidden kernel length scale in {0.05, 0.1, 0.15, 0.2}, one axis for
 both sides of the hidden kernel; N 512, P 128, weight_lambda 20, otherwise as `spatial_n_scan`; the
 `data.n_latents` axis wins over `linear_teacher.n_latents`. Caveat: at N 512 about 500 hidden eigenvalues sit at the
@@ -103,7 +103,7 @@ the presets keep their activations, and an `id` grid is `--axis 'net.phi=["tanh"
 
 ```sh
 uv run python -m fct sweep init ROOT --preset tiny        # write ROOT/sweep.json (--set n_epochs=100 ...)
-uv run python -m fct sweep init ROOT --preset phase_transition --n-lambda 8 --axis 'net.L=[1,2,3]'
+uv run python -m fct sweep init ROOT --preset lambda_grid --n-lambda 8 --axis 'net.L=[1,2,3]'
 uv run python -m fct sweep list ROOT                      # "<index> <task>/<setting directory>"
 uv run python -m fct sweep count ROOT                     # number of settings (36 for modularity)
 uv run python -m fct sweep run ROOT --index 7             # train one setting (resumable); no --index: all
@@ -144,7 +144,7 @@ uv run python notebooks/build_modularity.py ROOT                 # execute on RO
 uv run python notebooks/build_modularity.py --no-execute         # rebuild the committed source notebook
 ```
 
-**Phase-transition notebook.** For a sweep made with `--preset phase_transition`: pick a setting by
+**Phase-transition notebook.** For a sweep made with `--preset lambda_grid`: pick a setting by
 `L`, `PHI`, `LAMBDA_R`, `LAMBDA_W` (snapped to the nearest grid value, which is printed) to see its loss
 curves, example outputs, MIR over training and the tuning curves of its neurons; then the MIR of every
 network of one depth and activation, as a (lambda_r, lambda_w) matrix per hidden layer and against
