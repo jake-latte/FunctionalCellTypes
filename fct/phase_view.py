@@ -120,22 +120,22 @@ class RandomTestSet(NamedTuple):
 
 
 def _check_matches_training(data_cfg: DataConfig, train: Dataset) -> None:
-    """ValueError unless `data_cfg` describes `train`: its size, its teacher maps' shape and
-    its latent range (the latents are uniform on [-a, a], so a larger |z| is a different a)."""
-    problems = []
-    if len(train.x) != data_cfg.P:
-        problems.append(f"P = {data_cfg.P} but the training set has {len(train.x)} points")
-    maps = (train.extras or {}).get("W_X")
-    if maps is None or tuple(maps.shape) != (data_cfg.D_in, data_cfg.n_latents):
-        got = None if maps is None else tuple(maps.shape)
-        problems.append(
-            f"(D_in, n_latents) = {(data_cfg.D_in, data_cfg.n_latents)} but the teacher map is {got}"
+    """ValueError unless `train` is exactly the set `data_cfg` generates: the same inputs and
+    targets (the data depend on the config and dtype only, so they are regenerated in memory on
+    the CPU and compared), which fixes P, D_in, n_latents, latent range and seed at once."""
+    expected = make_dataset(data_cfg, torch.device("cpu"), train.x.dtype)
+    same = (
+        expected.x.shape == train.x.shape
+        and expected.y.shape == train.y.shape
+        and torch.equal(expected.x, train.x.cpu())
+        and torch.equal(expected.y, train.y.cpu())
+    )
+    if not same:
+        raise ValueError(
+            "data_cfg does not match the training set: regenerating it from data_cfg "
+            f"(P={data_cfg.P}, D_in={data_cfg.D_in}, n_latents={data_cfg.n_latents}, "
+            f"latent_range={data_cfg.latent_range}, seed={data_cfg.seed}) gives different data"
         )
-    z = [f for name, f in (train.factors or {}).items() if name.startswith("z")]
-    if z and max(f.abs().max().item() for f in z) > data_cfg.latent_range * (1 + 1e-9):
-        problems.append(f"the training latents exceed latent_range = {data_cfg.latent_range}")
-    if problems:
-        raise ValueError("data_cfg does not match the training set: " + "; ".join(problems))
 
 
 def random_test_set(
@@ -254,8 +254,8 @@ def _pair(f, factors: FactorPair) -> FactorPair:
 
 def _population_floor(population, weight_lambda: float) -> PopulationFloor:
     root = _check_lambda(weight_lambda)
-    floor = 1 / torch.linalg.eigvalsh(population.M)[-1].item()  # M's top eigenvalue is 1 / floor
     report = population.report
+    floor = report.floor
     return PopulationFloor(report.n_floored, report.fraction_floored, floor / root, root / floor)
 
 

@@ -597,7 +597,15 @@ def test_ensemble_views_refuse_a_single_network(small, sets):
 
 
 @pytest.mark.parametrize(
-    "update", [{"n_latents": 2}, {"D_in": 10}, {"P": 21}, {"latent_range": 0.5}]
+    "update",
+    [
+        {"n_latents": 2},
+        {"D_in": 10},
+        {"P": 21},
+        {"latent_range": 0.5},
+        {"latent_range": 2.0},
+        {"seed": 5},
+    ],
 )
 def test_random_test_set_refuses_a_config_that_is_not_the_trainings(small, update):
     data_cfg, train, _, _ = small
@@ -647,3 +655,18 @@ def test_loader_reports_a_stale_setting_without_weights(root, tmp_path):
     run = load_phase_run(copy, {"spatial.d": 2})
     assert run.setting.status == "stale"
     assert run.net is None and run.history is None and run.epoch == 0
+
+
+def test_floor_is_min_rel_eig_times_top_even_when_nothing_was_floored():
+    """With a tiny floor nothing is raised to it, so M's top eigenvalue is 1 / lambda_min(K),
+    not 1 / floor: the floor must come from min_rel_eig and K's top eigenvalue."""
+    pop = PopulationSpec(
+        embedding=EmbeddingSpec(kind="random"), kernel=KernelSpec(length_scale=0.05)
+    )
+    spatial = SpatialConfig(d=1, input=pop, hidden=pop, output=pop, min_rel_eig=1e-6)
+    space = build_spaces(spatial, m=8, N=8, L=1, n_out=8)[0]
+    assert space.post.report.n_floored == 0
+    top = np.linalg.eigvalsh(space.post.K.numpy())[-1]  # numpy, independent of torch's path
+    prior = layer_priors([space], LAMBDA_W, n_eig=3)[0]
+    assert prior.floors.post.covariance_floor == pytest.approx(1e-6 * top / LAMBDA_W**0.5)
+    assert prior.floors.post.penalty_ceiling == pytest.approx(LAMBDA_W**0.5 / (1e-6 * top))
