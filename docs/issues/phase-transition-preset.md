@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: simple
-status: todo
+status: in progress
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -20,7 +20,7 @@ in any d. B = 8.
 
 The preset: grid `spatial.d` in [1, 2, 3, 4] x `spatial.lambda_max` in [0.1, 0.5, 0.75, 0.9, 0.99]
 (20 settings, d slowest), phi "id", L = 1, net.B = 8, weight_lambda = 1, every population's
-length scale 0.15 (PM default, PI may change), otherwise `spatial_grid`'s fields (linear teacher,
+length scale 0.15 (PI CONFIRMED 2026-10-30: 0.15 for every population; the per-weight prior variance shrinking with population size under lambda_max is intended), otherwise `spatial_grid`'s fields (linear teacher,
 64 features, 2 latents, SGLD beta 1e4, lr 1e-2, float64, N 512, P 128, 250k epochs, MIR monitor).
 It takes no n_lambda (a FIXED_GRID_PRESET); `lambda_grid` keeps taking n_lambda.
 
