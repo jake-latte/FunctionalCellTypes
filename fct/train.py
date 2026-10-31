@@ -514,6 +514,17 @@ def select_member(net: Net, history: History, member: int | None = None) -> tupl
     return net.member(member), member_history(history, member)
 
 
+def load_weights(
+    cache_dir: Path, cfg: Config, device: torch.device, dtype: torch.dtype, done: bool
+) -> tuple[Net, History, int]:
+    """The net, history and epochs completed of a setting that has weights: `final.pt` when
+    `done` (all `cfg.train.n_epochs`), else the latest checkpoint of a run still going."""
+    if done:
+        net, history = load_trained(cache_dir, cfg, device, dtype)
+        return net, history, cfg.train.n_epochs
+    return load_latest_checkpoint(cache_dir, cfg, device, dtype)
+
+
 # What torch.load, `_load_payload` and `load_state_dict` raise for a truncated, foreign or
 # inconsistent file; anything else (a bug) is not a file problem and propagates.
 _UNREADABLE = (StaleCacheError, ValueError, TypeError, KeyError, RuntimeError, EOFError)

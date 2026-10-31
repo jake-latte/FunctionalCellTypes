@@ -2,25 +2,32 @@
 inputs with known answers (hand-made embeddings and histories, small random ensembles) and on a
 tiny `phase_transition` sweep trained here on the CPU."""
 
+import ast
+import dataclasses
 import hashlib
 import shutil
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 
+from fct import phase_view
+from fct.activations import get_phi
 from fct.analyse import example_outputs
 from fct.config import DataConfig, NetConfig
 from fct.data import get_dataset, get_latent_lattice_dataset, make_dataset
 from fct.grid_view import tuning_view
 from fct.meanfield import readout_activities
-from fct.model import make_net
+from fct.model import MLP, make_net
 from fct.modularity import information_overlap, rate_overlap
 from fct.phase_view import (
     ENSEMBLE_KEYS,
+    ascending_spectrum,
     average_views,
     covariance_factors,
     descending_spectrum,
+    effective_covariance_factors,
     ensemble_example_outputs,
     ensemble_statistics,
     ensemble_views,
@@ -30,6 +37,7 @@ from fct.phase_view import (
     penalty_factors,
     random_test_set,
     unit_order,
+    weight_kernels,
 )
 from fct.spatial import (
     EmbeddingSpec,
@@ -40,7 +48,7 @@ from fct.spatial import (
     data_kernel,
     weight_quadratic_form,
 )
-from fct.spatial_view import empirical_kernels
+from fct.spatial_view import data_kernels, empirical_kernels
 from fct.sweep import (
     expand,
     preset,
@@ -50,7 +58,8 @@ from fct.sweep import (
     setting_dir,
     with_grid,
 )
-from fct.tasks import latent_lattice_dataset
+from fct.tasks import Dataset, latent_lattice_dataset
+from notebooks import build_spatial
 
 CPU, F64 = torch.device("cpu"), torch.float64
 TUNING = {"n_bins": 4, "kind": "corrected", "n_shuffles": 2, "seed": 0}
@@ -203,7 +212,7 @@ def test_layer_priors_give_every_layer_both_factor_pairs_and_their_spectra(small
         assert len(p.covariance_spectra.post) == 4
         expected = torch.linalg.eigvalsh(covariance_factors(space, LAMBDA_W).pre).flip(0)[:4]
         assert torch.allclose(p.covariance_spectra.pre, expected)
-        assert torch.all(p.penalty_spectra.post[:-1] >= p.penalty_spectra.post[1:])
+        assert torch.all(p.penalty_spectra.post[:-1] <= p.penalty_spectra.post[1:])  # ascending
 
 
 # --------------------------------------------------------------------------- ensemble statistics
@@ -252,14 +261,14 @@ def _lattice(data_cfg, train):
     return latent_lattice_dataset(data_cfg, train)
 
 
-def _notebook_member(net, lattice, test, spaces):
+def _notebook_member(net, lattice, test, spaces, seed=TUNING["seed"]):
     """What the spatial notebook computes for one `MLP`, written out cell by cell."""
     with torch.no_grad():
         H, _ = net(lattice.x.to(net.dtype))
     psis = readout_activities(H, net.phi)
     Ks = [spaces[l + 1].pre.K for l in range(len(psis))]
     A = torch.stack([data_kernel(psi.detach().cpu().to(K.dtype), K) for psi, K in zip(psis, Ks)])
-    views = [tuning_view(net, test, layer, **TUNING) for layer in range(net.L)]
+    views = [tuning_view(net, test, layer, **{**TUNING, "seed": seed}) for layer in range(net.L)]
     info = torch.stack([information_overlap(v.member_mi) for v in views])
     rate = torch.stack([rate_overlap(v.curves.mean) for v in views])
     weights = [net.U.detach(), *(J.detach() for J in net.J), net.V.detach().T]
@@ -289,7 +298,9 @@ def test_a_single_member_view_equals_the_notebook_computation(small, sets):
 def test_ensemble_average_equals_the_mean_of_members_taken_one_at_a_time(small, sets):
     _, _, net, spaces = small
     lattice, test = sets
-    per_member = [_notebook_member(net.member(b), lattice, test, spaces) for b in range(net.B)]
+    per_member = [
+        _notebook_member(net.member(b), lattice, test, spaces, seed=b) for b in range(net.B)
+    ]
     views = ensemble_views(net, lattice, test, spaces, **TUNING)
     assert len(views) == net.B
     mean = average_views(views)
@@ -414,3 +425,225 @@ def test_every_function_runs_on_the_trained_setting(root):
 
     examples = ensemble_example_outputs(run.net, test, [0, 1])
     assert examples.y_pred.shape == (2, 2, 8)
+
+
+# --------------------------------------------------------------------------- review additions
+
+
+def _floored_space():
+    """A layer on 12 random points whose penalty floor bites (min_rel_eig 0.1)."""
+    spatial = _random_spatial(1).model_copy(update={"min_rel_eig": 0.1})
+    return build_spaces(spatial, m=12, N=12, L=1, n_out=12)[0]
+
+
+def test_penalty_spectrum_holds_the_smallest_eigenvalues_ascending_not_the_flat_floor():
+    space = _floored_space()
+    assert space.post.report.n_floored > 1  # the largest M eigenvalues are all the floor
+    prior = layer_priors([space], 1.0, n_eig=4)[0]
+    expected = torch.linalg.eigvalsh(space.post.M)[:4]
+    assert torch.allclose(prior.penalty_spectra.post, expected)
+    assert torch.all(prior.penalty_spectra.post[:-1] <= prior.penalty_spectra.post[1:])
+    # the smallest penalty eigenvalues are the reciprocals of K's largest, floored
+    floor = prior.floors.post.covariance_floor
+    top_k = torch.linalg.eigvalsh(space.post.K).flip(0)[:4].clamp(min=floor)
+    assert torch.allclose(prior.penalty_spectra.post, 1 / top_k, rtol=1e-8)
+
+
+def test_ascending_spectrum_is_sorted_truncated_and_refuses_zero():
+    matrix = torch.diag(torch.tensor([4.0, 1.0, 3.0, 2.0], dtype=F64))
+    assert ascending_spectrum(matrix, 2).tolist() == pytest.approx([1.0, 2.0])
+    assert len(ascending_spectrum(matrix, 9)) == 4
+    with pytest.raises(ValueError, match="n_eig"):
+        ascending_spectrum(matrix, 0)
+
+
+def test_layer_priors_report_the_floor_of_each_population():
+    space = _floored_space()
+    prior = layer_priors([space], LAMBDA_W, n_eig=3)[0]
+    floor_value = 1 / torch.linalg.eigvalsh(space.post.M)[-1].item()  # M's top = 1 / floor
+    assert prior.floors.post.n_floored == space.post.report.n_floored
+    assert prior.floors.post.fraction_floored == space.post.report.fraction_floored
+    assert prior.floors.post.covariance_floor == pytest.approx(floor_value / LAMBDA_W**0.5)
+    assert prior.floors.post.penalty_ceiling == pytest.approx(LAMBDA_W**0.5 / floor_value)
+    assert prior.floors.pre.n_floored == space.pre.report.n_floored
+
+
+def test_effective_covariance_is_the_floored_inverse_penalty_the_nets_trained_under():
+    space = _floored_space()
+    f = effective_covariance_factors(space, LAMBDA_W)
+    expected = torch.kron(space.post.M.inverse(), space.pre.M.inverse()) / LAMBDA_W
+    assert torch.allclose(torch.kron(f.post, f.pre), expected, rtol=1e-8, atol=1e-12)
+    # unlike K / lambda_w, its spectrum never falls below the floor
+    prior = layer_priors([space], LAMBDA_W, n_eig=12)[0]
+    floor = prior.floors.post.covariance_floor
+    assert prior.effective_covariance_spectra.post.min() >= floor * (1 - 1e-9)
+    assert prior.covariance_spectra.post.min() < floor
+    spectrum = prior.effective_covariance_spectra.post
+    assert torch.all(spectrum[:-1] >= spectrum[1:])
+
+
+def test_covariance_factors_refuse_a_zero_lambda_w(small):
+    with pytest.raises(ValueError, match="weight_lambda"):
+        covariance_factors(small[3][0], 0.0)
+
+
+# fixed-value oracles, computed by hand
+
+
+def _identity_net(U, V, phi="id"):
+    return MLP.from_weights(U, [], V, 1.0, get_phi(phi))
+
+
+def test_data_kernel_of_an_identity_net_is_psi_psi_transpose_over_n_by_hand():
+    U = torch.tensor([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=F64)  # N = 3, D_in = 2
+    net = _identity_net(U, torch.ones(3, 2, dtype=F64))
+    x = torch.tensor([[1.0, 0.0], [0.0, 1.0], [2.0, 2.0]], dtype=F64)
+    spaces = build_spaces(_random_spatial(1), m=2, N=3, L=1, n_out=2)
+    hidden = dataclasses.replace(spaces[1].pre, K=torch.eye(3, dtype=F64))
+    spaces[1] = dataclasses.replace(spaces[1], pre=hidden)
+    # psi = x U^T / sqrt(2): rows (1, 0, 1), (0, 2, 1), (2, 4, 4), all over sqrt(2)
+    expected = torch.tensor([[2, 1, 6], [1, 5, 12], [6, 12, 36]], dtype=F64) / 2 / 3
+    assert torch.allclose(data_kernels(net, x, spaces)[0], expected)
+
+
+def test_weight_kernels_of_a_non_symmetric_square_weight_by_hand():
+    W = torch.tensor([[1.0, 2.0], [0.0, 1.0]], dtype=F64)
+    net = _identity_net(W, torch.eye(2, dtype=F64))
+    first = weight_kernels(net)[0]
+    assert first.post.tolist() == [[2.5, 1.0], [1.0, 0.5]]  # W W^T / 2: rows of W
+    assert first.pre.tolist() == [[0.5, 1.0], [1.0, 2.5]]  # W^T W / 2: columns of W
+    readout = weight_kernels(net)[1]  # V is stored (pre, post): the weight is V.T = I
+    assert readout.post.tolist() == [[0.5, 0.0], [0.0, 0.5]]
+
+
+def test_weight_kernels_are_float64_whatever_the_net_dtype():
+    ones = torch.ones(2, 2, dtype=torch.float32)
+    net = MLP.from_weights(ones, [], ones.clone(), 1.0, get_phi("id"))
+    assert all(k.post.dtype == torch.float64 for k in weight_kernels(net))
+
+
+def test_overlaps_of_two_neurons_each_tuned_to_its_own_latent():
+    """x = z (two independent latents), U = sqrt(2) I: neuron i is z_i. Each neuron carries
+    about log B nats about its own latent and none about the other, and their tuning curves
+    are ramps of different latents, so the off-diagonal overlaps vanish."""
+    z = torch.rand(4000, 2, dtype=F64, generator=torch.Generator().manual_seed(0)) * 2 - 1
+    data = Dataset(
+        x=z, y=z, Q=None, period=None, factors={"z0": z[:, 0], "z1": z[:, 1]},
+        groups={"z0": ["z0"], "z1": ["z1"]},
+    )  # fmt: skip
+    net = _identity_net(torch.eye(2, dtype=F64) * 2**0.5, torch.ones(2, 2, dtype=F64))
+    spaces = build_spaces(_random_spatial(1), m=2, N=2, L=1, n_out=2)
+    view = member_view(net, data, data, spaces, n_bins=4, kind="raw", n_shuffles=1, seed=0)
+    info, rate = view.info_overlap[0], view.rate_overlap[0]
+    assert info[0, 0] == pytest.approx((np.log(4) ** 2) / 2, rel=0.02)  # (1/k) sum_f I_0f^2
+    assert info[0, 0] == pytest.approx(info[1, 1], rel=0.02)
+    assert info[0, 1] < 0.01 * info[0, 0]
+    assert abs(rate[0, 1]) < 0.1 * rate[0, 0] and rate[0, 0] > 0
+
+
+def _cell_namespace(source: str, names: set[str], namespace: dict) -> dict:
+    """Execute only the top-level `def`s and assignments of a notebook cell named in `names`."""
+    keep = [
+        node for node in ast.parse(source).body
+        if (isinstance(node, ast.FunctionDef) and node.name in names)
+        or (isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) in names)
+    ]  # fmt: skip
+    exec(compile(ast.Module(keep, []), "<cell>", "exec"), namespace)  # noqa: S102
+    return namespace
+
+
+def test_the_library_matches_the_notebook_cells_it_replaces(small, sets):
+    """The data kernels and overlaps are computed in `build_spatial.py` cells; pin the
+    library to those cells' own code so a change in either is caught."""
+    _, _, net, spaces = small
+    lattice, test = sets
+    mlp = net.member(0)
+    ns = {"np": np, "torch": torch, "readout_activities": readout_activities,
+          "data_kernel": data_kernel}  # fmt: skip
+    cell = _cell_namespace(build_spatial.DATA_KERNEL, {"data_kernels"}, ns)
+    H = mlp(lattice.x)[0].detach()
+    assert torch.equal(
+        cell["data_kernels"](H, mlp.phi, spaces), data_kernels(mlp, lattice.x, spaces)
+    )
+
+    ns = {"RUN": SimpleNamespace(net=mlp, dataset=test), "N_BINS": TUNING["n_bins"],
+          "MIR_KIND": TUNING["kind"], "N_SHUFFLES": TUNING["n_shuffles"],
+          "TRAIN_SEED": TUNING["seed"], "tuning_view": tuning_view,
+          "information_overlap": information_overlap, "rate_overlap": rate_overlap}  # fmt: skip
+    cell = _cell_namespace(build_spatial.OVERLAP, {"views", "info_overlaps", "rate_overlaps"}, ns)
+    view = member_view(mlp, lattice, test, spaces, **TUNING)
+    assert torch.equal(torch.stack(cell["info_overlaps"]), view.info_overlap)
+    assert torch.equal(torch.stack(cell["rate_overlaps"]), view.rate_overlap)
+
+
+def test_ensemble_views_give_each_member_its_own_shuffle_seed(small, sets, monkeypatch):
+    _, _, net, spaces = small
+    seen = []
+    real = phase_view.member_view
+
+    def spy(member, *args, **kwargs):
+        seen.append(kwargs.get("seed", args[-1] if args else None))
+        return real(member, *args, **kwargs)
+
+    monkeypatch.setattr(phase_view, "member_view", spy)
+    ensemble_views(net, sets[0], sets[1], spaces, n_bins=4, kind="raw", n_shuffles=1, seed=10)
+    assert seen == [10, 11, 12]
+
+
+def test_ensemble_views_refuse_a_single_network(small, sets):
+    _, _, net, spaces = small
+    with pytest.raises(TypeError, match="EnsembleMLP"):
+        ensemble_views(net.member(0), sets[0], sets[1], spaces, 4, "raw", 1, 0)
+
+
+@pytest.mark.parametrize(
+    "update", [{"n_latents": 2}, {"D_in": 10}, {"P": 21}, {"latent_range": 0.5}]
+)
+def test_random_test_set_refuses_a_config_that_is_not_the_trainings(small, update):
+    data_cfg, train, _, _ = small
+    with pytest.raises(ValueError, match="does not match"):
+        random_test_set(data_cfg.model_copy(update=update), train, 10, seed=5)
+
+
+def test_random_test_set_latents_are_uniform_on_the_latent_range(small):
+    data_cfg, train, _, _ = small
+    test = random_test_set(data_cfg, train, 20000, seed=5).dataset
+    z = torch.stack(list(test.factors.values()), dim=1)
+    a = data_cfg.latent_range
+    assert z.abs().max() <= a
+    assert z.mean().abs() < 0.02 and z.var(0).mean() == pytest.approx(a**2 / 3, rel=0.03)
+
+
+def test_ensemble_statistics_refuse_rows_that_do_not_match_the_epochs():
+    history = _synthetic_history()
+    history["loss"] = history["loss"][:-1]
+    with pytest.raises(ValueError, match="epoch"):
+        ensemble_statistics(history)
+
+
+def test_ensemble_example_outputs_come_back_on_the_cpu(small, sets):
+    _, _, net, _ = small
+    examples = ensemble_example_outputs(net, sets[1], [0, 1])
+    assert examples.y_pred.device.type == "cpu" and examples.x.device.type == "cpu"
+
+
+def test_loader_generates_in_memory_when_a_done_setting_lacks_its_dataset_file(root, tmp_path):
+    copy = tmp_path / "copy"
+    shutil.copytree(root, copy)
+    directory = setting_dir(copy, expand(_tiny_sweep())[0])
+    (directory / "data" / "dataset.pt").unlink()
+    run = load_phase_run(copy, {"spatial.d": 2})
+    assert run.setting.status == "done" and run.net is not None
+    assert not (directory / "data" / "dataset.pt").exists()
+    cached = load_phase_run(root, {"spatial.d": 2}).dataset
+    assert torch.equal(run.dataset.x, cached.x)
+
+
+def test_loader_reports_a_stale_setting_without_weights(root, tmp_path):
+    copy = tmp_path / "copy"
+    shutil.copytree(root, copy)
+    directory = setting_dir(copy, expand(_tiny_sweep())[0])
+    (directory / "train" / "final.pt").write_bytes(b"not a checkpoint")
+    run = load_phase_run(copy, {"spatial.d": 2})
+    assert run.setting.status == "stale"
+    assert run.net is None and run.history is None and run.epoch == 0

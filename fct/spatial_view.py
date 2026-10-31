@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple
 
 import numpy as np
+import torch
 from torch import Tensor
 
 from fct.cache import cache_paths
@@ -25,6 +26,7 @@ from fct.config import (
     save_config,
 )
 from fct.data import Dataset, get_dataset
+from fct.meanfield import readout_activities
 from fct.model import MLP
 from fct.spatial import (
     EmbeddingSpec,
@@ -33,6 +35,7 @@ from fct.spatial import (
     PopulationSpec,
     SpatialConfig,
     build_spaces,
+    data_kernel,
 )
 from fct.train import History, train_from_config
 
@@ -222,6 +225,23 @@ def panel_grid(positions: Tensor, n_cols: int) -> PanelGrid:
     if xy.shape[1] == 2:
         return _lattice_grid(xy)
     raise ValueError(f"panels can be laid out for d <= 2, got d = {xy.shape[1]}")
+
+
+# --------------------------------------------------------------------------- data kernels
+
+
+def data_kernels(net: MLP, x: Tensor, spaces: list[LayerSpace]) -> Tensor:
+    """A^(l) (P, P) of every hidden layer l (0-based), stacked (L, P, P): psi = phi(h^l) on the
+    inputs `x` (P, D_in), against the K_pre of the weight layer it feeds, `spaces[l + 1]`
+    (`fct.spatial.data_kernel`). The K are float64 on the CPU, so psi is brought there from
+    wherever the net lives; `x` is moved to the net's device and dtype."""
+    with torch.no_grad():
+        H, _ = net(x.to(net.device, net.dtype))
+    psis = readout_activities(H, net.phi)
+    kernels = [spaces[layer + 1].pre.K for layer in range(len(psis))]
+    return torch.stack(
+        [data_kernel(psi.cpu().to(K.dtype), K) for psi, K in zip(psis, kernels, strict=True)]
+    )
 
 
 # --------------------------------------------------------------------------- empirical kernels
