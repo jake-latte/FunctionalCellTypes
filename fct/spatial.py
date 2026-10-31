@@ -227,6 +227,8 @@ class FloorReport:
     fraction_floored: n_floored over the number of eigenvalues.
     n_negative: eigenvalues below -NEGATIVE_RTOL * the largest (clearly negative, not round-off).
     cond_before, cond_after: largest over smallest eigenvalue before and after (inf if <= 0).
+    floor: the eigenvalue floor, min_rel_eig times the largest eigenvalue (whether or not any
+    eigenvalue was below it).
     """
 
     n_floored: int
@@ -234,6 +236,7 @@ class FloorReport:
     n_negative: int
     cond_before: float
     cond_after: float
+    floor: float
 
 
 def _check_kernel(K: torch.Tensor) -> None:
@@ -274,6 +277,7 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
         n_negative=n_negative,
         cond_before=top / bottom if bottom > 0 else float("inf"),
         cond_after=top / floored[0].item(),
+        floor=floor,
     )
     return M, report
 

@@ -36,7 +36,7 @@ from fct.modularity import FactorInformation, neuron_factor_information, neuron_
 from fct.report import MIR_KINDS, Item, SettingResult, setting_label
 from fct.sweep import load_sweep, same_value, setting_config, setting_dir
 from fct.tasks import Dataset
-from fct.train import load_latest_checkpoint, load_trained, select_member
+from fct.train import load_weights, select_member
 from fct.tuning import ORDERS, TuningCurves, select_neurons, tuning_curves
 
 DEPTH_AXIS = "net.L"
@@ -338,11 +338,7 @@ def load_setting_data(root: Path, result: SettingResult) -> SettingData:
     cfg = setting_config(load_sweep(root), result.setting).model_copy(update={"device": "cpu"})
     directory = setting_dir(root, result.setting)
     cpu, dtype = torch.device("cpu"), resolve_dtype(cfg.dtype)
-    if result.status == "done":
-        net, history = load_trained(directory, cfg, cpu, dtype)
-        epoch = cfg.train.n_epochs
-    else:
-        net, history, epoch = load_latest_checkpoint(directory, cfg, cpu, dtype)
+    net, history, epoch = load_weights(directory, cfg, cpu, dtype, result.status == "done")
     net, _ = select_member(net, history)  # ValueError for an ensemble: one network is shown
     return SettingData(net, get_dataset(directory, cfg), cfg, epoch)
 
