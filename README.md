@@ -33,7 +33,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `monitor.py` | `make_mir_monitor`: the training hook that records per-layer MIR during training |
 | `sweep.py` | a grid of runs over any `Config` fields: `SweepConfig`, `expand`, `run_setting`, `setting_status`, presets |
 | `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
-| `grid_view.py` | from a sweep ROOT to the phase-transition figures: snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
+| `grid_view.py` | from a sweep ROOT to the figures of a `lambda_grid` sweep (the phase-transition notebook): snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
 | `spatial_view.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels (the notebook draws its own figures) |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
@@ -90,13 +90,14 @@ fields the spatial presets set (`L`, `g`, `phi`, `weight_lambda`, `rate_lambda`,
 library values, and an axis of the same name wins. Presets: `spatial_tiny` (N in {4, 8}, P 16, one hidden layer,
 SGLD, 6 epochs: a CPU pipeline check) and `spatial_n_scan` (the width scan N in {64, 128, 256, 512, 1024}: linear
 teacher P 164, m 64, k 2, tanh, SGLD beta 1e4, weight_lambda 60 (= 2 beta x 3e-3: the prior term is lambda_w / (2 beta) times the prior form), 250 000 epochs, float64, grid embeddings of
-length scale 0.15 in d = 1, MIR monitor every 5000 epochs), and `phase_transition` (20 settings: spatial.d in {1, 2, 3, 4} x spatial.lambda_max in {0.1, 0.5, 0.75, 0.9, 0.99}, linear, L = 1, random embeddings of length scale 0.15, an ensemble of B = 8, otherwise as `spatial_grid`), and `spatial_grid` (24 settings: net.phi in
+length scale 0.15 in d = 1, MIR monitor every 5000 epochs), and `spatial_grid` (24 settings: net.phi in
 {id, tanh, relu} x data.n_latents in {2, 4} x hidden kernel length scale in {0.05, 0.1, 0.15, 0.2}, one axis for
 both sides of the hidden kernel; N 512, P 128, weight_lambda 20, otherwise as `spatial_n_scan`; the
 `data.n_latents` axis wins over `linear_teacher.n_latents`. Caveat: at N 512 about 500 hidden eigenvalues sit at the
 min_rel_eig floor 1e-2 x lambda_max(K), which grows with the length scale, so the mean hidden prior variance
 diag(M^-1) is 1.62 / 2.26 / 2.90 / 3.54 for 0.05 / 0.1 / 0.15 / 0.2: the length-scale axis is confounded with
-prior strength). A directory name shows a dict-valued axis value as a short
+prior strength).
+Preset `phase_transition` (20 settings: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9, 0.99}; linear (phi id), L = 1, weight_lambda 1, random embeddings of length scale 0.15 for every population, an ensemble of B = 8 per setting via a one-value `net.B` axis; otherwise as `spatial_grid`). It has no results reader or solve stage yet: the readers refuse B > 1 and need `net.L`, `net.phi` and `rate_lambda` axes. At 250 000 epochs the settings with lambda_max >= 0.5 are not fully stationary from the initial N(0, 1) weights (the softest prior mode relaxes on about 2e6 lambda_max^2 epochs). A directory name shows a dict-valued axis value as a short
 hash. The mean-field solver knows only the iid prior, so `sweep run --stage solve` on a spatial setting fails with its
 one-line message. `net.phi` is one of `tanh`, `relu`, `sigmoid` or `id` (phi(h) = h: a linear network);
 the presets keep their activations, and an `id` grid is `--axis 'net.phi=["tanh","relu","id"]'`.
@@ -144,7 +145,7 @@ uv run python notebooks/build_modularity.py ROOT                 # execute on RO
 uv run python notebooks/build_modularity.py --no-execute         # rebuild the committed source notebook
 ```
 
-**Phase-transition notebook.** For a sweep made with `--preset lambda_grid`: pick a setting by
+**Phase-transition notebook** (the viewer for the `lambda_grid` preset). For a sweep made with `--preset lambda_grid`: pick a setting by
 `L`, `PHI`, `LAMBDA_R`, `LAMBDA_W` (snapped to the nearest grid value, which is printed) to see its loss
 curves, example outputs, MIR over training and the tuning curves of its neurons; then the MIR of every
 network of one depth and activation, as a (lambda_r, lambda_w) matrix per hidden layer and against

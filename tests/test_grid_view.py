@@ -1,4 +1,4 @@
-"""Wiring from a sweep ROOT to the phase-transition figures: snapping a requested setting to the
+"""Wiring from a sweep ROOT to the figures of a `lambda_grid` sweep: snapping a requested setting to the
 grid, assembling MIR records (holes, provisional settings), per-neuron tuning of one layer.
 
 The pure parts run on hand-built results; the loaders run on a tiny phase-transition sweep

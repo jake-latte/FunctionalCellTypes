@@ -406,8 +406,14 @@ def phase_transition() -> SweepConfig:
     with the population size; weight_lambda is 1 (the `Config` rule under lambda_max).
 
     B is a one-value axis rather than a shared field: a sweep.json written by every other preset
-    then stays as it was. At min_rel_eig 1e-2 the prior's stiffest curvature grows like
-    1 / (min_rel_eig lambda_max)^2, which the SGLD stability check bounds at lr 1e-2."""
+    then stays as it was.
+
+    SGLD at lr 1e-2: the prior's stiffest curvature k grows like 1 / (min_rel_eig lambda_max)^2,
+    and the stability check passes everywhere, but at lambda_max 0.1 (d <= 3) lr * k = 1 on the
+    stiffest modes, so Euler-Maruyama doubles their variance (prior power inflated by up to
+    about 13% at d = 1). The softest prior mode relaxes on about 2e6 lambda_max^2 epochs
+    (1e4 at 0.1, 1e6 at 0.99), so at 250k epochs settings with lambda_max >= 0.5 are not fully
+    stationary from the N(0, 1) initialisation."""
     population = PopulationSpec(
         embedding=EmbeddingSpec(kind="random"), kernel=KernelSpec(length_scale=0.15)
     )

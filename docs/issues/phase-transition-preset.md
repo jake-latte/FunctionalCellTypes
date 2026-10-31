@@ -36,3 +36,31 @@ product of PSD matrices), so no embedding change is needed; the tests below chec
 - The SGLD stability check passes for all 20 settings at the preset's lr (report the worst
   margin: the prior's stiffest curvature grows like 1 / (min_rel_eig lambda_max)^2).
 - One setting trains end to end on the CPU at reduced size (few epochs) in the test suite.
+
+## Results (worker, 2026-10-31)
+
+SGLD stability at the preset's lr 1e-2 (beta 1e4, weight_lambda 1, min_rel_eig 1e-2, N 512, with
+the real output population of 64 units). The check's quantity is `lr * c * stiffest` =
+lr * k / 2, with k = 2 c r s the curvature of the stiffest prior mode, so it must be < 1 and
+lr * k < 2. The stiffest curvature is 1 / (min_rel_eig lambda_max)^2 where the floor binds
+(d <= 3). All 20 settings pass.
+
+At lambda_max 0.1, d <= 3, lr * k = 1.0 on the stiffest modes: Euler-Maruyama then gives exactly
+2x the target variance (target / (1 - lr k / 2)). Total prior power of U / V is inflated by about
++13% / +3.6% / +0.8% at d = 1 / 2 / 3 and +0.2% at d = 4; every other lambda_max row is < 0.3%.
+The data term adds < 5e-4 to lr * k (reviewer's measurement). lr * k per setting, with the real
+output population (64 units, which sets the V factor and the worst case):
+
+| lambda_max | d = 1, 2, 3 | d = 4 |
+|---|---|---|
+| 0.1 | 1.0000 | 0.302 |
+| 0.5 | 0.0400 | 0.0121 |
+| 0.75 | 0.0178 | 0.0054 |
+| 0.9 | 0.0123 | 0.0037 |
+| 0.99 | 0.0102 | 0.0031 |
+
+Run length: the softest prior mode relaxes on tau ~ 2 beta lambda_max^2 / (lr weight_lambda) ~
+2e6 lambda_max^2 epochs (1e4 at 0.1, ~1e6 at 0.99), so at 250k epochs settings with
+lambda_max >= 0.5 are not fully stationary from the N(0, 1) init (reviewer: prior power still
+7-14% above target at >= 0.75; mse still falling at d 1, lambda 0.99). lr and n_epochs are left
+as they are pending a PI decision.

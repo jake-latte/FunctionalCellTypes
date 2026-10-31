@@ -1,4 +1,5 @@
-"""Build and execute `phase_transition.ipynb`, the results notebook of a phase-transition sweep.
+"""Build and execute `phase_transition.ipynb`, the phase-transition notebook, the results viewer
+of a `lambda_grid` sweep.
 
 One viewer for a sweep made with `--preset lambda_grid`: pick a setting by (L, phi,
 lambda_r, lambda_w) and see its loss curves, example outputs, MIR over training and the tuning

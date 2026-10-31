@@ -1,4 +1,5 @@
-"""From a sweep ROOT to the phase-transition figures: one chosen setting and the whole grid.
+"""From a sweep ROOT to the figures of a `lambda_grid` sweep (the phase-transition notebook): one
+chosen setting and the whole grid.
 
 Three layers, as in `fct.report`:
 
