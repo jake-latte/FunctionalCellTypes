@@ -5,6 +5,7 @@ executions on a tiny `phase_transition` sweep (CPU) with one trained and one nev
 import ast
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -16,11 +17,16 @@ from nbclient.exceptions import CellExecutionError
 
 from fct.config import DataConfig, NetConfig
 from fct.data import make_dataset
+from fct.grid_view import tuning_view
 from fct.model import make_net
 from fct.phase_view import (
+    average_views,
     ensemble_example_outputs,
     ensemble_statistics,
+    ensemble_views,
     layer_priors,
+    load_phase_run,
+    random_test_set,
     unit_order,
 )
 from fct.spatial import (
@@ -31,8 +37,9 @@ from fct.spatial import (
     build_spaces,
 )
 from fct.sweep import expand, run_setting, save_sweep, setting_dir
-from notebooks.build_phase_transition_grid import build_notebook
-from notebooks.build_spatial import execute_notebook
+from fct.tasks import latent_lattice_dataset
+from notebooks.build_phase_transition_grid import build_notebook, function_source
+from notebooks.build_spatial import execute_notebook, set_parameters
 from tests.test_build_spatial import _code, _n_figures_in, _text_outputs
 from tests.test_phase_view import _tiny_sweep
 
@@ -223,7 +230,7 @@ def test_example_outputs_draw_every_member_in_its_own_palette_colour(draw, ensem
     picks = ensemble_example_outputs(net, train, [0, 3])
     everything = ensemble_example_outputs(net, train, list(range(len(train.x))))
     colours = mpl.rcParams["axes.prop_cycle"].by_key()["color"]
-    fig = draw["plot_ensemble_outputs"](picks, everything, colours, "t")
+    fig = draw["plot_ensemble_outputs"](picks, everything, colours, "t", 4)
     drawn = {
         mpl.colors.to_hex(line.get_color())
         for ax in fig.axes
@@ -244,7 +251,7 @@ def test_more_members_than_palette_colours_raises(draw, ensemble):
     net, train = ensemble
     outputs = ensemble_example_outputs(net, train, [0, 1])
     with pytest.raises(ValueError, match="palette"):
-        draw["plot_ensemble_outputs"](outputs, outputs, ["C0", "C1"], "t")
+        draw["plot_ensemble_outputs"](outputs, outputs, ["C0", "C1"], "t", 4)
 
 
 # ---------------------------------------------------------------- change 9: weight kernels
@@ -300,10 +307,12 @@ def test_overlaps_are_shown_in_the_given_order_and_labelled_with_it(draw):
     C = torch.arange(16.0).reshape(4, 4)
     C = C + C.T
     order = np.array([2, 0, 3, 1])
-    fig = draw["plot_overlaps"](C, C, order, float(C.max()), float(C.max()), "t", "neuron, by x")
+    coordinate = np.array([0.4, 0.1, 0.3, 0.2])
+    top = float(C.max())
+    fig = draw["plot_overlaps"](C, C, order, coordinate, top, top, "t", 1)
     left = _visible(fig)[0]
     assert np.allclose(np.asarray(left.images[0].get_array()), C.numpy()[np.ix_(order, order)])
-    assert left.get_xlabel() == "neuron, by x"
+    assert "coordinate 1" in left.get_xlabel()
 
 
 def _markdown(nb) -> str:
@@ -435,3 +444,317 @@ def test_a_partly_trained_setting_is_drawn_and_labelled_provisional(root, tmp_pa
     text = _text_outputs(nb)
     assert "ERROR" not in text and "provisional" in text.lower()
     assert _n_figures_in(nb) == N_FIGURES
+
+
+# ---------------------------------------------------------------- the review's additions
+# Wiring: the notebook's own cells are run in this process, and the arrays in the figures they
+# draw are compared with `fct.phase_view` computed independently here.
+
+DEFAULTS = {"n_bins": 8, "kind": "corrected", "n_shuffles": 5}
+MEMBER, SORT = PARAMETERS["MEMBER"], PARAMETERS["SORT_DIM"]
+
+
+class Session:
+    """The namespace after running every code cell of the notebook, and the figures each drew."""
+
+    def __init__(self, nb, root, setting, **parameters):
+        values = {"ROOT": str(root), "SETTING": setting, **PARAMETERS, **parameters}
+        self.ns: dict = {}
+        self.figures: list[tuple[str, mpl.figure.Figure]] = []
+        plt.close("all")
+        for cell in set_parameters(nb, values).cells:
+            if cell.cell_type != "code":
+                continue
+            exec(compile(cell.source, f"<{cell.id}>", "exec"), self.ns)  # noqa: S102
+            self.figures += [(cell.source, plt.figure(n)) for n in plt.get_fignums()]
+            plt.close("all")
+
+    def figs(self, *needles: str):
+        return [f for src, f in self.figures if all(n in src for n in needles)]
+
+
+def _titled(fig, prefix):
+    """The visible, non-colorbar axis whose title starts with `prefix`."""
+    (ax,) = [a for a in _visible(fig) if a.get_title().startswith(prefix)]
+    return ax
+
+
+def _image(ax):
+    return np.asarray(ax.images[0].get_array())
+
+
+@pytest.fixture(scope="module")
+def session(root):
+    return Session(build_notebook(), root, {"spatial.d": 2})
+
+
+@pytest.fixture(scope="module")
+def reference(root):
+    """phase_view computed independently of the notebook's cells."""
+    run = load_phase_run(root, {"spatial.d": 2})
+    cfg = run.setting.cfg
+    test = random_test_set(cfg.data, run.dataset, PARAMETERS["P_TEST"]).dataset
+    lattice = latent_lattice_dataset(cfg.data, run.dataset)
+    views = ensemble_views(run.net, lattice, test, run.spaces, seed=cfg.train.seed, **DEFAULTS)
+    pops = [run.spaces[0].pre, *(s.post for s in run.spaces)]
+    orders = [unit_order(p.embedding.positions, SORT) for p in pops]
+    return SimpleNamespace(
+        run=run, cfg=cfg, test=test, lattice=lattice, views=views, mean=average_views(views),
+        pops=pops, orders=orders,
+    )  # fmt: skip
+
+
+def _sorted(matrix, order):
+    return np.asarray(matrix)[np.ix_(order, order)]
+
+
+def test_the_fixture_distinguishes_the_sort_axes_and_the_input_from_the_output(reference):
+    for pop in reference.pops:
+        assert not np.array_equal(
+            unit_order(pop.embedding.positions, 0), unit_order(pop.embedding.positions, SORT)
+        )
+    assert not np.array_equal(reference.orders[0], reference.orders[2])  # input vs output units
+
+
+def test_wiring_the_notebook_orders_every_population_by_sort_dim(session, reference):
+    for got, want in zip(session.ns["ORDERS"], reference.orders, strict=True):
+        assert np.array_equal(got, want)
+
+
+def test_wiring_overlaps_are_the_member_then_the_average_in_sort_dim_order(session, reference):
+    member_fig, average_fig = session.figs("plot_overlaps(", "MEAN_VIEW")
+    order = reference.orders[1]
+    for fig, view, tag in [
+        (member_fig, reference.views[MEMBER], f"member {MEMBER}"),
+        (average_fig, reference.mean, "ensemble average"),
+    ]:
+        assert tag in fig.get_suptitle()
+        info, rate = _visible(fig)
+        assert np.allclose(_image(info), _sorted(view.info_overlap[0], order))
+        assert np.allclose(_image(rate), _sorted(view.rate_overlap[0], order))
+    assert not np.allclose(_image(_visible(member_fig)[0]), _image(_visible(average_fig)[0]))
+
+
+def test_wiring_data_kernels_are_the_member_then_the_average(session, reference):
+    member_fig, average_fig = session.figs("plot_data_kernels(", "MEAN_VIEW")
+    z0 = reference.lattice.factors["z0"].numpy()
+    order = np.argsort(z0, kind="stable")
+    for fig, view in [(member_fig, reference.views[MEMBER]), (average_fig, reference.mean)]:
+        _, a_axis = _visible(fig)  # the latent kernel B, then A of hidden layer 1
+        assert np.allclose(_image(a_axis), _sorted(view.A[0], order))
+    assert f"member {MEMBER}" in member_fig.get_suptitle()
+    assert "average" in average_fig.get_suptitle()
+
+
+def test_wiring_weight_kernels_are_the_prior_the_member_and_the_average(session, reference):
+    figs = session.figs("plot_weight_kernels(", "MEAN_VIEW")
+    priors = layer_priors(reference.run.spaces, reference.cfg.train.weight_lambda, 3)
+    assert len(figs) == len(priors)
+    for layer, fig in enumerate(figs):
+        order = {"post": reference.orders[layer + 1], "pre": reference.orders[layer]}
+        for which in ("post", "pre"):
+            for prefix, pair in [
+                ("effective prior", priors[layer].effective_covariance),
+                (f"member {MEMBER}", reference.views[MEMBER].weight_kernels[layer]),
+                ("average", reference.mean.weight_kernels[layer]),
+            ]:
+                ax = _titled(fig, f"{prefix}: {which}")
+                assert np.allclose(_image(ax), _sorted(getattr(pair, which), order[which]))
+
+
+def test_wiring_prior_matrices_use_the_order_of_their_own_population(session, reference):
+    priors = layer_priors(reference.run.spaces, reference.cfg.train.weight_lambda, 3)
+    figs = session.figs("def plot_prior_matrices")
+    assert len(figs) == len(priors)
+    for layer, fig in enumerate(figs):
+        order = {"post": reference.orders[layer + 1], "pre": reference.orders[layer]}
+        for which in ("post", "pre"):
+            for name, pair in [
+                ("covariance", priors[layer].covariance),
+                ("effective covariance", priors[layer].effective_covariance),
+                ("penalty", priors[layer].penalty),
+            ]:
+                ax = _titled(fig, f"{name}, {which}")
+                assert np.allclose(_image(ax), _sorted(getattr(pair, which), order[which]))
+
+
+def test_wiring_tuning_is_of_the_chosen_member_on_the_random_test_set(session, reference):
+    (fig,) = session.figs("plot_tuning_by_order(", "NET.member")
+    view = tuning_view(
+        reference.run.net.member(MEMBER), reference.test, 0,
+        seed=reference.cfg.train.seed + MEMBER, **DEFAULTS,
+    )  # fmt: skip
+    shown = [a for a in _visible(fig) if a.get_title()]
+    assert len(shown) == PARAMETERS["N_NEURONS"]
+    positions = reference.pops[1].embedding.positions
+    for k, ax in enumerate(shown):
+        neuron = int(ax.get_title().split()[1].rstrip(","))
+        assert neuron == reference.orders[1][k]
+        assert f"{float(positions[neuron, SORT]):.2f}" in ax.get_title()
+        assert np.allclose(ax.containers[0].lines[0].get_ydata(), view.curves.mean[neuron, 0])
+
+
+# ---------------------------------------------------------------- the review's other changes
+
+
+def test_example_outputs_show_a_subset_of_the_outputs_with_a_member_legend(draw, ensemble):
+    net, train = ensemble
+    picks = ensemble_example_outputs(net, train, [0, 3])
+    everything = ensemble_example_outputs(net, train, list(range(len(train.x))))
+    colours = mpl.rcParams["axes.prop_cycle"].by_key()["color"]
+    fig = draw["plot_ensemble_outputs"](picks, everything, colours, "t", 4)
+    first = fig.axes[0]
+    diamonds = [ln for ln in first.lines if ln.get_marker() == "D"]
+    assert len(diamonds) == 3 and all(len(ln.get_xdata()) == 4 for ln in diamonds)
+    assert len(first.get_xticks()) == 4
+    labels = [t.get_text() for t in first.get_legend().get_texts()]
+    assert [f"member {b}" for b in range(3)] == [t for t in labels if t.startswith("member")]
+    every = draw["plot_ensemble_outputs"](picks, everything, colours, "t", 99)  # all 8 outputs
+    assert len(every.axes[0].get_xticks()) == 8
+
+
+def test_sorted_matrices_are_antialiased_and_ticked_with_the_coordinate(draw, spaces):
+    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    order_post, order_pre = unit_order(spaces[0].post.embedding.positions, 1), np.arange(8)
+    fig = draw["plot_prior_matrices"](prior, spaces[0], order_post, order_pre, 1)
+    fig.canvas.draw()
+    ax = _titled(fig, "covariance, post")
+    assert ax.images[0].get_interpolation() != "none"
+    coordinate = spaces[0].post.embedding.positions[:, 1].numpy()
+    ticks = [int(t) for t in ax.get_xticks()]
+    assert [t.get_text() for t in ax.get_xticklabels()] == [
+        f"{coordinate[order_post[r]]:.2f}" for r in ticks
+    ]
+    assert [t.get_text() for t in ax.get_yticklabels()] == [
+        t.get_text() for t in ax.get_xticklabels()
+    ]
+
+
+def test_the_overlap_figure_uses_the_same_tick_convention(draw):
+    C = torch.rand(6, 6, dtype=F64)
+    C = C + C.T
+    order, coordinate = np.array([3, 1, 5, 0, 2, 4]), np.linspace(0, 1, 6)[::-1]
+    fig = draw["plot_overlaps"](C, C, order, coordinate, float(C.max()), 1.0, "t", 0)
+    fig.canvas.draw()
+    ax = _visible(fig)[0]
+    ticks = [int(t) for t in ax.get_xticks()]
+    assert [t.get_text() for t in ax.get_xticklabels()] == [
+        f"{coordinate[order[r]]:.2f}" for r in ticks
+    ]
+
+
+@pytest.mark.parametrize("name", ["plot_prior_matrices", "plot_weight_kernels", "plot_overlaps"])
+def test_an_order_that_is_not_a_permutation_of_the_units_raises(draw, spaces, name):
+    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    good_post, good_pre = np.arange(6), np.arange(8)
+    bad_post = np.array([0, 1, 2, 3, 4, 4])
+    with pytest.raises(ValueError, match="permutation"):
+        if name == "plot_prior_matrices":
+            draw[name](prior, spaces[0], bad_post, good_pre, 0)
+        elif name == "plot_weight_kernels":
+            panels = [("a", prior.covariance), ("b", prior.covariance)]
+            draw[name](panels, spaces[0], good_post, np.arange(1, 9), 0)
+        else:
+            C = torch.eye(6, dtype=F64)
+            draw[name](C, C, bad_post, np.zeros(6), 1.0, 1.0, "t", 0)
+
+
+def test_member_and_average_of_the_weight_kernels_share_a_symmetric_scale(draw, spaces):
+    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    small = prior.covariance
+    big = type(small)(small.post * 3, small.pre * 3)
+    panels = [("prior", small), ("member", small), ("average", big)]
+    fig = draw["plot_weight_kernels"](panels, spaces[0], np.arange(6), np.arange(8), 0)
+    for which in ("post", "pre"):
+        member, average = (_titled(fig, f"{p}: {which}").images[0] for p in ("member", "average"))
+        assert member.get_clim() == average.get_clim()
+        low, high = member.get_clim()
+        assert low == -high
+
+
+def test_member_and_average_overlaps_share_their_colour_scales(session):
+    member_fig, average_fig = session.figs("plot_overlaps(", "MEAN_VIEW")
+    for i in (0, 1):
+        member, average = (_visible(f)[i].images[0] for f in (member_fig, average_fig))
+        assert member.get_clim() == average.get_clim()
+    low, high = _visible(member_fig)[1].images[0].get_clim()
+    assert low == -high  # the rate overlap is signed: centred at 0
+
+
+def test_spectra_figure_has_integer_ticks_and_counts_each_population(draw, spaces):
+    prior = layer_priors(spaces, 1.0, n_eig=10)[0]  # 8 input units, 6 hidden: 8 and 6 drawn
+    fig = draw["plot_prior_spectra"](prior, spaces[0])
+    for ax in _visible(fig):
+        assert all(float(t).is_integer() for t in ax.get_xticks())
+    title = fig.get_suptitle()
+    assert "pre 8" in title and "post 6" in title
+
+
+def test_the_figure_titles_carry_the_status_tag_when_given(draw, spaces):
+    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    tag = " [PROVISIONAL]"
+    figs = [
+        draw["plot_prior_matrices"](prior, spaces[0], np.arange(6), np.arange(8), 0, tag),
+        draw["plot_prior_spectra"](prior, spaces[0], tag),
+        draw["plot_weight_kernels"](
+            [("a", prior.covariance)], spaces[0], np.arange(6), np.arange(8), 0, tag
+        ),
+    ]
+    assert all(tag in f.get_suptitle() for f in figs)
+
+
+def test_every_figure_of_a_partly_trained_run_is_tagged_provisional(root, tmp_path):
+    copy = tmp_path / "copy"
+    shutil.copytree(root, copy)
+    (setting_dir(copy, expand(_tiny_sweep())[0]) / "train" / "final.pt").unlink()
+    partial = Session(build_notebook(), copy, {"spatial.d": 2})
+    assert len(partial.figures) == N_FIGURES
+    for _, fig in partial.figures:
+        text = fig.get_suptitle() + " ".join(a.get_title() for a in fig.axes)
+        assert "PROVISIONAL" in text and "epoch" in text
+
+
+def test_a_finished_run_has_no_provisional_tag(session):
+    for _, fig in session.figures:
+        assert "PROVISIONAL" not in fig.get_suptitle() + " ".join(a.get_title() for a in fig.axes)
+
+
+def test_tuning_neurons_can_be_picked_first_or_spread_along_the_order(draw):
+    order = np.arange(10)[::-1]
+    assert draw["pick_neurons"](order, 3, "first").tolist() == [9, 8, 7]
+    assert draw["pick_neurons"](order, 3, "spread").tolist() == [9, 5, 0]
+    assert draw["pick_neurons"](order, 50, "first").tolist() == order.tolist()
+    with pytest.raises(ValueError, match="NEURON_PICK"):
+        draw["pick_neurons"](order, 3, "random")
+
+
+def test_the_spread_pick_is_reported_in_the_executed_notebook(root):
+    nb = _execute(root, {"spatial.d": 2}, NEURON_PICK="spread")
+    assert "4 evenly spaced of 6 neurons" in _text_outputs(nb)
+
+
+def test_the_tuning_line_names_the_rate_bins_n_bins_not_b(trained):
+    text = _text_outputs(trained)
+    assert "P = 40, n_bins = 8" in text and "B = 8" not in text
+
+
+def test_the_text_fits_this_sweep():
+    text = _markdown(build_notebook())
+    assert "tanh rates" not in text and "at the defaults" not in text
+    assert "log y-axis" in text and "log axis" not in text.replace("log y-axis", "")
+    assert "$\\omega_w = \\sum_l" in text and "$\\omega_r = \\sum_{l, i, \\mu}" in text
+    assert "only appears once" in text  # the floor shows once N_EIG passes the unfloored count
+
+
+def test_function_source_returns_the_functions_in_the_order_asked_and_raises_on_a_miss():
+    source = "def a():\n    return 1\n\n\ndef b():\n    return 2\n"
+    got = function_source(source, "b", "a")
+    assert got.index("def b") < got.index("def a")
+    with pytest.raises(ValueError, match="c"):
+        function_source(source, "a", "c")
+
+
+def test_the_sorted_matrix_drawing_is_one_shared_helper():
+    code = _code(build_notebook())
+    assert code.count("def draw_sorted_matrix(") == 1
+    assert code.count("draw_sorted_matrix(") >= 3  # its definition and the two figures
