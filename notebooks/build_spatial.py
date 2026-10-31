@@ -151,7 +151,9 @@ PRIOR_TEXT = r"""## Spatial prior
 Every unit $i$ of population $p$ (the input, hidden layer $l$, the output) has a position
 $x^p_i$ on the torus $[0, \mathrm{box})^d$ (`D`, `BOX`), placed on a grid or uniformly at random.
 The population's kernel is the wrapped Gaussian of `fct/spatial.py`, with amplitude $A_p$ and
-length scale $\ell_p$ set by `population_spec`:
+length scale $\ell_p$ set by `population_spec` (if `lambda_max` is set, the kernel is rescaled so its
+top eigenvalue is `lambda_max`, which multiplies it by `Population.scale`; $A_p$ below is then
+`amplitude * scale`, its diagonal):
 $$K^p_{ij} = A_p \prod_{a=1}^{d} \frac{G(\delta_a)}{G(0)}, \qquad G(\delta) = \sum_{|n| \le n_\mathrm{img}} e^{-(\delta + n\, \mathrm{box})^2 / 2 \ell_p^2},$$
 where $\delta = x^p_i - x^p_j$ reduced to $[-\mathrm{box}/2, \mathrm{box}/2]$ on every axis $a$.
 Weight layer $l$ maps population pre to population post, and its prior covariance is
@@ -286,7 +288,8 @@ KERNELS = r"""def plot_layer_prior(space):
         ax.scatter(dist.numpy(), pop.K.ravel().numpy(), s=6, alpha=0.4, color=color)
         # kappa(delta) is a function of one axis difference, defined up to box / 2
         delta = torch.linspace(0, min(dist.max().item(), box / 2), 200, dtype=x.dtype)
-        kappa = wrapped_gaussian_profile(delta, pop.kernel.length_scale, box, pop.kernel.amplitude)
+        diagonal = pop.kernel.amplitude * pop.scale  # K_ii, with or without lambda_max
+        kappa = wrapped_gaussian_profile(delta, pop.kernel.length_scale, box, diagonal)
         label = rf"{which}: {pop.name}, $\ell$ = {pop.kernel.length_scale:g}"
         ax.plot(delta.numpy(), kappa.numpy(), color=color, label=label)
     ax.set(xlabel=r"torus distance $\Vert x_i - x_j \Vert$", ylabel="$K_{ij}$")
@@ -434,8 +437,8 @@ sorted by ring position. Under the prior alone (SGLD, ignoring the floor)
 $\mathrm{vec}(U) \sim \mathcal{N}(0, c\, K^{\mathrm{post}} \otimes K^{\mathrm{pre}})$ with
 $c = \lambda_w^{-1}$, so
 $\mathbb{E}[\hat K^{\mathrm{post}}] = c\, A_{\mathrm{pre}}\, K^{\mathrm{post}}$ and
-$\mathbb{E}[\hat K^{\mathrm{pre}}] = c\, A_{\mathrm{post}}\, K^{\mathrm{pre}}$ ($A$ the kernel
-amplitude, the diagonal of $K$): the comparison holds up to that scale, so each panel has its own
+$\mathbb{E}[\hat K^{\mathrm{pre}}] = c\, A_{\mathrm{post}}\, K^{\mathrm{pre}}$ ($A$ the diagonal of $K$:
+the kernel amplitude times `Population.scale`): the comparison holds up to that scale, so each panel has its own
 colour scale (Adam samples no such law: its prior is the $\beta = 1$ case, and only the shapes compare). These are second moments of the
 trained *weights* over *units*, not the mean-field kernels $\Phi^{(l)}$ of `fct/meanfield.py`, which
 are activity kernels between *samples* (with a pair of unit indices under a spatial prior), shown

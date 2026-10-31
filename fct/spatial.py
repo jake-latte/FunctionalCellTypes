@@ -105,6 +105,22 @@ class SpatialConfig(StrictModel):
     hidden: PopulationSpec = PopulationSpec()
     output: PopulationSpec = PopulationSpec()
     min_rel_eig: RelEig = 1e-6
+    # When set, every population kernel is rescaled to this top eigenvalue (see `_make_population`)
+    # and `kernel.amplitude` is not used, so it must stay 1; `Config` also requires weight_lambda = 1.
+    lambda_max: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+
+    @model_validator(mode="after")
+    def _amplitude_is_one_under_lambda_max(self) -> Self:
+        if self.lambda_max is None:
+            return self
+        for name in ("input", "hidden", "output"):
+            amplitude = getattr(self, name).kernel.amplitude
+            if amplitude != 1.0:
+                raise ValueError(
+                    f"{name}.kernel.amplitude is {amplitude!r} but lambda_max is set, which "
+                    "overwrites the amplitude; leave it at 1"
+                )
+        return self
 
     @model_validator(mode="after")
     def _grid_shapes_match_d(self) -> Self:
@@ -267,7 +283,10 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
 
 @dataclass(frozen=True)
 class Population:
-    """One population's embedding, kernel K (n, n), penalty M (n, n) and floor report."""
+    """One population's embedding, kernel K (n, n), penalty M (n, n) and floor report.
+    `scale` is the factor applied to the unit-amplitude kernel G under `lambda_max`
+    (lambda_max / top eigenvalue of G); it is 1.0 when `lambda_max` is unset, where K carries the
+    spec's amplitude instead."""
 
     name: str
     embedding: Embedding
@@ -275,6 +294,7 @@ class Population:
     K: torch.Tensor
     M: torch.Tensor
     report: FloorReport
+    scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -303,8 +323,13 @@ def _make_population(
     K = periodic_gaussian_kernel(
         emb.positions, emb.positions, spec.kernel.length_scale, cfg.box, spec.kernel.amplitude
     )
+    scale = 1.0
+    if cfg.lambda_max is not None:
+        # Per population: the embedding (and so the top eigenvalue) differs between them.
+        scale = cfg.lambda_max / torch.linalg.eigvalsh(K)[-1].item()
+        K = scale * K
     M, report = penalty_matrix(K, cfg.min_rel_eig)
-    return Population(name, emb, spec.kernel, K, M, report)
+    return Population(name, emb, spec.kernel, K, M, report, scale)
 
 
 def build_spaces(cfg: SpatialConfig, m: int, N: int, L: int, n_out: int) -> list[LayerSpace]:
