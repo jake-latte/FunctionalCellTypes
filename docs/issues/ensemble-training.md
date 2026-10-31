@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in review
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -57,8 +57,10 @@ CPU with large activations (large P, or deep nets) B singles in a Python loop ar
 because each elementwise pass over (B, P, N) tensors leaves the cache while a single net's stays
 in it (profiled: tanh, mul, tanh_backward and grad accumulation cost 5-17x a single net's for
 8x the data). One SGLD step (loss, backward, update), N = 512, D_in = D_out = 64, B = 8, median
-of 50 (CPU: 16 torch threads on a shared 32-core host, load ~5; GPU: RTX 4500 Ada, 30 reps).
-"loop / ensemble" > 1 means the ensemble is faster.
+of 50 as run (the script's `--reps` defaults to 20; pass it) (CPU: 16 torch threads on a shared 32-core host, load ~5; GPU: RTX 4500 Ada, 30 reps).
+"loop / ensemble" > 1 means the ensemble is faster. The table leaves out the MIR monitor,
+which runs once per member and so costs B times a single net's at every monitor call, and the
+spatial prior (cheap at L = 1).
 
 | device | dtype | case | ensemble ms | loop of 8 ms | loop / ensemble |
 |---|---|---|---|---|---|
