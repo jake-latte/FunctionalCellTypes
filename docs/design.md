@@ -144,6 +144,7 @@ class NetConfig(BaseModel):
     N: int = 100; L: int = 3; g: float = 1.0
     phi: Literal["relu", "tanh", "sigmoid", "id"] = "relu"   # "id": phi(h) = h, a linear net
     seed: int = 0
+    B: int = 1                          # ensemble size (>= 1): B > 1 trains B non-interacting nets in one run (see "Ensembles" below); hashed only when != 1
 class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
     weight_lambda: float = 2e-4; rate_lambda: float = 1e-3
@@ -208,6 +209,7 @@ class Config(BaseModel):
     dtype: Literal["float32", "float64"] = "float64"
     def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `LOSS_VERSION` when `train` is), first 12 hex chars; >=1 section required
         # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
+        # with `net`: net.B dropped when it is 1, so every single-network cache keeps its hash
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -315,19 +317,29 @@ def latent_lattice_dataset(cfg, reference: Dataset) -> Dataset
 
 ```python
 class MLP(nn.Module)   # the notebook's net: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None); forward(x) -> (H (P,L,N), Z (P,D_out)) with Z = phi(H[:, -1]) @ V / N, a linear readout of the last layer's post-activations (MODEL_VERSION 2); weight_l2()
-def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> MLP   # weights drawn on CPU from a local torch.Generator seeded with cfg.seed, then moved to device (no global RNG touched); phi = get_phi(cfg.phi)
+class EnsembleMLP(nn.Module)   # B MLPs batched over a leading member axis: U (B,N,D_in), J_k (B,N,N), V (B,N,D_out); __init__(members: Sequence[MLP]) copies and stacks them
+    # forward(x (P,D_in)) -> (H (B,P,L,N), Z (B,P,D_out)); weight_l2() -> (B,); member(b) -> MLP (a copy of member b's weights); B, device, dtype properties
+    # forward: batched matmuls with contiguous (B,P,.) results, each scale factor on the smaller of weight and result
+Net = MLP | EnsembleMLP                                  # MLP.B = 1 (class attribute), so `net.B` works for both;
+    # member_axes: leading axes indexing members (MLP 0, EnsembleMLP 1), which train.per_member reduces around
+MLP.from_weights(U, J, V, g, phi) -> MLP                 # an MLP holding the given weights (no copy, no random draw); member() uses it
+def member_seed(seed: int, b: int) -> int                # member 0: seed itself; b > 0: first 8 bytes (little-endian) of sha256("fct.model.member:<seed>:<b>")
+def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> Net   # cfg.B = 1: an MLP, weights drawn on CPU from a local torch.Generator seeded with cfg.seed;
+    # cfg.B > 1: an EnsembleMLP whose member b is drawn from a generator seeded with member_seed(cfg.seed, b); then moved to device (no global RNG touched); phi = get_phi(cfg.phi)
 ```
 
 ## train.py
 
 ```python
-def compute_loss(net, x, y, prior_coefficient, rate_lambda, weight_penalty=MLP.weight_l2) -> tuple[Tensor, dict[str, Tensor]]
+def compute_loss(net, x, y, prior_coefficient, rate_lambda, weight_penalty=None) -> tuple[Tensor, dict[str, Tensor]]   # None: the net's own weight_l2
+    # ensemble: every part is (B,), member b's own, and the returned loss is the SUM over members (so member b's gradient is its own loss's)
     # loss = 0.5*N*mse + prior_coefficient*weight_l2 + rate_lambda*rate_l2; callers pass the function
     #   prior_coefficient(cfg.train) = train.weight_lambda / (2 beta), never the raw train.weight_lambda
     # weight_l2 = weight_penalty(net): the sum of squares of every parameter by default, the spatial prior
     #   sum_l tr(M_post W_l M_pre W_l^T) from make_weight_penalty when cfg.spatial is set (see "Spatial weight prior in training")
     # rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
-WeightPenalty = Callable[[MLP], Tensor]
+WeightPenalty = Callable[[Net], Tensor]   # 0-d for an MLP, (B,) for an ensemble
+def per_member(net, t, reduce=torch.sum) -> Tensor   # reduce over every axis but the member axis (all axes for an MLP)
 def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None, else the spatial prior for net's sizes, dtype and device
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
@@ -339,14 +351,44 @@ def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
     # monitor: required exactly when cfg.train.monitor_int > 0 (ValueError otherwise, before anything runs)
 def train_from_config(cfg: Config, dataset: Dataset, cache_dir: Path, log=print, monitor=None) -> tuple[MLP, History]
     # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the sweep
-def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[MLP, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
+def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
+    # an EnsembleMLP and an ensemble history when cfg.net.B > 1 (load_latest_checkpoint likewise)
+def select_member(net: Net, history, member: int | None = None) -> tuple[MLP, History]   # a single net passes through (member None or 0);
+    # an ensemble needs member (ValueError if None, IndexError out of range) and gives net.member(member), member_history(history, member)
+def member_history(history, member) -> History          # every entry but epoch / monitor_epoch indexed by member: a single network's history
 ```
 
-SGLD (`train.optimizer = "sgld"`, `fct/sgld.py`). The `SGLD(params, lr, beta)` optimiser takes the full-batch
+Ensembles (`net.B > 1`). One run trains B copies of the network that share the dataset and differ in their initial
+weights (`member_seed`; member 0 is exactly the single network of the same `net.seed`, and member b does not depend on
+B) and their SGLD noise (iid per element from the one global stream, so members' noises are independent). The loss is
+the sum of the members' losses, the spatial prior applied per member (`spatial_weight_penalty` returns (B,)), so the
+gradient of member b is exactly that of its own loss; Adam's moments are elementwise and `SGLD(member_axis=True)`
+updates elementwise, so members do not interact: an ensemble equals its members trained separately, to round-off
+(`tests/test_ensemble.py`). Every logged history entry (`mse`, `weight_l2`, `rate_l2`, `loss`, `grad_norm`,
+`param_msd`) is a list over members; `epoch` is not. The monitor is called on each member (`net.member(b)`), so each
+`monitor_<key>` entry is a list over members of lists over layers; `monitor_epoch` has no member axis. The log line
+prints `B=<B> mean (min..max)` of each part. Checkpoints hold the batched state_dict (same keys, a leading B axis)
+and the Adam moments of the same shapes; resume is exact as for a single network.
+
+B = 1 keeps the unbatched `MLP` (parameters without a member axis) and its code path, so every existing cache, reader
+and pinned number is unchanged: `tests/test_train_pins.py` reproduces a tiny Adam run and an SGLD run with a spatial
+prior, written before `net.B` existed, bit for bit (hash, every checkpoint, final file). A batched B = 1 would have
+changed every state_dict shape and cache. Readers that analyse one network call `select_member` and so refuse an
+ensemble unless given a member: `spatial_grid.load_grid_run(chosen, member=None)` takes one; the CLI's trained-net
+commands, `report.load_setting_result`, `grid_view.load_setting_data` and `lrtune.evaluate_setting` refuse; the
+mean-field `solve` raises for an ensemble, and the sweep's solve stage raises `SweepError` for an ensemble setting
+before writing anything, trained or not (its solve status stays "missing").
+
+Cost: an ensemble is one batched run, measured in `docs/issues/ensemble-training.md` (`jobs/bench_ensemble.py`). It is
+faster than B singles on the GPU and at the phase-transition preset's sizes on the CPU, but SLOWER than a loop of B
+singles on the CPU when the activations are large (P 2048: about 2x slower; deep tanh nets: on par), because its
+elementwise passes over (B, P, N) tensors leave the cache.
+
+SGLD (`train.optimizer = "sgld"`, `fct/sgld.py`). The `SGLD(params, lr, beta, member_axis=False, noise=torch.randn_like)` optimiser takes the full-batch
 Euler-Maruyama step `theta <- theta - lr * grad L + sqrt(2 * lr / beta) * N(0, I)` with `dt = lr`, where `L` is the
 unchanged `compute_loss`. Its stationary law is `p(theta) ~ exp(-beta L)` as `lr -> 0`; at finite `lr` the stationary
 variance on a quadratic of curvature `c` is `1 / (beta c (1 - lr c / 2))`. The noise is drawn from the global torch
-generator, whose state is checkpointed, so a resumed SGLD run equals an uninterrupted one exactly. `optimizer="adam"`
+generator (`noise=torch.randn_like`, injectable for tests), whose state is checkpointed, so a resumed SGLD run equals an uninterrupted one exactly; `member_axis=True` (ensembles) makes `last_msd` per member. `optimizer="adam"`
 (default) is unchanged. SGLD histories carry two extra per-logged-epoch keys: `grad_norm` (L2 norm of the full gradient of
 the step) and `param_msd` (squared displacement of the step, averaged over parameters; `param_msd / (2 lr)` is an
 effective temperature that tends to `1/beta` when the noise dominates the drift).
@@ -395,7 +437,7 @@ def make_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str,
 The docstring of `make_mir_monitor` owns the contract (the keys `MIR_MONITOR_KEYS`, their meaning and the settings
 used); `MIR_MONITOR_KEYS` is exported from `monitor.py`. One call runs the net on `dataset.x`, takes the rates phi(H)
 of every hidden layer and gets each layer's numbers from one `layer_mir_report` call. The history keys are
-`monitor_epoch` plus `monitor_<key>` for each of those keys, each a list over calls of lists over layers.
+`monitor_epoch` plus `monitor_<key>` for each of those keys, each a list over calls of lists over layers; for an ensemble, of lists over members of lists over layers (`train` calls the monitor on every member).
 
 Cost: per layer a call bins the rates once and makes 1 + `monitor_shuffles` mutual-information passes (the raw
 estimate plus one per shuffle, shared by the bias correction and the chance level), so it grows linearly with L,
@@ -831,7 +873,8 @@ fig_example_outputs(task, outputs, data_cfg, n_show=None) -> Figure
     # (grid size, n_motifs)
 ```
 
-History keys. `train.py` records `epoch`, `mse`, `weight_l2`, `rate_l2`, `loss` (lists of floats). The monitor adds
+History keys. `train.py` records `epoch`, `mse`, `weight_l2`, `rate_l2`, `loss` (lists of floats; an ensemble's carry a
+member axis, which `train.member_history` removes before plotting). The monitor adds
 `monitor_epoch` (list[int]) and `monitor_mir`, `monitor_mir_corrected`, `monitor_mir_chance`, `monitor_n_dead`,
 `monitor_n_dead_corrected`: lists over monitor calls of lists over layers. The result plot functions raise
 `ValueError` for a missing key (the message names it), an empty history, columns of different length, or a
@@ -1118,7 +1161,7 @@ periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post
 wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
 penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, fraction_floored, n_negative, cond_before, cond_after))
 build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
-weight_quadratic_form(W, M_rows, M_cols) -> Tensor        # tr(M_rows W M_cols W^T), any dtype/device; identity factors give W.square().sum() exactly
+weight_quadratic_form(W, M_rows, M_cols) -> Tensor        # tr(M_rows W M_cols W^T), any dtype/device; identity factors give W.square().sum() exactly; W (..., r, c) gives one value per matrix
 parameter_factors(spaces) -> {"U" | "J.k" | "V": (M_rows, M_cols)}   # factors of each MLP weight in its STORED orientation (V: (M_pre, M_post))
 data_kernel(psi (P, n_pre), K_pre (n_pre, n_pre)) -> (P, P)           # A = psi K_pre psi^T / n_pre: the data factor of the paper's Phi^{mu nu}_ij = K^post_ij A_{mu nu} (eq. phi-diagonalised); K_pre = I gives psi psi^T / n_pre
 spatial_kernel_pairs(A (P, P), K_post (n, n), trials) -> (S, S, n, n)   # block [s, t] = A[trials[s], trials[t]] * K_post; ValueError on non-square inputs and on trials empty or outside 0..P-1

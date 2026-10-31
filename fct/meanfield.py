@@ -65,7 +65,7 @@ from fct.hmc import (
     tilt_rule,
 )
 from fct.importance import ImportanceSampler
-from fct.model import MLP
+from fct.model import MLP, EnsembleMLP
 
 F64 = torch.float64
 CKPT_PREFIX, CKPT_WIDTH, FINAL_NAME = "ckpt_", 5, "final.pt"
@@ -1422,7 +1422,15 @@ def solve(
     runs after the step's history entry and before its checkpoint is written, so results are
     identical with and without it, except that the time it takes is charged to history["time"] of
     the following steps.  An exception it raises stops the solve.
+
+    `net` is a single network: TypeError for an ensemble (`fct.model.EnsembleMLP`); pass
+    one of its members (`net.member(b)`).
     """
+    if isinstance(net, EnsembleMLP):
+        raise TypeError(
+            f"the solver compares with one network, got an ensemble of B={net.B}; "
+            "pass one member (net.member(b))"
+        )
     if checkpoint_dir is not None and not config_hash:
         raise ValueError("checkpoint_dir needs a non-empty config_hash to guard against reuse")
     t_call = time.time()

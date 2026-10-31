@@ -50,7 +50,13 @@ from fct.sweep import (
     setting_status,
 )
 from fct.tasks import Dataset, resample
-from fct.train import compute_loss, load_trained, make_weight_penalty, prior_coefficient
+from fct.train import (
+    compute_loss,
+    load_trained,
+    make_weight_penalty,
+    prior_coefficient,
+    select_member,
+)
 
 Row = dict[str, object]
 
@@ -387,7 +393,8 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
 
     Read-only on ROOT: the training dataset is loaded from its cache (never generated), and
     the held-out data is built in memory. FileNotFoundError if the setting is not finished;
-    ValueError if its history lacks the loss curve or the MIR monitor entries.
+    ValueError if its history lacks the loss curve or the MIR monitor entries, or if the run
+    is an ensemble (net.B > 1; learning rates are tuned on single networks).
     """
     directory = setting_dir(root, setting)
     status = setting_status(root, sweep, setting)
@@ -403,7 +410,7 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
     cfg = _cpu_config(sweep, setting)
     device, dtype = resolve_device(cfg), resolve_dtype(cfg.dtype)
     train = get_dataset(directory, cfg)
-    net, history = load_trained(directory, cfg, device, dtype)
+    net, history = select_member(*load_trained(directory, cfg, device, dtype))
     missing = [k for k in REQUIRED_HISTORY if not history.get(k)]
     if missing:
         raise ValueError(

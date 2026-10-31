@@ -28,7 +28,7 @@ from fct.sweep import (
     setting_status,
     setting_statuses,
 )
-from fct.train import load_trained
+from fct.train import load_trained, select_member
 
 
 class GridSetting(NamedTuple):
@@ -83,14 +83,16 @@ def settings_table(root: Path) -> str:
     return "\n".join(rows)
 
 
-def load_grid_run(chosen: GridSetting) -> tuple[TrainRun, Dataset]:
+def load_grid_run(chosen: GridSetting, member: int | None = None) -> tuple[TrainRun, Dataset]:
     """The trained run of `chosen` and its test set: the 3^k latent-lattice points of the same
-    teacher. ValueError if the setting is not trained."""
+    teacher. ValueError if the setting is not trained. For an ensemble (net.B > 1) `member`
+    picks the network (and its history) and is required (`fct.train.select_member`)."""
     if chosen.status != "done":
         raise ValueError(f"setting {chosen.setting.axes} is not trained ({chosen.status})")
     cfg = chosen.cfg
-    net, history = load_trained(
-        chosen.directory, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype)
+    net, history = select_member(
+        *load_trained(chosen.directory, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype)),
+        member,
     )
     run = TrainRun(chosen.directory, get_dataset(chosen.directory, cfg), net, history)
     test = get_latent_lattice_dataset(chosen.directory, cfg)

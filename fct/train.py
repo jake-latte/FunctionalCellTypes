@@ -23,13 +23,16 @@ from fct.cache import (
 )
 from fct.config import Config, TrainConfig, resolve_device, resolve_dtype
 from fct.data import Dataset
-from fct.model import MLP, make_net
+from fct.model import MLP, EnsembleMLP, Net, make_net
 from fct.sgld import SGLD
 from fct.spatial import build_spaces, parameter_factors, weight_quadratic_form
 
-History = dict[str, list]  # monitor entries are lists over layers, the rest numbers
-Monitor = Callable[[MLP], dict[str, list]]
-WeightPenalty = Callable[[MLP], Tensor]  # the prior's quadratic form, before its coefficient
+# Monitor entries are lists over layers, the rest numbers; for an ensemble every entry but
+# `epoch` and `monitor_epoch` has a member axis first (see `train`).
+History = dict[str, list]
+Monitor = Callable[[MLP], dict[str, list]]  # always called on a single network
+# The prior's quadratic form, before its coefficient: 0-d for an MLP, (B,) for an ensemble.
+WeightPenalty = Callable[[Net], Tensor]
 MONITOR_PREFIX = "monitor_"  # history keys of monitor results: monitor_epoch, monitor_<key>
 MONITOR_EPOCH = f"{MONITOR_PREFIX}epoch"
 _HISTORY_KEYS = ("epoch", "mse", "weight_l2", "rate_l2", "loss")
@@ -52,14 +55,19 @@ def prior_coefficient(tc: TrainConfig) -> float:
 
 
 def compute_loss(
-    net: MLP,
+    net: Net,
     x: Tensor,
     y: Tensor,
     prior_coefficient: float,
     rate_lambda: float,
-    weight_penalty: WeightPenalty = MLP.weight_l2,
+    weight_penalty: WeightPenalty | None = None,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """0.5*N*mse + prior_coefficient*weight_l2 + rate_lambda*rate_l2, plus its parts.
+
+    For an ensemble every part is (B,), member b's own value, and the returned loss is the
+    SUM of the members' losses: member b's parameters enter only its own term, so the
+    gradient with respect to them is exactly that of its loss (not 1/B of it).
+    `weight_penalty` None is the net's own `weight_l2`.
 
     `prior_coefficient` multiplies the prior's quadratic form: callers pass
     `prior_coefficient(train_config)` (= weight_lambda / (2 beta)), never the raw
@@ -74,20 +82,32 @@ def compute_loss(
     sync every epoch, so the caller converts only when it logs.
     """
     h, z = net(x)
-    mse = (y - z).square().mean()
-    weight_l2 = weight_penalty(net)
-    rate_l2 = net.phi(h).square().sum()
+    mse = per_member(net, (y - z).square(), torch.mean)
+    rate_l2 = per_member(net, net.phi(h).square())
+    weight_l2 = (type(net).weight_l2 if weight_penalty is None else weight_penalty)(net)
+    if weight_l2.shape != mse.shape:
+        raise ValueError(
+            f"the weight penalty has shape {tuple(weight_l2.shape)} but the loss needs "
+            f"{tuple(mse.shape)} (one value per member for an ensemble)"
+        )
     loss = 0.5 * net.N * mse + prior_coefficient * weight_l2 + rate_lambda * rate_l2
     parts = {"mse": mse, "weight_l2": weight_l2, "rate_l2": rate_l2, "loss": loss}
-    return loss, {k: v.detach() for k, v in parts.items()}
+    return loss.sum(), {k: v.detach() for k, v in parts.items()}
 
 
-def spatial_weight_penalty(net: MLP, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor:
+def per_member(net: Net, t: Tensor, reduce: Callable[..., Tensor] = torch.sum) -> Tensor:
+    """`reduce` (sum, mean) of `t` over every axis but the net's member axis: 0-d for a
+    single network, (B,) for an ensemble, whose tensors carry the member axis first."""
+    return reduce(t, dim=tuple(range(net.member_axes, t.ndim)))
+
+
+def spatial_weight_penalty(net: Net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor:
     """Sum over the parameters of tr(M_rows P M_cols P^T), `factors[name] = (M_rows, M_cols)`
-    in each parameter's stored orientation (`fct.spatial.parameter_factors`). Summed in
-    parameter order like `MLP.weight_l2`, so identity factors reproduce it bit for bit."""
+    in each parameter's stored orientation (`fct.spatial.parameter_factors`); per member,
+    (B,), for an ensemble. Summed in parameter order like `MLP.weight_l2`, so identity
+    factors reproduce it bit for bit."""
     terms = [weight_quadratic_form(p, *factors[name]) for name, p in net.named_parameters()]
-    return torch.stack(terms).sum()
+    return torch.stack(terms).sum(0)
 
 
 def _check_sgld_step_resolves_the_prior(
@@ -116,15 +136,16 @@ def _check_sgld_step_resolves_the_prior(
         )
 
 
-def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty:
-    """The weight term `cfg` asks for: `MLP.weight_l2` without a spatial prior, else the
-    spatial prior with the penalty matrices built for `net`'s sizes (float64 on the CPU) and
-    then cast to its dtype and device. They are built here, once per run, and are not
-    parameters: a resumed run rebuilds the same matrices from the config. For SGLD it raises
-    if `train.lr` cannot resolve the prior (`_check_sgld_step_resolves_the_prior`).
+def make_weight_penalty(cfg: Config, net: Net) -> WeightPenalty:
+    """The weight term `cfg` asks for: the net's `weight_l2` (`MLP.weight_l2`, or
+    `EnsembleMLP.weight_l2` per member) without a spatial prior, else the spatial prior
+    (per member for an ensemble) with the penalty matrices built for `net`'s sizes (float64
+    on the CPU) and then cast to its dtype and device. They are built here, once per run, and
+    are not parameters: a resumed run rebuilds the same matrices from the config. For SGLD it
+    raises if `train.lr` cannot resolve the prior (`_check_sgld_step_resolves_the_prior`).
     """
     if cfg.spatial is None:
-        return MLP.weight_l2
+        return type(net).weight_l2
     spaces = build_spaces(cfg.spatial, m=net.D_in, N=net.N, L=net.L, n_out=net.D_out)
     factors64 = parameter_factors(spaces)
     names = {name for name, _ in net.named_parameters()}
@@ -173,7 +194,7 @@ def _optim_from_saved(state: dict) -> dict:
     return {**state, "state": {int(i): v for i, v in state["state"].items()}}
 
 
-def _payload(net: MLP, optim: torch.optim.Optimizer, history: History, epoch: int) -> dict:
+def _payload(net: Net, optim: torch.optim.Optimizer, history: History, epoch: int) -> dict:
     """`epoch` is the next epoch to run."""
     return {
         "epoch": epoch,
@@ -198,7 +219,7 @@ def _load_payload(path: Path, cfg: Config, device: torch.device) -> dict:
 
 
 def _restore(
-    path: Path, cfg: Config, net: MLP, optim: torch.optim.Optimizer
+    path: Path, cfg: Config, net: Net, optim: torch.optim.Optimizer
 ) -> tuple[int, History, str | None]:
     """Load a checkpoint into `net` and `optim`; return next epoch, history, RNG note."""
     payload = _load_payload(path, cfg, net.device)
@@ -211,43 +232,60 @@ def _restore(
     return payload["epoch"], payload["history"], note
 
 
-def _log_line(epoch: int, n_epochs: int, parts: dict[str, float]) -> str:
-    return (
-        f"[{epoch:05d}/{n_epochs:05d}] mse={parts['mse']:.4f} "
-        f"weight penalty={parts['weight_l2']:.4f} rate L2={parts['rate_l2']:.4f} "
-        f"loss={parts['loss']:.4f}"
+def _log_line(epoch: int, n_epochs: int, parts: dict[str, float | list[float]]) -> str:
+    """One line per logged epoch; for an ensemble the mean over members with (min..max)."""
+    labels = {"mse": "mse", "weight_l2": "weight penalty", "rate_l2": "rate L2", "loss": "loss"}
+    head = f"[{epoch:05d}/{n_epochs:05d}]"
+    if not isinstance(parts["loss"], list):
+        return f"{head} " + " ".join(f"{label}={parts[k]:.4f}" for k, label in labels.items())
+
+    def summary(values: list[float]) -> str:
+        mean = sum(values) / len(values)
+        return f"{mean:.4f} ({min(values):.4f}..{max(values):.4f})"
+
+    B = len(parts["loss"])
+    return f"{head} B={B} mean (min..max): " + " ".join(
+        f"{label}={summary(parts[k])}" for k, label in labels.items()
     )
+
+
+def _to_host(value: Tensor) -> float | list[float]:
+    """A logged part as a number, or for an ensemble a list over members."""
+    return value.item() if value.ndim == 0 else value.tolist()
 
 
 def _history_keys(optimizer: str) -> tuple[str, ...]:
     return _HISTORY_KEYS + (_SGLD_KEYS if optimizer == "sgld" else ())
 
 
-def _record(history: History, epoch: int, parts: dict[str, float]) -> None:
+def _record(history: History, epoch: int, parts: dict[str, float | list[float]]) -> None:
     history["epoch"].append(epoch)
     for key, value in parts.items():
         history[key].append(value)
 
 
-def _make_optimiser(net: MLP, tc: TrainConfig) -> torch.optim.Optimizer:
+def _make_optimiser(net: Net, tc: TrainConfig) -> torch.optim.Optimizer:
     if tc.optimizer == "sgld":
-        return SGLD(net.parameters(), lr=tc.lr, beta=tc.beta)
+        member_axis = net.member_axes == 1
+        return SGLD(net.parameters(), lr=tc.lr, beta=tc.beta, member_axis=member_axis)
+    # Adam's moments are elementwise, so the members of an ensemble do not interact.
     return torch.optim.Adam(net.parameters(), lr=tc.lr)
 
 
-def _grad_norm(net: MLP) -> Tensor:
-    return torch.sqrt(sum(p.grad.square().sum() for p in net.parameters()))
+def _grad_norm(net: Net) -> Tensor:
+    """L2 norm of the full gradient; (B,), each member's, for an ensemble."""
+    return torch.sqrt(sum(per_member(net, p.grad.square()) for p in net.parameters()))
 
 
 def _step(
-    net: MLP,
+    net: Net,
     optim: torch.optim.Optimizer,
     dataset: Dataset,
     tc: TrainConfig,
     weight_penalty: WeightPenalty,
 ) -> dict[str, Tensor]:
     """One full-batch optimiser step; returns the loss parts from before the step (for SGLD
-    also the gradient norm and the step's mean squared displacement)."""
+    also the gradient norm and the step's mean squared displacement), (B,) for an ensemble."""
     optim.zero_grad()
     loss, parts = compute_loss(
         net, dataset.x, dataset.y, prior_coefficient(tc), tc.rate_lambda, weight_penalty
@@ -293,29 +331,49 @@ def _record_monitor(history: History, epoch: int, result: dict[str, list]) -> No
         history.setdefault(f"{MONITOR_PREFIX}{key}", []).append(value)
 
 
-def _call_monitor(monitor: Monitor, net: MLP) -> dict[str, list]:
+def _monitor_members(monitor: Monitor, net: EnsembleMLP) -> dict[str, list]:
+    """`monitor` on every member, merged into one result whose values are lists over members."""
+    results = [monitor(net.member(b)) for b in range(net.B)]
+    keys = set(results[0])
+    for b, result in enumerate(results):
+        if set(result) != keys:
+            raise ValueError(
+                f"monitor returned keys {sorted(result)} for member {b}, "
+                f"{sorted(keys)} for member 0"
+            )
+    return {key: [result[key] for result in results] for key in results[0]}
+
+
+def _call_monitor(monitor: Monitor, net: Net) -> dict[str, list]:
     """Run `monitor` without gradients and without advancing the global RNG: the training
-    stream must not depend on whether, or how often, the net is being monitored."""
+    stream must not depend on whether, or how often, the net is being monitored. An ensemble
+    is monitored member by member, which puts a member axis first in every value."""
     cuda = [net.device] if net.device.type == "cuda" else []
     with torch.no_grad(), torch.random.fork_rng(devices=cuda):
+        if isinstance(net, EnsembleMLP):
+            return _monitor_members(monitor, net)
         return monitor(net)
 
 
-def _check_net_matches_config(net: MLP, cfg: Config) -> None:
+def _check_net_matches_config(net: Net, cfg: Config) -> None:
     if net.dtype != resolve_dtype(cfg.dtype):
         raise ValueError(f"net dtype {net.dtype} does not match config dtype {cfg.dtype!r}")
     if net.device.type != resolve_device(cfg).type:
         raise ValueError(f"net is on {net.device} but the config resolves to {resolve_device(cfg)}")
+    if net.B != cfg.net.B:
+        raise ValueError(
+            f"the net is an ensemble of B={net.B} but the config has net.B={cfg.net.B}"
+        )
 
 
 def train(
     cfg: Config,
     dataset: Dataset,
-    net: MLP,
+    net: Net,
     cache_dir: Path,
     log: Callable[[str], None] = print,
     monitor: Monitor | None = None,
-) -> tuple[MLP, History]:
+) -> tuple[Net, History]:
     """Train `net` in place on the full dataset (Adam or SGLD, `train.optimizer`) with the
     weight penalty of `make_weight_penalty`; resume from the latest checkpoint if any.
 
@@ -329,6 +387,12 @@ def train(
     step, and once more after the last step (e = n_epochs). Its results enter the history as
     `monitor_epoch` and `monitor_<key>`. A checkpoint therefore never holds the entry of the
     epoch it is written at; the resumed run records it, so resuming reproduces the history.
+
+    An ensemble (`EnsembleMLP`, cfg.net.B > 1) trains on the sum of its members' losses, so
+    each member follows exactly its own gradient (`compute_loss`); every logged part is then
+    a list over members, and the monitor runs on each member (`net.member(b)`), so each
+    `monitor_<key>` entry is a list over members of what the monitor returned. `epoch` and
+    `monitor_epoch` have no member axis. `select_member` extracts one member's history.
     """
     _check_net_matches_config(net, cfg)
     _check_monitor_matches_config(cfg, monitor)
@@ -364,7 +428,7 @@ def train(
             _record_monitor(history, epoch, _call_monitor(monitor, net))
         parts = _step(net, optim, dataset, tc, weight_penalty)
         if epoch % tc.log_int == 0:
-            values = {k: v.item() for k, v in parts.items()}
+            values = {k: _to_host(v) for k, v in parts.items()}
             _record(history, epoch, values)
             log(_log_line(epoch, tc.n_epochs, values))
 
@@ -380,7 +444,7 @@ def train_from_config(
     cache_dir: Path,
     log: Callable[[str], None] = print,
     monitor: Monitor | None = None,
-) -> tuple[MLP, History]:
+) -> tuple[Net, History]:
     """Build the net the config describes for `dataset` and `train` it (see `train`).
 
     The one place that turns a config and a dataset into a net, so the CLI and the sweep
@@ -396,17 +460,19 @@ def train_from_config(
     return train(cfg, dataset, net, cache_dir, log=log, monitor=monitor)
 
 
-def _net_from_payload(payload: dict, cfg: Config, device: torch.device, dtype: torch.dtype) -> MLP:
+def _net_from_payload(payload: dict, cfg: Config, device: torch.device, dtype: torch.dtype) -> Net:
     state = payload["net_state_dict"]
-    net = make_net(cfg.net, state["U"].shape[1], state["V"].shape[1], device, dtype)
+    # The last axis is D_in / D_out for a single net (N, D) and an ensemble (B, N, D) alike.
+    net = make_net(cfg.net, state["U"].shape[-1], state["V"].shape[-1], device, dtype)
     net.load_state_dict(state)
     return net
 
 
 def load_trained(
     cache_dir: Path, cfg: Config, device: torch.device, dtype: torch.dtype
-) -> tuple[MLP, History]:
-    """Rebuild the trained net and its history from `final.pt`."""
+) -> tuple[Net, History]:
+    """Rebuild the trained net and its history from `final.pt`: an `EnsembleMLP` and an
+    ensemble history when cfg.net.B > 1 (`select_member` picks one network)."""
     if dtype != resolve_dtype(cfg.dtype):
         raise ValueError(f"dtype {dtype} does not match config dtype {cfg.dtype!r}")
     final = cache_paths(cache_dir).train / "final.pt"
@@ -414,6 +480,38 @@ def load_trained(
         raise FileNotFoundError(f"no trained model at {final}; run training first")
     payload = _load_payload(final, cfg, device)
     return _net_from_payload(payload, cfg, device, dtype), payload["history"]
+
+
+# History keys without a member axis in an ensemble history.
+_SHARED_KEYS = ("epoch", MONITOR_EPOCH)
+
+
+def member_history(history: History, member: int) -> History:
+    """Member `member`'s history from an ensemble's: every entry but `epoch` and
+    `monitor_epoch` indexed by the member, which gives a single network's history."""
+    return {
+        key: list(values) if key in _SHARED_KEYS else [entry[member] for entry in values]
+        for key, values in history.items()
+    }
+
+
+def select_member(net: Net, history: History, member: int | None = None) -> tuple[MLP, History]:
+    """One network of a trained run and its history, for readers that analyse one network.
+
+    A single network passes through unchanged (`member` None or 0). An ensemble needs an
+    explicit `member` (ValueError otherwise), so no reader ever looks at member 0 without
+    being asked to; IndexError for a member out of range.
+    """
+    if isinstance(net, MLP):
+        if member not in (None, 0):
+            raise IndexError(f"member {member} out of range for a single network (B=1)")
+        return net, history
+    if member is None:
+        raise ValueError(
+            f"the run is an ensemble of B={net.B} networks and this reader takes one; "
+            "select a member"
+        )
+    return net.member(member), member_history(history, member)
 
 
 # What torch.load, `_load_payload` and `load_state_dict` raise for a truncated, foreign or
@@ -438,7 +536,7 @@ def _read_latest(train_dir: Path, cfg: Config, device: torch.device) -> tuple[Pa
 
 def load_latest_checkpoint(
     cache_dir: Path, cfg: Config, device: torch.device, dtype: torch.dtype
-) -> tuple[MLP, History, int]:
+) -> tuple[Net, History, int]:
     """Read-only: the net, history and epoch reached (epochs completed) of the latest
     checkpoint, for looking at a run that is still going.
 

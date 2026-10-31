@@ -350,14 +350,15 @@ def build_spaces(cfg: SpatialConfig, m: int, N: int, L: int, n_out: int) -> list
 def weight_quadratic_form(
     W: torch.Tensor, M_rows: torch.Tensor, M_cols: torch.Tensor
 ) -> torch.Tensor:
-    """tr(M_rows W M_cols W^T) = sum_{i,a,j,b} W_ia (M_rows)_ij (M_cols)_ab W_jb for W (r, c).
+    """tr(M_rows W M_cols W^T) = sum_{i,a,j,b} W_ia (M_rows)_ij (M_cols)_ab W_jb for W (r, c);
+    for W (..., r, c) with leading batch axes (an ensemble's members), one value per matrix.
 
     This is vec(W)^T (M_rows (x) M_cols) vec(W) with vec row-major, without forming the
     (r c, r c) Kronecker matrix. With identity factors it is exactly W.square().sum(): the
     products by 1 and sums with 0 are exact, so no round-off separates it from the L2 norm.
     Works in any dtype and on any device (the factors must match W's).
     """
-    return ((M_rows @ W @ M_cols) * W).sum()
+    return ((M_rows @ W @ M_cols) * W).sum(dim=(-2, -1))
 
 
 # --------------------------------------------------------------------------- kernels over samples

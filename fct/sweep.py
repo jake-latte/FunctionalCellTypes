@@ -844,11 +844,18 @@ def run_setting(
     with the trained net if there is one (see `_solve_setting`).
 
     StaleCacheError if the stage was finished under another config or loss definition: its
-    results would silently stand in for a run of the current one."""
+    results would silently stand in for a run of the current one. SweepError for the solve
+    stage of an ensemble setting (net.B > 1), before anything is written, whether or not it is
+    trained yet: the solve compares with one trained network."""
     _check_stage(stage)
     setting = get_setting(sweep, index)
     directory = setting_dir(root, setting)
     cfg = setting_config(sweep, setting)
+    if stage == "solve" and cfg.net.B > 1:
+        raise SweepError(
+            f"setting {index}: the solve compares with one trained network, but the setting "
+            f"is an ensemble of net.B={cfg.net.B}; solving ensembles is not supported"
+        )
     _write_config_once(cfg, directory)
     _write_setting_once(sweep, setting, directory)
     status = setting_status(root, sweep, setting, stage)
@@ -898,8 +905,8 @@ def _solve_setting(
     """Solve the setting's saddle point. The trained net, if train/final.pt exists, adds the
     comparison with the net to the history; without one the solve runs on its own. The choice
     is fixed when a solve starts: resuming a checkpoint needs the same (SweepError otherwise,
-    see `_check_checkpoint_matches_net`). An InadequateSamplerError propagates and leaves no
-    final.pt."""
+    see `_check_checkpoint_matches_net`). `run_setting` refuses ensembles (net.B > 1) before
+    this. An InadequateSamplerError propagates and leaves no final.pt."""
     net = None
     if (cache_paths(directory).train / "final.pt").exists():
         net, _ = load_trained(directory, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype))

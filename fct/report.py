@@ -65,7 +65,7 @@ from fct.sweep import (
     setting_dir,
     setting_status,
 )
-from fct.train import History, load_latest_checkpoint, load_trained
+from fct.train import History, load_latest_checkpoint, load_trained, select_member
 
 ROOT_ENV = "FCT_SWEEP_ROOT"
 N_EXAMPLES = 6  # examples loaded per setting; fig_example_outputs draws up to its per-task default
@@ -299,6 +299,7 @@ def _load_partial(directory: Path, relative: Path, setting: Setting, cfg: Config
         net, history, epoch = load_latest_checkpoint(directory, cfg, cpu, dtype)
     except (OSError, ValueError) as err:
         return _not_shown(setting, relative, f"checkpoint not shown: {err}")
+    net, history = select_member(net, history)  # an ensemble raises: the report takes one net
     return _with_data(setting, "partial", relative, cfg, net, history, dataset, epoch)
 
 
@@ -312,7 +313,8 @@ def load_setting_result(root: Path, sweep: SweepConfig, setting: Setting) -> Set
     setting whose dataset or other artefacts do not match the sweep config raises; for a partial
     one an unreadable or stale dataset or checkpoint file is reported in `note` instead, since its
     checkpoint may be replaced by a running job at any moment. Other exceptions (from the
-    model code) propagate: they are bugs, not bad files."""
+    model code) propagate: they are bugs, not bad files. An ensemble run (net.B > 1) raises
+    ValueError (`fct.train.select_member`): the report shows one network per setting."""
     directory = setting_dir(root, setting)
     relative = directory.relative_to(root)
     status = setting_status(root, sweep, setting)
@@ -327,7 +329,9 @@ def load_setting_result(root: Path, sweep: SweepConfig, setting: Setting) -> Set
     if missing:
         return missing
     dataset = get_dataset(directory, cfg)
-    net, history = load_trained(directory, cfg, torch.device("cpu"), resolve_dtype(cfg.dtype))
+    net, history = select_member(
+        *load_trained(directory, cfg, torch.device("cpu"), resolve_dtype(cfg.dtype))
+    )
     return _with_data(setting, status, relative, cfg, net, history, dataset, cfg.train.n_epochs)
 
 

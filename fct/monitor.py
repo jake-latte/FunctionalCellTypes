@@ -2,7 +2,9 @@
 
 `make_mir_monitor` binds a dataset and a config into a function `net -> dict` that
 `fct.train.train` calls during training. Each value is a list over hidden layers, so the
-history holds, per key, a list over monitor calls of lists over layers.
+history holds, per key, a list over monitor calls of lists over layers. The monitor always
+sees a single network: `train` calls it on every member of an ensemble (net.B > 1), which
+puts a member axis between the calls and the layers.
 """
 
 from collections.abc import Callable

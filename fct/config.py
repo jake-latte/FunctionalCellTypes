@@ -93,6 +93,10 @@ class NetConfig(StrictModel):
     g: PosFloat = 1.0
     phi: Phi = "relu"
     seed: int = 0
+    # Ensemble size: B > 1 trains B non-interacting copies of the network in one run
+    # (`fct.model.EnsembleMLP`); they share the data and differ in initial weights and SGLD
+    # noise. B enters the hash only when it is not 1, so single-network caches keep theirs.
+    B: PosInt = 1
 
 
 class TrainConfig(StrictModel):
@@ -388,13 +392,12 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections,
-        `LOSS_VERSION` when "train" is, and
-        `train.optimizer` / `train.beta` are left out of the hash for the adam optimiser. The
-        `spatial` section enters with "train" only when it is set (without its `lambda_max` while that
-        is None), so runs without a spatial
-        prior keep the hashes they had before the section existed. The meanfield section
-        enters as `MeanFieldConfig.hash_payload()`, not as its dump.
+        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and
+        `LOSS_VERSION` when "train" is. `train.optimizer` / `train.beta` are left out of the
+        hash for the adam optimiser, and `net.B` when it is 1. The `spatial` section enters
+        with "train" only when it is set (without its `lambda_max` while that is None), so runs
+        without a spatial prior keep the hashes they had before the section existed. The
+        meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
@@ -407,6 +410,8 @@ class Config(StrictModel):
             hashed["meanfield"] = self.meanfield.hash_payload()
         if "net" in sections:  # the forward pass belongs to the net section
             hashed["model_version"] = MODEL_VERSION
+            if self.net.B == 1:  # a single network hashes as before the ensemble size existed
+                del hashed["net"]["B"]
         if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes
