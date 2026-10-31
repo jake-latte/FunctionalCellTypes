@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: simple
-status: todo
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -51,3 +51,12 @@ Changes from spatial_grid.ipynb (PI's list, 2026-10-31):
   notebook; N_EIG and N_NEURONS truncate).
 - README notebook table lists it; the `phase_transition` preset paragraph points at it.
 - No existing .ipynb changes.
+
+## Leftovers after review (not blocking)
+- Two seeded mutations the tests miss: the tuning shuffle seed (the wiring session uses the raw
+  MIR, which has no shuffles), and an overlap colour limit taken from one view only (the test
+  checks the limits are equal, not that they cover both maxima).
+- Cosmetic: spectra legends overlap a few points near j = 8-10; the example-output legend
+  touches a target marker; a missing comma in the README notebook paragraph.
+- The member's tuning view is recomputed in the notebook (MemberView keeps only overlaps).
+- Open for the PI: default NEURON_PICK ("first", the literal request, or "spread").

@@ -39,7 +39,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
-| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_grid.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
+| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_grid.py`, `build_phase_transition_grid.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
 | `jobs/fct_sweep.sh` | SLURM array script for the sweep (train stage) |
 | `jobs/fct_solve.sh` | the same array job at the solve stage (mean-field saddle points) |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
@@ -97,7 +97,7 @@ both sides of the hidden kernel; N 512, P 128, weight_lambda 20, otherwise as `s
 min_rel_eig floor 1e-2 x lambda_max(K), which grows with the length scale, so the mean hidden prior variance
 diag(M^-1) is 1.62 / 2.26 / 2.90 / 3.54 for 0.05 / 0.1 / 0.15 / 0.2: the length-scale axis is confounded with
 prior strength).
-Preset `phase_transition` (20 settings: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9, 0.99}; linear (phi id), L = 1, weight_lambda 1, random embeddings of length scale 0.15 for every population, an ensemble of B = 8 per setting via a one-value `net.B` axis; otherwise as `spatial_grid`). It has no results reader or solve stage yet: the readers refuse B > 1 and need `net.L`, `net.phi` and `rate_lambda` axes. At 250 000 epochs the settings with lambda_max >= 0.5 are not fully stationary from the initial N(0, 1) weights (the softest prior mode relaxes on about 2e6 lambda_max^2 epochs). A directory name shows a dict-valued axis value as a short
+Preset `phase_transition` (20 settings: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9, 0.99}; linear (phi id), L = 1, weight_lambda 1, random embeddings of length scale 0.15 for every population, an ensemble of B = 8 per setting via a one-value `net.B` axis; otherwise as `spatial_grid`). Its results notebook is `notebooks/phase_transition_grid.ipynb` (`fct/phase_view.py`, built by `notebooks/build_phase_transition_grid.py`; see below); it has no solve stage yet, and the modularity readers (`fct.report`) refuse B > 1 and need `net.L`, `net.phi` and `rate_lambda` axes. At 250 000 epochs the settings with lambda_max >= 0.5 are not fully stationary from the initial N(0, 1) weights (the softest prior mode relaxes on about 2e6 lambda_max^2 epochs). A directory name shows a dict-valued axis value as a short
 hash. The mean-field solver knows only the iid prior, so `sweep run --stage solve` on a spatial setting fails with its
 one-line message. `net.phi` is one of `tanh`, `relu`, `sigmoid` or `id` (phi(h) = h: a linear network);
 the presets keep their activations, and an `id` grid is `--axis 'net.phi=["tanh","relu","id"]'`.
@@ -218,6 +218,13 @@ notebook's (`build_spatial_grid.py` imports them), so both build the same figure
 uv run python notebooks/build_spatial_grid.py ROOT --set 'SETTING={"net.N": 256}'   # execute -> tmp/spatial_grid.ipynb
 uv run python notebooks/build_spatial_grid.py ROOT --set 'SETTING={"net.N": 8}' --set DEVICE=\'cuda\'
 uv run python notebooks/build_spatial_grid.py --no-execute                          # rebuild the committed source notebook
+```
+
+**Phase-transition-grid notebook** (`phase_transition_grid.ipynb`; the viewer for the `phase_transition` preset, an ensemble of B networks per setting; not the lambda_grid viewer `phase_transition.ipynb`). Give the sweep ROOT and the axis values of one setting, `SETTING = {"spatial.d": 2, "spatial.lambda_max": 0.5}`, and the parameters `MEMBER` (the member of the single-network figures), `SORT_DIM` (every unit ordering uses this coordinate of the random embedding; with d > 1 it is one coordinate, not a ring position, and out of range raises), `P_TEST` (size of the fresh random test set of the tuning and information/rate overlaps; the data kernels A keep the 3^k latent lattice), `N_EIG` (spectra truncation) `N_NEURONS` with `NEURON_PICK` (the tuning figure shows the `"first"` N_NEURONS in SORT_DIM order, or `"spread"` evenly along it) and `N_OUTPUT_DIMS` (output dimensions drawn in the example panels). It draws, for the prior, the covariance K / lambda_w, the effective (floored) covariance the nets were trained under and the penalty lambda_w M side by side, and their spectra with the floor; the loss curves as mean +- sem over members; every member's example outputs on the same axes (one palette colour each, at most the palette's ten, a subset of the output dimensions); and, for member `MEMBER` and for the ensemble average, the trained weight kernels, the data kernels A and the overlaps (the average overlap is the mean over members of each member's overlap). The first-layer weight image and the trial and pair grids of the spatial notebook are not drawn. A setting that is not trained gets only its prior; a partly trained one is drawn from its latest checkpoint, and every figure title says so (PROVISIONAL, with the epoch reached). Logic is in `fct/phase_view.py`; only the source notebook is committed.
+
+```sh
+uv run python notebooks/build_phase_transition_grid.py ROOT --set 'SETTING={"spatial.d": 2}' --set MEMBER=1   # execute -> tmp/phase_transition_grid.ipynb
+uv run python notebooks/build_phase_transition_grid.py --no-execute                                          # rebuild the committed source notebook
 ```
 
 ## Python library: single runs and the mean-field solver
