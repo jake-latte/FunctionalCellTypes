@@ -43,6 +43,7 @@ CPU, F64 = torch.device("cpu"), torch.float64
 N_PRIOR_FIGURES = 2 + 2
 N_FIGURES = N_PRIOR_FIGURES + 1 + 1 + 2 + 2 + 1 + 2
 GUARDED_CELLS = 7  # trained-only code cells: loss, examples, kernels, A, tuning, overlaps, + loader
+N_LATENTS = _tiny_sweep().linear_teacher.n_latents
 PARAMETERS = {"MEMBER": 1, "SORT_DIM": 1, "P_TEST": 40, "N_EIG": 3, "N_NEURONS": 4}
 
 
@@ -158,7 +159,7 @@ def test_prior_matrices_are_drawn_in_the_given_unit_order(draw, spaces):
     prior = layer_priors(spaces, 1.0, n_eig=3)[0]
     order_post, order_pre = np.array([5, 4, 3, 2, 1, 0]), np.arange(8)[::-1].copy()
     fig = draw["plot_prior_matrices"](prior, spaces[0], order_post, order_pre, 0)
-    first_row = [ax for ax in _visible(fig) if "covariance" in ax.get_title()][0]
+    first_row = next(ax for ax in _visible(fig) if "covariance" in ax.get_title())
     shown = first_row.images[0].get_array()
     expected = prior.covariance.pre.numpy()[np.ix_(order_pre, order_pre)]
     assert np.allclose(np.asarray(shown), expected)
@@ -211,7 +212,7 @@ def test_loss_curves_are_the_member_mean_with_a_sem_band(draw):
     band = ax.collections[0].get_paths()[0].vertices[:, 1]
     sem = members.std(axis=1, ddof=1) / np.sqrt(2)
     assert np.isclose(band.max(), (mean + sem).max()) and np.isclose(band.min(), (mean - sem).min())
-    assert "mean" in ax.get_title() and "sem" in ax.get_title()
+    assert "mean" in ax.get_ylabel() and "sem" in ax.get_ylabel()
 
 
 # ---------------------------------------------------------------- change 8: example outputs
@@ -231,7 +232,10 @@ def test_example_outputs_draw_every_member_in_its_own_palette_colour(draw, ensem
     }
     assert drawn == {mpl.colors.to_hex(colours[b]) for b in range(3)}
     scatter = {
-        mpl.colors.to_hex(c.get_facecolor()[0]) for ax in fig.axes for c in ax.collections
+        mpl.colors.to_hex(c.get_facecolor()[0])
+        for ax in fig.axes
+        for c in ax.collections
+        if isinstance(c, mpl.collections.PathCollection)
     }
     assert {mpl.colors.to_hex(colours[b]) for b in range(3)} <= scatter
 
@@ -285,7 +289,7 @@ def test_tuning_draws_only_the_neurons_it_is_given_in_that_order(draw, shown):
     fig = draw["plot_tuning_by_order"](view, positions, order, 1, 4, 0.8)
     titles = [ax.get_title() for ax in fig.axes if ax.get_visible() and ax.get_title()]
     assert len(titles) == shown
-    assert [int(t.split()[1]) for t in titles] == order.tolist()
+    assert [int(t.split()[1].rstrip(",")) for t in titles] == order.tolist()
     assert all("coordinate 1" in t for t in titles)
 
 
@@ -302,9 +306,16 @@ def test_overlaps_are_shown_in_the_given_order_and_labelled_with_it(draw):
     assert left.get_xlabel() == "neuron, by x"
 
 
+def _markdown(nb) -> str:
+    """All the markdown, lower-cased with line breaks collapsed, for phrase searches."""
+    return " ".join(
+        " ".join(c.source.split()) for c in nb.cells if c.cell_type == "markdown"
+    ).lower()
+
+
 def test_the_text_says_a_sorted_coordinate_is_not_a_ring_position():
     nb = build_notebook()
-    text = " ".join(c.source for c in nb.cells if c.cell_type == "markdown")
+    text = _markdown(nb)
     assert "not a ring position" in text and "general distance measures come later" in text
     assert "position_order(" not in _code(nb)  # no view sorts by ring position
     assert "unit_order(" in _code(nb)
@@ -314,14 +325,12 @@ def test_the_text_says_a_sorted_coordinate_is_not_a_ring_position():
 
 
 def test_text_says_the_overlap_average_is_the_mean_of_the_members_overlaps():
-    nb = build_notebook()
-    text = " ".join(c.source for c in nb.cells if c.cell_type == "markdown")
+    text = _markdown(build_notebook())
     assert "mean over members of each member's own overlap" in text
 
 
 def test_text_names_the_palette_limit_of_the_example_outputs():
-    nb = build_notebook()
-    text = " ".join(c.source for c in nb.cells if c.cell_type == "markdown")
+    text = _markdown(build_notebook())
     assert "at most as many members as the palette has colours" in text
 
 
@@ -339,7 +348,7 @@ def root(tmp_path_factory):
 
 
 def _execute(root: Path, setting: dict, **parameters):
-    overrides = {"SETTING": setting, **{**PARAMETERS, **parameters}}
+    overrides = {"SETTING": setting, **PARAMETERS, **parameters}
     return execute_notebook(build_notebook(), root, overrides, root_name="ROOT")
 
 
@@ -362,7 +371,7 @@ def test_executes_on_a_trained_setting_and_draws_every_figure(trained):
 def test_tuning_and_mir_use_a_fresh_random_test_set_of_p_test_points(trained):
     text = _text_outputs(trained)
     assert "random test set: 40 points" in text
-    assert "lattice test set: 9 points" in text  # A keeps the latent lattice, 3^k with k = 2
+    assert f"lattice test set: {3**N_LATENTS} points" in text
     assert "P = 40," in text  # the plug-in bias line of the tuning section uses P_TEST
 
 
@@ -383,9 +392,7 @@ def test_a_and_overlap_figures_come_for_the_member_and_for_the_average(trained):
     assert all("MEMBER_VIEW" in s for s in overlap + kernels)
     # member + average: two figures per hidden layer for the overlaps, two for A
     per_cell = {
-        s: sum(
-            "image/png" in o.get("data", {}) for o in c.get("outputs", [])
-        )
+        s: sum("image/png" in o.get("data", {}) for o in c.get("outputs", []))
         for c in trained.cells
         if c.cell_type == "code"
         for s in [c.source]
@@ -426,5 +433,5 @@ def test_a_partly_trained_setting_is_drawn_and_labelled_provisional(root, tmp_pa
     (setting_dir(copy, expand(_tiny_sweep())[0]) / "train" / "final.pt").unlink()
     nb = _execute(copy, {"spatial.d": 2})
     text = _text_outputs(nb)
-    assert "ERROR" not in text and "provisional" in text
+    assert "ERROR" not in text and "provisional" in text.lower()
     assert _n_figures_in(nb) == N_FIGURES
