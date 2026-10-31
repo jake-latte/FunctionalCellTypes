@@ -327,6 +327,30 @@ def test_sgld_training_steps_with_the_spatial_prior_equal_separate_members():
     assert prior_coefficient(tc) > 0  # the prior is in the loss
 
 
+def _lambda_max_config(B: int) -> Config:
+    """The pinned SGLD run with every kernel scaled to top eigenvalue lambda_max (random
+    embeddings, unit amplitudes, weight_lambda 1)."""
+    cfg = pinned_config("sgld", B=B)
+    spatial = cfg.spatial.model_copy(update={"lambda_max": 0.5})
+    train = cfg.train.model_copy(update={"weight_lambda": 1.0})
+    return Config.model_validate(
+        {**cfg.model_dump(), "spatial": spatial.model_dump(), "train": train.model_dump()}
+    )
+
+
+def test_an_ensemble_trains_under_lambda_max_with_member_penalties(tmp_path):
+    cfg = _lambda_max_config(3)
+    assert cfg.spatial.lambda_max == 0.5 and cfg.spatial.input.embedding.kind == "random"
+    ds, ens = _setup(cfg)
+    ens, history = train(cfg, ds, ens, tmp_path, **QUIET)
+    assert all(len(entry) == 3 for entry in history["weight_l2"])
+    assert torch.isfinite(torch.tensor(history["loss"])).all()
+    per_member = make_weight_penalty(cfg, ens)(ens)
+    single = make_weight_penalty(_lambda_max_config(1), ens.member(0))
+    for b in range(3):
+        torch.testing.assert_close(per_member[b], single(ens.member(b)), rtol=1e-13, atol=0)
+
+
 def test_sgld_member_noises_are_independent():
     """Zero gradients: one step moves each parameter by its noise alone. The empirical
     correlation of two members' noises over n entries has standard error 1 / sqrt(n)."""
