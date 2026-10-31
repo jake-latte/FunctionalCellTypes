@@ -1,6 +1,7 @@
-"""Build and execute `phase_transition.ipynb`, the results notebook of a phase-transition sweep.
+"""Build and execute `phase_transition.ipynb`, the phase-transition notebook, the results viewer
+of a `lambda_grid` sweep.
 
-One viewer for a sweep made with `--preset phase_transition`: pick a setting by (L, phi,
+One viewer for a sweep made with `--preset lambda_grid`: pick a setting by (L, phi,
 lambda_r, lambda_w) and see its loss curves, example outputs, MIR over training and the tuning
 curves of its neurons; then the MIR of the whole grid as one heat-map per hidden layer and as a
 scatter against lambda_r / lambda_w. All logic is in `fct.grid_view` and `fct.report`; each cell

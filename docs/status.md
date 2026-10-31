@@ -52,7 +52,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
   (`fct.meanfield.network_constants`): `prior_scale = 1/weight_lambda`, `alpha = weight_lambda P d_out / beta`,
   `rate_tilt = 2 beta rate_lambda`, `learning_prefactor = weight_lambda/2`, `beta = train.beta` (SGLD) or 1 (Adam); explicit
   `MeanFieldConfig` fields win. All four are exact for SGLD (a test on the exemplar's weight variance per beta, and one on `run_meanfield`'s defaults with the
-  library's own `meanfield.beta = None`, which follows `train.beta`, or 1 under Adam). Every earlier mean-field result is stale. Still open: the `phase_transition` preset's `weight_lambda` axis
+  library's own `meanfield.beta = None`, which follows `train.beta`, or 1 under Adam). Every earlier mean-field result is stale. Still open: the `lambda_grid` preset's `weight_lambda` axis
   (log-spaced 1e-6..1) was not rescaled.
 - **Relu tilt rule (PI confirmed the item 2026-10-29; the PM chose the option; `relu-tilt-rule`).** For relu the tilt
   projection enforces positive definiteness of Sigma^-1 + M + lambda_r I, the all-active orthant's Gaussian condition

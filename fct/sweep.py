@@ -64,7 +64,7 @@ from fct.config import (
 from fct.data import Dataset, get_dataset, task_dims
 from fct.meanfield import meanfield_hash, run_meanfield
 from fct.monitor import make_mir_monitor
-from fct.spatial import KernelSpec, PopulationSpec, SpatialConfig
+from fct.spatial import EmbeddingSpec, KernelSpec, PopulationSpec, SpatialConfig
 from fct.train import load_trained, train_from_config
 
 SWEEP_FILE = "sweep.json"
@@ -388,20 +388,59 @@ def spatial_grid() -> SweepConfig:
     )
 
 
-# Presets with their own grid and no lambda axes, by name; each takes no argument.
-FIXED_GRID_PRESETS: dict[str, Callable[[], SweepConfig]] = {
-    "spatial_tiny": spatial_tiny,
-    "spatial_n_scan": spatial_n_scan,
-    "spatial_grid": spatial_grid,
-}
-
-
 def with_grid(sweep: SweepConfig, grid: dict[str, list]) -> SweepConfig:
     """A validated copy of `sweep` over `grid`."""
     return SweepConfig.model_validate({**sweep.model_dump(), "grid": grid})
 
 
-def phase_transition(n_lambda: int) -> SweepConfig:
+def phase_transition() -> SweepConfig:
+    """Phase transition of a linear one-hidden-layer net in the spatial dimension d and the
+    prior strength: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9,
+    0.99} (20 settings, d slowest), phi "id", L = 1, SGLD, float64, MIR monitor, the sizes of
+    `spatial_grid`, and an ensemble of B = 8 networks per setting.
+
+    Every population is embedded at random (uniform on the d-torus, seed 0, so the members of an
+    ensemble share one geometry), which makes any N valid in any d; the wrapped Gaussian is a
+    product over the axes, so every kernel is PSD. All populations have length scale 0.15. Each
+    kernel is rescaled to top eigenvalue lambda_max, so the per-weight prior variance shrinks
+    with the population size; weight_lambda is 1 (the `Config` rule under lambda_max).
+
+    B is a one-value axis rather than a shared field: a sweep.json written by every other preset
+    then stays as it was.
+
+    SGLD at lr 1e-2: the prior's stiffest curvature k grows like 1 / (min_rel_eig lambda_max)^2,
+    and the stability check passes everywhere, but at lambda_max 0.1 (d <= 3) lr * k = 1 on the
+    stiffest modes, so Euler-Maruyama doubles their variance (prior power inflated by up to
+    about 13% at d = 1). The softest prior mode relaxes on about 2e6 lambda_max^2 epochs
+    (1e4 at 0.1, 1e6 at 0.99), so at 250k epochs settings with lambda_max >= 0.5 are not fully
+    stationary from the N(0, 1) initialisation."""
+    population = PopulationSpec(
+        embedding=EmbeddingSpec(kind="random"), kernel=KernelSpec(length_scale=0.15)
+    )
+    spatial = SpatialConfig(
+        input=population, hidden=population, output=population, min_rel_eig=1e-2
+    )
+    base = spatial_grid().model_copy(update={"phi": "id", "weight_lambda": 1.0, "spatial": spatial})
+    return with_grid(
+        base,
+        {
+            "spatial.d": [1, 2, 3, 4],
+            "spatial.lambda_max": [0.1, 0.5, 0.75, 0.9, 0.99],
+            "net.B": [8],
+        },
+    )
+
+
+# Presets with their own grid and no lambda axes, by name; each takes no argument.
+FIXED_GRID_PRESETS: dict[str, Callable[[], SweepConfig]] = {
+    "spatial_tiny": spatial_tiny,
+    "spatial_n_scan": spatial_n_scan,
+    "spatial_grid": spatial_grid,
+    "phase_transition": phase_transition,
+}
+
+
+def lambda_grid(n_lambda: int) -> SweepConfig:
     """Linear-teacher sweep over depth, activation and both regularisers: L in {1, 2}, phi in
     {tanh, relu}, rate_lambda and weight_lambda each `n_lambda` log-spaced values in [1e-6, 1].
     Cluster sizes; the shared sizes are the knobs to tune before submitting."""
@@ -418,7 +457,7 @@ def phase_transition(n_lambda: int) -> SweepConfig:
 
 
 # Presets with an explicit grid, by name; each takes n_lambda, the points per lambda axis.
-GRID_PRESETS: dict[str, Callable[[int], SweepConfig]] = {"phase_transition": phase_transition}
+GRID_PRESETS: dict[str, Callable[[int], SweepConfig]] = {"lambda_grid": lambda_grid}
 PRESET_NAMES = ("tiny", "full", "modularity", *GRID_PRESETS, *FIXED_GRID_PRESETS)
 
 

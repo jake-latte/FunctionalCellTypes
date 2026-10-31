@@ -33,7 +33,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `monitor.py` | `make_mir_monitor`: the training hook that records per-layer MIR during training |
 | `sweep.py` | a grid of runs over any `Config` fields: `SweepConfig`, `expand`, `run_setting`, `setting_status`, presets |
 | `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
-| `grid_view.py` | from a sweep ROOT to the phase-transition figures: snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
+| `grid_view.py` | from a sweep ROOT to the figures of a `lambda_grid` sweep (the phase-transition notebook): snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
 | `spatial_view.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels (the notebook draws its own figures) |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
@@ -73,7 +73,7 @@ overrides the shared value, except fields the sweep owns (data size, seeds, log/
 Presets: `tiny` (seconds per setting on a CPU, a pipeline check that learns nothing meaningful), `full` and
 `modularity` (cluster sizes, placeholders to tune; the 36-setting grid of 3 tasks x layers {1, 3, 5} x phi
 {tanh, relu} x rate regulariser {0, 1e-3}, directories `ROOT/<task>/L{L}_{phi}_r{rate}/`, weight regulariser at
-its library default), and `phase_transition --n-lambda N_LAMBDA` (linear teacher, L in {1, 2}, phi in {tanh, relu},
+its library default), and `lambda_grid --n-lambda N_LAMBDA` (linear teacher, L in {1, 2}, phi in {tanh, relu},
 `rate_lambda` and `weight_lambda` each `N_LAMBDA` log-spaced values in [1e-6, 1]). Other grids use directories
 `ROOT/<task>/s{index:04d}_<label>/`, each with a `setting.json` recording its axis values, so a notebook can
 find a setting from its values (`fct.sweep.find_setting_dir`). `--axis PATH=[values]` replaces or adds an axis.
@@ -96,14 +96,15 @@ both sides of the hidden kernel; N 512, P 128, weight_lambda 20, otherwise as `s
 `data.n_latents` axis wins over `linear_teacher.n_latents`. Caveat: at N 512 about 500 hidden eigenvalues sit at the
 min_rel_eig floor 1e-2 x lambda_max(K), which grows with the length scale, so the mean hidden prior variance
 diag(M^-1) is 1.62 / 2.26 / 2.90 / 3.54 for 0.05 / 0.1 / 0.15 / 0.2: the length-scale axis is confounded with
-prior strength). A directory name shows a dict-valued axis value as a short
+prior strength).
+Preset `phase_transition` (20 settings: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9, 0.99}; linear (phi id), L = 1, weight_lambda 1, random embeddings of length scale 0.15 for every population, an ensemble of B = 8 per setting via a one-value `net.B` axis; otherwise as `spatial_grid`). It has no results reader or solve stage yet: the readers refuse B > 1 and need `net.L`, `net.phi` and `rate_lambda` axes. At 250 000 epochs the settings with lambda_max >= 0.5 are not fully stationary from the initial N(0, 1) weights (the softest prior mode relaxes on about 2e6 lambda_max^2 epochs). A directory name shows a dict-valued axis value as a short
 hash. The mean-field solver knows only the iid prior, so `sweep run --stage solve` on a spatial setting fails with its
 one-line message. `net.phi` is one of `tanh`, `relu`, `sigmoid` or `id` (phi(h) = h: a linear network);
 the presets keep their activations, and an `id` grid is `--axis 'net.phi=["tanh","relu","id"]'`.
 
 ```sh
 uv run python -m fct sweep init ROOT --preset tiny        # write ROOT/sweep.json (--set n_epochs=100 ...)
-uv run python -m fct sweep init ROOT --preset phase_transition --n-lambda 8 --axis 'net.L=[1,2,3]'
+uv run python -m fct sweep init ROOT --preset lambda_grid --n-lambda 8 --axis 'net.L=[1,2,3]'
 uv run python -m fct sweep list ROOT                      # "<index> <task>/<setting directory>"
 uv run python -m fct sweep count ROOT                     # number of settings (36 for modularity)
 uv run python -m fct sweep run ROOT --index 7             # train one setting (resumable); no --index: all
@@ -144,7 +145,7 @@ uv run python notebooks/build_modularity.py ROOT                 # execute on RO
 uv run python notebooks/build_modularity.py --no-execute         # rebuild the committed source notebook
 ```
 
-**Phase-transition notebook.** For a sweep made with `--preset phase_transition`: pick a setting by
+**Phase-transition notebook** (the viewer for the `lambda_grid` preset). For a sweep made with `--preset lambda_grid`: pick a setting by
 `L`, `PHI`, `LAMBDA_R`, `LAMBDA_W` (snapped to the nearest grid value, which is printed) to see its loss
 curves, example outputs, MIR over training and the tuning curves of its neurons; then the MIR of every
 network of one depth and activation, as a (lambda_r, lambda_w) matrix per hidden layer and against

@@ -17,8 +17,8 @@ from fct.sweep import (
     find_setting_dir,
     get_setting,
     grid_hash,
+    lambda_grid,
     load_sweep,
-    phase_transition,
     preset,
     read_setting,
     run_setting,
@@ -99,7 +99,7 @@ def test_directories_are_index_prefixed_labelled_and_distinct(small, tmp_path):
 
 
 def test_labels_keep_the_underscores_of_axis_names(tmp_path):
-    sweep = phase_transition(3)
+    sweep = lambda_grid(3)
     name = setting_dir(tmp_path, expand(sweep)[1]).name
     assert name == "s0001_L1_phitanh_rate_lambda1e-06_weight_lambda0.001"
 
@@ -112,8 +112,8 @@ def test_near_equal_floats_never_share_a_directory(tmp_path):
 
 
 # ---------------------------------------------------------------------------- phase transition
-def test_phase_transition_preset_with_three_lambdas():
-    sweep = phase_transition(3)
+def test_lambda_grid_preset_with_three_lambdas():
+    sweep = lambda_grid(3)
     settings = expand(sweep)
     assert len(settings) == 2 * 2 * 3 * 3
     configs = [setting_config(sweep, s) for s in settings]
@@ -127,8 +127,8 @@ def test_phase_transition_preset_with_three_lambdas():
     assert len(pairs) == 9  # every weight/rate combination is a setting
 
 
-def test_phase_transition_lambdas_are_log_spaced():
-    sweep = phase_transition(8)
+def test_lambda_grid_lambdas_are_log_spaced():
+    sweep = lambda_grid(8)
     for axis in ("train.weight_lambda", "train.rate_lambda"):
         assert sweep.grid[axis] == np.logspace(-6, 0, 8).tolist()
     assert len(expand(sweep)) == 2 * 2 * 8 * 8
@@ -136,12 +136,12 @@ def test_phase_transition_lambdas_are_log_spaced():
 
 def test_presets_that_need_n_lambda_say_so():
     with pytest.raises(ValueError, match="n_lambda"):
-        preset("phase_transition")
+        preset("lambda_grid")
     with pytest.raises(ValueError, match="n_lambda"):
         preset("tiny", n_lambda=3)
     with pytest.raises(ValueError, match="n_lambda"):
-        phase_transition(0)
-    assert len(expand(preset("phase_transition", n_lambda=2))) == 16
+        lambda_grid(0)
+    assert len(expand(preset("lambda_grid", n_lambda=2))) == 16
 
 
 # ---------------------------------------------------------------------------- validation
@@ -310,7 +310,7 @@ TINY_SETS = [
 
 
 def _init_2x2(capsys, root):
-    args = ["init", root, "--preset", "phase_transition", "--n-lambda", 2]
+    args = ["init", root, "--preset", "lambda_grid", "--n-lambda", 2]
     args += ["--axis", "net.L=[1]", "--axis", 'net.phi=["tanh"]']
     for item in TINY_SETS:
         args += ["--set", item]
@@ -364,7 +364,7 @@ def test_an_interrupted_grid_setting_resumes_from_its_checkpoint(small, tmp_path
 
 
 def test_cli_set_cannot_edit_the_grid(tmp_path, capsys):
-    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "phase_transition", "--n-lambda", 2,
+    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "lambda_grid", "--n-lambda", 2,
                         "--set", "grid.net.L=[1]")  # fmt: skip
     assert code == 1 and "--axis" in err
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny", "--set", "grid=null")
@@ -372,10 +372,10 @@ def test_cli_set_cannot_edit_the_grid(tmp_path, capsys):
 
 
 def test_cli_init_axis_errors_are_one_line(tmp_path, capsys):
-    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "phase_transition", "--n-lambda", 2,
+    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "lambda_grid", "--n-lambda", 2,
                         "--axis", "net.typo=[1]")  # fmt: skip
     assert code == 1 and err.startswith("error:") and "net.typo" in err
-    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "phase_transition")
+    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "lambda_grid")
     assert code == 1 and "n_lambda" in err
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny", "--axis", "net.L=[1]")
     assert code == 1 and "modularity" in err

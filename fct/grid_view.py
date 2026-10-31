@@ -1,4 +1,5 @@
-"""From a sweep ROOT to the phase-transition figures: one chosen setting and the whole grid.
+"""From a sweep ROOT to the figures of a `lambda_grid` sweep (the phase-transition notebook): one
+chosen setting and the whole grid.
 
 Three layers, as in `fct.report`:
 
@@ -11,7 +12,7 @@ Three layers, as in `fct.report`:
 - Plotting: `fct.draw` draws; `tuning_items`, `matrix_items` and `ratio_items` assemble the
   items a notebook cell shows.
 
-The sweep must have the four axes of `phase_transition` (depth, activation, lambda_r, lambda_w).
+The sweep must have the four axes of `lambda_grid` (depth, activation, lambda_r, lambda_w).
 A setting still running is shown from its latest checkpoint and labelled "provisional"; a
 setting with no usable data is a blank cell, never a made-up value.
 """
@@ -97,7 +98,7 @@ def axis_values(results: Sequence[SettingResult]) -> dict[str, list]:
         if any(axis not in r.setting.axes for r in results):
             raise ValueError(
                 f"the sweep has no axis {axis!r}; this view needs {GRID_AXES} (the "
-                "phase_transition preset has them)"
+                "lambda_grid preset has them)"
             )
         values = _unique([r.setting.axes[axis] for r in results])
         numeric = all(isinstance(v, int | float) and not isinstance(v, bool) for v in values)

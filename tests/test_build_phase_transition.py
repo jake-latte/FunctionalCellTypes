@@ -1,4 +1,4 @@
-"""The phase-transition notebook: structure of the source, and an end-to-end execution on a tiny
+"""The phase-transition notebook (the viewer for the `lambda_grid` preset): structure of the source, and an end-to-end execution on a tiny
 phase-transition sweep with a done, a partial and many missing settings."""
 
 from pathlib import Path
