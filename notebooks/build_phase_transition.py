@@ -52,7 +52,7 @@ from fct.exp_view import (
     snap_text,
     tuning_items,
 )
-from fct.report import load_results, overview_text, setting_items, show, exp_root_from_env
+from fct.report import exp_root_from_env, load_results, overview_text, setting_items, show
 
 mpl.rcParams["figure.dpi"] = 100
 ROOT = ROOT or exp_root_from_env()

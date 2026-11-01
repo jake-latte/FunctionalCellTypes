@@ -46,12 +46,12 @@ PARAMETERS = """ROOT = None  # the experiment ROOT (holds exp.json); None reads 
 SETUP = """import matplotlib as mpl
 
 from fct.report import (
+    exp_root_from_env,
     find_result,
     load_results,
     overview_text,
     setting_items,
     show,
-    exp_root_from_env,
     task_items,
 )
 

@@ -44,8 +44,7 @@ spatial_n_scan`, say) and `SETTING` the axis values of one of its settings, e.g.
 subset of the axes is enough when it picks one setting. The notebook lists the experiment's
 settings, loads that setting's trained net and shows what `spatial.ipynb` shows for a net it trains
 itself: the prior, the loss curves, example outputs, the first-layer weights and the spatially
-indexed kernels
-$\Phi^{(l)}$, and the tuning of every neuron.
+indexed kernels $\Phi^{(l)}$, and the tuning of every neuron.
 
 Two things differ from the spatial notebook. The kernels $\Phi^{(l)}$ (the data kernels $A^{(l)}$,
 the chosen trials and the pair grids) and the example outputs are computed on the **test set**: the
@@ -75,8 +74,8 @@ EXP_ROOT = ROOT or exp_root_from_env()"""
 SETTINGS_TEXT = """## The experiment's settings
 
 Every setting of the experiment with its axis values and the state of its training (`done`,
-`partial`,
-`missing` or `stale`), as `python -m fct exp status ROOT` prints it. Choose one with `SETTING`."""
+`partial`, `missing` or `stale`), as `python -m fct exp status ROOT` prints it. Choose one with
+`SETTING`."""
 
 SETTINGS_TABLE = """display(Markdown(settings_table(EXP_ROOT)))"""
 
