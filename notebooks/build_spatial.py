@@ -139,7 +139,8 @@ from fct.spatial_view import (
 
 mpl.rcParams.update({"figure.dpi": 100, "font.size": 12, "axes.titlesize": 12})"""
 
-# What only the notebook that trains its own run needs; the spatial-experiment notebook has its own extras.
+# What only the notebook that trains its own run needs; the spatial-experiment notebook has its own
+# extras.
 TRAIN_IMPORTS = """from fct.cache import cache_root_from_env
 from fct.data import get_latent_lattice_dataset
 from fct.spatial_view import make_config, train_run
@@ -1038,7 +1039,8 @@ def execute_notebook(
     root_name: str = "CACHE_ROOT",
 ) -> NotebookNode:
     """Run a copy of `nb` in a fresh kernel with the parameter `root_name` (CACHE_ROOT, or the
-    experiment ROOT of the spatial-experiment notebook) and the `overrides` set; the source `nb` gains no outputs.
+    experiment ROOT of the spatial-experiment notebook) and the `overrides` set; the source `nb`
+    gains no outputs.
     A failing cell raises (nbclient.exceptions.CellExecutionError)."""
     values = {root_name: str(cache_root), **(overrides or {})}
     client = NotebookClient(

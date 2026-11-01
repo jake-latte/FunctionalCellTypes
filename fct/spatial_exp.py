@@ -1,5 +1,5 @@
-"""One setting of a spatial experiment, for the spatial-experiment notebook: pick it by its axis values,
-load its trained net, its training set and the held-out latent-lattice test set.
+"""One setting of a spatial experiment, for the spatial-experiment notebook: pick it by its axis
+values, load its trained net, its training set and the held-out latent-lattice test set.
 
 The experiment's own functions find and train the settings; this module only joins them for a
 notebook. A setting that was never trained is a status, not an error, so the notebook can
@@ -46,10 +46,11 @@ def _matching_settings(exp: ExpConfig, values: Mapping[str, Any]) -> list[Settin
 
 
 def select_setting(root: Path, values: Mapping[str, Any], device: str = "cpu") -> ExpSetting:
-    """The one setting of the experiment at `root` whose axes equal `values` (a subset of the axes is
-    enough when it picks one), with its status. LookupError for an axis that is not in the experiment
-    and for no match or several, whether or not they were run, so an ambiguous request never
-    resolves to a setting the caller did not name. A setting of the experiment that was never run is
+    """The one setting of the experiment at `root` whose axes equal `values` (a subset of the axes
+    is enough when it picks one), with its status. LookupError for an axis that is not in the
+    experiment and for no match or several, whether or not they were run, so an ambiguous request
+    never resolves to a setting the caller did not name. A setting of the experiment that was never
+    run is
     returned with status "missing". A run setting's directory is confirmed by `find_setting_dir`
     (ExpError if it was written under another experiment)."""
     root = Path(root)
@@ -57,7 +58,8 @@ def select_setting(root: Path, values: Mapping[str, Any], device: str = "cpu") -
     matches = _matching_settings(exp, values)
     if len(matches) != 1:
         raise LookupError(
-            f"{len(matches)} settings of the experiment match {dict(values)}; give axes that pick one"
+            f"{len(matches)} settings of the experiment match {dict(values)}; "
+            "give axes that pick one"
         )
     (setting,) = matches
     directory = setting_dir(root, setting)
@@ -69,7 +71,7 @@ def select_setting(root: Path, values: Mapping[str, Any], device: str = "cpu") -
 
 
 def settings_table(root: Path) -> str:
-    """A markdown table of the experiment: index, the value of every axis, and the training status."""
+    """A markdown table of the experiment: index, every axis value, and the training status."""
     root = Path(root)
     exp = load_exp(root)
     axes = list(axes_of(exp))

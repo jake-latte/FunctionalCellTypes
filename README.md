@@ -114,9 +114,9 @@ uv run python -m fct exp status ROOT --stage solve      # the same states for th
 uv run python -m fct exp migrate ROOT                   # convert a folder written by older code (once)
 ```
 
-A folder written before the sweep/grid vocabulary became "experiment" (it holds `sweep.json`, with a `grid` key and `grid_hash` in
+A folder that holds a legacy `sweep.json` (with a `grid` key and `grid_hash` in
 every `setting.json`) is converted once, in place, by `uv run python -m fct exp migrate ROOT`: it renames those names,
-checks everything before writing anything, leaves every train / solve artefact and hash alone, and refuses a second run.
+checks everything before writing anything, leaves every train / solve artefact and hash alone, finishes an interrupted run when run again, and refuses a finished folder.
 Every other `exp` command on an unmigrated folder stops and points to this one. The notebook environment variable is now
 `$FCT_EXP_ROOT` (it was `$FCT_SWEEP_ROOT`).
 

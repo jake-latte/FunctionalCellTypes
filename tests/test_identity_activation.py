@@ -1,5 +1,6 @@
 """The identity activation "id": registry, linear forward pass, a tiny spatial experiment trained
-through the CLI, the spatial experiment notebook on an `id` setting, lrplot, and the (iid) solve stage."""
+through the CLI, the spatial experiment notebook on an `id` setting, lrplot, and the (iid)
+solve stage."""
 
 import math
 
@@ -61,7 +62,8 @@ def test_two_hidden_layer_id_net_is_the_matrix_product_and_linear_in_the_input()
     assert torch.allclose(net(a * x1 + b * x2)[1], a * net(x1)[1] + b * net(x2)[1], atol=1e-12)
 
 
-# ---------------------------------------------------------------- spatial experiment through the CLI
+# ---------------------------------------------------------------- spatial experiment through the
+# CLI
 @pytest.fixture(scope="module")
 def trained_root(tmp_path_factory):
     root = tmp_path_factory.mktemp("id_exp")

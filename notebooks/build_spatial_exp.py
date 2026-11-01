@@ -1,7 +1,8 @@
 """Build and execute `spatial_exp.ipynb`: every figure of `spatial.ipynb` for one setting of a
 spatial experiment.
 
-Give an experiment ROOT (made with `python -m fct exp init ROOT --preset spatial_n_scan`, or any experiment
+Give an experiment ROOT (made with `python -m fct exp init ROOT --preset spatial_n_scan`, or any
+experiment
 with a spatial section on a linear teacher) and the axis values of one setting, `SETTING =
 {"net.N": 256}`. The notebook lists the experiment's settings, finds that setting through `fct.exp.find_setting_dir`
 and loads its trained net and training set. It then shows the figures of the spatial notebook (the
@@ -40,9 +41,10 @@ INTRO = (
 
 `ROOT` is an experiment over spatially embedded nets (`python -m fct exp init ROOT --preset
 spatial_n_scan`, say) and `SETTING` the axis values of one of its settings, e.g. `{"net.N": 256}`; a
-subset of the axes is enough when it picks one setting. The notebook lists the experiment's settings, loads that
-setting's trained net and shows what `spatial.ipynb` shows for a net it trains itself: the prior,
-the loss curves, example outputs, the first-layer weights and the spatially indexed kernels
+subset of the axes is enough when it picks one setting. The notebook lists the experiment's
+settings, loads that setting's trained net and shows what `spatial.ipynb` shows for a net it trains
+itself: the prior, the loss curves, example outputs, the first-layer weights and the spatially
+indexed kernels
 $\Phi^{(l)}$, and the tuning of every neuron.
 
 Two things differ from the spatial notebook. The kernels $\Phi^{(l)}$ (the data kernels $A^{(l)}$,
@@ -53,8 +55,8 @@ once and none was trained on. The loss curves are the training history, and the 
 information overlaps use the training samples, as in the spatial notebook. The readout is
 $\phi(h^{(L)})$ and $\psi^{(l)} = \phi(h^{(l)})$ on every hidden layer.
 
-A setting of the experiment that was never trained (or is only partly trained) is reported in its cells
-and only its prior is drawn.
+A setting of the experiment that was never trained (or is only partly trained) is reported in its
+cells and only its prior is drawn.
 
 """
     + sp.NOTATION
@@ -72,7 +74,8 @@ EXP_ROOT = ROOT or exp_root_from_env()"""
 
 SETTINGS_TEXT = """## The experiment's settings
 
-Every setting of the experiment with its axis values and the state of its training (`done`, `partial`,
+Every setting of the experiment with its axis values and the state of its training (`done`,
+`partial`,
 `missing` or `stale`), as `python -m fct exp status ROOT` prints it. Choose one with `SETTING`."""
 
 SETTINGS_TABLE = """display(Markdown(settings_table(EXP_ROOT)))"""

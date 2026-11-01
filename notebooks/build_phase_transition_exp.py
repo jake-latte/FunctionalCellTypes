@@ -4,10 +4,11 @@ dimensions.
 
 Give an experiment ROOT (made with `python -m fct exp init ROOT --preset phase_transition`) and the
 axis values of one setting, `SETTING = {"spatial.d": 2, "spatial.lambda_max": 0.5}`. The notebook
-lists the experiment's settings, loads that setting through `fct.phase_view.load_phase_run` and draws the prior
-(covariance, effective covariance and penalty, with their spectra and the eigenvalue floor), the
-ensemble's loss curves, example outputs, the trained weight kernels, the data kernels A, the tuning
-of one member and the information and rate overlaps. A, the weight kernels and the overlaps come
+lists the experiment's settings, loads that setting through `fct.phase_view.load_phase_run` and
+draws the prior (covariance, effective covariance and penalty, with their spectra and the eigenvalue
+floor), the ensemble's loss curves, example outputs, the trained weight kernels, the data kernels A,
+the tuning of one member and the information and rate overlaps. A, the weight kernels and the
+overlaps come
 for member `MEMBER` and for the ensemble average. A setting that is not trained is reported in the
 cells and only its prior is drawn.
 
@@ -60,8 +61,8 @@ that differ in the embedding dimension $d$ and in the top eigenvalue of the kern
 $\lambda_{\max}$, each an ensemble of $B$ networks that share their random embeddings and differ in
 their initial weights and Langevin noise. `SETTING` is the axis values of one setting, e.g.
 `{"spatial.d": 2, "spatial.lambda_max": 0.5}`; a subset of the axes is enough when it picks one.
-The notebook lists the experiment's settings, loads that setting and draws what `spatial_exp.ipynb` draws for one
-network, adapted to an ensemble:
+The notebook lists the experiment's settings, loads that setting and draws what `spatial_exp.ipynb`
+draws for one network, adapted to an ensemble:
 
 - **the prior** of every weight layer: the covariance $K / \lambda_w$, the effective covariance the
   networks were trained under (the covariance with its small eigenvalues raised to the floor) and
@@ -73,8 +74,8 @@ network, adapted to an ensemble:
   overlaps** of the neurons, each for member `MEMBER` and for the ensemble average;
 - **the tuning of the neurons of member `MEMBER`** to the latents, to the first `N_NEURONS`.
 
-Three things differ from the spatial experiment. Tuning and the overlaps use a fresh random test set of
-`P_TEST` samples of the training set's own teacher, not the training samples (a larger set lowers
+Three things differ from the spatial experiment. Tuning and the overlaps use a fresh random test set
+of `P_TEST` samples of the training set's own teacher, not the training samples (a larger set lowers
 the plug-in noise floor of the mutual information); the data kernels keep the held-out latent
 lattice of $3^k$ points. Every view that orders units uses their coordinate along axis `SORT_DIM`
 (see below). The first-layer weight image and the trial and pair grids of the spatial notebook
@@ -235,8 +236,8 @@ covariance for that reason."""
 )
 
 FLOOR_TEXT = sp.FLOOR_TEXT[: sp.FLOOR_TEXT.index("At the defaults")] + (
-    r"In this experiment $\lambda_w = 1$ and every kernel is rescaled so that its top eigenvalue is "
-    r"`spatial.lambda_max`, so $\lambda_{\max}(K^p)$ is the same for every population and the floor "
+    r"In this experiment $\lambda_w = 1$ and every kernel is rescaled so that its top "
+    r"eigenvalue is `spatial.lambda_max`, so $\lambda_{\max}(K^p)$ is the same for every population and the floor "
     r"$\epsilon\, \lambda_{\max}(K^p)$ is set by $\epsilon$ (`MIN_REL_EIG`) and $\lambda_{\max}$ alone; "
     r"what changes from setting to setting is how many eigenvalues lie below it. The tables below give, for "
     r"this setting, how many eigenvalues of each population the floor raised, $\lambda_{\max}(K^p)$, "
@@ -828,8 +829,9 @@ plt.show()"""
 
 
 def build_notebook() -> NotebookNode:
-    """The notebook without outputs: parameters, the settings table, the chosen setting, the prior (always
-    drawn), then the figures of the trained ensemble (a markdown cell with the equation, a code
+    """The notebook without outputs: parameters, the settings table, the chosen setting, the prior
+    (always drawn), then the figures of the trained ensemble (a markdown cell with the equation, a
+    code
     cell with the plotting function), guarded for an untrained setting."""
     nb = new_notebook(
         metadata={

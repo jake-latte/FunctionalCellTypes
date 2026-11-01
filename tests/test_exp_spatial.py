@@ -219,7 +219,8 @@ def test_an_invalid_spatial_value_fails_at_load_naming_the_axis():
 
 
 def test_a_dict_valued_axis_gets_a_short_distinct_directory_name(tmp_path):
-    # `spatial` itself is an axis only while the experiment has no section; its values are whole dumps.
+    # `spatial` itself is an axis only while the experiment has no section; its values are whole
+    # dumps.
     prior = SpatialConfig().model_dump()
     exp = with_axes(preset("tiny"), {"spatial": [None, prior, {**prior, "min_rel_eig": 1e-3}]})
     names = [setting_dir(tmp_path, s).name for s in expand(exp)]

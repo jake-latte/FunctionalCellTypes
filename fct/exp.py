@@ -81,8 +81,8 @@ MAX_LABEL_VALUE = 24
 # Setting directories are ROOT/<task>/<name>: `expand` builds `relpath` that way, and the lookups
 # below find them with this glob.
 SETTING_DIRS_GLOB = "*/*"
-# Index prefix of an indexed setting directory name; zero-padded so names sort in index order, which holds up
-# to 10**INDEX_WIDTH settings (`expand` refuses more).
+# Index prefix of an indexed setting directory name; zero-padded so names sort in index order, which
+# holds up to 10**INDEX_WIDTH settings (`expand` refuses more).
 INDEX_WIDTH = 4
 # A float typed in a notebook finds the one that went through a JSON round trip.
 LOOKUP_REL_TOL = 1e-9
@@ -131,8 +131,8 @@ class Setting:
     """One point of the experiment: its position, the value of every axis, and its directory.
 
     `axes` maps each axis to this setting's value, in the experiment's axis order. `task` is the
-    data task the setting trains on: the `data.task` axis if there is one, else the experiment's base
-    task. `relpath` is the setting's directory relative to the experiment ROOT.
+    data task the setting trains on: the `data.task` axis if there is one, else the experiment's
+    base task. `relpath` is the setting's directory relative to the experiment ROOT.
     """
 
     index: int
@@ -469,7 +469,8 @@ PRESET_NAMES = ("tiny", "full", "modularity", *LAMBDA_PRESETS, *FIXED_AXES_PRESE
 
 
 def preset(name: str, n_lambda: int | None = None) -> ExpConfig:
-    """A ready-made experiment. `tiny` and `full` are two sizes of the modularity experiment (`modularity`
+    """A ready-made experiment. `tiny` and `full` are two sizes of the modularity experiment
+    (`modularity`
     is `full`); the lambda presets need `n_lambda`, the others reject it."""
     if name not in PRESET_NAMES:
         raise ValueError(f"unknown preset {name!r}; valid: {sorted(PRESET_NAMES)}")
@@ -503,7 +504,7 @@ def load_exp(root: Path) -> ExpConfig:
     if not path.exists():
         if (Path(root) / LEGACY_EXP_FILE).exists():
             raise UnmigratedExpError(
-                f"{root} was written by older code ({LEGACY_EXP_FILE}, no {EXP_FILE}); "
+                f"{root} holds a legacy {LEGACY_EXP_FILE} and no {EXP_FILE}; "
                 f"run `python -m fct exp migrate {root}` once to convert it"
             )
         raise FileNotFoundError(f"{path} not found")
@@ -849,7 +850,8 @@ def find_setting_dir(root: Path, exp: ExpConfig, values: Mapping[str, Any]) -> P
     """The directory of the one already-run setting of `exp` whose axes equal `values`; a
     subset of the axes is enough when it is unambiguous. LookupError if none or several match,
     or an axis is not one of the experiment's; ExpError if a directory was written under another
-    experiment. Only the experiment's own directories are considered, so strays in ROOT cannot match."""
+    experiment. Only the experiment's own directories are considered, so strays in ROOT cannot
+    match."""
     if unknown := sorted(set(values) - set(axes_of(exp))):
         raise LookupError(f"unknown axis {unknown}; the experiment has axes {list(axes_of(exp))}")
     directories = [setting_dir(root, s) for s in expand(exp)]
@@ -917,8 +919,8 @@ def run_setting(
         raise StaleCacheError(
             f"setting {index}: {directory}/{_STAGE_DIRS[stage]}/final.pt was written under a "
             f"different config {_STAGE_SECTIONS[stage]} than the current one, or is unreadable, "
-            "so its results are not those of this experiment. To rerun it, delete the experiment ROOT or "
-            "use a fresh one."
+            "so its results are not those of this experiment. To rerun it, delete the experiment "
+            "ROOT or use a fresh one."
         )
     if status == "done":
         log(f"setting {index} ({directory}) already done ({stage})")

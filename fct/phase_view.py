@@ -83,7 +83,8 @@ def _training_set(chosen: ExpSetting, has_weights: bool) -> Dataset:
 def load_phase_run(root, values, device: str = "cpu") -> PhaseRun:
     """The setting of the experiment at `root` whose axes equal `values` (`select_setting`:
     LookupError for an unknown axis or value, or several matches). Read-only. ValueError unless
-    it is an ensemble (net.B > 1), since every view here reads a member axis; an experiment of single
+    it is an ensemble (net.B > 1), since every view here reads a member axis; an experiment of
+    single
     networks is read with `fct.spatial_exp`."""
     chosen = select_setting(root, values, device)
     cfg = chosen.cfg

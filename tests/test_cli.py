@@ -1,5 +1,6 @@
 """End-to-end tests of `python -m fct` on a tiny CPU config, calling `main` directly."""
 
+import argparse
 import io
 import json
 import sys
@@ -8,7 +9,7 @@ import pytest
 import torch
 
 import fct.meanfield as mf
-from fct.cli import main
+from fct.cli import build_parser, main
 from fct.config import load_config, save_config
 from fct.meanfield import SpatialPriorUnsupportedError
 from fct.monitor import MIR_MONITOR_KEYS
@@ -323,3 +324,30 @@ def test_exp_run_all_settings_reports_the_spatial_error_without_a_traceback(
     err = capsys.readouterr().err
     assert "no spatial prior" in err and "Traceback" not in err
     assert err.strip().splitlines()[-1].startswith("error: 1 of 1 settings failed")
+
+
+# ---------------------------------------------------------------------------- vocabulary
+def _help_texts(parser: argparse.ArgumentParser) -> list[str]:
+    """The help text of `parser` and of every subcommand below it."""
+    texts = [parser.format_help()]
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for sub in action.choices.values():
+                texts.extend(_help_texts(sub))
+    return texts
+
+
+def test_the_exp_help_uses_only_the_experiment_vocabulary():
+    top = build_parser()
+    exp_parser = next(
+        a.choices["exp"] for a in top._actions if isinstance(a, argparse._SubParsersAction)
+    )
+    texts = _help_texts(exp_parser)
+    assert len(texts) == 7  # exp and its six actions
+    assert not any("sweep" in t.lower() or "grid" in t.lower() for t in texts)
+
+
+def test_there_is_no_sweep_command(capsys):
+    with pytest.raises(SystemExit):
+        main(["sweep", "count", "ROOT"])
+    assert "invalid choice: 'sweep'" in capsys.readouterr().err

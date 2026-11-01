@@ -142,7 +142,8 @@ case "${ACTION}" in
 esac
 
 # ── --submit / --dry-run: build one sbatch command and either print or run it ─
-N_TOTAL=$(fct exp count "${ROOT}") || die "could not read the experiment size from ${ROOT}/exp.json."
+N_TOTAL=$(fct exp count "${ROOT}") \
+    || die "could not read the experiment size from ${ROOT}/exp.json."
 [[ "${N_TOTAL}" =~ ^[0-9]+$ ]] || die "could not determine experiment size (got '${N_TOTAL}')."
 
 # --export is comma-delimited, so a comma in either path would split it.

@@ -219,7 +219,8 @@ def test_exp_root_from_env(monkeypatch, tmp_path):
         exp_root_from_env()
 
 
-# ---------------------------------------------------------------- a real tiny experiment, partly run
+# ---------------------------------------------------------------- a real tiny experiment, partly
+# run
 def _index(task: str, L: int, phi: str, rate: float) -> int:
     return modularity_setting(task, L, phi, rate).index
 

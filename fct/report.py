@@ -16,7 +16,8 @@ Three layers, as in the rest of the package:
 
 The report supports the modularity experiment (settings varying task, net.L, net.phi and
 train.rate_lambda; other experiments may add axes, as long as these exist): `load_results` raises
-on an experiment without them, and `final_mir` and the figures assume a layer count of at most `max(LAYERS)`.
+on an experiment without them, and `final_mir` and the figures assume a layer count of at most
+`max(LAYERS)`.
 
 Loading is read-only: nothing is generated, cached or written under ROOT, which a running job
 may be writing to. Settings are loaded on the CPU whatever device they were trained on, and are
@@ -205,7 +206,8 @@ def _label_value(value: Any) -> str:
 
 
 def setting_label(setting: Setting) -> str:
-    """Every axis except the task, in index order, so two settings of an experiment never share a label."""
+    """Every axis except the task, in index order, so two settings of an experiment never share
+    a label."""
     parts = []
     for axis, value in setting.axes.items():
         if axis == TASK_AXIS:
@@ -310,9 +312,9 @@ def load_setting_result(root: Path, exp: ExpConfig, setting: Setting) -> Setting
 
     Read-only: a setting whose data/dataset.pt is missing is reported as "partial" with a note,
     because loading it through `get_dataset` would generate and write the file. A finished
-    setting whose dataset or other artefacts do not match the experiment config raises; for a partial
-    one an unreadable or stale dataset or checkpoint file is reported in `note` instead, since its
-    checkpoint may be replaced by a running job at any moment. Other exceptions (from the
+    setting whose dataset or other artefacts do not match the experiment config raises; for a
+    partial one an unreadable or stale dataset or checkpoint file is reported in `note` instead,
+    since its checkpoint may be replaced by a running job at any moment. Other exceptions (from the
     model code) propagate: they are bugs, not bad files. An ensemble run (net.B > 1) raises
     ValueError (`fct.train.select_member`): the report shows one network per setting."""
     directory = setting_dir(root, setting)
@@ -337,8 +339,10 @@ def load_setting_result(root: Path, exp: ExpConfig, setting: Setting) -> Setting
 
 def load_results(root: Path | str) -> list[SettingResult]:
     """All settings of the experiment at `root`, in index order. FileNotFoundError if `root` has no
-    exp.json: with no experiment there is nothing to report. ValueError if the experiment's axes lack
-    the axes net.L, net.phi and train.rate_lambda (the report supports the modularity experiment)."""
+    exp.json: with no experiment there is nothing to report. ValueError if the experiment's axes
+    lack
+    the axes net.L, net.phi and train.rate_lambda (the report supports the modularity
+    experiment)."""
     root = Path(root)
     exp = load_exp(root)
     missing = [a for a in MODULARITY_AXES if a not in axes_of(exp)]

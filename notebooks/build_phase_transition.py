@@ -3,8 +3,8 @@ of a `lambda_exp` experiment.
 
 One viewer for an experiment made with `--preset lambda_exp`: pick a setting by (L, phi,
 lambda_r, lambda_w) and see its loss curves, example outputs, MIR over training and the tuning
-curves of its neurons; then the MIR of the whole experiment as one heat-map per hidden layer and as a
-scatter against lambda_r / lambda_w. All logic is in `fct.exp_view` and `fct.report`; each cell
+curves of its neurons; then the MIR of the whole experiment as one heat-map per hidden layer and as
+a scatter against lambda_r / lambda_w. All logic is in `fct.exp_view` and `fct.report`; each cell
 only calls it. Run
 
     python notebooks/build_phase_transition.py ROOT            # execute, write tmp/phase_transition.ipynb
@@ -31,9 +31,9 @@ EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "phase_transition.ipynb"
 
 INTRO = """# Phase transition in modularity: one setting, then the whole experiment
 
-Set the experiment ROOT in the first code cell, then choose a setting in the selector cell. Requested
-values are snapped to the nearest axis value (lambdas on a log scale) and the value used is
-printed. A setting still running is shown from its latest checkpoint and labelled
+Set the experiment ROOT in the first code cell, then choose a setting in the selector cell.
+Requested values are snapped to the nearest axis value (lambdas on a log scale) and the value used
+is printed. A setting still running is shown from its latest checkpoint and labelled
 "provisional"; a setting with no checkpoint gets a message and no plots. The last two figures
 show every network of one depth and activation: layer-average MIR as a (lambda_r, lambda_w)
 matrix per hidden layer, and against lambda_r / lambda_w. `MIR_KIND` picks the

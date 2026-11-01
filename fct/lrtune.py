@@ -1,4 +1,5 @@
-"""Learning-rate tuning of the experiment: score trained settings on held-out data, then pick a rate.
+"""Learning-rate tuning of the experiment: score trained settings on held-out data, then pick a
+rate.
 
 Layers (kept apart so the logic is testable without a disk or a GPU):
 - pure: `loss_curve_stats`, the table logic (`collapse_seeds`,

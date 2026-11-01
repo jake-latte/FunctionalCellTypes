@@ -376,7 +376,7 @@ def cmd_exp_init(args: argparse.Namespace) -> int:
     path = exp_path(args.root)
     if (args.root / LEGACY_EXP_FILE).exists():
         raise CliError(
-            f"{args.root} holds a {LEGACY_EXP_FILE} from older code; "
+            f"{args.root} holds a legacy {LEGACY_EXP_FILE}; "
             f"run `python -m fct exp migrate {args.root}` instead of starting over"
         )
     if path.exists() and not args.force:
@@ -476,7 +476,7 @@ EXP_HELP = "an experiment: a batch of runs over varied hyperparameters (its axes
 def cmd_exp_migrate(args: argparse.Namespace) -> int:
     try:
         lines = migrate_exp(args.root)
-    except MigrationError as err:
+    except (MigrationError, OSError) as err:  # nothing is half-written: see exp_migrate
         raise CliError(str(err)) from err
     print("\n".join(lines))
     return 0

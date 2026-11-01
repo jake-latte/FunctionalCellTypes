@@ -461,3 +461,9 @@ def test_real_cli_solve_dry_run_and_status(fake_sbatch, real_root):
     assert "--stage solve" in dry.stdout
     assert "36 missing" in status.stdout
     assert sbatch_calls(fake_sbatch) == []
+
+
+@pytest.mark.parametrize("script", [SCRIPT, SOLVE_SCRIPT], ids=lambda p: p.name)
+def test_the_scripts_use_only_the_experiment_vocabulary(script):
+    text = script.read_text().lower()
+    assert "sweep" not in text and "grid" not in text
