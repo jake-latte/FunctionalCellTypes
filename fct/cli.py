@@ -476,8 +476,12 @@ EXP_HELP = "an experiment: a batch of runs over varied hyperparameters (its axes
 def cmd_exp_migrate(args: argparse.Namespace) -> int:
     try:
         lines = migrate_exp(args.root)
-    except (MigrationError, OSError) as err:  # nothing is half-written: see exp_migrate
+    except MigrationError as err:  # refused before anything was written
         raise CliError(str(err)) from err
+    except OSError as err:  # a write failed part-way; the folder is still a legacy one
+        raise CliError(
+            f"{err}; run `python -m fct exp migrate {args.root}` again to finish"
+        ) from err
     print("\n".join(lines))
     return 0
 

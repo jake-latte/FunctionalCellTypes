@@ -116,7 +116,13 @@ uv run python -m fct exp migrate ROOT                   # convert a folder writt
 
 A folder that holds a legacy `sweep.json` (with a `grid` key and `grid_hash` in
 every `setting.json`) is converted once, in place, by `uv run python -m fct exp migrate ROOT`: it renames those names,
-checks everything before writing anything, leaves every train / solve artefact and hash alone, finishes an interrupted run when run again, and refuses a finished folder.
+checks everything before writing anything, leaves every train / solve artefact and hash alone, and refuses a finished folder.
+The rename keeps the folder as it is: a `setting.json` left by an earlier experiment of the same folder (an old `init --force`
+never deleted settings) is renamed too and reported as "kept from an earlier experiment"; `exp run` still refuses it, as before.
+If the write fails part-way (disk full, say), run the command again to finish. A legacy `sweep.json` that no longer
+validates under the current config (for example one that still carries the removed `meanfield.readout`) is refused, naming
+the field: the old code could not load it either, so the folder's results are stale under the current code; make it validate
+first. Do not migrate a folder while any checkout or SLURM job still runs the old code: it would write `grid_hash` again.
 Every other `exp` command on an unmigrated folder stops and points to this one. The notebook environment variable is now
 `$FCT_EXP_ROOT` (it was `$FCT_SWEEP_ROOT`).
 

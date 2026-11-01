@@ -28,7 +28,7 @@ from fct.exp import (
     setting_statuses,
     with_axes,
 )
-from fct.exp_migrate import MigrationError, migrate_exp, plan_migration
+from fct.exp_migrate import MigrationError, migrate_exp
 from tests.report_helpers import QUIET
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -197,17 +197,16 @@ def test_only_the_experiments_own_setting_directories_are_touched(legacy, fresh)
     stray.mkdir()
     (stray / "setting.json").write_text('{"grid_hash": "not ours"}')
 
-    def others() -> dict[str, bytes]:
-        return {
-            k: v
-            for k, v in _snapshot(legacy).items()
-            if k.startswith(("nested", "linear_teacher/stray"))
-        }
+    def nested_files() -> dict[str, bytes]:
+        return {k: v for k, v in _snapshot(legacy).items() if k.startswith("nested")}
 
-    before = others()
-    migrate_exp(legacy)
-    assert others() == before
+    before = nested_files()
+    lines = migrate_exp(legacy)
+    assert nested_files() == before
     assert (nested / "sweep.json").exists() and not (nested / "exp.json").exists()
+    # a record at setting depth is renamed whether or not the experiment owns the directory
+    assert json.loads((stray / "setting.json").read_text()) == {"exp_hash": "not ours"}
+    assert any("kept from an earlier experiment" in line and "stray" in line for line in lines)
 
 
 # ---------------------------------------------------------------------------- refusals
@@ -242,13 +241,12 @@ def test_it_refuses_an_exp_json_that_is_not_the_conversion_naming_both_files(leg
     [
         (lambda r: {k: v for k, v in r.items() if k != "grid_hash"}, "neither"),
         (lambda r: {**r, "exp_hash": r["grid_hash"]}, "both grid_hash and exp_hash"),
-        (lambda r: {**r, "grid_hash": "0" * 12}, "differ"),
         (lambda r: {**r, "index": 99}, "index"),
         (lambda r: {**r, "index": True}, "index"),
         (lambda r: {**r, "index": 1 - r["index"]}, "index"),
         (lambda r: {**r, "axes": {"net.L": 7}}, "axis values"),
     ],
-    ids=["no-hash", "both-keys", "other-experiment", "index-out-of-range", "index-bool",
+    ids=["no-hash", "both-keys", "index-out-of-range", "index-bool",
          "index-of-another-setting", "other-axis-values"],
 )  # fmt: skip
 def test_it_refuses_inconsistent_setting_files_and_changes_nothing(legacy, edit, match):
@@ -286,16 +284,13 @@ def test_it_refuses_a_legacy_file_that_is_not_json(tmp_path):
     assert [p.name for p in tmp_path.iterdir()] == ["sweep.json"]
 
 
-def test_a_converted_setting_file_with_a_wrong_hash_is_refused(legacy):
-    """A setting file that is already converted is accepted only with the hash the
-    experiment gives."""
-    plan = plan_migration(legacy)
-    path, text = next(iter(plan.setting_texts.items()))
-    path.write_text(text.replace('"exp_hash": "', '"exp_hash": "x'))
-    before = _snapshot(legacy)
-    with pytest.raises(MigrationError, match="differ"):
-        migrate_exp(legacy)
-    assert _snapshot(legacy) == before
+def test_a_setting_file_with_another_hash_and_a_wrong_index_is_kept_not_judged(legacy):
+    """Only a record with the experiment's own hash is checked for index and axes."""
+    _edit_first_setting(legacy, lambda r: {**r, "grid_hash": "0" * 12, "index": 99})
+    lines = migrate_exp(legacy)
+    first = json.loads(_setting_files(legacy)[0].read_text())
+    assert first["exp_hash"] == "0" * 12 and first["index"] == 99
+    assert any("kept from an earlier experiment (hash " + "0" * 12 in line for line in lines)
 
 
 # ---------------------------------------------------------------------------- crashes
@@ -384,3 +379,56 @@ def test_the_cli_reports_a_failed_write_as_one_error_line(legacy, monkeypatch, c
     assert main(["exp", "migrate", str(legacy)]) == 1
     err = capsys.readouterr().err
     assert err.startswith("error: ") and "No space left" in err and "Traceback" not in err
+    assert f"fct exp migrate {legacy}` again to finish" in err
+
+
+# ---------------------------------------------------------------------------- init --force leftovers
+def _forced_reinit(root: Path, first_axes: dict, second_axes: dict, run_index: int) -> None:
+    """The layout the old `init --force` left: a run of one experiment, then another experiment
+    written over exp.json, then a run of that one (settings of the first are never deleted)."""
+    first = with_axes(preset("tiny"), first_axes)
+    second = with_axes(preset("tiny"), second_axes)
+    save_exp(first, root)
+    run_setting(first, 0, root, **QUIET)
+    save_exp(second, root)
+    run_setting(second, run_index, root, **QUIET)
+    _make_legacy(root)
+
+
+def test_a_member_directory_kept_from_an_earlier_experiment_migrates_with_a_note(tmp_path, capsys):
+    """B: net.L [1, 2] run at index 0, then --force with [1, 2, 3] run at index 2. s0000_L1 is a
+    member directory of the new experiment but carries the old hash."""
+    _forced_reinit(tmp_path, {"net.L": [1, 2]}, {"net.L": [1, 2, 3]}, 2)
+    old_hash = json.loads(_setting_files(tmp_path)[0].read_text())["grid_hash"]
+    lines = migrate_exp(tmp_path)
+    assert sum("kept from an earlier experiment" in line for line in lines) == 1
+    assert any(f"(hash {old_hash}); `exp run` refuses it, as before" in line for line in lines)
+    assert all("exp_hash" in json.loads(p.read_text()) for p in _setting_files(tmp_path))
+    assert not (tmp_path / "sweep.json").exists()
+    kept = tmp_path / expand(load_exp(tmp_path))[0].relpath / "setting.json"
+    assert json.loads(kept.read_text())["exp_hash"] == old_hash
+    assert main(["exp", "status", str(tmp_path)]) == 0
+    assert main(["exp", "run", str(tmp_path), "--index", "0"]) == 1  # refused, as before
+    capsys.readouterr()
+
+
+def test_a_non_member_directory_kept_from_an_earlier_experiment_migrates_with_a_note(tmp_path):
+    """A: net.L [1, 2] run at index 0, then --force with [3] run at index 0 (another name)."""
+    _forced_reinit(tmp_path, {"net.L": [1, 2]}, {"net.L": [3]}, 0)
+    lines = migrate_exp(tmp_path)
+    assert sum("kept from an earlier experiment" in line for line in lines) == 1
+    assert all("exp_hash" in json.loads(p.read_text()) for p in _setting_files(tmp_path))
+    assert not any("grid_hash" in p.read_text() for p in _setting_files(tmp_path))
+
+
+# ---------------------------------------------------------------------------- a stale legacy file
+def test_a_legacy_file_that_no_longer_validates_says_the_old_code_could_not_load_it(tmp_path):
+    shutil.copy(FIXTURES / "legacy_sweep_readout.json", tmp_path / "sweep.json")
+    before = _snapshot(tmp_path)
+    with pytest.raises(MigrationError) as info:
+        migrate_exp(tmp_path)
+    message = str(info.value)
+    assert "meanfield.readout" in message
+    assert "old code could not load it either" in message
+    assert "validate under the current config" in message and "stale" in message
+    assert _snapshot(tmp_path) == before

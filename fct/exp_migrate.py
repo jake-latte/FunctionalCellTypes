@@ -2,7 +2,9 @@
 every setting.json) to the current layout (`exp.json`, `axes`, `exp_hash`), once, in place.
 
 Only those names change; the values, the hashes and every train / solve artefact stay as they
-are. `plan_migration` reads and checks everything and writes nothing; `apply_plan` is the only
+are. The rename is cosmetic, so it keeps the old (in)consistency instead of judging it: a
+setting.json that an earlier `init --force` experiment left behind (another hash, or a directory
+the current experiment does not own) is renamed like the rest and reported, not refused. `plan_migration` reads and checks everything and writes nothing; `apply_plan` is the only
 writer. The converted exp.json is validated as an `ExpConfig` before any file is written, and the
 legacy file is removed last. A run that was interrupted after writing exp.json (both files
 then exist) is finished by running the command again.
@@ -21,6 +23,7 @@ from pydantic import ValidationError
 from fct.exp import (
     EXP_FILE,
     LEGACY_EXP_FILE,
+    SETTING_DIRS_GLOB,
     SETTING_FILE,
     ExpConfig,
     ExpError,
@@ -40,18 +43,20 @@ class MigrationError(ExpError):
 @dataclass(frozen=True)
 class MigrationPlan:
     """What `apply_plan` writes: the new exp.json (None when a half-finished earlier run already
-    wrote the right one) and the setting.json files that still need converting."""
+    wrote the right one) and the setting.json files that still need converting; `notes` report
+    the records kept from an earlier experiment."""
 
     exp_text: str | None
     setting_texts: dict[Path, str]
     resumed: bool
+    notes: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------- pure conversion
 def convert_exp_tree(tree: dict[str, Any]) -> dict[str, Any]:
     """The experiment dict with its `grid` key renamed `axes` (in place of the key, so the
-    order is kept); an absent or null `grid` stays absent or null. ValueError if the file
-    already has `axes`, which would make the renamed key ambiguous."""
+    order is kept); an absent or null `grid` stays absent or null. MigrationError (an ExpError, so a
+    ValueError) if the file already has `axes`, which would make the renamed key ambiguous."""
     if "axes" in tree:
         raise MigrationError(
             f"the legacy {LEGACY_EXP_FILE} has an `axes` key"
@@ -87,50 +92,67 @@ def _validated(tree: dict[str, Any], root: Path) -> ExpConfig:
     try:
         return ExpConfig.model_validate(tree)
     except ValidationError as err:
+        fields = sorted({".".join(str(part) for part in e["loc"]) for e in err.errors()})
         raise MigrationError(
-            f"{root / LEGACY_EXP_FILE} does not validate as an experiment once converted: {err}"
+            f"{root / LEGACY_EXP_FILE} does not validate as an experiment once converted "
+            f"(offending: {', '.join(fields)}): {err}\n"
+            "The old code could not load it either: a legacy file must first validate "
+            "under the current config (fix the offending field), and the folder's "
+            "results are stale under the current code."
         ) from err
 
 
-def _check_record(path: Path, record: dict[str, Any], setting: Setting, expected: str) -> None:
-    """The record must be the one `run_setting` writes for this setting (hash, index, axes), so
-    that no later command rejects the migrated folder."""
+def _hash_of(path: Path, record: dict[str, Any]) -> tuple[str, bool]:
+    """The record's hash and whether it already carries the new key; MigrationError unless it
+    has exactly one of the two keys."""
     has_new, has_old = "exp_hash" in record, LEGACY_HASH_KEY in record
     if has_new and has_old:
         raise MigrationError(f"{path} has both {LEGACY_HASH_KEY} and exp_hash: check it by hand")
     if not (has_new or has_old):
         raise MigrationError(f"{path} has neither {LEGACY_HASH_KEY} nor exp_hash")
-    found = record["exp_hash"] if has_new else record[LEGACY_HASH_KEY]
-    if found != expected:
-        raise MigrationError(
-            f"{path} carries hash {found}, but {LEGACY_EXP_FILE} gives {expected}: the "
-            "hashes differ, so the setting was written under another experiment"
-        )
+    return (record["exp_hash"] if has_new else record[LEGACY_HASH_KEY]), has_new
+
+
+def _check_member(path: Path, record: dict[str, Any], setting: Setting) -> None:
+    """A record with the experiment's own hash must be the one `run_setting` writes for this
+    setting (index, axes), so that no later command rejects the migrated folder."""
     if record.get("index") != setting.index or isinstance(record.get("index"), bool):
         raise MigrationError(f"{path} has index {record.get('index')!r}, expected {setting.index}")
     if record.get("axes") != json.loads(json.dumps(setting.axes)):
         raise MigrationError(f"{path} records axis values that differ from the experiment's")
 
 
-def _setting_texts(root: Path, exp: ExpConfig) -> tuple[dict[Path, str], int]:
-    """The new text of every setting.json still carrying `grid_hash`, and how many were
-    converted already. Only the experiment's own setting directories are read (never a
-    search below ROOT, so a nested copy of an experiment is left alone)."""
+def _setting_texts(root: Path, exp: ExpConfig) -> tuple[dict[Path, str], int, list[str]]:
+    """The new text of every setting.json still carrying `grid_hash`, how many were converted
+    already, and a note per record kept from an earlier experiment. Every setting.json at the
+    setting depth `SETTING_DIRS_GLOB` is converted (nothing deeper, so a nested copy of an
+    experiment is left alone); only a record with the experiment's own hash is checked against
+    its setting, because the rename keeps an older experiment's records as they are."""
     expected = exp_hash(exp)
+    members = {s.relpath: s for s in expand(exp)}
     texts: dict[Path, str] = {}
+    notes: list[str] = []
     done = 0
-    for setting in expand(exp):
-        path = root / setting.relpath / SETTING_FILE
-        if not path.exists():
-            continue
+    for path in sorted(root.glob(SETTING_DIRS_GLOB + "/" + SETTING_FILE)):
         record = _read_json(path, SETTING_FILE)
-        _check_record(path, record, setting, expected)
-        if "exp_hash" in record:
+        found, converted = _hash_of(path, record)
+        relpath = path.parent.relative_to(root)
+        setting = members.get(relpath)
+        if setting is not None and found == expected:
+            _check_member(path, record, setting)
+        elif setting is not None:
+            notes.append(
+                f"{relpath}: kept from an earlier experiment (hash {found}); "
+                "`exp run` refuses it, as before"
+            )
+        else:
+            notes.append(f"{relpath}: kept from an earlier experiment (hash {found})")
+        if converted:
             done += 1
         else:
-            converted = {("exp_hash" if k == LEGACY_HASH_KEY else k): v for k, v in record.items()}
-            texts[path] = _dump(converted)
-    return texts, done
+            renamed = {("exp_hash" if k == LEGACY_HASH_KEY else k): v for k, v in record.items()}
+            texts[path] = _dump(renamed)
+    return texts, done, notes
 
 
 def plan_migration(root: Path) -> MigrationPlan:
@@ -149,8 +171,9 @@ def plan_migration(root: Path) -> MigrationPlan:
             f"{root} holds both {LEGACY_EXP_FILE} and {EXP_FILE}, and {EXP_FILE} is not the "
             f"conversion of {LEGACY_EXP_FILE} (already migrated?); nothing changed, check both"
         )
-    texts, done = _setting_texts(root, _validated(tree, root))
-    return MigrationPlan(None if has_exp else _dump(tree), texts, resumed=has_exp or done > 0)
+    texts, done, notes = _setting_texts(root, _validated(tree, root))
+    plan_exp = None if has_exp else _dump(tree)
+    return MigrationPlan(plan_exp, texts, resumed=has_exp or done > 0, notes=tuple(notes))
 
 
 # ---------------------------------------------------------------------------- write
@@ -170,6 +193,7 @@ def apply_plan(root: Path, plan: MigrationPlan) -> list[str]:
     lines = [f"resuming an interrupted migration of {root}"] if plan.resumed else []
     for path, text in plan.setting_texts.items():
         _write_atomically(path, text)
+    lines.extend(plan.notes)
     lines.append(
         f"rewrote {len(plan.setting_texts)} {SETTING_FILE} file(s) ({LEGACY_HASH_KEY} -> exp_hash)"
     )

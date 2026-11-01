@@ -925,7 +925,7 @@ class ExpConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_
     # experiment field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
     # build the same Config, so [0, 0.0] is a repeat), then every combination is built into a Config, so a bad axis name or value fails
     # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the experiment's `weight_lambda` field (the TrainConfig default 2e-4 unless set) unless it is an axis
-def preset(name: str, n_lambda: int | None = None) -> ExpConfig   # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full" and "modularity": N=256, P=4096, 15000 epochs (placeholders to tune), the modularity grid;
+def preset(name: str, n_lambda: int | None = None) -> ExpConfig   # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full" and "modularity": N=256, P=4096, 15000 epochs (placeholders to tune), the modularity experiment;
                                                                     # "lambda_exp": the sizes of "full" + lambda_exp(n_lambda); n_lambda is required there and rejected elsewhere; ValueError otherwise
 def spatial_tiny() -> ExpConfig                    # presets without lambda axes (FIXED_AXES_PRESETS; n_lambda is rejected): axes net.N [4, 8], P 16, linear teacher m 6 k 2, L 1, tanh, SGLD (beta 1e3, weight_lambda 0.2 = 2 beta x 1e-4), 6 epochs, CPU, spatial prior with grid embeddings, length scale 0.15, min_rel_eig 1e-2, meanfield.n_points 16
 def spatial_n_scan() -> ExpConfig                   # axes net.N [64, 128, 256, 512, 1024] (directories s000i_N<N>): P 164, m 64, k 2, L 1, tanh, g 1, weight_lambda 60 (under the lambda_w / (2 beta) convention; 3e-3 under the old lambda_w x form), rate_lambda 0, SGLD beta 1e4, lr 1e-2, 250000 epochs, float64, monitor every 5000 (8 bins, 5 shuffles), same spatial prior
@@ -933,7 +933,7 @@ def spatial_exp() -> ExpConfig                    # axes net.phi [id, tanh, relu
 def phase_transition() -> ExpConfig               # axes spatial.d [1, 2, 3, 4] x spatial.lambda_max [0.1, 0.5, 0.75, 0.9, 0.99] x net.B [8] (20 settings, d slowest; B is a one-value axis so no other exp.json gains a field); phi id, L 1, weight_lambda 1 (the lambda_max rule), every population random-embedded (seed 0, shared by the ensemble members) with length scale 0.15, min_rel_eig 1e-2; otherwise as spatial_exp. Each kernel is rescaled to top eigenvalue lambda_max, so the per-weight prior variance shrinks with the population size (intended). SGLD at lr 1e-2: the check's quantity lr * c * stiffest (c = weight_lambda / (2 beta)) is lr * k / 2, k = 2 c r s the curvature of the stiffest prior mode, with stiffest = r s = 1 / (min_rel_eig lambda_max)^2 where the floor binds (4e4 at 0.5, 1e6 at 0.1; d = 4 is lower). It passes everywhere, but at lambda_max 0.1, d <= 3, lr * k = 1.0 on the stiffest modes, where Euler-Maruyama gives exactly 2x the target variance (target / (1 - lr k / 2)): the total prior power of U / V is inflated by about +13% / +3.6% / +0.8% at d = 1 / 2 / 3 and +0.2% at d = 4; every other lambda_max row is < 0.3% (the data term adds < 5e-4 to lr * k). Run length: the softest prior mode relaxes on tau ~ 2 beta lambda_max^2 / (lr weight_lambda) ~ 2e6 lambda_max^2 epochs (1e4 at 0.1, ~1e6 at 0.99), so at 250k epochs settings with lambda_max >= 0.5 are not fully stationary from the N(0, 1) init. This preset has no results reader or solve stage yet (the readers refuse B > 1 and need net.L, phi, rate_lambda)
 def lambda_exp(n_lambda) -> ExpConfig             # linear teacher; axes net.L [1,2], net.phi [tanh, relu], train.rate_lambda and train.weight_lambda both np.logspace(-6, 0, n_lambda): 4 * n_lambda**2 settings
 def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json; load raises FileNotFoundError naming the path
-def expand(exp) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given exp.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow a grid in a fresh ROOT)
+def expand(exp) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given exp.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow an experiment in a fresh ROOT)
 def get_setting(exp, index) -> Setting                 # ExpError (a ValueError) "index i is out of range; valid indices are 0..N-1"
 def setting_dir(root, setting) -> Path                   # ROOT / setting.relpath (see Layout)
 def data_config(exp, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the experiment
@@ -967,17 +967,23 @@ CLI: `python -m fct exp init ROOT --preset lambda_exp --n-lambda 8 [--axis net.L
 from `exp count`. `exp status` and `exp run` take `--stage train|solve` (default train): train the nets or solve the
 saddle points of the same initialised experiment, locally or as an array job (`jobs/fct_solve.sh`); `list` and `count` do not depend on the stage.
 `exp migrate ROOT` (`fct/exp_migrate.py`, the only module that knows the legacy names) converts a folder that holds a legacy
-`sweep.json`: it becomes `exp.json` (key `grid` renamed `axes`, null or absent kept; a file with both keys is a ValueError) and the
-`setting.json` of each of the experiment's own setting directories (from `expand`, never a search below ROOT, so a nested copy or a
-stray file is left alone) gets `grid_hash` renamed `exp_hash`; hashes and artefacts are untouched. `plan_migration` reads and checks
-everything and writes nothing: the converted file must validate as `ExpConfig`, and every setting.json must be readable JSON and carry
-the hash, `index` and `axes` that the experiment gives that directory. `apply_plan` then converts the setting files, writes exp.json,
-and removes sweep.json last, each file by `<name>.tmp` and `os.replace`. A folder with no setting files migrates. A sweep.json with no
-exp.json, or with an exp.json that is exactly its conversion, is an interrupted run: running the command again finishes it (setting
-files already converted are accepted when their `exp_hash` is the experiment's). It refuses, changing nothing, if exp.json exists
-without sweep.json ("already migrated"), if both exist and exp.json is not the conversion, if sweep.json is missing, or if any file
-is inconsistent. `load_exp` on a folder with sweep.json and no exp.json raises `UnmigratedExpError` naming `exp migrate`, so every
-command that loads the experiment (and `exp init`) stops with that message.
+`sweep.json`: it becomes `exp.json` (key `grid` renamed `axes`, null or absent kept; a file with both keys is a `MigrationError`, an
+`ExpError` and so a ValueError) and every `setting.json` at the setting depth `SETTING_DIRS_GLOB` (never deeper, so a nested copy of an
+experiment is left alone) gets `grid_hash` renamed `exp_hash`, value kept; hashes and artefacts are untouched. The rename is cosmetic, so it
+keeps the old (in)consistency instead of judging it: a record left by an earlier experiment of the same folder (an `init --force` never
+deletes settings) is renamed too and reported as "kept from an earlier experiment", with ", `exp run` refuses it, as before" when its
+directory belongs to the current experiment under another hash. `plan_migration` reads and checks everything and writes nothing: the
+converted file must validate as `ExpConfig` (a legacy file that does not, say one carrying the removed `meanfield.readout`, is refused
+naming the field: the old code could not load it either, so the folder's results are stale under the current code), every
+setting.json must be readable JSON with exactly one of the two hash keys, and a record with the experiment's own hash must have the
+`index` and `axes` that the experiment gives its directory. `apply_plan` then converts the setting files, writes exp.json, and removes
+sweep.json last, each file by `<name>.tmp` and `os.replace`; a failed write (an `OSError`) leaves a folder that running the command
+again finishes. A folder with no setting files migrates. A sweep.json with no exp.json, or with an exp.json that is exactly its
+conversion, is an interrupted run: running the command again finishes it (setting files already converted are accepted whatever their
+`exp_hash`). It refuses, changing nothing, if exp.json exists without sweep.json ("already migrated"), if both exist and exp.json is not
+the conversion, if sweep.json is missing, or if any file is inconsistent. Nothing else should run the old code on the folder meanwhile (a
+checkout or SLURM job still on the old code would write `grid_hash` again). `load_exp` on a folder with sweep.json and no exp.json raises
+`UnmigratedExpError` naming `exp migrate`, so every command that loads the experiment (and `exp init`) stops with that message.
 Solver settings are `meanfield` in exp.json, set with `--set meanfield.n_points=50 --set meanfield.solver.n_outer=100 ...` at `exp init`. `lrtune.py` and `notebooks/build_modularity.py` are written for the modularity experiment (they read
 `setting.axes["net.L"]`, `["net.phi"]`, `["train.rate_lambda"]`); `report.py` needs those three axes too (see below).
 
@@ -1285,7 +1291,7 @@ Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD
 
 ## spatial_exp.py and the spatial-experiment notebook
 
-`notebooks/build_spatial_exp.py` builds `spatial_exp.ipynb` (source only; an executed copy goes to the ignored `tmp/`): every figure of the spatial notebook for ONE setting of an already-run spatial experiment, instead of a net the notebook trains itself. Its cells are `build_spatial.py`'s, imported as module constants so the two notebooks cannot drift; only the parameters, the setup, the grid listing and the loader are its own.
+`notebooks/build_spatial_exp.py` builds `spatial_exp.ipynb` (source only; an executed copy goes to the ignored `tmp/`): every figure of the spatial notebook for ONE setting of an already-run spatial experiment, instead of a net the notebook trains itself. Its cells are `build_spatial.py`'s, imported as module constants so the two notebooks cannot drift; only the parameters, the setup, the settings listing and the loader are its own.
 
 - Parameters (the `parameters`-tagged cell): `ROOT` (the experiment ROOT, None reads `$FCT_EXP_ROOT`), `SETTING` (axis values of the setting, e.g. `{"net.N": 256}`, a subset of the experiment's axes that picks one setting), `DEVICE`. The other `--set` parameters are the ones the shared cells assign (`PHI_SORT_LATENT`, `PHI_TRIALS`, `N_EXAMPLES`, `N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). The experiment must have a spatial section on a linear teacher (`layer_spaces` raises otherwise).
 - `fct.spatial_exp` (I/O + wiring, no plotting): `select_setting(root, values, device="cpu") -> ExpSetting(setting, directory, cfg, status)` finds the directory through `fct.exp.find_setting_dir` (values compared as `same_value`, so `8.0` finds `8`); the match is computed over the whole experiment, so values or axes outside it, or matching several settings (run or not), raise `LookupError`, and a setting of the experiment that was never run comes back with status `"missing"`; a run setting's directory is confirmed by `find_setting_dir`. `settings_table` shares its (index, setting, status) rows with `exp status` (`fct.exp.setting_statuses`). The device override is validated by `Config`. `settings_table(root)` is the markdown table (index, every axis, `setting_status`); `load_exp_run(chosen) -> (TrainRun, test Dataset)` loads the trained net, history and training set and builds the 3^k test set, and raises `ValueError` unless the status is `"done"`; the loader sets `PRIOR_COEFF = fct.train.prior_coefficient(cfg.train)` (and `OPTIMIZER`, `BETA`, `LR`, `TRAIN_SEED`) from the setting's config for the shared cells.
