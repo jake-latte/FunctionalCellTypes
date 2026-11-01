@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in progress
+status: done
 ---
 
 # Presets become base experiments stored as JSON in fct/presets/
