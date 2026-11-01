@@ -1,0 +1,152 @@
+{
+  "description": "Spatially embedded linear-teacher nets, N = 512, one hidden layer, SGLD, float64, with the MIR monitor: net.phi in {id, tanh, relu} x data.n_latents in {2, 4} x hidden length scale in {0.05, 0.1, 0.15, 0.2} (24 settings). With L = 1 the one hidden kernel is both K^1_post and K^2_pre, so a single length-scale axis ties them; the input and output kernels stay at 0.15. weight_lambda 20 is under the lambda_w / (2 beta) convention: 2 beta x 1e-3 at beta 1e4, the same effective prior as lambda_w = 1e-3 when the loss is lambda_w times the prior form. linear_teacher.n_latents (2) is only the base value; the data.n_latents axis wins in every setting. Caveat: with min_rel_eig 1e-2 at N = 512, about 500 of the 512 hidden eigenvalues are floored at 1e-2 x lambda_max(K), and lambda_max grows with the length scale. The mean hidden-side prior variance diag(M^-1) is therefore 1.62 / 2.26 / 2.90 / 3.54 for length scales 0.05 / 0.1 / 0.15 / 0.2 (diag K = 1): the length-scale axis is confounded with prior strength.",
+  "N": 512,
+  "P": 128,
+  "n_epochs": 250000,
+  "lr": 0.01,
+  "log_int": 1000,
+  "save_int": 5000,
+  "monitor_int": 5000,
+  "monitor_bins": 8,
+  "monitor_shuffles": 5,
+  "linear_teacher": {
+    "n_features": 64,
+    "n_latents": 2,
+    "latent_range": 1.0
+  },
+  "object_action": {
+    "grid_size": 5,
+    "max_objects": 3
+  },
+  "what_where": {
+    "n_motifs": 8
+  },
+  "seeds": {
+    "data": 0,
+    "net": 0,
+    "train": 0
+  },
+  "dtype": "float64",
+  "device": "auto",
+  "task": "linear_teacher",
+  "L": 1,
+  "g": 1.0,
+  "phi": "tanh",
+  "weight_lambda": 20.0,
+  "rate_lambda": 0.0,
+  "optimizer": "sgld",
+  "beta": 10000.0,
+  "spatial": {
+    "d": 1,
+    "box": 1.0,
+    "input": {
+      "embedding": {
+        "kind": "grid",
+        "shape": null,
+        "seed": 0
+      },
+      "kernel": {
+        "length_scale": 0.15,
+        "amplitude": 1.0
+      }
+    },
+    "hidden": {
+      "embedding": {
+        "kind": "grid",
+        "shape": null,
+        "seed": 0
+      },
+      "kernel": {
+        "length_scale": 0.15,
+        "amplitude": 1.0
+      }
+    },
+    "output": {
+      "embedding": {
+        "kind": "grid",
+        "shape": null,
+        "seed": 0
+      },
+      "kernel": {
+        "length_scale": 0.15,
+        "amplitude": 1.0
+      }
+    },
+    "min_rel_eig": 0.01,
+    "lambda_max": null
+  },
+  "meanfield": {
+    "n_points": 100,
+    "beta": null,
+    "prior_scale": null,
+    "alpha": null,
+    "learning_prefactor": null,
+    "rate_tilt": null,
+    "solver": {
+      "sampler": "hmc",
+      "n_outer": 300,
+      "n_inner_max": 30,
+      "inner_tol": 0.01,
+      "inner_tol_mc": 2.0,
+      "eta_phi": 0.05,
+      "eta_phihat": 0.05,
+      "eta_max": 0.25,
+      "eta_grow": 1.1,
+      "max_backtrack": 8,
+      "eta_min_rel": 0.001,
+      "max_div_frac": 0.02,
+      "max_h2_growth": 10.0,
+      "max_h2_prior_ratio": 100.0,
+      "max_mc_err_growth": 10.0,
+      "eps_collapse": 0.01,
+      "project_tilt": true,
+      "tilt_floor": 0.05,
+      "max_rel_step": 0.1,
+      "inner_step_control": "progress",
+      "eta_max_phihat": 0.25,
+      "phi_step_scale": "kernel",
+      "inner_start": "target",
+      "tilt_tripwire_resid": 0.9,
+      "tilt_tripwire_steps": 3,
+      "pd_floor_rel": 1e-08,
+      "inv_floor_rel": 0.0001,
+      "n_chains": 2048,
+      "n_trans": 2,
+      "n_trans_outer": 5,
+      "n_leap": 10,
+      "eps0": 0.05,
+      "target_accept": 0.75,
+      "adapt_rate": 0.05,
+      "warmup_trans": 200,
+      "sample_dtype": "float32",
+      "jitter_rel": 1e-06,
+      "precondition": true,
+      "n_importance_samples": 4096,
+      "importance_proposal_scale": 1.0,
+      "min_ess_drop": 0.1,
+      "min_ess_frac": 0.01,
+      "init": "lazy",
+      "n_init_samples": 20000,
+      "log_int": 5,
+      "save_int": 10,
+      "seed": 0
+    }
+  },
+  "axes": {
+    "net.phi": [
+      "id",
+      "tanh",
+      "relu"
+    ],
+    "data.n_latents": [
+      2,
+      4
+    ],
+    "spatial.hidden.kernel.length_scale": [
+      0.05,
+      0.1,
+      0.15,
+      0.2
+    ]
+  }
+}

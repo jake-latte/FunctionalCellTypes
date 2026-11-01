@@ -26,9 +26,12 @@ import itertools
 import json
 import math
 import numbers
+import os
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
@@ -64,7 +67,7 @@ from fct.config import (
 from fct.data import Dataset, get_dataset, task_dims
 from fct.meanfield import meanfield_hash, run_meanfield
 from fct.monitor import make_mir_monitor
-from fct.spatial import EmbeddingSpec, KernelSpec, PopulationSpec, SpatialConfig
+from fct.spatial import SpatialConfig
 from fct.train import load_trained, train_from_config
 
 EXP_FILE = "exp.json"
@@ -170,6 +173,10 @@ class Seeds(StrictModel):
 class ExpConfig(StrictModel):
     """Shared settings of the runs, and the axes they vary over; see `preset`.
 
+    `description` is free text saying what the experiment is. It is documentation only: it never
+    enters a hash or a directory name, `same_experiment` ignores it, and exp.json omits it when
+    it is None.
+
     The same data, net and training seeds are used for every setting, so settings differ only
     in the axes. Everything else is the base `Config` a setting starts from (the shared
     network and loss fields `L`, `g`, `phi`, `weight_lambda`, ... are the library defaults unless set). `axes` maps a dotted `Config` path to the list
@@ -189,6 +196,7 @@ class ExpConfig(StrictModel):
     stage refuses a spatial setting (the solver knows only the iid prior).
     """
 
+    description: str | None = None
     N: PosInt
     P: PosInt
     n_epochs: NonNegInt
@@ -233,7 +241,7 @@ class ExpConfig(StrictModel):
         elif self.spatial is not None:
             # The built-in axes: every setting must still build a valid Config (the spatial
             # section ties weight_lambda to lambda_max). Experiments without one have no such
-            # cross-field rule, and the module-level presets are built before these helpers exist.
+            # cross-field rule, so they are not checked here.
             _validate_combinations(self)
         return self
 
@@ -260,241 +268,119 @@ def data_config(exp: ExpConfig, task: str) -> DataConfig:
     return DataConfig(**{**fields, "D_in": d_in})
 
 
-_SIZE_PRESETS: dict[str, ExpConfig] = {
-    # Seconds per setting on a CPU: for checking the pipeline, not for results.
-    "tiny": ExpConfig(
-        N=8,
-        P=32,
-        n_epochs=6,
-        lr=1e-2,
-        log_int=2,
-        save_int=2,
-        monitor_int=2,
-        monitor_bins=4,
-        monitor_shuffles=2,
-        linear_teacher=LinearTeacherParams(n_features=8, n_latents=3, latent_range=1.0),
-        object_action=ObjectActionParams(grid_size=3, max_objects=2),
-        what_where=WhatWhereParams(n_motifs=4),
-        device="cpu",
-    ),
-    # Cluster sizes; N, P and n_epochs are the knobs to tune before submitting.
-    "full": ExpConfig(
-        N=256,
-        P=4096,
-        n_epochs=15_000,
-        lr=1e-3,
-        log_int=100,
-        save_int=500,
-        monitor_int=100,
-        monitor_bins=10,
-        monitor_shuffles=5,
-        linear_teacher=LinearTeacherParams(n_features=64, n_latents=3, latent_range=1.0),
-        object_action=ObjectActionParams(grid_size=5, max_objects=3),
-        what_where=WhatWhereParams(n_motifs=8),
-    ),
-}
+def with_axes(exp: ExpConfig, axes: dict[str, list], description: str | None = None) -> ExpConfig:
+    """A validated copy of `exp` over `axes`. The copy has `description` (None unless given): the
+    description of `exp` describes its own axes, which no longer apply."""
+    return ExpConfig.model_validate({**exp.model_dump(), "axes": axes, "description": description})
 
 
-_SPATIAL_POPULATION = PopulationSpec(kernel=KernelSpec(length_scale=0.15))
-_SPATIAL_PRIOR = SpatialConfig(
-    input=_SPATIAL_POPULATION,
-    hidden=_SPATIAL_POPULATION,
-    output=_SPATIAL_POPULATION,
-    min_rel_eig=1e-2,
-)
+# ---------------------------------------------------------------------------- the presets
+class PresetError(ExpError):
+    """A preset that cannot be used: unknown, unreadable or invalid. The message names the file."""
 
 
-def spatial_tiny() -> ExpConfig:
-    """Seconds per setting on a CPU, for checking the spatial pipeline (not for results): a
-    linear teacher, one hidden layer of N in {4, 8} units under the spatial prior, SGLD.
-
-    weight_lambda 0.2 is under the lambda_w / (2 beta) convention: 2 beta x 1e-4 at beta 1e3."""
-    return ExpConfig(
-        N=8,
-        P=16,
-        n_epochs=6,
-        lr=1e-2,
-        log_int=2,
-        save_int=2,
-        monitor_int=2,
-        monitor_bins=4,
-        monitor_shuffles=2,
-        linear_teacher=LinearTeacherParams(n_features=6, n_latents=2, latent_range=1.0),
-        object_action=ObjectActionParams(grid_size=3, max_objects=2),
-        what_where=WhatWhereParams(n_motifs=4),
-        L=1,
-        phi="tanh",
-        optimizer="sgld",
-        weight_lambda=0.2,
-        beta=1e3,
-        meanfield=MeanFieldConfig(n_points=16),  # at most P, so a solve reaches the solver
-        spatial=_SPATIAL_PRIOR,
-        device="cpu",
-        axes={"net.N": [4, 8]},
-    )
+# A preset is `<name>.json` in the presets folder; the stem must be a Python-style identifier so
+# it works as a command-line value and in file names without quoting.
+PRESET_NAME_RULE = "[A-Za-z_][A-Za-z0-9_]*"
+_PRESET_STEM = re.compile(PRESET_NAME_RULE)
+PRESET_SUFFIX = ".json"
 
 
-def spatial_n_scan() -> ExpConfig:
-    """Width scan of a spatially embedded linear-teacher net: N in {64, ..., 1024}, one hidden
-    layer, SGLD, float64, with the MIR monitor.
-
-    weight_lambda 60 is under the lambda_w / (2 beta) convention: 2 beta x 3e-3 at beta 1e4, the
-    same effective prior as lambda_w = 3e-3 when the loss is lambda_w times the prior form."""
-    return ExpConfig(
-        N=64,
-        P=164,
-        n_epochs=250_000,
-        lr=1e-2,
-        log_int=1000,
-        save_int=5000,
-        monitor_int=5000,
-        monitor_bins=8,
-        monitor_shuffles=5,
-        linear_teacher=LinearTeacherParams(n_features=64, n_latents=2, latent_range=1.0),
-        object_action=ObjectActionParams(grid_size=5, max_objects=3),
-        what_where=WhatWhereParams(n_motifs=8),
-        L=1,
-        g=1.0,
-        phi="tanh",
-        weight_lambda=60.0,
-        rate_lambda=0.0,
-        optimizer="sgld",
-        beta=1e4,
-        spatial=_SPATIAL_PRIOR,
-        dtype="float64",
-        axes={"net.N": [64, 128, 256, 512, 1024]},
-    )
+def packaged_presets() -> Traversable:
+    """The presets folder that ships in the library (a real folder, or a folder inside a zip)."""
+    return resources.files("fct").joinpath("presets")
 
 
-def spatial_exp() -> ExpConfig:
-    """Spatially embedded linear-teacher nets, N = 512, one hidden layer, SGLD, float64,
-    with the MIR monitor: phi in {id, tanh, relu} x teacher latents in {2, 4} x hidden length
-    scale in {0.05, 0.1, 0.15, 0.2} (24 settings).
-
-    With L = 1 the one hidden kernel is both K^1_post and K^2_pre, so a single length-scale axis
-    ties them; the input and output kernels stay at 0.15.
-
-    weight_lambda 20 is under the lambda_w / (2 beta) convention: 2 beta x 1e-3 at beta 1e4, the
-    same effective prior as lambda_w = 1e-3 when the loss is lambda_w times the prior form.
-
-    `linear_teacher.n_latents` (2) in exp.json is only the base value; the `data.n_latents`
-    axis wins in every setting.
-
-    Caveat: with min_rel_eig 1e-2 at N = 512, about 500 of the 512 hidden eigenvalues are floored
-    at 1e-2 x lambda_max(K), and lambda_max grows with the length scale. The mean hidden-side
-    prior variance diag(M^-1) is therefore 1.62 / 2.26 / 2.90 / 3.54 for length scales 0.05 / 0.1
-    / 0.15 / 0.2 (diag K = 1): the length-scale axis is confounded with prior strength."""
-    base = spatial_n_scan().model_copy(update={"N": 512, "P": 128, "weight_lambda": 20.0})
-    return with_axes(  # validates the whole experiment, so a wrong axis or value fails here
-        base,
-        {
-            "net.phi": ["id", "tanh", "relu"],
-            "data.n_latents": [2, 4],
-            "spatial.hidden.kernel.length_scale": [0.05, 0.1, 0.15, 0.2],
-        },
-    )
+def _folder(directory: Path | str | None) -> Traversable:
+    return packaged_presets() if directory is None else Path(directory)
 
 
-def with_axes(exp: ExpConfig, axes: dict[str, list]) -> ExpConfig:
-    """A validated copy of `exp` over `axes`."""
-    return ExpConfig.model_validate({**exp.model_dump(), "axes": axes})
+def _is_preset_file(entry: Traversable) -> bool:
+    """A regular file `<stem>.json`, not hidden, that is a candidate for a preset (a symlink to a
+    file counts; one to a folder or to nothing does not)."""
+    name = entry.name
+    return entry.is_file() and name.endswith(PRESET_SUFFIX) and not name.startswith(".")
 
 
-def phase_transition() -> ExpConfig:
-    """Phase transition of a linear one-hidden-layer net in the spatial dimension d and the
-    prior strength: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9,
-    0.99} (20 settings, d slowest), phi "id", L = 1, SGLD, float64, MIR monitor, the sizes of
-    `spatial_exp`, and an ensemble of B = 8 networks per setting.
-
-    Every population is embedded at random (uniform on the d-torus, seed 0, so the members of an
-    ensemble share one geometry), which makes any N valid in any d; the wrapped Gaussian is a
-    product over the axes, so every kernel is PSD. All populations have length scale 0.15. Each
-    kernel is rescaled to top eigenvalue lambda_max, so the per-weight prior variance shrinks
-    with the population size; weight_lambda is 1 (the `Config` rule under lambda_max).
-
-    B is a one-value axis rather than a shared field: an exp.json written by every other preset
-    then stays as it was.
-
-    SGLD at lr 1e-2: the prior's stiffest curvature k grows like 1 / (min_rel_eig lambda_max)^2,
-    and the stability check passes everywhere, but at lambda_max 0.1 (d <= 3) lr * k = 1 on the
-    stiffest modes, so Euler-Maruyama doubles their variance (prior power inflated by up to
-    about 13% at d = 1). The softest prior mode relaxes on about 2e6 lambda_max^2 epochs
-    (1e4 at 0.1, 1e6 at 0.99), so at 250k epochs settings with lambda_max >= 0.5 are not fully
-    stationary from the N(0, 1) initialisation."""
-    population = PopulationSpec(
-        embedding=EmbeddingSpec(kind="random"), kernel=KernelSpec(length_scale=0.15)
-    )
-    spatial = SpatialConfig(
-        input=population, hidden=population, output=population, min_rel_eig=1e-2
-    )
-    base = spatial_exp().model_copy(update={"phi": "id", "weight_lambda": 1.0, "spatial": spatial})
-    return with_axes(
-        base,
-        {
-            "spatial.d": [1, 2, 3, 4],
-            "spatial.lambda_max": [0.1, 0.5, 0.75, 0.9, 0.99],
-            "net.B": [8],
-        },
-    )
+def _list_presets(directory: Path | str | None) -> tuple[list[str], list[str]]:
+    """`(names, ignored)` in the folder: the names of the usable presets, sorted, and the
+    `*.json` files ignored because their stem breaks `PRESET_NAME_RULE`. Subdirectories, hidden
+    files and files of other kinds (a README) are neither."""
+    folder = _folder(directory)
+    try:
+        entries = [e for e in folder.iterdir() if _is_preset_file(e)]
+    except OSError as err:
+        raise PresetError(f"cannot list the presets folder {folder}: {err}") from err
+    stems = sorted(e.name.removesuffix(PRESET_SUFFIX) for e in entries)
+    names = [stem for stem in stems if _PRESET_STEM.fullmatch(stem)]
+    ignored = [stem + PRESET_SUFFIX for stem in stems if not _PRESET_STEM.fullmatch(stem)]
+    return names, ignored
 
 
-# Presets with their own axes and no lambda axes, by name; each takes no argument.
-FIXED_AXES_PRESETS: dict[str, Callable[[], ExpConfig]] = {
-    "spatial_tiny": spatial_tiny,
-    "spatial_n_scan": spatial_n_scan,
-    "spatial_exp": spatial_exp,
-    "phase_transition": phase_transition,
-}
+def preset_names(directory: Path | str | None = None) -> list[str]:
+    """The presets available now, sorted: found when called, so a file added to the folder is a
+    preset at once. `directory` replaces the packaged folder."""
+    return _list_presets(directory)[0]
 
 
-def lambda_exp(n_lambda: int) -> ExpConfig:
-    """Linear-teacher experiment over depth, activation and both regularisers: L in {1, 2}, phi in
-    {tanh, relu}, rate_lambda and weight_lambda each `n_lambda` log-spaced values in [1e-6, 1].
-    Cluster sizes; the shared sizes are the knobs to tune before submitting."""
-    if n_lambda < 1:
-        raise ValueError(f"n_lambda must be at least 1, got {n_lambda}")
-    lambdas = np.logspace(-6, 0, n_lambda).tolist()
-    axes = {
-        "net.L": [1, 2],
-        "net.phi": ["tanh", "relu"],
-        "train.rate_lambda": lambdas,
-        "train.weight_lambda": lambdas,
-    }
-    return with_axes(_SIZE_PRESETS["full"], axes)
+def _unknown_preset_message(
+    name: str, folder: Traversable, names: list[str], ignored: list[str]
+) -> str:
+    message = f"unknown preset {name!r}; available in {folder}: {names}"
+    if ignored:
+        message += (
+            f". Ignored (the name before {PRESET_SUFFIX} must match {PRESET_NAME_RULE}): {ignored}"
+        )
+    return message
 
 
-# Presets with explicit axes, by name; each takes n_lambda, the points per lambda axis.
-LAMBDA_PRESETS: dict[str, Callable[[int], ExpConfig]] = {"lambda_exp": lambda_exp}
-PRESET_NAMES = ("tiny", "full", "modularity", *LAMBDA_PRESETS, *FIXED_AXES_PRESETS)
-
-
-def preset(name: str, n_lambda: int | None = None) -> ExpConfig:
-    """A ready-made experiment. `tiny` and `full` are two sizes of the modularity
-    experiment (`modularity` is `full`); the lambda presets need `n_lambda`, the others reject
-    it."""
-    if name not in PRESET_NAMES:
-        raise ValueError(f"unknown preset {name!r}; valid: {sorted(PRESET_NAMES)}")
-    if name in FIXED_AXES_PRESETS:
-        if n_lambda is not None:
-            raise ValueError(f"preset {name!r} has no lambda axes, so n_lambda does not apply")
-        return FIXED_AXES_PRESETS[name]()
-    if name in LAMBDA_PRESETS:
-        if n_lambda is None:
-            raise ValueError(f"preset {name!r} needs n_lambda (points per lambda axis)")
-        return LAMBDA_PRESETS[name](n_lambda)
-    if n_lambda is not None:
-        raise ValueError(f"preset {name!r} has no lambda axes, so n_lambda does not apply")
-    return _SIZE_PRESETS["tiny" if name == "tiny" else "full"]
+def preset(name: str, directory: Path | str | None = None) -> ExpConfig:
+    """The base experiment `<directory>/<name>.json` (the packaged `fct/presets` by default),
+    validated. PresetError, naming the full path, if the name is unknown (the message lists
+    the presets and the ignored files) or the file cannot be read or is not a valid experiment."""
+    names, ignored = _list_presets(directory)
+    folder = _folder(directory)
+    if name not in names:
+        raise PresetError(_unknown_preset_message(name, folder, names, ignored))
+    path = folder.joinpath(name + PRESET_SUFFIX)
+    try:
+        return ExpConfig.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as err:
+        raise PresetError(f"cannot read the preset file {path}: {err}") from err
+    except ValidationError as err:  # also covers JSON that does not parse
+        raise PresetError(f"the preset file {path} is not a valid experiment: {err}") from err
 
 
 def exp_path(root: Path) -> Path:
     return Path(root) / EXP_FILE
 
 
+def exp_text(exp: ExpConfig) -> str:
+    """The text of exp.json. The description is left out when there is none, so an experiment
+    without one has the text it had before the field existed."""
+    exclude = {"description"} if exp.description is None else None
+    return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
+
+
+def write_exp_text(path: Path, text: str) -> None:
+    """Write `text` as the exp.json at `path`, the one way exp.json is written: UTF-8, through a
+    `.tmp` sibling renamed over the target so a crash leaves the old file or the new, never half."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def save_exp(exp: ExpConfig, root: Path) -> None:
     path = exp_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(exp.model_dump_json(indent=2) + "\n")
+    write_exp_text(path, exp_text(exp))
+
+
+def same_experiment(a: ExpConfig, b: ExpConfig) -> bool:
+    """Whether two experiments are the same one: every field equal except the description,
+    which is documentation and may be edited without changing what runs."""
+    return a.model_dump(exclude={"description"}) == b.model_dump(exclude={"description"})
 
 
 def load_exp(root: Path) -> ExpConfig:
@@ -508,7 +394,7 @@ def load_exp(root: Path) -> ExpConfig:
                 f"run `python -m fct exp migrate {root}` once to convert it"
             )
         raise FileNotFoundError(f"{path} not found")
-    return ExpConfig.model_validate_json(path.read_text())
+    return ExpConfig.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------------------- the axes

@@ -30,6 +30,7 @@ from fct.exp import (
     Setting,
     exp_hash,
     expand,
+    write_exp_text,
 )
 
 LEGACY_AXES_KEY = "grid"
@@ -73,7 +74,7 @@ def _dump(tree: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------- read, check
 def _read_json(path: Path, what: str) -> dict[str, Any]:
     try:
-        tree = json.loads(path.read_text())
+        tree = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as err:
         raise MigrationError(f"{path} is not valid JSON ({what}): {err}") from err
     if not isinstance(tree, dict):
@@ -81,11 +82,19 @@ def _read_json(path: Path, what: str) -> dict[str, Any]:
     return tree
 
 
+def _without_description(tree: dict[str, Any]) -> dict[str, Any]:
+    """The description is documentation: editing it must not make a resumed migration refuse."""
+    return {key: value for key, value in tree.items() if key != "description"}
+
+
 def _exp_json_is_the_conversion(root: Path, converted: dict[str, Any]) -> bool:
     try:
-        return json.loads((root / EXP_FILE).read_text()) == converted
+        written = json.loads((root / EXP_FILE).read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return False
+    return isinstance(written, dict) and _without_description(written) == _without_description(
+        converted
+    )
 
 
 def _validated(tree: dict[str, Any], root: Path) -> ExpConfig:
@@ -181,7 +190,7 @@ def _write_atomically(path: Path, text: str) -> None:
     """Write `<name>.tmp` beside the target and rename it over, so a crash leaves each file
     either old or new, never half-written."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -198,7 +207,7 @@ def apply_plan(root: Path, plan: MigrationPlan) -> list[str]:
         f"rewrote {len(plan.setting_texts)} {SETTING_FILE} file(s) ({LEGACY_HASH_KEY} -> exp_hash)"
     )
     if plan.exp_text is not None:
-        _write_atomically(root / EXP_FILE, plan.exp_text)
+        write_exp_text(root / EXP_FILE, plan.exp_text)
         lines.append(f"wrote {root / EXP_FILE} ({LEGACY_AXES_KEY} -> axes)")
     (root / LEGACY_EXP_FILE).unlink()
     lines.append(f"removed {root / LEGACY_EXP_FILE}")

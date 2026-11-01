@@ -41,9 +41,9 @@ from fct.modularity import neuron_factor_information
 from fct.report import SettingResult, load_results
 from fct.tuning import TuningCurves
 from tests.draw_helpers import FakeDeviceTensor, on_fake_device
-from tests.report_helpers import QUIET, tiny_phase_exp
+from tests.report_helpers import QUIET, TWO_LAMBDAS, tiny_phase_exp
 
-LAMBDAS = [1e-6, 1.0]  # lambda_exp(2)
+LAMBDAS = TWO_LAMBDAS
 GLOBAL = {"depth": 1, "phi": "tanh", "kind": "corrected"}
 
 

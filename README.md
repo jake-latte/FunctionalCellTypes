@@ -31,7 +31,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `model.py`, `train.py` | MLP and the training loop with checkpoint / resume and an optional monitor hook |
 | `modularity.py` | rank binning, plug-in mutual information, preference ratio, MIR, dead neurons, shuffle baseline and bias correction (pure functions) |
 | `monitor.py` | `make_mir_monitor`: the training hook that records per-layer MIR during training |
-| `exp.py` | an experiment, a batch of runs over varied `Config` fields (its axes): `ExpConfig`, `expand`, `run_setting`, `setting_status`, presets |
+| `exp.py` | an experiment, a batch of runs over varied `Config` fields (its axes): `ExpConfig`, `expand`, `run_setting`, `setting_status`, preset readers; the presets themselves are the JSON files in `presets/` |
 | `report.py` | read-only loading of an experiment and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
 | `exp_view.py` | from an experiment ROOT to the figures of a `lambda_exp` experiment (the phase-transition notebook): snapping a setting to the axis values, MIR records of one depth and activation, tuning curves of one layer |
 | `spatial_view.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels (the notebook draws its own figures) |
@@ -70,11 +70,7 @@ with equations, are in `notebooks/modularity.ipynb` and `fct/modularity.py`.
 settings are the Cartesian product in the order written (first axis slowest), so index `i` is stable. Sizes,
 seeds and the task parameters are shared by all settings (`--set N=64 --set n_epochs=2000 ...`); an axis
 overrides the shared value, except fields the experiment owns (data size, seeds, log/save/monitor schedules).
-Presets: `tiny` (seconds per setting on a CPU, a pipeline check that learns nothing meaningful), `full` and
-`modularity` (cluster sizes, placeholders to tune; the 36-setting experiment of 3 tasks x layers {1, 3, 5} x phi
-{tanh, relu} x rate regulariser {0, 1e-3}, directories `ROOT/<task>/L{L}_{phi}_r{rate}/`, weight regulariser at
-its library default), and `lambda_exp --n-lambda N_LAMBDA` (linear teacher, L in {1, 2}, phi in {tanh, relu},
-`rate_lambda` and `weight_lambda` each `N_LAMBDA` log-spaced values in [1e-6, 1]). Other experiments use directories
+Base experiments are the presets (below). Other experiments use directories
 `ROOT/<task>/s{index:04d}_<label>/`, each with a `setting.json` recording its axis values, so a notebook can
 find a setting from its values (`fct.exp.find_setting_dir`). `--axis PATH=[values]` replaces or adds an axis.
 Indices follow the product order, so adding a value to any axis but the first renumbers the settings after it
@@ -87,24 +83,32 @@ setting trains under the plain weight L2. The axes may then vary any field of th
 (`--axis spatial.hidden.kernel.length_scale=[0.05,0.15,0.3]`, `spatial.hidden.embedding.kind`, `spatial.min_rel_eig`,
 `spatial.d`, ...); such an axis on an experiment without the section is rejected at load. The shared network and loss
 fields the spatial presets set (`L`, `g`, `phi`, `weight_lambda`, `rate_lambda`, `optimizer`, `beta`) default to the
-library values, and an axis of the same name wins. Presets: `spatial_tiny` (N in {4, 8}, P 16, one hidden layer,
-SGLD, 6 epochs: a CPU pipeline check) and `spatial_n_scan` (the width scan N in {64, 128, 256, 512, 1024}: linear
-teacher P 164, m 64, k 2, tanh, SGLD beta 1e4, weight_lambda 60 (= 2 beta x 3e-3: the prior term is lambda_w / (2 beta) times the prior form), 250 000 epochs, float64, grid embeddings of
-length scale 0.15 in d = 1, MIR monitor every 5000 epochs), and `spatial_exp` (24 settings: net.phi in
-{id, tanh, relu} x data.n_latents in {2, 4} x hidden kernel length scale in {0.05, 0.1, 0.15, 0.2}, one axis for
-both sides of the hidden kernel; N 512, P 128, weight_lambda 20, otherwise as `spatial_n_scan`; the
-`data.n_latents` axis wins over `linear_teacher.n_latents`. Caveat: at N 512 about 500 hidden eigenvalues sit at the
-min_rel_eig floor 1e-2 x lambda_max(K), which grows with the length scale, so the mean hidden prior variance
-diag(M^-1) is 1.62 / 2.26 / 2.90 / 3.54 for 0.05 / 0.1 / 0.15 / 0.2: the length-scale axis is confounded with
-prior strength).
-Preset `phase_transition` (20 settings: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9, 0.99}; linear (phi id), L = 1, weight_lambda 1, random embeddings of length scale 0.15 for every population, an ensemble of B = 8 per setting via a one-value `net.B` axis; otherwise as `spatial_exp`). Its results notebook is `notebooks/phase_transition_exp.ipynb` (`fct/phase_view.py`, built by `notebooks/build_phase_transition_exp.py`; see below); it has no solve stage yet, and the modularity readers (`fct.report`) refuse B > 1 and need `net.L`, `net.phi` and `rate_lambda` axes. At 250 000 epochs the settings with lambda_max >= 0.5 are not fully stationary from the initial N(0, 1) weights (the softest prior mode relaxes on about 2e6 lambda_max^2 epochs). A directory name shows a dict-valued axis value as a short
+library values, and an axis of the same name wins. The spatial presets are `spatial_tiny`, `spatial_n_scan`, `spatial_exp` and `phase_transition`; the
+description in each JSON file (see Presets) carries the details and caveats. The results notebook of `phase_transition`
+is `notebooks/phase_transition_exp.ipynb` (`fct/phase_view.py`, built by `notebooks/build_phase_transition_exp.py`; see
+below); it has no solve stage yet, and the modularity readers (`fct.report`) refuse B > 1 and need `net.L`, `net.phi`
+and `rate_lambda` axes. A directory name shows a dict-valued axis value as a short
 hash. The mean-field solver knows only the iid prior, so `exp run --stage solve` on a spatial setting fails with its
 one-line message. `net.phi` is one of `tanh`, `relu`, `sigmoid` or `id` (phi(h) = h: a linear network);
 the presets keep their activations, and a variant with `id` is `--axis 'net.phi=["tanh","relu","id"]'`.
 
+**Presets.** A preset is a base experiment stored as data: one JSON file per preset in `fct/presets/`, writing out
+every `ExpConfig` field (`tiny`, `full`, `modularity`, `lambda_exp`, `spatial_tiny`, `spatial_n_scan`, `spatial_exp`,
+`phase_transition`). The file's `description` says what the experiment is and keeps its caveats; read the JSON file
+for it rather than a copy here. `exp init ROOT --preset NAME` copies the file into `ROOT/exp.json`; with any `--set`
+or `--axis` it replaces the description with a derived one that lists the overrides (`Preset 'tiny' with overrides:
+--set N=16`). The description is documentation only: it never enters a hash, a directory name or any check that two
+experiments are the same, so editing it never makes results stale.
+To change a preset, edit its JSON file. To add one, put a new `<name>.json` there (a complete experiment, no
+inheritance and no comments); the name before `.json` must match `[A-Za-z_][A-Za-z0-9_]*`. Other files (a README,
+hidden files, folders) are ignored, and a `*.json` file with a name that breaks the rule is listed as ignored when a
+preset is not found. Presets are read each time they are asked for, so with an editable install (`uv sync`, the
+default) an edit or a new file is picked up at once; an installed wheel holds the files it was built with.
+`fct.exp.preset(name, directory=None)` and `preset_names(directory=None)` read the packaged folder or any other.
+
 ```sh
 uv run python -m fct exp init ROOT --preset tiny        # write ROOT/exp.json (--set n_epochs=100 ...)
-uv run python -m fct exp init ROOT --preset lambda_exp --n-lambda 8 --axis 'net.L=[1,2,3]'
+uv run python -m fct exp init ROOT --preset lambda_exp --axis 'net.L=[1,2,3]'
 uv run python -m fct exp list ROOT                      # "<index> <task>/<setting directory>"
 uv run python -m fct exp count ROOT                     # number of settings (36 for modularity)
 uv run python -m fct exp run ROOT --index 7             # train one setting (resumable); no --index: all

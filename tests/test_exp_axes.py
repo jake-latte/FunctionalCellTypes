@@ -17,7 +17,6 @@ from fct.exp import (
     expand,
     find_setting_dir,
     get_setting,
-    lambda_exp,
     load_exp,
     preset,
     read_setting,
@@ -99,9 +98,8 @@ def test_directories_are_index_prefixed_labelled_and_distinct(small, tmp_path):
 
 
 def test_labels_keep_the_underscores_of_axis_names(tmp_path):
-    exp = lambda_exp(3)
-    name = setting_dir(tmp_path, expand(exp)[1]).name
-    assert name == "s0001_L1_phitanh_rate_lambda1e-06_weight_lambda0.001"
+    name = setting_dir(tmp_path, expand(preset("lambda_exp"))[1]).name
+    assert name == "s0001_L1_phitanh_rate_lambda1e-06_weight_lambda1e-05"
 
 
 def test_near_equal_floats_never_share_a_directory(tmp_path):
@@ -112,36 +110,25 @@ def test_near_equal_floats_never_share_a_directory(tmp_path):
 
 
 # ---------------------------------------------------------------------------- phase transition
-def test_lambda_exp_preset_with_three_lambdas():
-    exp = lambda_exp(3)
+def test_lambda_exp_preset_has_seven_lambdas_per_axis():
+    exp = preset("lambda_exp")
     settings = expand(exp)
-    assert len(settings) == 2 * 2 * 3 * 3
+    assert len(settings) == 2 * 2 * 7 * 7
     configs = [setting_config(exp, s) for s in settings]
     assert {c.data.task for c in configs} == {"linear_teacher"}
     assert {c.net.L for c in configs} == {1, 2}
     assert {c.net.phi for c in configs} == {"tanh", "relu"}
     for name in ("weight_lambda", "rate_lambda"):
         got = sorted({getattr(c.train, name) for c in configs})
-        assert got == pytest.approx([1e-6, 1e-3, 1.0], rel=1e-12)
+        assert got == pytest.approx([10.0**k for k in range(-6, 1)], rel=1e-12)
     pairs = {(c.train.weight_lambda, c.train.rate_lambda) for c in configs}
-    assert len(pairs) == 9  # every weight/rate combination is a setting
+    assert len(pairs) == 49  # every weight/rate combination is a setting
 
 
-def test_lambda_exp_lambdas_are_log_spaced():
-    exp = lambda_exp(8)
+def test_lambda_exp_lambdas_are_seven_log_spaced_values_from_1e_6_to_1():
+    exp = preset("lambda_exp")
     for axis in ("train.weight_lambda", "train.rate_lambda"):
-        assert exp.axes[axis] == np.logspace(-6, 0, 8).tolist()
-    assert len(expand(exp)) == 2 * 2 * 8 * 8
-
-
-def test_presets_that_need_n_lambda_say_so():
-    with pytest.raises(ValueError, match="n_lambda"):
-        preset("lambda_exp")
-    with pytest.raises(ValueError, match="n_lambda"):
-        preset("tiny", n_lambda=3)
-    with pytest.raises(ValueError, match="n_lambda"):
-        lambda_exp(0)
-    assert len(expand(preset("lambda_exp", n_lambda=2))) == 16
+        assert exp.axes[axis] == np.logspace(-6, 0, 7).tolist()
 
 
 # ---------------------------------------------------------------------------- validation
@@ -310,8 +297,9 @@ TINY_SETS = [
 
 
 def _init_2x2(capsys, root):
-    args = ["init", root, "--preset", "lambda_exp", "--n-lambda", 2]
+    args = ["init", root, "--preset", "lambda_exp"]
     args += ["--axis", "net.L=[1]", "--axis", 'net.phi=["tanh"]']
+    args += ["--axis", "train.rate_lambda=[1e-6,1.0]", "--axis", "train.weight_lambda=[1e-6,1.0]"]
     for item in TINY_SETS:
         args += ["--set", item]
     return _cli(capsys, *args)
@@ -364,7 +352,7 @@ def test_an_interrupted_setting_resumes_from_its_checkpoint(small, tmp_path):
 
 
 def test_cli_set_cannot_edit_the_axes(tmp_path, capsys):
-    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "lambda_exp", "--n-lambda", 2,
+    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "lambda_exp",
                         "--set", "axes.net.L=[1]")  # fmt: skip
     assert code == 1 and "--axis" in err
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny", "--set", "axes=null")
@@ -372,11 +360,9 @@ def test_cli_set_cannot_edit_the_axes(tmp_path, capsys):
 
 
 def test_cli_init_axis_errors_are_one_line(tmp_path, capsys):
-    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "lambda_exp", "--n-lambda", 2,
+    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "lambda_exp",
                         "--axis", "net.typo=[1]")  # fmt: skip
     assert code == 1 and err.startswith("error:") and "net.typo" in err
-    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "lambda_exp")
-    assert code == 1 and "n_lambda" in err
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny", "--axis", "net.L=[1]")
     assert code == 1 and "modularity" in err
     assert not (tmp_path / "exp.json").exists()

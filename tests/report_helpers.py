@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from fct.exp import ExpConfig, Setting, expand, lambda_exp, preset
+from fct.exp import ExpConfig, Setting, expand, preset
 from fct.report import SettingResult
 
 QUIET = {"log": lambda s: None}  # keyword arguments for run_setting: no progress output
@@ -55,8 +55,17 @@ def synthetic_results(missing=()) -> list[SettingResult]:
     return out
 
 
+TWO_LAMBDAS = [1e-6, 1.0]
+
+
 def tiny_phase_exp() -> ExpConfig:
-    """The lambda_exp preset with 2 points per lambda, at the sizes of the `tiny` preset."""
+    """The axes of the lambda_exp preset with 2 points per lambda (1e-6 and 1), at the sizes of
+    the `tiny` preset."""
     tree = preset("tiny").model_dump()
-    tree["axes"] = lambda_exp(2).axes
+    tree["description"] = None
+    tree["axes"] = {
+        **preset("lambda_exp").axes,
+        "train.rate_lambda": TWO_LAMBDAS,
+        "train.weight_lambda": TWO_LAMBDAS,
+    }
     return ExpConfig.model_validate(tree)

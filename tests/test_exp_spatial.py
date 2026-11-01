@@ -13,7 +13,6 @@ from fct.exp import (
     _label_part,
     data_config,
     expand,
-    lambda_exp,
     load_exp,
     preset,
     run_setting,
@@ -95,7 +94,7 @@ def test_the_modularity_experiment_builds_the_configs_it_built_before(name):
 
 
 def test_the_lambda_exp_preset_builds_the_configs_it_built_before():
-    exp = lambda_exp(2)
+    exp = preset("lambda_exp")
     for setting in expand(exp):
         assert setting_config(exp, setting) == _previous_config(exp, setting.axes)
 

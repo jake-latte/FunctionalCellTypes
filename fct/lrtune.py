@@ -39,15 +39,18 @@ from fct.exp import (
     ExpConfig,
     Seeds,
     Setting,
+    exp_text,
     expand,
     get_setting,
     load_exp,
     preset,
     run_setting,
+    same_experiment,
     save_exp,
     setting_config,
     setting_dir,
     setting_status,
+    write_exp_text,
 )
 from fct.model import MLP
 from fct.tasks import Dataset, resample
@@ -487,6 +490,7 @@ def tuning_template(
     log_int = max(1, n_epochs // LOGGED_POINTS)
     return preset(base).model_copy(
         update={
+            "description": None,  # the base's description does not describe the tuning sizes
             "N": N,
             "P": P,
             "n_epochs": n_epochs,
@@ -518,7 +522,7 @@ def subset_indices(exp: ExpConfig, tasks: Sequence[str], layers: Sequence[int]) 
 def _prepare_root(exp: ExpConfig, root: Path) -> None:
     """Write ROOT/exp.json, or check that the one there is the same experiment."""
     if (root / "exp.json").exists():
-        if load_exp(root) != exp:
+        if not same_experiment(load_exp(root), exp):
             raise ValueError(f"{root}/exp.json differs from the requested trial; use a fresh base")
     else:
         save_exp(exp, root)
@@ -701,7 +705,7 @@ def _load_template(base: Path) -> ExpConfig:
     path = base / TUNING_FILE
     if not path.exists():
         raise FileNotFoundError(f"{path} not found; run `init` first")
-    return ExpConfig.model_validate_json(path.read_text())
+    return ExpConfig.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def _report(args: argparse.Namespace) -> int:
@@ -727,7 +731,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             update={"device": args.device}
         )
         args.base.mkdir(parents=True, exist_ok=True)
-        (args.base / TUNING_FILE).write_text(template.model_dump_json(indent=2) + "\n")
+        write_exp_text(args.base / TUNING_FILE, exp_text(template))
         return 0
     if args.command == "report":
         return _report(args)
