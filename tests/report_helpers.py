@@ -3,14 +3,14 @@
 
 from pathlib import Path
 
+from fct.exp import ExpConfig, Setting, expand, lambda_exp, preset
 from fct.report import SettingResult
-from fct.sweep import Setting, SweepConfig, expand, lambda_grid, preset
 
 QUIET = {"log": lambda s: None}  # keyword arguments for run_setting: no progress output
 
 
 def modularity_setting(task: str, L: int, phi: str, rate_lambda: float) -> Setting:
-    """The setting of the fixed modularity grid with these swept values."""
+    """The setting of the modularity experiment with these values."""
     wanted = (task, L, phi, rate_lambda)
     return next(
         s
@@ -55,8 +55,8 @@ def synthetic_results(missing=()) -> list[SettingResult]:
     return out
 
 
-def tiny_phase_sweep() -> SweepConfig:
-    """The lambda_grid preset with 2 points per lambda, at the sizes of the `tiny` preset."""
+def tiny_phase_exp() -> ExpConfig:
+    """The lambda_exp preset with 2 points per lambda, at the sizes of the `tiny` preset."""
     tree = preset("tiny").model_dump()
-    tree["grid"] = lambda_grid(2).grid
-    return SweepConfig.model_validate(tree)
+    tree["axes"] = lambda_exp(2).axes
+    return ExpConfig.model_validate(tree)

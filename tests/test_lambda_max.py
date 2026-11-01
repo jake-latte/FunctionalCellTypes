@@ -1,5 +1,5 @@
 """`SpatialConfig.lambda_max`: every population kernel is scaled to this top eigenvalue, the
-config constraints that go with it, the unchanged behaviour without it, and a sweep axis."""
+config constraints that go with it, the unchanged behaviour without it, and an experiment axis."""
 
 import json
 import math
@@ -9,6 +9,7 @@ import torch
 
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset
+from fct.exp import ExpConfig, expand, preset, setting_config, with_axes
 from fct.model import make_net
 from fct.spatial import (
     EmbeddingSpec,
@@ -19,7 +20,6 @@ from fct.spatial import (
     parameter_factors,
     periodic_gaussian_kernel,
 )
-from fct.sweep import SweepConfig, expand, preset, setting_config, with_grid
 from fct.train import make_weight_penalty, spatial_weight_penalty, train
 
 CPU, F64 = torch.device("cpu"), torch.float64
@@ -140,19 +140,19 @@ def test_lambda_max_survives_a_json_round_trip():
     assert Config.model_validate_json(cfg.model_dump_json()).spatial.lambda_max == 0.5
 
 
-def _sweep(weight_lambda=1.0):
+def _exp(weight_lambda=1.0):
     base = preset("spatial_tiny").model_copy(
         update={"spatial": _spatial(1, "random", 0.3, None), "weight_lambda": weight_lambda}
     )
-    return with_grid(base, {"spatial.d": [1, 2], "spatial.lambda_max": [0.1, 0.9]})
+    return with_axes(base, {"spatial.d": [1, 2], "spatial.lambda_max": [0.1, 0.9]})
 
 
-def test_a_lambda_max_sweep_rebuilds_kernels_with_the_right_top_eigenvalue():
-    sweep = _sweep()
-    settings = expand(sweep)
+def test_a_lambda_max_exp_rebuilds_kernels_with_the_right_top_eigenvalue():
+    exp = _exp()
+    settings = expand(exp)
     assert len(settings) == 4
     for setting in settings:
-        cfg = setting_config(sweep, setting)
+        cfg = setting_config(exp, setting)
         saved = Config.model_validate(json.loads(cfg.model_dump_json()))  # as config.json reloads
         spaces = build_spaces(saved.spatial, m=6, N=4, L=1, n_out=2)
         for pop in [spaces[0].pre] + [s.post for s in spaces]:
@@ -160,16 +160,16 @@ def test_a_lambda_max_sweep_rebuilds_kernels_with_the_right_top_eigenvalue():
             assert top == pytest.approx(setting.axes["spatial.lambda_max"], rel=1e-10)
 
 
-def test_a_lambda_max_sweep_with_another_weight_lambda_fails_naming_it():
+def test_a_lambda_max_exp_with_another_weight_lambda_fails_naming_it():
     with pytest.raises(ValueError, match="weight_lambda"):
-        _sweep(weight_lambda=0.2)
+        _exp(weight_lambda=0.2)
 
 
-def test_a_sweep_without_a_grid_checks_its_base_settings_at_load():
-    base = preset("spatial_tiny").model_copy(update={"grid": None, "weight_lambda": 0.2})
+def test_an_exp_without_axes_checks_its_base_settings_at_load():
+    base = preset("spatial_tiny").model_copy(update={"axes": None, "weight_lambda": 0.2})
     spatial = _spatial(1, "random", 0.3, 0.5)
     with pytest.raises(ValueError, match="weight_lambda"):
-        SweepConfig.model_validate({**base.model_dump(), "spatial": spatial.model_dump()})
+        ExpConfig.model_validate({**base.model_dump(), "spatial": spatial.model_dump()})
 
 
 def test_a_tiny_sgld_net_trains_under_lambda_max(tmp_path):

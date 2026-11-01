@@ -1,9 +1,9 @@
-"""One setting of a spatial sweep, for the spatial-grid notebook: pick it by its axis values,
+"""One setting of a spatial experiment, for the spatial-experiment notebook: pick it by its axis values,
 load its trained net, its training set and the held-out latent-lattice test set.
 
-The sweep's own functions find and train the settings; this module only joins them for a
-notebook. A grid setting that was never trained is a status, not an error, so the notebook can
-say so in the cell; a setting that is not in the grid at all (a typo) is a LookupError.
+The experiment's own functions find and train the settings; this module only joins them for a
+notebook. A setting that was never trained is a status, not an error, so the notebook can
+say so in the cell; a setting that is not in the experiment at all (a typo) is a LookupError.
 """
 
 from collections.abc import Mapping
@@ -12,78 +12,78 @@ from typing import Any, NamedTuple
 
 from fct.config import Config, resolve_device, resolve_dtype
 from fct.data import Dataset, get_dataset, get_latent_lattice_dataset
-from fct.spatial_view import TrainRun
-from fct.sweep import (
+from fct.exp import (
     SETTING_FILE,
+    ExpConfig,
     Setting,
     Status,
-    SweepConfig,
+    axes_of,
     expand,
     find_setting_dir,
-    grid_of,
-    load_sweep,
+    load_exp,
     same_value,
     setting_config,
     setting_dir,
     setting_status,
     setting_statuses,
 )
+from fct.spatial_view import TrainRun
 from fct.train import load_trained, select_member
 
 
-class GridSetting(NamedTuple):
+class ExpSetting(NamedTuple):
     setting: Setting
     directory: Path
     cfg: Config  # the setting's config with the device `select_setting` was given
     status: Status  # "done" is the only status with a trained net to show
 
 
-def _matching_settings(sweep: SweepConfig, values: Mapping[str, Any]) -> list[Setting]:
-    """The settings of the grid whose axes equal `values`, run or not."""
-    if unknown := sorted(set(values) - set(grid_of(sweep))):
-        raise LookupError(f"unknown axis {unknown}; the grid has axes {list(grid_of(sweep))}")
-    return [s for s in expand(sweep) if all(same_value(s.axes[a], v) for a, v in values.items())]
+def _matching_settings(exp: ExpConfig, values: Mapping[str, Any]) -> list[Setting]:
+    """The settings of the experiment whose axes equal `values`, run or not."""
+    if unknown := sorted(set(values) - set(axes_of(exp))):
+        raise LookupError(f"unknown axis {unknown}; the experiment has axes {list(axes_of(exp))}")
+    return [s for s in expand(exp) if all(same_value(s.axes[a], v) for a, v in values.items())]
 
 
-def select_setting(root: Path, values: Mapping[str, Any], device: str = "cpu") -> GridSetting:
-    """The one setting of the sweep at `root` whose axes equal `values` (a subset of the axes is
-    enough when it picks one), with its status. LookupError for an axis that is not in the grid
+def select_setting(root: Path, values: Mapping[str, Any], device: str = "cpu") -> ExpSetting:
+    """The one setting of the experiment at `root` whose axes equal `values` (a subset of the axes is
+    enough when it picks one), with its status. LookupError for an axis that is not in the experiment
     and for no match or several, whether or not they were run, so an ambiguous request never
-    resolves to a setting the caller did not name. A setting of the grid that was never run is
+    resolves to a setting the caller did not name. A setting of the experiment that was never run is
     returned with status "missing". A run setting's directory is confirmed by `find_setting_dir`
-    (SweepError if it was written under another grid)."""
+    (ExpError if it was written under another experiment)."""
     root = Path(root)
-    sweep = load_sweep(root)
-    matches = _matching_settings(sweep, values)
+    exp = load_exp(root)
+    matches = _matching_settings(exp, values)
     if len(matches) != 1:
         raise LookupError(
-            f"{len(matches)} settings of the grid match {dict(values)}; give axes that pick one"
+            f"{len(matches)} settings of the experiment match {dict(values)}; give axes that pick one"
         )
     (setting,) = matches
     directory = setting_dir(root, setting)
     if (directory / SETTING_FILE).exists():
-        directory = find_setting_dir(root, sweep, setting.axes)
+        directory = find_setting_dir(root, exp, setting.axes)
     # Config validates the device name, unlike a model_copy update.
-    cfg = Config.model_validate({**setting_config(sweep, setting).model_dump(), "device": device})
-    return GridSetting(setting, directory, cfg, setting_status(root, sweep, setting))
+    cfg = Config.model_validate({**setting_config(exp, setting).model_dump(), "device": device})
+    return ExpSetting(setting, directory, cfg, setting_status(root, exp, setting))
 
 
 def settings_table(root: Path) -> str:
-    """A markdown table of the grid: index, the value of every axis, and the training status."""
+    """A markdown table of the experiment: index, the value of every axis, and the training status."""
     root = Path(root)
-    sweep = load_sweep(root)
-    axes = list(grid_of(sweep))
+    exp = load_exp(root)
+    axes = list(axes_of(exp))
     rows = [
         "| " + " | ".join(["index", *axes, "status"]) + " |",
         "|" + "---|" * (len(axes) + 2),
     ]
-    for i, setting, status in setting_statuses(root, sweep):
+    for i, setting, status in setting_statuses(root, exp):
         cells = [str(i), *(str(setting.axes[a]) for a in axes), status]
         rows.append("| " + " | ".join(cells) + " |")
     return "\n".join(rows)
 
 
-def load_grid_run(chosen: GridSetting, member: int | None = None) -> tuple[TrainRun, Dataset]:
+def load_exp_run(chosen: ExpSetting, member: int | None = None) -> tuple[TrainRun, Dataset]:
     """The trained run of `chosen` and its test set: the 3^k latent-lattice points of the same
     teacher. ValueError if the setting is not trained. For an ensemble (net.B > 1) `member`
     picks the network (and its history) and is required (`fct.train.select_member`)."""

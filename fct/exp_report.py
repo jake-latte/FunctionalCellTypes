@@ -1,4 +1,4 @@
-"""Assemble sweep records into the arrays the grid figures draw."""
+"""Assemble experiment records into the arrays the figures draw."""
 
 from collections.abc import Iterable, Sequence
 from typing import NamedTuple
@@ -16,7 +16,7 @@ class MirRecord(NamedTuple):
     mir: float
 
 
-def _check_grid_axis(values: np.ndarray, what: str) -> None:
+def _check_axis_values(values: np.ndarray, what: str) -> None:
     if values.ndim != 1 or values.size == 0:
         raise ValueError(f"{what} must be a non-empty 1-D sequence, got shape {values.shape}")
     close = np.isclose(values[:, None], values[None, :], rtol=LAMBDA_RTOL, atol=0)
@@ -27,7 +27,7 @@ def _check_grid_axis(values: np.ndarray, what: str) -> None:
 def _index_of(values: np.ndarray, value: float, what: str) -> int:
     (matches,) = np.nonzero(np.isclose(values, value, rtol=LAMBDA_RTOL, atol=0))
     if matches.size == 0:
-        raise ValueError(f"{what} {value} is not on the grid {values.tolist()}")
+        raise ValueError(f"{what} {value} is not among the values {values.tolist()}")
     return int(matches[0])
 
 
@@ -43,7 +43,7 @@ def check_finite_mir(value: float, lambda_r: float, lambda_w: float) -> None:
         raise ValueError(f"non-finite mir {value} for lambda_r={lambda_r}, lambda_w={lambda_w}")
 
 
-def mir_grid(
+def mir_matrix(
     records: Iterable[MirRecord],
     lambda_r_values: Sequence[float],
     lambda_w_values: Sequence[float],
@@ -52,8 +52,8 @@ def mir_grid(
     """(n_layers, n_r, n_w) layer-average MIR from `MirRecord`s (0-based layers).
 
     A setting with no record is NaN (the heat-map draws it blank), including a whole layer
-    with no records. Two records for one cell, a record off the grid or with a layer outside
-    [0, n_layers), a non-finite MIR, a grid with near-duplicate values, or no records at all
+    with no records. Two records for one cell, a record off the axis values or with a layer outside
+    [0, n_layers), a non-finite MIR, axis values that nearly repeat, or no records at all
     is an error.
     """
     records = list(records)
@@ -61,9 +61,9 @@ def mir_grid(
         raise ValueError("no records")
     lam_r = np.asarray(lambda_r_values, dtype=float)
     lam_w = np.asarray(lambda_w_values, dtype=float)
-    _check_grid_axis(lam_r, "lambda_r_values")
-    _check_grid_axis(lam_w, "lambda_w_values")
-    grid = np.full((n_layers, lam_r.size, lam_w.size), np.nan)
+    _check_axis_values(lam_r, "lambda_r_values")
+    _check_axis_values(lam_w, "lambda_w_values")
+    matrix = np.full((n_layers, lam_r.size, lam_w.size), np.nan)
     seen = set()
     for lr, lw, layer, value in records:
         check_layer(layer, n_layers)
@@ -72,5 +72,5 @@ def mir_grid(
         if cell in seen:
             raise ValueError(f"duplicate record for lambda_r={lr}, lambda_w={lw}, layer={layer}")
         seen.add(cell)
-        grid[cell] = value
-    return grid
+        matrix[cell] = value
+    return matrix

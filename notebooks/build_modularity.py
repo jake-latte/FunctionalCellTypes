@@ -1,4 +1,4 @@
-"""Build and execute `modularity.ipynb`, the results notebook of a sweep.
+"""Build and execute `modularity.ipynb`, the results notebook of an experiment.
 
 The notebook source lives here, not in the .ipynb: `build_notebook` makes it from a few lines per
 cell, each of which only calls a function of `fct.report` (where the logic is tested). Run
@@ -6,7 +6,7 @@ cell, each of which only calls a function of `fct.report` (where the logic is te
     python notebooks/build_modularity.py ROOT            # build, execute, write tmp/modularity.ipynb
     python notebooks/build_modularity.py --no-execute    # source only: notebooks/modularity.ipynb
 
-ROOT is the sweep directory (the one holding sweep.json); `$FCT_SWEEP_ROOT` works too. Only the
+ROOT is the experiment directory (the one holding exp.json); `$FCT_EXP_ROOT` works too. Only the
 source notebook is committed; an executed one records the ROOT path and its figures are large, so it
 goes to the git-ignored tmp/ unless --out says otherwise.
 """
@@ -21,27 +21,27 @@ from nbclient import NotebookClient
 from nbformat import NotebookNode
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
+from fct.exp import EXP_TASKS, MODULARITY_AXES, expand, preset
 from fct.explanations import MIR_EXPLANATION
 from fct.report import ROOT_ENV
-from fct.sweep import MODULARITY_AXES, SWEEP_TASKS, expand, preset
 
 SOURCE_OUT = Path(__file__).with_name("modularity.ipynb")
 EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "modularity.ipynb"
 EXECUTE_TIMEOUT_S = 1800
 
-INTRO = """# Modularity of hidden layers across the sweep
+INTRO = """# Modularity of hidden layers across the experiment
 
 Per task and setting: loss curves, example outputs of the trained net (of the latest checkpoint
 for a setting still running), MIR per layer over training (raw with its chance baseline,
 shuffle-corrected, dead-neuron counts) and prediction metrics. A summary table and heatmap of the
-final MIR per layer open each task. All numbers and sentences below are computed from the sweep
+final MIR per layer open each task. All numbers and sentences below are computed from the experiment
 ROOT named in the parameter cell. A setting that is still running is shown from its latest
 checkpoint and labelled "partial, epoch X of N"; its numbers are provisional (marked `*` in the
 table, hatched in the heatmap) and are left out of the summary statistics. A setting with no
 checkpoint, or whose checkpoint or dataset file is unreadable, stale or missing, is listed with a
 message instead of being drawn."""
 
-PARAMETERS = """ROOT = None  # the sweep ROOT (holds sweep.json); None reads $FCT_SWEEP_ROOT"""
+PARAMETERS = """ROOT = None  # the experiment ROOT (holds exp.json); None reads $FCT_EXP_ROOT"""
 
 SETUP = """import matplotlib as mpl
 
@@ -51,12 +51,12 @@ from fct.report import (
     overview_text,
     setting_items,
     show,
-    sweep_root_from_env,
+    exp_root_from_env,
     task_items,
 )
 
 mpl.rcParams["figure.dpi"] = 100  # about 1300 px for a 13 in figure
-RESULTS = load_results(ROOT or sweep_root_from_env())
+RESULTS = load_results(ROOT or exp_root_from_env())
 show([overview_text(RESULTS)])"""
 
 
@@ -85,9 +85,9 @@ def build_notebook() -> NotebookNode:
         new_code_cell(SETUP, id=ids.next()),
         new_markdown_cell(MIR_EXPLANATION, id=ids.next()),
     ]
-    # The grid does not depend on the sweep's sizes, so any preset gives the same order.
+    # The axes do not depend on the experiment's sizes, so any preset gives the same order.
     settings = expand(preset("tiny"))
-    for task in SWEEP_TASKS:
+    for task in EXP_TASKS:
         nb.cells.append(new_markdown_cell(f"## {task}", id=ids.next()))
         nb.cells.append(new_markdown_cell("### Summary of the final MIR", id=ids.next()))
         nb.cells.append(new_code_cell(f'show(task_items(RESULTS, "{task}"))', id=ids.next()))
@@ -97,7 +97,7 @@ def build_notebook() -> NotebookNode:
             L, phi, rate = (setting.axes[a] for a in MODULARITY_AXES)
             title = f"### L{L}, {phi}, rate_lambda {rate:g}"
             nb.cells.append(new_markdown_cell(title, id=ids.next()))
-            # Selected by name, not position: a reordered grid fails here instead of
+            # Selected by name, not position: reordered axes fail here instead of
             # silently showing another setting under this heading.
             axes = dict(zip(MODULARITY_AXES, (L, phi, rate), strict=True))
             select = f'find_result(RESULTS, "{task}", {axes!r})'
@@ -135,7 +135,7 @@ def write_notebook(nb: NotebookNode, path: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("root", nargs="?", type=Path, help=f"sweep ROOT (default ${ROOT_ENV})")
+    parser.add_argument("root", nargs="?", type=Path, help=f"experiment ROOT (default ${ROOT_ENV})")
     parser.add_argument(
         "--out", type=Path, help="default: the source notebook, or tmp/ if executed"
     )
@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_execute:
         root = args.root or os.environ.get(ROOT_ENV)
         if not root:
-            parser.error(f"give a sweep ROOT or set ${ROOT_ENV}")
+            parser.error(f"give an experiment ROOT or set ${ROOT_ENV}")
         nb = execute_notebook(nb, Path(root))
     out = args.out or (SOURCE_OUT if args.no_execute else EXECUTED_OUT)
     out.parent.mkdir(parents=True, exist_ok=True)

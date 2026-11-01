@@ -1,4 +1,4 @@
-"""jobs/fct_sweep.sh and jobs/fct_solve.sh: only --submit may reach sbatch, and then only a test double.
+"""jobs/fct_exp.sh and jobs/fct_solve.sh: only --submit may reach sbatch, and then only a test double.
 
 A fake `sbatch` first on PATH records its arguments and exits `FAKE_SBATCH_EXIT`; the
 non-submit actions run with it exiting 99, so any call to it fails the test loudly.
@@ -14,10 +14,10 @@ from pathlib import Path
 import pytest
 
 PROJECT = Path(__file__).resolve().parents[1]
-SCRIPT = PROJECT / "jobs" / "fct_sweep.sh"
+SCRIPT = PROJECT / "jobs" / "fct_exp.sh"
 SOLVE_SCRIPT = PROJECT / "jobs" / "fct_solve.sh"
 STUB_COUNT = 5
-LOG_PATTERN = "tmp/logs/fct_sweep_%A_%a"
+LOG_PATTERN = "tmp/logs/fct_exp_%A_%a"
 
 
 @pytest.fixture
@@ -33,7 +33,7 @@ def fake_sbatch(tmp_path):
 
 @pytest.fixture
 def stub_python(tmp_path):
-    """An interpreter stand-in: records its args and answers the sweep subcommands."""
+    """An interpreter stand-in: records its args and answers the experiment subcommands."""
     log = tmp_path / "python_calls.txt"
     stub = tmp_path / "stub_python"
     stub.write_text(
@@ -52,9 +52,9 @@ def stub_python(tmp_path):
 
 @pytest.fixture(scope="module")
 def real_root(tmp_path_factory):
-    root = tmp_path_factory.mktemp("real") / "sweep"
+    root = tmp_path_factory.mktemp("real") / "exp"
     subprocess.run(
-        [sys.executable, "-m", "fct", "sweep", "init", str(root)],
+        [sys.executable, "-m", "fct", "exp", "init", str(root)],
         cwd=PROJECT,
         check=True,
         capture_output=True,
@@ -64,7 +64,7 @@ def real_root(tmp_path_factory):
 
 @pytest.fixture
 def root(tmp_path):
-    path = tmp_path / "sweep"
+    path = tmp_path / "exp"
     path.mkdir()
     return path
 
@@ -79,7 +79,7 @@ def run_script(
         "FCT_PYTHON": str(python),
         **(env_extra or {}),
     }
-    for name in ("FCT_SWEEP_ROOT", "FCT_PROJECT", "SLURM_ARRAY_TASK_ID", "FCT_MAX_CONCURRENT"):
+    for name in ("FCT_EXP_ROOT", "FCT_PROJECT", "SLURM_ARRAY_TASK_ID", "FCT_MAX_CONCURRENT"):
         if not (env_extra and name in env_extra):
             env.pop(name, None)
     return subprocess.run(
@@ -112,7 +112,7 @@ def test_dry_run_prints_the_exact_sbatch_command_without_calling_it(fake_sbatch,
     assert f"--array=0-{last_index()}%4" in r.stdout
     assert f"--output={PROJECT}/{LOG_PATTERN}.out" in r.stdout
     assert str(root) in r.stdout
-    assert "sweep run" in r.stdout and "--index $SLURM_ARRAY_TASK_ID" in r.stdout
+    assert "exp run" in r.stdout and "--index $SLURM_ARRAY_TASK_ID" in r.stdout
     assert sbatch_calls(fake_sbatch) == []
 
 
@@ -173,7 +173,7 @@ def test_index_range_uses_the_configured_concurrency_cap(fake_sbatch, stub_pytho
 @pytest.mark.parametrize(
     "given", [f"3:{STUB_COUNT + 1}", "0:99", f"{STUB_COUNT}:{STUB_COUNT + 1}", "0:08", "08:09"]
 )
-def test_index_range_past_the_sweep_fails(fake_sbatch, stub_python, root, given):
+def test_index_range_past_the_exp_fails(fake_sbatch, stub_python, root, given):
     r = run_script(fake_sbatch, stub_python[0], str(root), "--dry-run", "--index", given)
     assert r.returncode != 0
     assert "out of range" in r.stderr
@@ -259,14 +259,14 @@ def test_list_and_status_pass_through_without_calling_sbatch(fake_sbatch, stub_p
 
 
 def test_root_may_come_from_the_environment(fake_sbatch, stub_python, root):
-    r = run_script(fake_sbatch, stub_python[0], "--status", env_extra={"FCT_SWEEP_ROOT": str(root)})
+    r = run_script(fake_sbatch, stub_python[0], "--status", env_extra={"FCT_EXP_ROOT": str(root)})
     assert r.returncode == 0, r.stderr
 
 
 def test_missing_root_fails(fake_sbatch, stub_python):
     r = run_script(fake_sbatch, stub_python[0], "--list")
     assert r.returncode != 0
-    assert "no sweep ROOT" in r.stderr
+    assert "no experiment ROOT" in r.stderr
 
 
 def test_nonexistent_root_fails(fake_sbatch, stub_python, tmp_path):
@@ -291,7 +291,7 @@ def test_relative_python_is_resolved_before_changing_directory(fake_sbatch, stub
     stub, log = stub_python
     r = run_script(fake_sbatch, f"./{stub.name}", str(root), "--list", cwd=stub.parent)
     assert r.returncode == 0, r.stderr
-    assert log.read_text().startswith("-m fct sweep list")
+    assert log.read_text().startswith("-m fct exp list")
 
 
 # ----------------------------------------------------------------------- --submit
@@ -331,7 +331,7 @@ def test_task_runs_the_setting_and_propagates_the_exit_code(
     env = task_env(tmp_path, STUB_RUN_EXIT=str(exit_code))
     r = run_script(fake_sbatch, stub, str(root), env_extra=env)
     assert r.returncode == exit_code, r.stderr
-    assert log.read_text().splitlines() == [f"-m fct sweep run {root} --index 2 --stage train"]
+    assert log.read_text().splitlines() == [f"-m fct exp run {root} --index 2 --stage train"]
     assert sbatch_calls(fake_sbatch) == []
 
 
@@ -364,13 +364,13 @@ def test_solve_dry_run_prints_the_solve_sbatch_command_without_calling_it(
     assert r.returncode == 0, r.stderr
     assert f"--array=0-{last_index()}%4" in r.stdout
     assert f"--output={PROJECT}/tmp/logs/fct_solve_%A_%a.out" in r.stdout
-    assert "fct_sweep_" not in r.stdout
+    assert "fct_exp_" not in r.stdout
     assert str(SOLVE_SCRIPT) in r.stdout.split()
     assert "--index $SLURM_ARRAY_TASK_ID --stage solve" in r.stdout
     assert sbatch_calls(fake_sbatch) == []
 
 
-def test_sweep_dry_run_names_the_train_stage(fake_sbatch, stub_python, root):
+def test_exp_dry_run_names_the_train_stage(fake_sbatch, stub_python, root):
     r = run_script(fake_sbatch, stub_python[0], str(root), "--dry-run")
     assert "--index $SLURM_ARRAY_TASK_ID --stage train" in r.stdout
 
@@ -390,7 +390,7 @@ def test_solve_task_runs_the_solve_stage_and_propagates_the_exit_code(
     stub, log = stub_python
     r = run_solve(fake_sbatch, stub, str(root), env_extra=task_env(tmp_path, STUB_RUN_EXIT="7"))
     assert r.returncode == 7, r.stderr
-    assert log.read_text().splitlines() == [f"-m fct sweep run {root} --index 2 --stage solve"]
+    assert log.read_text().splitlines() == [f"-m fct exp run {root} --index 2 --stage solve"]
     assert sbatch_calls(fake_sbatch) == []
 
 
@@ -398,7 +398,7 @@ def test_solve_status_asks_for_the_solve_stage(fake_sbatch, stub_python, root):
     stub, log = stub_python
     r = run_solve(fake_sbatch, stub, str(root), "--status")
     assert r.returncode == 0, r.stderr
-    assert log.read_text().strip() == f"-m fct sweep status {root} --stage solve"
+    assert log.read_text().strip() == f"-m fct exp status {root} --stage solve"
     assert sbatch_calls(fake_sbatch) == []
 
 
@@ -418,7 +418,7 @@ def test_the_two_sbatch_headers_agree_apart_from_the_job_name():
         return [d for d in _sbatch_directives(script) if not d.startswith("#SBATCH -J")]
 
     assert without_name(SCRIPT) == without_name(SOLVE_SCRIPT)
-    assert _sbatch_directives(SCRIPT)[0] == "#SBATCH -J fct-sweep"
+    assert _sbatch_directives(SCRIPT)[0] == "#SBATCH -J fct-exp"
 
 
 def test_an_unknown_stage_in_the_environment_fails(fake_sbatch, stub_python, root):
@@ -430,9 +430,9 @@ def test_an_unknown_stage_in_the_environment_fails(fake_sbatch, stub_python, roo
 
 
 # ------------------------------------------------------- integration (real fct)
-def test_real_cli_dry_run_uses_the_sweep_size(fake_sbatch, real_root):
+def test_real_cli_dry_run_uses_the_exp_size(fake_sbatch, real_root):
     count = subprocess.run(
-        [sys.executable, "-m", "fct", "sweep", "count", str(real_root)],
+        [sys.executable, "-m", "fct", "exp", "count", str(real_root)],
         cwd=PROJECT,
         check=True,
         capture_output=True,

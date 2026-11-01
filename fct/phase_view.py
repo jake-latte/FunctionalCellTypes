@@ -1,6 +1,6 @@
 """The computation behind the phase-transition notebook: one setting of a `phase_transition`
-sweep (an ensemble of B networks, random embeddings in d dimensions) turned into the arrays its
-figures draw. Single-network sweeps go through `fct.spatial_grid` instead.
+experiment (an ensemble of B networks, random embeddings in d dimensions) turned into the arrays its
+figures draw. Single-network experiments go through `fct.spatial_exp` instead.
 
 Layers (nothing here plots, and only `load_phase_run` reads disk):
 
@@ -30,11 +30,11 @@ from torch import Tensor
 from fct.cache import cache_paths
 from fct.config import DataConfig, resolve_device, resolve_dtype
 from fct.data import Dataset, get_dataset, make_dataset
-from fct.grid_view import tuning_view
+from fct.exp_view import tuning_view
 from fct.model import MLP, EnsembleMLP
 from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import LayerSpace
-from fct.spatial_grid import GridSetting, select_setting
+from fct.spatial_exp import ExpSetting, select_setting
 from fct.spatial_view import data_kernels, empirical_kernels, layer_spaces
 from fct.tasks import resample
 from fct.train import History, load_weights
@@ -49,12 +49,12 @@ TEST_SEED_OFFSET = 1_000_003
 
 
 class PhaseRun(NamedTuple):
-    """One setting of the sweep. `net` and `history` are None for a setting with no weights
+    """One setting of the experiment. `net` and `history` are None for a setting with no weights
     (status "missing" or "stale"); a "partial" one holds the latest checkpoint, `epoch` epochs
     in. `dataset` is the training set (generated in memory, never written, when no usable file
     is cached)."""
 
-    setting: GridSetting
+    setting: ExpSetting
     net: EnsembleMLP | None
     history: History | None
     epoch: int  # epochs completed by `net`; 0 without weights
@@ -62,7 +62,7 @@ class PhaseRun(NamedTuple):
     dataset: Dataset
 
 
-def _load_weights(chosen: GridSetting) -> tuple[EnsembleMLP | None, History | None, int]:
+def _load_weights(chosen: ExpSetting) -> tuple[EnsembleMLP | None, History | None, int]:
     if chosen.status not in ("done", "partial"):
         return None, None, 0
     cfg = chosen.cfg
@@ -70,7 +70,7 @@ def _load_weights(chosen: GridSetting) -> tuple[EnsembleMLP | None, History | No
     return load_weights(chosen.directory, cfg, device, dtype, chosen.status == "done")
 
 
-def _training_set(chosen: GridSetting, has_weights: bool) -> Dataset:
+def _training_set(chosen: ExpSetting, has_weights: bool) -> Dataset:
     """The cached training set when the setting has weights and its file exists, else the same
     data generated in memory: they are a pure function of the config, and reading must not
     write into a setting's cache directory."""
@@ -81,16 +81,16 @@ def _training_set(chosen: GridSetting, has_weights: bool) -> Dataset:
 
 
 def load_phase_run(root, values, device: str = "cpu") -> PhaseRun:
-    """The setting of the sweep at `root` whose axes equal `values` (`select_setting`:
+    """The setting of the experiment at `root` whose axes equal `values` (`select_setting`:
     LookupError for an unknown axis or value, or several matches). Read-only. ValueError unless
-    it is an ensemble (net.B > 1), since every view here reads a member axis; a sweep of single
-    networks is read with `fct.spatial_grid`."""
+    it is an ensemble (net.B > 1), since every view here reads a member axis; an experiment of single
+    networks is read with `fct.spatial_exp`."""
     chosen = select_setting(root, values, device)
     cfg = chosen.cfg
     if cfg.net.B < 2:
         raise ValueError(
             f"phase_view reads ensembles, but net.B = {cfg.net.B} for {dict(values)}; use "
-            "fct.spatial_grid for single networks"
+            "fct.spatial_exp for single networks"
         )
     net, history, epoch = _load_weights(chosen)
     dataset = _training_set(chosen, net is not None)
@@ -380,7 +380,7 @@ def member_view(
     """The matrices of one network: data kernels A^(l) on the `lattice` test set; information
     and rate overlaps from the tuning of every neuron on the (random) `test` set, with the
     tuning's `n_bins`, MIR `kind` ("raw" or "corrected"), `n_shuffles` and `seed`
-    (`fct.grid_view.tuning_view`); and the empirical kernels of the trained weights."""
+    (`fct.exp_view.tuning_view`); and the empirical kernels of the trained weights."""
     info, rate = _overlaps(net, test, n_bins, kind, n_shuffles, seed)
     return MemberView(data_kernels(net, lattice.x, spaces), info, rate, weight_kernels(net))
 

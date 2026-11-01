@@ -34,7 +34,7 @@ from fct.analyse import (
 )
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
-from fct.grid_report import MirRecord, check_finite_mir, check_layer
+from fct.exp_report import MirRecord, check_finite_mir, check_layer
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 from fct.tuning import TuningCurves
 

@@ -1,5 +1,5 @@
 """The notebook builder: structure of the source, and an end-to-end execution on a partial tiny
-sweep (most settings missing) that must render a message for each missing setting."""
+experiment (most settings missing) that must render a message for each missing setting."""
 
 import ast
 from pathlib import Path
@@ -7,7 +7,7 @@ from pathlib import Path
 import nbformat
 import pytest
 
-from fct.sweep import SWEEP_TASKS, expand, preset, run_setting, save_sweep, setting_dir
+from fct.exp import EXP_TASKS, expand, preset, run_setting, save_exp, setting_dir
 from notebooks.build_modularity import (
     build_notebook,
     execute_notebook,
@@ -34,7 +34,7 @@ def test_source_notebook_has_a_cell_per_setting_and_task_and_no_outputs():
     code = [c for c in nb.cells if c.cell_type == "code"]
     assert all(not c.outputs and c.execution_count is None for c in code)
     assert _code(nb).count("find_result(RESULTS,") == N_SETTINGS
-    assert _code(nb).count("task_items(RESULTS,") == len(SWEEP_TASKS)
+    assert _code(nb).count("task_items(RESULTS,") == len(EXP_TASKS)
 
 
 def test_explanation_cell_sits_between_the_setup_and_the_first_task():
@@ -44,13 +44,13 @@ def test_explanation_cell_sits_between_the_setup_and_the_first_task():
     (index,) = [i for i, c in enumerate(nb.cells) if c.source == MIR_EXPLANATION]
     assert nb.cells[index].cell_type == "markdown"
     assert "RESULTS = load_results" in nb.cells[index - 1].source
-    assert nb.cells[index + 1].source == f"## {SWEEP_TASKS[0]}"
+    assert nb.cells[index + 1].source == f"## {EXP_TASKS[0]}"
 
 
 def test_running_the_setup_cell_sets_a_legible_dpi(tmp_path):
     import matplotlib as mpl
 
-    save_sweep(preset("tiny"), tmp_path)
+    save_exp(preset("tiny"), tmp_path)
     setup = next(c.source for c in build_notebook().cells if "load_results(" in c.source)
     with mpl.rc_context():  # restores the caller's rcParams afterwards
         exec(setup, {"ROOT": tmp_path})  # noqa: S102  (runs the notebook source itself)
@@ -64,8 +64,8 @@ def _named_setting(line: str) -> tuple:
     return (ast.literal_eval(task), axes["net.L"], axes["net.phi"], axes["train.rate_lambda"])
 
 
-def test_each_setting_cell_names_one_distinct_grid_setting():
-    """Cells select settings by name; together they name exactly the grid."""
+def test_each_setting_cell_names_one_distinct_setting():
+    """Cells select settings by name; together they name exactly the experiment's settings."""
     named = {
         _named_setting(line)
         for line in _code(build_notebook()).splitlines()
@@ -92,7 +92,7 @@ def test_report_cells_are_a_single_show_call():
     show_cells = _show_cells(nb)
     other = [c for c in nb.cells if c.cell_type == "code" and c not in show_cells]
     assert len(other) == 2  # the parameter cell and the setup cell
-    assert len(show_cells) == len(SWEEP_TASKS) + N_SETTINGS
+    assert len(show_cells) == len(EXP_TASKS) + N_SETTINGS
     assert all("\n" not in c.source for c in show_cells)
 
 
@@ -108,10 +108,10 @@ def test_with_root_sets_only_the_parameter_cell_and_leaves_the_source_alone(tmp_
 
 @pytest.fixture(scope="module")
 def executed(tmp_path_factory):
-    root = tmp_path_factory.mktemp("sweep")
-    sweep = preset("tiny")
-    save_sweep(sweep, root)
-    run_setting(sweep, 0, root, **QUIET)
+    root = tmp_path_factory.mktemp("exp")
+    exp = preset("tiny")
+    save_exp(exp, root)
+    run_setting(exp, 0, root, **QUIET)
     source = build_notebook()
     return source, execute_notebook(source, root), root
 
@@ -142,7 +142,7 @@ def test_executed_notebook_holds_exactly_the_expected_figures(executed):
     png = sum(
         "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
     )
-    assert png == FIGURES_PER_SETTING + len(SWEEP_TASKS)  # plus one heatmap figure per task
+    assert png == FIGURES_PER_SETTING + len(EXP_TASKS)  # plus one heatmap figure per task
 
 
 def test_executing_leaves_the_source_notebook_output_free(executed):
@@ -170,12 +170,12 @@ def test_write_notebook_round_trips(tmp_path, executed):
 
 
 def test_executes_on_a_mix_of_done_partial_and_missing_settings(tmp_path):
-    sweep = preset("tiny")
-    save_sweep(sweep, tmp_path)
+    exp = preset("tiny")
+    save_exp(exp, tmp_path)
     for index in (0, 1):
-        run_setting(sweep, index, tmp_path, **QUIET)
+        run_setting(exp, index, tmp_path, **QUIET)
     # an interrupted run: its checkpoint stays, final.pt never appeared
-    (setting_dir(tmp_path, expand(sweep)[1]) / "train" / "final.pt").unlink()
+    (setting_dir(tmp_path, expand(exp)[1]) / "train" / "final.pt").unlink()
     nb = execute_notebook(build_notebook(), tmp_path)
     text = _text_outputs(nb)
     assert "ERROR" not in text
@@ -184,7 +184,7 @@ def test_executes_on_a_mix_of_done_partial_and_missing_settings(tmp_path):
     png = sum(
         "image/png" in out.get("data", {}) for cell in nb.cells for out in cell.get("outputs", [])
     )
-    assert png == 2 * FIGURES_PER_SETTING + len(SWEEP_TASKS)
+    assert png == 2 * FIGURES_PER_SETTING + len(EXP_TASKS)
 
 
 def test_the_committed_notebook_is_what_the_builder_produces():

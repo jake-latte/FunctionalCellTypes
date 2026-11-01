@@ -1,5 +1,5 @@
-"""Solving the saddle points of a sweep's settings: the solver config in sweep.json, the
-per-stage status, and train-only / solve-only / train-then-solve runs on a tiny grid (CPU)."""
+"""Solving the saddle points of an experiment's settings: the solver config in exp.json, the
+per-stage status, and train-only / solve-only / train-then-solve runs on a tiny experiment (CPU)."""
 
 import json
 
@@ -10,20 +10,20 @@ import fct.meanfield as mf
 from fct.cache import StaleCacheError, cache_paths, save_artefact
 from fct.cli import main
 from fct.config import MeanFieldConfig, SolverConfig, load_config, save_config
-from fct.meanfield import InadequateSamplerError, load_meanfield, meanfield_hash
-from fct.sweep import (
-    SweepConfig,
-    SweepError,
+from fct.exp import (
+    ExpConfig,
+    ExpError,
     expand,
-    load_sweep,
+    load_exp,
     preset,
     run_setting,
-    save_sweep,
+    save_exp,
     setting_config,
     setting_dir,
     setting_status,
-    with_grid,
+    with_axes,
 )
+from fct.meanfield import InadequateSamplerError, load_meanfield, meanfield_hash
 from tests.report_helpers import QUIET
 
 # A solve of a few outer steps at ten points: seconds on a CPU.
@@ -35,35 +35,35 @@ TINY_MEANFIELD = MeanFieldConfig(n_points=10, beta=1e3, solver=TINY_SOLVER)
 
 
 @pytest.fixture
-def small() -> SweepConfig:
+def small() -> ExpConfig:
     """Two settings (L = 1, 2) with the tiny solve."""
     base = preset("tiny").model_copy(update={"meanfield": TINY_MEANFIELD})
-    return with_grid(base, {"net.L": [1, 2]})
+    return with_axes(base, {"net.L": [1, 2]})
 
 
-def _with_beta(sweep: SweepConfig, beta: float) -> SweepConfig:
-    return sweep.model_copy(update={"meanfield": sweep.meanfield.model_copy(update={"beta": beta})})
+def _with_beta(exp: ExpConfig, beta: float) -> ExpConfig:
+    return exp.model_copy(update={"meanfield": exp.meanfield.model_copy(update={"beta": beta})})
 
 
-def _dirs(root, sweep, i):
-    return cache_paths(setting_dir(root, expand(sweep)[i]))
+def _dirs(root, exp, i):
+    return cache_paths(setting_dir(root, expand(exp)[i]))
 
 
-def _solve_hash(sweep, i):
-    return meanfield_hash(setting_config(sweep, expand(sweep)[i]))
+def _solve_hash(exp, i):
+    return meanfield_hash(setting_config(exp, expand(exp)[i]))
 
 
-def _write_solved(root, sweep, i, config_hash=None):
+def _write_solved(root, exp, i, config_hash=None):
     """A minimal meanfield/final.pt carrying the solve hash of setting i (or `config_hash`)."""
     save_artefact(
-        _dirs(root, sweep, i).meanfield / "final.pt",
+        _dirs(root, exp, i).meanfield / "final.pt",
         {"x": 0},
-        config_hash or _solve_hash(sweep, i),
+        config_hash or _solve_hash(exp, i),
     )
 
 
-def _status(root, sweep, i, stage):
-    return setting_status(root, sweep, expand(sweep)[i], stage)
+def _status(root, exp, i, stage):
+    return setting_status(root, exp, expand(exp)[i], stage)
 
 
 class Interrupt(Exception):
@@ -71,16 +71,16 @@ class Interrupt(Exception):
 
 
 # ---------------------------------------------------------------------------- config
-def test_sweep_config_carries_a_default_meanfield_and_a_legacy_file_loads(tmp_path):
+def test_exp_config_carries_a_default_meanfield_and_a_legacy_file_loads(tmp_path):
     tree = preset("tiny").model_dump()
-    del tree["meanfield"]  # a sweep.json written before the solver was part of it
-    (tmp_path / "sweep.json").write_text(json.dumps(tree))
-    assert load_sweep(tmp_path).meanfield == MeanFieldConfig()
+    del tree["meanfield"]  # an exp.json written before the solver was part of it
+    (tmp_path / "exp.json").write_text(json.dumps(tree))
+    assert load_exp(tmp_path).meanfield == MeanFieldConfig()
 
 
-def test_meanfield_round_trips_through_sweep_json(small, tmp_path):
-    save_sweep(small, tmp_path)
-    assert load_sweep(tmp_path).meanfield == TINY_MEANFIELD
+def test_meanfield_round_trips_through_exp_json(small, tmp_path):
+    save_exp(small, tmp_path)
+    assert load_exp(tmp_path).meanfield == TINY_MEANFIELD
 
 
 def test_the_solver_config_reaches_every_setting_config(small):
@@ -94,8 +94,8 @@ def test_the_meanfield_section_never_changes_training_hashes_or_directories():
     assert expand(changed) == expand(legacy)
     for setting in expand(legacy):
         hashes = [
-            setting_config(sweep, setting).section_hash("data", "net", "train")
-            for sweep in (legacy, changed)
+            setting_config(exp, setting).section_hash("data", "net", "train")
+            for exp in (legacy, changed)
         ]
         assert hashes[0] == hashes[1]
     assert setting_config(legacy, expand(legacy)[0]).meanfield == legacy.meanfield
@@ -160,9 +160,9 @@ def test_train_only_leaves_no_meanfield_directory(small, tmp_path):
     assert not _dirs(tmp_path, small, 0).meanfield.exists()
 
 
-def _history(root, sweep, i):
-    setting = expand(sweep)[i]
-    return load_meanfield(setting_dir(root, setting), setting_config(sweep, setting), "cpu")[2]
+def _history(root, exp, i):
+    setting = expand(exp)[i]
+    return load_meanfield(setting_dir(root, setting), setting_config(exp, setting), "cpu")[2]
 
 
 def test_solve_only_runs_without_a_trained_net(small, tmp_path):
@@ -243,7 +243,7 @@ def test_changing_the_solver_does_not_block_training_and_config_json_follows_it(
 def test_solve_refuses_a_setting_whose_training_config_changed(small, tmp_path):
     run_setting(small, 0, tmp_path, **QUIET)
     changed = small.model_copy(update={"lr": small.lr * 2})
-    with pytest.raises(SweepError, match="differs"):  # config.json belongs to the old training
+    with pytest.raises(ExpError, match="differs"):  # config.json belongs to the old training
         run_setting(changed, 0, tmp_path, stage="solve", **QUIET)
 
 
@@ -304,7 +304,7 @@ def test_resuming_with_a_checkpoint_made_with_the_net_after_it_is_gone_is_refuse
     run_setting(small, 0, tmp_path, **QUIET)  # train
     _interrupt_solve_without_net(small, tmp_path)  # solves WITH the net, interrupted
     _dirs(tmp_path, small, 0).train.joinpath("final.pt").unlink()
-    with pytest.raises(SweepError, match=r"with the trained net, but there is no trained net now"):
+    with pytest.raises(ExpError, match=r"with the trained net, but there is no trained net now"):
         run_setting(small, 0, tmp_path, stage="solve", **QUIET)
 
 
@@ -323,10 +323,10 @@ def _interrupt_solve_without_net(small, root):
         run_setting(small, 0, root, stage="solve", log=stop_at_outer_step_1)
 
 
-def test_resuming_a_partial_solve_after_training_is_refused_with_a_sweep_error(small, tmp_path):
+def test_resuming_a_partial_solve_after_training_is_refused_with_an_exp_error(small, tmp_path):
     _interrupt_solve_without_net(small, tmp_path)
     run_setting(small, 0, tmp_path, **QUIET)  # train
-    with pytest.raises(SweepError, match=r"ckpt_00001\.pt.*without the trained net.*delete"):
+    with pytest.raises(ExpError, match=r"ckpt_00001\.pt.*without the trained net.*delete"):
         run_setting(small, 0, tmp_path, stage="solve", **QUIET)
     assert not (_dirs(tmp_path, small, 0).meanfield / "final.pt").exists()
 
@@ -339,13 +339,13 @@ def test_cli_turns_the_partial_solve_mismatch_into_one_line(small, root, capsys)
     assert "without the trained net" in err and "Traceback" not in err
 
 
-def test_solving_more_points_than_the_data_has_is_a_sweep_error_but_training_is_fine(
+def test_solving_more_points_than_the_data_has_is_an_exp_error_but_training_is_fine(
     small, tmp_path
 ):
     tree = small.model_dump()
     tree["meanfield"]["n_points"] = small.P + 1
-    too_many = SweepConfig.model_validate(tree)  # loads: a train-only sweep never reads it
-    with pytest.raises(SweepError, match="n_points"):
+    too_many = ExpConfig.model_validate(tree)  # loads: a train-only experiment never reads it
+    with pytest.raises(ExpError, match="n_points"):
         run_setting(too_many, 0, tmp_path, stage="solve", **QUIET)
     run_setting(too_many, 0, tmp_path, **QUIET)
 
@@ -368,14 +368,14 @@ def test_config_json_is_written_atomically(small, tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------------------- CLI
 def _cli(capsys, *args) -> tuple[int, str, str]:
-    code = main(["sweep", *map(str, args)])
+    code = main(["exp", *map(str, args)])
     out = capsys.readouterr()
     return code, out.out, out.err
 
 
 @pytest.fixture
 def root(small, tmp_path):
-    save_sweep(small, tmp_path)
+    save_exp(small, tmp_path)
     return tmp_path
 
 
@@ -397,7 +397,7 @@ def test_cli_run_all_solves_every_setting(root, capsys):
 
 def test_cli_rejects_an_unknown_stage(root, capsys):
     with pytest.raises(SystemExit):
-        main(["sweep", "status", str(root), "--stage", "plot"])
+        main(["exp", "status", str(root), "--stage", "plot"])
     capsys.readouterr()
 
 
@@ -453,5 +453,5 @@ def test_cli_init_sets_the_solver_by_dotted_key(tmp_path, capsys):
         capsys, "init", tmp_path, "--preset", "tiny",
         "--set", "meanfield.n_points=7", "--set", "meanfield.solver.sampler=importance",
     )  # fmt: skip
-    meanfield = load_sweep(tmp_path).meanfield
+    meanfield = load_exp(tmp_path).meanfield
     assert meanfield.n_points == 7 and meanfield.solver.sampler == "importance"

@@ -447,7 +447,7 @@ def train_from_config(
 ) -> tuple[Net, History]:
     """Build the net the config describes for `dataset` and `train` it (see `train`).
 
-    The one place that turns a config and a dataset into a net, so the CLI and the sweep
+    The one place that turns a config and a dataset into a net, so the CLI and the experiment
     start every run identically.
     """
     net = make_net(

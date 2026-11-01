@@ -1,5 +1,5 @@
 """Learning-rate tuning: result table logic on hand-built tables, the evaluation of finished
-settings, the runner and the command line on a tiny CPU sweep."""
+settings, the runner and the command line on a tiny CPU experiment."""
 
 import itertools
 import math
@@ -12,6 +12,7 @@ import torch
 import fct.config
 from fct import lrtune
 from fct.cache import cache_paths, latest_checkpoint
+from fct.exp import expand, preset, run_setting, save_exp, setting_dir, setting_status
 from fct.lrplot import fig_metric_vs_lr, plot_metric_vs_lr
 from fct.lrtune import (
     COLUMNS,
@@ -33,12 +34,11 @@ from fct.lrtune import (
     select_by,
     setting_key,
     subset_indices,
+    trial_exp,
     trial_root,
-    trial_sweep,
     tuning_template,
     write_rows_csv,
 )
-from fct.sweep import expand, preset, run_setting, save_sweep, setting_dir, setting_status
 
 LRS = (1e-4, 1e-3, 1e-2)
 TASKS = ("linear_teacher", "object_action")
@@ -330,11 +330,11 @@ def test_csv_with_a_wrong_header_or_a_bad_boolean_fails_loudly(tmp_path):
 
 # ---------------------------------------------------------------------------- evaluation
 def _finished_tiny(tmp_path, task="linear_teacher", **update):
-    sweep = preset("tiny").model_copy(update=update)
-    save_sweep(sweep, tmp_path)
-    index = next(i for i, s in enumerate(expand(sweep)) if s.task == task)
-    run_setting(sweep, index, tmp_path, log=lambda s: None)
-    return sweep, expand(sweep)[index]
+    exp = preset("tiny").model_copy(update=update)
+    save_exp(exp, tmp_path)
+    index = next(i for i, s in enumerate(expand(exp)) if s.task == task)
+    run_setting(exp, index, tmp_path, log=lambda s: None)
+    return exp, expand(exp)[index]
 
 
 def _snapshot(root):
@@ -344,37 +344,37 @@ def _snapshot(root):
 
 
 def test_evaluate_setting_scores_a_finished_setting_without_touching_its_cache(tmp_path):
-    sweep, setting = _finished_tiny(tmp_path)
+    exp, setting = _finished_tiny(tmp_path)
     before = _snapshot(tmp_path)
-    row = evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
-    again = evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
+    row = evaluate_setting(tmp_path, exp, setting, held_out_seed=77)
+    again = evaluate_setting(tmp_path, exp, setting, held_out_seed=77)
     assert _snapshot(tmp_path) == before
     assert row == again
     # plain Python types: a numpy float would be written to the CSV as 'np.float64(...)'
     assert {k: type(v) for k, v in row.items()} == COLUMNS
     assert math.isfinite(row["train_mse"]) and math.isfinite(row["heldout_mse"])
-    assert not row["diverged"] and row["lr"] == sweep.lr and row["task"] == "linear_teacher"
-    assert row["n_epochs"] == sweep.n_epochs and row["null_mse"] > 0
+    assert not row["diverged"] and row["lr"] == exp.lr and row["task"] == "linear_teacher"
+    assert row["n_epochs"] == exp.n_epochs and row["null_mse"] > 0
     assert len(row["mir_corrected"].split(";")) == setting.axes["net.L"]
     assert cache_paths(setting_dir(tmp_path, setting)).train.exists()
 
 
 def test_evaluate_setting_fails_loudly_for_an_unfinished_setting(tmp_path):
-    sweep = preset("tiny")
-    save_sweep(sweep, tmp_path)
+    exp = preset("tiny")
+    save_exp(exp, tmp_path)
     with pytest.raises(FileNotFoundError):
-        evaluate_setting(tmp_path, sweep, expand(sweep)[0], held_out_seed=77)
+        evaluate_setting(tmp_path, exp, expand(exp)[0], held_out_seed=77)
 
 
 def test_evaluate_setting_fails_loudly_without_a_dataset_cache(tmp_path):
-    sweep, setting = _finished_tiny(tmp_path)
+    exp, setting = _finished_tiny(tmp_path)
     (cache_paths(setting_dir(tmp_path, setting)).data / "dataset.pt").unlink()
     with pytest.raises(FileNotFoundError, match="refusing to generate"):
-        evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
+        evaluate_setting(tmp_path, exp, setting, held_out_seed=77)
 
 
 def test_evaluate_setting_fails_loudly_if_the_history_has_no_monitor_entries(tmp_path, monkeypatch):
-    sweep, setting = _finished_tiny(tmp_path)
+    exp, setting = _finished_tiny(tmp_path)
     real = lrtune.load_trained
 
     def without_monitor(*args):
@@ -383,14 +383,14 @@ def test_evaluate_setting_fails_loudly_if_the_history_has_no_monitor_entries(tmp
 
     monkeypatch.setattr(lrtune, "load_trained", without_monitor)
     with pytest.raises(ValueError, match="monitor_mir_corrected"):
-        evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
+        evaluate_setting(tmp_path, exp, setting, held_out_seed=77)
 
 
 def test_an_overfitting_net_is_worse_on_held_out_data_than_on_its_training_data(tmp_path):
     # 8 training points of a discrete task, 128 units: the net memorises them, so the held-out
     # MSE is far above the training MSE.
-    sweep, setting = _finished_tiny(tmp_path, "object_action", P=8, N=128, n_epochs=400, lr=1e-2)
-    row = evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
+    exp, setting = _finished_tiny(tmp_path, "object_action", P=8, N=128, n_epochs=400, lr=1e-2)
+    row = evaluate_setting(tmp_path, exp, setting, held_out_seed=77)
     assert row["heldout_mse"] > 3 * row["train_mse"]
 
 
@@ -400,15 +400,15 @@ def _tiny_template():
 
 
 def test_subset_indices_and_trial_names():
-    sweep = preset("tiny")
-    indices = subset_indices(sweep, ["what_where"], [1, 5])
-    settings = [expand(sweep)[i] for i in indices]
+    exp = preset("tiny")
+    indices = subset_indices(exp, ["what_where"], [1, 5])
+    settings = [expand(exp)[i] for i in indices]
     assert len(indices) == 8 and {s.axes["net.L"] for s in settings} == {1, 5}
     assert {s.task for s in settings} == {"what_where"}
     with pytest.raises(ValueError, match="unknown"):
-        subset_indices(sweep, ["nope"], [1])
+        subset_indices(exp, ["nope"], [1])
     assert trial_root(Path("b"), 3e-4, 2) == Path("b/lr_0.0003_seed2")
-    trial = trial_sweep(sweep, 3e-4, 2)
+    trial = trial_exp(exp, 3e-4, 2)
     assert trial.lr == 3e-4 and trial.seeds.data == trial.seeds.net == trial.seeds.train == 2
 
 
@@ -420,14 +420,14 @@ def test_tuning_template_overrides_sizes_and_the_intervals_follow_them():
     assert tiny.log_int == tiny.save_int == tiny.monitor_int == 1
 
 
-def test_run_trials_writes_one_sweep_per_lr_and_seed_and_times_new_work_only(tmp_path):
+def test_run_trials_writes_one_exp_per_lr_and_seed_and_times_new_work_only(tmp_path):
     log = []
     run_trials(_tiny_template(), tmp_path, [0.01, 0.001], [0, 1], [0], log=log.append)
     assert log[0] == "device: cpu"
     for lr, seed in itertools.product([0.01, 0.001], [0, 1]):
         root = trial_root(tmp_path, lr, seed)
-        sweep = trial_sweep(_tiny_template(), lr, seed)
-        assert setting_status(root, sweep, expand(sweep)[0]) == "done"
+        exp = trial_exp(_tiny_template(), lr, seed)
+        assert setting_status(root, exp, expand(exp)[0]) == "done"
     lines = (tmp_path / TIMINGS_FILE).read_text().splitlines()
     assert lines[0] == "lr,seed,index,seconds,device" and len(lines) == 5
     run_trials(_tiny_template(), tmp_path, [0.01, 0.001], [0, 1], [0], log=log.append)
@@ -437,19 +437,19 @@ def test_run_trials_writes_one_sweep_per_lr_and_seed_and_times_new_work_only(tmp
 def test_run_trials_resumes_an_interrupted_setting_from_its_checkpoint(tmp_path):
     template = _tiny_template()
     run_trials(template, tmp_path, [0.01], [0], [0], log=lambda s: None)
-    sweep, root = trial_sweep(template, 0.01, 0), trial_root(tmp_path, 0.01, 0)
-    train_dir = cache_paths(setting_dir(root, expand(sweep)[0])).train
+    exp, root = trial_exp(template, 0.01, 0), trial_root(tmp_path, 0.01, 0)
+    train_dir = cache_paths(setting_dir(root, expand(exp)[0])).train
     final_before = torch.load(train_dir / "final.pt", weights_only=True)["net_state_dict"]
     (train_dir / "final.pt").unlink()
     assert latest_checkpoint(train_dir) is not None
-    assert setting_status(root, sweep, expand(sweep)[0]) == "partial"
+    assert setting_status(root, exp, expand(exp)[0]) == "partial"
     run_trials(template, tmp_path, [0.01], [0], [0], log=lambda s: None)
     final_after = torch.load(train_dir / "final.pt", weights_only=True)["net_state_dict"]
     assert all(torch.equal(final_before[k], final_after[k]) for k in final_before)
     assert len((tmp_path / TIMINGS_FILE).read_text().splitlines()) == 3  # header + two runs
 
 
-def test_a_trial_root_with_a_different_sweep_is_refused(tmp_path):
+def test_a_trial_root_with_a_different_exp_is_refused(tmp_path):
     run_trials(_tiny_template(), tmp_path, [0.01], [0], [0], log=lambda s: None)
     changed = _tiny_template().model_copy(update={"N": 9})
     with pytest.raises(ValueError, match="differs"):
@@ -457,7 +457,7 @@ def test_a_trial_root_with_a_different_sweep_is_refused(tmp_path):
 
 
 # ---------------------------------------------------------------------------- command line
-def test_cli_init_run_collect_report_on_a_tiny_cpu_sweep(tmp_path, capsys):
+def test_cli_init_run_collect_report_on_a_tiny_cpu_exp(tmp_path, capsys):
     base, table = tmp_path / "base", tmp_path / "rows.csv"
     sizes = ["--N", "8", "--P", "32", "--epochs", "6"]
     assert main(["init", str(base), *sizes, "--device", "cpu"]) == 0
@@ -580,7 +580,7 @@ def test_all_zero_values_get_a_non_degenerate_y_range():
 
 
 def test_evaluate_setting_says_stale_for_a_final_from_another_loss_version(tmp_path, monkeypatch):
-    sweep, setting = _finished_tiny(tmp_path)
+    exp, setting = _finished_tiny(tmp_path)
     monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION + 1)
     with pytest.raises(FileNotFoundError, match="stale"):
-        evaluate_setting(tmp_path, sweep, setting, held_out_seed=77)
+        evaluate_setting(tmp_path, exp, setting, held_out_seed=77)

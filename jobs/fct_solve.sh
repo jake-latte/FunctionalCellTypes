@@ -1,26 +1,26 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FunctionalCellTypes — solve the mean-field saddle point of every setting of a grid
+#  FunctionalCellTypes — solve the mean-field saddle point of every setting of an experiment
 #
-#  The same array job as jobs/fct_sweep.sh, with the stage set to "solve": one array task
-#  solves one setting (`python -m fct sweep run ROOT --index $TASK --stage solve`), using the
+#  The same array job as jobs/fct_exp.sh, with the stage set to "solve": one array task
+#  solves one setting (`python -m fct exp run ROOT --index $TASK --stage solve`), using the
 #  trained net of that setting if there is one and solving on its own otherwise. The solver
-#  settings are the `meanfield` section of ROOT/sweep.json. A solve resumes from its latest
+#  settings are the `meanfield` section of ROOT/exp.json. A solve resumes from its latest
 #  checkpoint and a finished one is skipped, so resubmitting an array is safe.
 #
-#  Usage and environment overrides are those of jobs/fct_sweep.sh:
+#  Usage and environment overrides are those of jobs/fct_exp.sh:
 #    bash jobs/fct_solve.sh ROOT --submit [--index X]   # X = N (one setting) or A:B (A .. B-1)
 #    bash jobs/fct_solve.sh ROOT --dry-run [--index X]
 #    bash jobs/fct_solve.sh ROOT --list | --status     # --status shows the solve stage
 #
 #  This file fixes the stage, its own job name and the log prefix, and hands everything else to
-#  fct_sweep.sh. The #SBATCH header below repeats fct_sweep.sh's (apart from -J) because sbatch
+#  fct_exp.sh. The #SBATCH header below repeats fct_exp.sh's (apart from -J) because sbatch
 #  reads it from the file that is submitted, which is this one; tests/test_slurm_script.py
 #  checks that the two agree. SLURM runs it directly per array task (ROOT as its only argument).
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# --array, --output and --error are passed by --submit (see jobs/fct_sweep.sh). Keep the rest
-# equal to the header of jobs/fct_sweep.sh.
+# --array, --output and --error are passed by --submit (see jobs/fct_exp.sh). Keep the rest
+# equal to the header of jobs/fct_exp.sh.
 #SBATCH -J fct-solve
 #SBATCH -p gpu
 #SBATCH --gres=gpu:1
@@ -39,4 +39,4 @@ PROJECT="${FCT_PROJECT:-$(dirname "$(dirname "${SELF}")")}"
 export FCT_STAGE=solve
 export FCT_LOG_NAME=fct_solve
 export FCT_ENTRY="${PROJECT}/jobs/fct_solve.sh"
-exec bash "${PROJECT}/jobs/fct_sweep.sh" "$@"
+exec bash "${PROJECT}/jobs/fct_exp.sh" "$@"

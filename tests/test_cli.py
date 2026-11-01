@@ -290,26 +290,26 @@ def test_solve_on_a_spatial_cache_fails_with_one_line_and_writes_nothing(tmp_pat
     assert not (cache / "meanfield").exists()
 
 
-def test_sweep_run_stage_solve_maps_the_spatial_error_to_a_cli_error(tmp_path, monkeypatch, capsys):
+def test_exp_run_stage_solve_maps_the_spatial_error_to_a_cli_error(tmp_path, monkeypatch, capsys):
     """run_setting is replaced by a stub that raises the solver's error, to test the mapping
-    in cmd_sweep_run alone (tests/test_sweep_spatial.py runs a real spatial setting)."""
+    in cmd_exp_run alone (tests/test_exp_spatial.py runs a real spatial setting)."""
     from fct import cli
 
     def refuse(*args, **kwargs):
         raise SpatialPriorUnsupportedError("the solver has no spatial prior; unset `spatial`")
 
     monkeypatch.setattr(cli, "run_setting", refuse)
-    monkeypatch.setattr(cli, "_load_sweep", lambda root: None)
-    args = ["sweep", "run", str(tmp_path), "--index", "0", "--stage", "solve"]
+    monkeypatch.setattr(cli, "_load_exp", lambda root: None)
+    args = ["exp", "run", str(tmp_path), "--index", "0", "--stage", "solve"]
     assert main(args) == 1
     err = capsys.readouterr().err.strip()
     assert err.startswith("error:") and "no spatial prior" in err and "\n" not in err
 
 
-def test_sweep_run_all_settings_reports_the_spatial_error_without_a_traceback(
+def test_exp_run_all_settings_reports_the_spatial_error_without_a_traceback(
     tmp_path, monkeypatch, capsys
 ):
-    """As above (run_setting is a stub), for `sweep run` without --index, which goes through
+    """As above (run_setting is a stub), for `exp run` without --index, which goes through
     _run_all: the failure is one line per setting plus the summary, and no traceback."""
     from fct import cli
 
@@ -317,9 +317,9 @@ def test_sweep_run_all_settings_reports_the_spatial_error_without_a_traceback(
         raise SpatialPriorUnsupportedError("the solver has no spatial prior; unset `spatial`")
 
     monkeypatch.setattr(cli, "run_setting", refuse)
-    monkeypatch.setattr(cli, "_load_sweep", lambda root: None)
-    monkeypatch.setattr(cli, "expand", lambda sweep: [0])
-    assert main(["sweep", "run", str(tmp_path), "--stage", "solve"]) == 1
+    monkeypatch.setattr(cli, "_load_exp", lambda root: None)
+    monkeypatch.setattr(cli, "expand", lambda exp: [0])
+    assert main(["exp", "run", str(tmp_path), "--stage", "solve"]) == 1
     err = capsys.readouterr().err
     assert "no spatial prior" in err and "Traceback" not in err
     assert err.strip().splitlines()[-1].startswith("error: 1 of 1 settings failed")

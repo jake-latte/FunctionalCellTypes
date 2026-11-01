@@ -1,4 +1,4 @@
-"""The sweep grid, its on-disk layout, status, and running one setting end to end (tiny, CPU)."""
+"""The experiment, its on-disk layout, status, and running one setting end to end (tiny, CPU)."""
 
 import json
 
@@ -10,34 +10,34 @@ import fct.config
 from fct.cache import StaleCacheError, cache_paths, save_artefact
 from fct.cli import main
 from fct.config import load_config
-from fct.monitor import MIR_MONITOR_KEYS
-from fct.sweep import (
-    SWEEP_TASKS,
-    SweepConfig,
+from fct.exp import (
+    EXP_TASKS,
+    ExpConfig,
+    exp_path,
     expand,
     get_setting,
-    load_sweep,
+    load_exp,
     preset,
     run_setting,
-    save_sweep,
+    save_exp,
     setting_config,
     setting_dir,
     setting_status,
-    sweep_path,
 )
+from fct.monitor import MIR_MONITOR_KEYS
 from fct.train import MONITOR_EPOCH, MONITOR_PREFIX
 
 QUIET = {"log": lambda s: None}
 
 
 @pytest.fixture
-def tiny() -> SweepConfig:
+def tiny() -> ExpConfig:
     return preset("tiny")
 
 
-def _index_of(sweep, task, L=1, phi="tanh", rate=1e-3) -> int:
+def _index_of(exp, task, L=1, phi="tanh", rate=1e-3) -> int:
     wanted = (task, L, phi, rate)
-    settings = expand(sweep)
+    settings = expand(exp)
     return next(
         i
         for i, s in enumerate(settings)
@@ -45,23 +45,23 @@ def _index_of(sweep, task, L=1, phi="tanh", rate=1e-3) -> int:
     )
 
 
-def _monitor_epochs(sweep) -> list[int]:
+def _monitor_epochs(exp) -> list[int]:
     """Epochs 0, k*monitor_int (< n_epochs), and n_epochs: the schedule `train` follows."""
-    return [*range(0, sweep.n_epochs, sweep.monitor_int), sweep.n_epochs]
+    return [*range(0, exp.n_epochs, exp.monitor_int), exp.n_epochs]
 
 
-def _final(root, sweep, i):
-    train_dir = cache_paths(setting_dir(root, expand(sweep)[i])).train
+def _final(root, exp, i):
+    train_dir = cache_paths(setting_dir(root, expand(exp)[i])).train
     return torch.load(train_dir / "final.pt", weights_only=True)
 
 
-# ---------------------------------------------------------------------------- the grid
+# ---------------------------------------------------------------------------- the axes
 def test_expand_gives_36_distinct_settings_and_dirs(tiny, tmp_path):
     settings = expand(tiny)
     assert len(settings) == 36
     assert len(set(settings)) == 36
     assert len({setting_dir(tmp_path, s) for s in settings}) == 36
-    assert {s.task for s in settings} == set(SWEEP_TASKS)
+    assert {s.task for s in settings} == set(EXP_TASKS)
 
 
 def test_expand_order_is_fixed_and_independent_of_the_preset(tiny):
@@ -72,13 +72,13 @@ def test_expand_order_is_fixed_and_independent_of_the_preset(tiny):
         first.axes["net.L"],
         first.axes["net.phi"],
         first.axes["train.rate_lambda"],
-    ) == (SWEEP_TASKS[0], 1, "tanh", 0.0)
+    ) == (EXP_TASKS[0], 1, "tanh", 0.0)
     assert (
         last.task,
         last.axes["net.L"],
         last.axes["net.phi"],
         last.axes["train.rate_lambda"],
-    ) == (SWEEP_TASKS[-1], 5, "relu", 1e-3)
+    ) == (EXP_TASKS[-1], 5, "relu", 1e-3)
 
 
 def test_setting_dir_layout(tiny, tmp_path):
@@ -101,45 +101,45 @@ def test_presets_differ_in_size_and_validate():
     assert tiny.n_epochs < full.n_epochs and tiny.N < full.N and tiny.P < full.P
     assert tiny.dtype == full.dtype == "float32"
     assert tiny.device == "cpu"
-    for sweep in (tiny, full):
-        assert SweepConfig.model_validate(sweep.model_dump()) == sweep
-        assert len([setting_config(sweep, s) for s in expand(sweep)]) == 36
+    for exp in (tiny, full):
+        assert ExpConfig.model_validate(exp.model_dump()) == exp
+        assert len([setting_config(exp, s) for s in expand(exp)]) == 36
     with pytest.raises(ValueError, match="unknown preset"):
         preset("huge")
 
 
-def test_sweep_round_trips_through_json(tiny, tmp_path):
-    save_sweep(tiny, tmp_path)
-    assert sweep_path(tmp_path) == tmp_path / "sweep.json"
-    assert load_sweep(tmp_path) == tiny
+def test_exp_round_trips_through_json(tiny, tmp_path):
+    save_exp(tiny, tmp_path)
+    assert exp_path(tmp_path) == tmp_path / "exp.json"
+    assert load_exp(tmp_path) == tiny
 
 
-def test_sweep_config_is_strict(tiny):
+def test_exp_config_is_strict(tiny):
     tree = tiny.model_dump()
     with pytest.raises(ValidationError):
-        SweepConfig.model_validate({**tree, "typo": 1})
+        ExpConfig.model_validate({**tree, "typo": 1})
     with pytest.raises(ValidationError):
-        SweepConfig.model_validate({**tree, "N": "8"})
+        ExpConfig.model_validate({**tree, "N": "8"})
     with pytest.raises(ValidationError):
-        SweepConfig.model_validate({**tree, "n_epochs": -1})
+        ExpConfig.model_validate({**tree, "n_epochs": -1})
 
 
-def test_load_missing_sweep_names_the_path(tmp_path):
-    with pytest.raises(FileNotFoundError, match="sweep.json"):
-        load_sweep(tmp_path)
+def test_load_missing_exp_names_the_path(tmp_path):
+    with pytest.raises(FileNotFoundError, match="exp.json"):
+        load_exp(tmp_path)
 
 
 def test_invalid_task_parameters_fail_at_load(tiny):
     tree = tiny.model_dump()
-    tree["object_action"]["max_objects"] = 99  # more objects than grid cells
+    tree["object_action"]["max_objects"] = 99  # more objects than cells of the task's grid
     with pytest.raises(ValidationError, match="max_objects"):
-        SweepConfig.model_validate(tree)
+        ExpConfig.model_validate(tree)
 
 
 # ---------------------------------------------------------------------------- status
-def _write_final(train_dir, sweep, setting):
+def _write_final(train_dir, exp, setting):
     """A minimal final.pt carrying the config hash of `setting` under the current code."""
-    cfg = setting_config(sweep, setting)
+    cfg = setting_config(exp, setting)
     save_artefact(train_dir / "final.pt", {"epoch": 0}, cfg.section_hash("data", "net", "train"))
 
 
@@ -164,12 +164,12 @@ def test_done_wins_over_leftover_checkpoint(tiny, tmp_path):
 
 
 # ---------------------------------------------------------------------------- running
-def test_sweep_uses_the_library_weight_regulariser(tiny):
-    # The sweep never sets weight_lambda; this notices a change of the library default.
+def test_exp_uses_the_library_weight_regulariser(tiny):
+    # The experiment never sets weight_lambda; this notices a change of the library default.
     assert {setting_config(tiny, s).train.weight_lambda for s in expand(tiny)} == {2e-4}
 
 
-@pytest.mark.parametrize("task", SWEEP_TASKS)
+@pytest.mark.parametrize("task", EXP_TASKS)
 def test_run_setting_trains_and_records_monitor_per_task(tiny, tmp_path, task):
     i = _index_of(tiny, task, L=3, phi="relu", rate=1e-3)
     run_setting(tiny, i, tmp_path, **QUIET)
@@ -228,7 +228,7 @@ def test_interrupt_and_resume_gives_the_uninterrupted_history(tiny, tmp_path):
     assert resumed == _final(tmp_path / "straight", tiny, i)["history"]
 
 
-def test_changed_sweep_does_not_overwrite_a_setting(tiny, tmp_path):
+def test_changed_exp_does_not_overwrite_a_setting(tiny, tmp_path):
     i = _index_of(tiny, "linear_teacher")
     run_setting(tiny, i, tmp_path, **QUIET)
     changed = tiny.model_copy(update={"lr": tiny.lr * 2})
@@ -238,14 +238,14 @@ def test_changed_sweep_does_not_overwrite_a_setting(tiny, tmp_path):
 
 # ---------------------------------------------------------------------------- CLI
 def _cli(capsys, *args) -> tuple[int, str, str]:
-    code = main(["sweep", *map(str, args)])
+    code = main(["exp", *map(str, args)])
     out = capsys.readouterr()
     return code, out.out, out.err
 
 
 def test_cli_init_count_list_agree(tmp_path, capsys):
     assert _cli(capsys, "init", tmp_path, "--preset", "tiny")[0] == 0
-    assert (tmp_path / "sweep.json").exists()
+    assert (tmp_path / "exp.json").exists()
     _, count, _ = _cli(capsys, "count", tmp_path)
     _, listing, _ = _cli(capsys, "list", tmp_path)
     lines = listing.strip().splitlines()
@@ -256,23 +256,23 @@ def test_cli_init_count_list_agree(tmp_path, capsys):
 
 def test_cli_init_refuses_overwrite_and_applies_set(tmp_path, capsys):
     assert _cli(capsys, "init", tmp_path, "--preset", "tiny", "--set", "n_epochs=4")[0] == 0
-    assert json.loads((tmp_path / "sweep.json").read_text())["n_epochs"] == 4
+    assert json.loads((tmp_path / "exp.json").read_text())["n_epochs"] == 4
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny")
     assert code == 1 and "--force" in err
     assert _cli(capsys, "init", tmp_path, "--preset", "tiny", "--force")[0] == 0
 
 
 def test_monitor_schedule_when_n_epochs_is_not_a_multiple(tiny, tmp_path):
-    sweep = tiny.model_copy(update={"n_epochs": 7})
-    run_setting(sweep, 0, tmp_path, **QUIET)
-    history = _final(tmp_path, sweep, 0)["history"]
-    assert history[MONITOR_EPOCH] == [0, 2, 4, 6, 7] == _monitor_epochs(sweep)
+    exp = tiny.model_copy(update={"n_epochs": 7})
+    run_setting(exp, 0, tmp_path, **QUIET)
+    history = _final(tmp_path, exp, 0)["history"]
+    assert history[MONITOR_EPOCH] == [0, 2, 4, 6, 7] == _monitor_epochs(exp)
 
 
 @pytest.mark.parametrize("sub", ["list", "count", "status", "run"])
-def test_cli_missing_sweep_json_fails_clearly(tmp_path, capsys, sub):
+def test_cli_missing_exp_json_fails_clearly(tmp_path, capsys, sub):
     code, _, err = _cli(capsys, sub, tmp_path)
-    assert code == 1 and "sweep.json" in err and "sweep init" in err
+    assert code == 1 and "exp.json" in err and "exp init" in err
 
 
 def test_cli_bad_index_fails_clearly(tmp_path, capsys):
@@ -282,22 +282,22 @@ def test_cli_bad_index_fails_clearly(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("text", ["{not json", '{"N": 8}'])
-def test_cli_invalid_sweep_json_fails_clearly(tmp_path, capsys, text):
-    (tmp_path / "sweep.json").write_text(text)
+def test_cli_invalid_exp_json_fails_clearly(tmp_path, capsys, text):
+    (tmp_path / "exp.json").write_text(text)
     code, _, err = _cli(capsys, "count", tmp_path)
-    assert code == 1 and "not a valid sweep config" in err
+    assert code == 1 and "not a valid experiment config" in err
 
 
 @pytest.mark.parametrize("bad", ["typo=1", "linear_teacher.nope=1", "nosection.x=1", "no_equals"])
 def test_cli_init_with_bad_key_fails_cleanly(tmp_path, capsys, bad):
     code, _, err = _cli(capsys, "init", tmp_path, "--set", bad)
     assert code == 1 and err.startswith("error:")
-    assert not (tmp_path / "sweep.json").exists()
+    assert not (tmp_path / "exp.json").exists()
 
 
 def test_cli_run_all_runs_every_setting_in_order(tmp_path, capsys, monkeypatch):
     calls = []
-    monkeypatch.setattr("fct.cli.run_setting", lambda sweep, i, root, log, stage: calls.append(i))
+    monkeypatch.setattr("fct.cli.run_setting", lambda exp, i, root, log, stage: calls.append(i))
     _cli(capsys, "init", tmp_path, "--preset", "tiny")
     code, _, _ = _cli(capsys, "run", tmp_path)
     assert code == 0 and calls == list(range(36))
@@ -306,7 +306,7 @@ def test_cli_run_all_runs_every_setting_in_order(tmp_path, capsys, monkeypatch):
 def test_cli_run_all_continues_past_failures_and_lists_them(tmp_path, capsys, monkeypatch):
     calls = []
 
-    def flaky(sweep, i, root, log, stage):
+    def flaky(exp, i, root, log, stage):
         calls.append(i)
         if i in (3, 10):
             raise RuntimeError(f"boom {i}")
@@ -321,13 +321,13 @@ def test_cli_run_all_continues_past_failures_and_lists_them(tmp_path, capsys, mo
 
 
 def test_unexpected_error_in_a_single_run_keeps_its_traceback(tmp_path, capsys, monkeypatch):
-    def broken(sweep, i, root, log, stage):
+    def broken(exp, i, root, log, stage):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("fct.cli.run_setting", broken)
     _cli(capsys, "init", tmp_path, "--preset", "tiny")
     with pytest.raises(RuntimeError, match="boom"):
-        main(["sweep", "run", str(tmp_path), "--index", "0"])
+        main(["exp", "run", str(tmp_path), "--index", "0"])
 
 
 def test_cli_run_index_then_status(tmp_path, capsys):
@@ -353,7 +353,7 @@ def test_finished_setting_from_the_old_loss_is_stale_not_done(tiny, tmp_path, mo
     setting = expand(tiny)[0]
     assert setting_status(tmp_path, tiny, setting) == "stale"
 
-    with pytest.raises(StaleCacheError, match="delete the sweep ROOT or use a fresh one"):
+    with pytest.raises(StaleCacheError, match="delete the experiment ROOT or use a fresh one"):
         run_setting(tiny, 0, tmp_path, **QUIET)
     with pytest.raises(StaleCacheError, match=str(setting_dir(tmp_path, setting))):
         run_setting(tiny, 0, tmp_path, **QUIET)

@@ -15,6 +15,16 @@ from fct.cache import cache_paths, write_checkpoint
 from fct.config import resolve_dtype
 from fct.data import get_dataset
 from fct.draw import fig_mir_heatmaps
+from fct.exp import (
+    Setting,
+    expand,
+    load_exp,
+    preset,
+    run_setting,
+    save_exp,
+    setting_config,
+    setting_dir,
+)
 from fct.model import make_net
 from fct.report import (
     SettingResult,
@@ -28,16 +38,6 @@ from fct.report import (
     setting_text,
     summary_text,
     task_items,
-)
-from fct.sweep import (
-    Setting,
-    expand,
-    load_sweep,
-    preset,
-    run_setting,
-    save_sweep,
-    setting_config,
-    setting_dir,
 )
 from fct.train import _new_history, _payload
 from tests.report_helpers import known, synthetic_history, synthetic_results
@@ -55,7 +55,7 @@ def _train_dir(root: Path, setting: Setting = FIRST) -> Path:
 def root(tmp_path) -> Path:
     """Setting 0 as it stood at its last checkpoint (epoch 4 of 6): run it to the end, then
     drop final.pt. Every other setting is missing."""
-    save_sweep(preset("tiny"), tmp_path)
+    save_exp(preset("tiny"), tmp_path)
     run_setting(preset("tiny"), 0, tmp_path, **QUIET)
     (_train_dir(tmp_path) / "final.pt").unlink()
     assert [p.name for p in _train_dir(tmp_path).glob("ckpt_*.pt")] == ["ckpt_000004.pt"]
@@ -67,11 +67,11 @@ def snapshot(root: Path) -> dict[Path, int]:
 
 
 def load_first(root: Path) -> SettingResult:
-    return load_setting_result(root, load_sweep(root), FIRST)
+    return load_setting_result(root, load_exp(root), FIRST)
 
 
 def cpu_config(root: Path):
-    return setting_config(load_sweep(root), FIRST).model_copy(update={"device": "cpu"})
+    return setting_config(load_exp(root), FIRST).model_copy(update={"device": "cpu"})
 
 
 # ---------------------------------------------------------------- the loader
@@ -120,7 +120,7 @@ def test_corrupt_checkpoint_is_reported_with_a_note_and_no_data(root):
 
 
 def test_checkpoint_with_another_config_hash_is_reported_not_shown(root):
-    other = load_sweep(root).model_copy(update={"lr": 0.5})
+    other = load_exp(root).model_copy(update={"lr": 0.5})
     r = load_setting_result(root, other, FIRST)
     assert r.status == "partial" and r.history is None
     assert "config hash" in r.note
@@ -358,12 +358,12 @@ def test_a_checkpoint_whose_weights_do_not_fit_the_net_is_reported(root):
 
 # ---------------------------------------------------------------- stale finished settings
 def test_a_finished_setting_from_the_old_loss_is_listed_with_a_note(tmp_path, monkeypatch):
-    sweep = preset("tiny")
-    save_sweep(sweep, tmp_path)
+    exp = preset("tiny")
+    save_exp(exp, tmp_path)
     with monkeypatch.context() as old:
         old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
-        run_setting(sweep, 0, tmp_path, **QUIET)
-    run_setting(sweep, 1, tmp_path, **QUIET)
+        run_setting(exp, 0, tmp_path, **QUIET)
+    run_setting(exp, 1, tmp_path, **QUIET)
 
     results = load_results(tmp_path)
     stale, good = results[0], results[1]

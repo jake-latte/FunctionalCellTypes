@@ -1,5 +1,5 @@
-"""The spatial-grid notebook: structure of the source, the guard that skips figures of an untrained
-setting, and end-to-end executions on a tiny spatial sweep (CPU) with one trained and one
+"""The spatial-experiment notebook: structure of the source, the guard that skips figures of an untrained
+setting, and end-to-end executions on a tiny spatial experiment (CPU) with one trained and one
 never-run setting."""
 
 import ast
@@ -13,11 +13,11 @@ from nbclient.exceptions import CellExecutionError
 
 from fct.config import DataConfig
 from fct.data import Dataset
-from fct.sweep import preset, run_setting, save_sweep
+from fct.exp import preset, run_setting, save_exp
 from fct.tasks import latent_lattice_dataset
 from notebooks import build_spatial as sp
 from notebooks.build_spatial import execute_notebook
-from notebooks.build_spatial_grid import build_notebook, when_trained
+from notebooks.build_spatial_exp import build_notebook, when_trained
 from tests.test_build_spatial import (
     N_FIGURES,
     PLOTTING_FUNCTIONS,
@@ -59,13 +59,13 @@ def test_source_notebook_validates_has_no_outputs_and_no_path():
 
 def test_every_figure_of_the_spatial_notebook_is_drawn_by_the_same_function_here():
     """The plotting functions are the spatial notebook's, defined in the cell that draws them."""
-    grid_code = _code(build_notebook())
+    exp_code = _code(build_notebook())
     for name in PLOTTING_FUNCTIONS:
-        assert f"def {name}(" in grid_code, name
+        assert f"def {name}(" in exp_code, name
     # a cell's source up to its last function definition is the spatial notebook's, verbatim
     for source in RUN_CELLS:
         end = max(n.end_lineno for n in ast.parse(source).body if isinstance(n, ast.FunctionDef))
-        assert "\n".join(source.splitlines()[:end]) in grid_code
+        assert "\n".join(source.splitlines()[:end]) in exp_code
 
 
 def test_every_figure_cell_is_introduced_by_an_equation_and_keeps_its_function_at_top_level():
@@ -91,15 +91,15 @@ def test_the_phi_and_example_cells_use_the_test_set():
             assert "TEST_DATASET" in source and "RUN.dataset" not in source
         if "plot_example_outputs" in source:
             assert "TEST_DATASET" in source and "RUN.dataset" not in source
-    assert "load_grid_run" in _code(build_notebook())
+    assert "load_exp_run" in _code(build_notebook())
 
 
 def test_set_parameters_takes_the_setting_as_a_dict_literal():
     from notebooks.build_spatial import set_parameters
 
-    out = set_parameters(build_notebook(), {"SETTING": {"net.N": 256}, "ROOT": "sweeps/a"})
+    out = set_parameters(build_notebook(), {"SETTING": {"net.N": 256}, "ROOT": "experiments/a"})
     code = _code(out)
-    assert "SETTING = {'net.N': 256}  # " in code and "ROOT = 'sweeps/a'  # " in code
+    assert "SETTING = {'net.N': 256}  # " in code and "ROOT = 'experiments/a'  # " in code
 
 
 # ---------------------------------------------------------------- the guard
@@ -180,10 +180,10 @@ def test_trial_picks_spread_over_the_sign_patterns_sorted_by_the_chosen_latent()
 @pytest.fixture(scope="module")
 def root(tmp_path_factory):
     """spatial_tiny (net.N in {4, 8}) with only N = 8 trained."""
-    root = tmp_path_factory.mktemp("grid_nb")
-    sweep = preset("spatial_tiny")
-    save_sweep(sweep, root)
-    run_setting(sweep, 1, root, log=lambda _: None)
+    root = tmp_path_factory.mktemp("exp_nb")
+    exp = preset("spatial_tiny")
+    save_exp(exp, root)
+    run_setting(exp, 1, root, log=lambda _: None)
     return root
 
 
@@ -196,7 +196,7 @@ def test_executes_on_a_trained_setting_and_draws_every_figure(root):
     text = _text_outputs(nb)
     assert "ERROR" not in text
     assert _n_figures_in(nb) == N_FIGURES
-    assert "| 0 | 4 | missing |" in text and "| 1 | 8 | done |" in text  # the grid
+    assert "| 0 | 4 | missing |" in text and "| 1 | 8 | done |" in text  # the settings table
     assert "**Setting 1** (net.N = 8)" in text
     assert "Test set: 9 latent-lattice points" in text  # 3^k, k = 2
     assert "test set: 9 points, data kernels A of shape (9, 9) per layer" in text
@@ -215,13 +215,13 @@ def test_a_setting_that_is_not_trained_is_reported_and_only_its_prior_is_drawn(r
     assert "SGLD needs < 1" in text  # the floor tables are there
 
 
-def test_a_setting_outside_the_grid_fails_loudly(root):
+def test_a_setting_outside_the_experiment_fails_loudly(root):
     with pytest.raises(CellExecutionError, match="net.N"):
         _execute(root, {"net.N": 5})
 
 
 def test_the_committed_notebook_is_what_the_builder_produces():
-    committed = nbformat.read(Path(__file__).parents[1] / "notebooks" / "spatial_grid.ipynb", 4)
+    committed = nbformat.read(Path(__file__).parents[1] / "notebooks" / "spatial_exp.ipynb", 4)
     assert [(c.cell_type, c.source) for c in committed.cells] == [
         (c.cell_type, c.source) for c in build_notebook().cells
     ]
