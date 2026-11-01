@@ -469,9 +469,9 @@ PRESET_NAMES = ("tiny", "full", "modularity", *LAMBDA_PRESETS, *FIXED_AXES_PRESE
 
 
 def preset(name: str, n_lambda: int | None = None) -> ExpConfig:
-    """A ready-made experiment. `tiny` and `full` are two sizes of the modularity experiment
-    (`modularity`
-    is `full`); the lambda presets need `n_lambda`, the others reject it."""
+    """A ready-made experiment. `tiny` and `full` are two sizes of the modularity
+    experiment (`modularity` is `full`); the lambda presets need `n_lambda`, the others reject
+    it."""
     if name not in PRESET_NAMES:
         raise ValueError(f"unknown preset {name!r}; valid: {sorted(PRESET_NAMES)}")
     if name in FIXED_AXES_PRESETS:
@@ -593,7 +593,7 @@ def _validate_axis(exp: ExpConfig, axis: str, values: list) -> None:
     if axis in EXP_OWNED_AXES:
         raise ValueError(
             f"axis {axis!r} is set by the experiment's own {EXP_OWNED_AXES[axis]}; "
-            "change that instead of exping it"
+            "change that instead of varying it"
         )
     if not values:
         raise ValueError(f"axis {axis!r} has no values")

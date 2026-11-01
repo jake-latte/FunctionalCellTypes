@@ -16,8 +16,8 @@ Three layers, as in the rest of the package:
 
 The report supports the modularity experiment (settings varying task, net.L, net.phi and
 train.rate_lambda; other experiments may add axes, as long as these exist): `load_results` raises
-on an experiment without them, and `final_mir` and the figures assume a layer count of at most
-`max(LAYERS)`.
+on an experiment without them, and `final_mir` and the figures assume a layer count of at
+most `max(LAYERS)`.
 
 Loading is read-only: nothing is generated, cached or written under ROOT, which a running job
 may be writing to. Settings are loaded on the CPU whatever device they were trained on, and are
@@ -339,10 +339,10 @@ def load_setting_result(root: Path, exp: ExpConfig, setting: Setting) -> Setting
 
 def load_results(root: Path | str) -> list[SettingResult]:
     """All settings of the experiment at `root`, in index order. FileNotFoundError if `root` has no
-    exp.json: with no experiment there is nothing to report. ValueError if the experiment's axes
-    lack
-    the axes net.L, net.phi and train.rate_lambda (the report supports the modularity
-    experiment)."""
+    exp.json: with no experiment there is nothing to report. UnmigratedExpError (an ExpError)
+    if it holds only a legacy sweep.json: run `fct exp migrate ROOT`. ValueError if the
+    experiment's axes lack net.L, net.phi or train.rate_lambda (the report supports the
+    modularity experiment)."""
     root = Path(root)
     exp = load_exp(root)
     missing = [a for a in MODULARITY_AXES if a not in axes_of(exp)]

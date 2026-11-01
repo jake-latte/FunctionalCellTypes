@@ -1273,7 +1273,7 @@ def fig_mir_heatmaps(
     return fig
 
 
-# --------------------------------------------------------------------------- tuning and grid MIR
+# --------------------------------------------------------------------------- tuning and MIR matrix
 TUNING_N_COLS = 4  # tuning panels per row
 # One colour per latent, none of them in LAYER_COLORS: a page can show layer k and latent k.
 LATENT_COLORS = ["#7b3294", "#8c510a", "#00a6b5", "#5c5c5c", "#b8a800", "#000000"]

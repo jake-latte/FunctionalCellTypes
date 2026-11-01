@@ -45,7 +45,7 @@ on the existing Stein-mismatch / ESS backstops and the tilt tripwire to catch a 
 density; and an exact per-orthant check (Schur complement per sign pattern, batched, feasible
 for P <= ~20) is implemented as a diagnostic / test oracle only, used to validate the rule on
 the exemplar's relu problem (P 20) and in tests. Acceptance: the analytic relu checks pass under
-the default config; the exemplar's relu variant and one relu setting of the modularity experiment
+the default config; the exemplar's relu variant and one relu setting of the modularity grid
 solve under the tripwire; the oracle agrees with the rule on the exemplar problem (or the
 disagreement is reported, with the fraction of orthants violated); the rule, its regime and the
 oracle's cost are stated in `docs/design.md`. Starts once `prior-scaling-convention` is merged.
@@ -78,7 +78,7 @@ oracle's cost are stated in `docs/design.md`. Starts once `prior-scaling-convent
   the rule keeps 59 %; along solves the share of the learning tilt at the solver's kernel goes 0.24 to 0.58 (floor 0.12 to
   0.37) and is 1.0 only late in some solves. Pinned in `test_the_rule_cuts_a_normalisable_learning_tilt_that_is_not_positive_definite`.
 - Does not hold: the exemplar's relu variant (HMC, notebook sizes, lazy or net start, 80 steps; also with eta_max 0.1,
-  eta_phi 0.01 or max_rel_step 0.02) and the tiny experiment's linear_teacher L1 relu r1e-3 setting (library solver, 16 points, 40
+  eta_phi 0.01 or max_rel_step 0.02) and the tiny grid's linear_teacher L1 relu r1e-3 setting (library solver, 16 points, 40
   steps) all end in the tilt tripwire, for two different reasons:
   - rule-driven (eta_max 0.1, lazy start): the all-active rule admitted non-normalisable tilts and the Stein / ESS / h^2
     backstops did not catch them. At step 5 (margin +0.19, plane -0.007) the chains escape (h^2/prior 3e3), the Stein
