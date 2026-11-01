@@ -1,4 +1,4 @@
-"""Build and execute `phase_transition_grid.ipynb`: the figures of `spatial_exp.ipynb` for one
+"""Build and execute `phase_transition_exp.ipynb`: the figures of `spatial_exp.ipynb` for one
 setting of a `phase_transition` experiment, an ensemble of B networks with random embeddings in d
 dimensions.
 
@@ -16,8 +16,8 @@ the cells that draw them. The plotting functions of the data-kernel figure are t
 `build_spatial.py` (taken verbatim, so the notebooks cannot drift); the others are written for the
 ensemble. Run
 
-    python notebooks/build_phase_transition_exp.py ROOT --set 'SETTING={"spatial.d": 2}'   # execute, write tmp/phase_transition_grid.ipynb
-    python notebooks/build_phase_transition_exp.py --no-execute                              # source only: notebooks/phase_transition_grid.ipynb
+    python notebooks/build_phase_transition_exp.py ROOT --set 'SETTING={"spatial.d": 2}'   # execute, write tmp/phase_transition_exp.ipynb
+    python notebooks/build_phase_transition_exp.py --no-execute                              # source only: notebooks/phase_transition_exp.ipynb
 
 ROOT is the experiment directory (the one holding exp.json); `$FCT_EXP_ROOT` works in the notebook
 too. Only the source notebook is committed; an executed one records the ROOT path and its figures
@@ -33,8 +33,8 @@ from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 from notebooks import build_spatial as sp
 from notebooks.build_spatial_exp import SETTINGS_TABLE, SETTINGS_TEXT, when_trained
 
-SOURCE_OUT = Path(__file__).with_name("phase_transition_grid.ipynb")
-EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "phase_transition_grid.ipynb"
+SOURCE_OUT = Path(__file__).with_name("phase_transition_exp.ipynb")
+EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "phase_transition_exp.ipynb"
 
 
 def function_source(source: str, *names: str) -> str:

@@ -1,4 +1,4 @@
-"""The phase_transition_grid notebook: its source, one test per change the PI asked for (on the
+"""The phase_transition_exp notebook: its source, one test per change the PI asked for (on the
 built cells, on the plotting functions the cells define, and on executed outputs), and end-to-end
 executions on a tiny `phase_transition` experiment (CPU) with one trained and one never-run setting."""
 
@@ -111,7 +111,7 @@ def test_source_notebook_validates_has_no_outputs_and_no_path():
 
 
 def test_the_committed_notebook_is_what_the_builder_produces():
-    path = Path(__file__).parents[1] / "notebooks" / "phase_transition_grid.ipynb"
+    path = Path(__file__).parents[1] / "notebooks" / "phase_transition_exp.ipynb"
     committed = nbformat.read(path, 4)
     assert [(c.cell_type, c.source) for c in committed.cells] == [
         (c.cell_type, c.source) for c in build_notebook().cells
