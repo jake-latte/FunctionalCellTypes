@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: in progress
+status: done
 ---
 
 # Rename the sweep/grid machinery to "experiment" (exp)
@@ -76,3 +76,13 @@ Acceptance criteria:
 4. Running an exp command on an unmigrated folder fails, and the error names `fct exp migrate`.
 5. `git grep -niE 'sweep|grid'` over the non-historical tree shows only: migration code that reads the legacy names, the borderline non-experiment senses you list, and historical records.
 6. `fct exp --help` and both SLURM scripts use only the new names; the SLURM script tests pass.
+
+## Leftovers (from the confirmation review; optional, not done)
+- migrate's note says "kept from an earlier experiment" also for a record whose hash is null, not a
+  string, or the current hash in a non-member directory; "kept as it is (hash X is not this
+  experiment's)" would not overclaim. Refusing a non-string hash is an option.
+- The stale-legacy-file refusal says the folder's results "are stale"; in general they only may be
+  (check with `exp status` after fixing the field).
+- Pre-existing, not from this item: after an old `init --force` extended an axis, `exp run` (and
+  `find_setting_dir`) still advise deleting a kept setting whose config.json still matches. A later
+  item could let `run` rewrite such a stale setting.json instead.
