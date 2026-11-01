@@ -241,7 +241,7 @@ class ExpConfig(StrictModel):
         elif self.spatial is not None:
             # The built-in axes: every setting must still build a valid Config (the spatial
             # section ties weight_lambda to lambda_max). Experiments without one have no such
-            # cross-field rule, and the module-level presets are built before these helpers exist.
+            # cross-field rule, so they are not checked here.
             _validate_combinations(self)
         return self
 
