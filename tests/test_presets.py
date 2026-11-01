@@ -162,9 +162,7 @@ def test_a_missing_presets_folder_raises_a_preset_error_naming_it(tmp_path):
     ],
     ids=["broken-json", "missing-fields", "not-an-object", "not-utf8"],
 )
-def test_an_invalid_preset_file_raises_a_preset_error_naming_its_full_path(
-    folder, content, reason
-):
+def test_an_invalid_preset_file_raises_a_preset_error_naming_its_full_path(folder, content, reason):
     (folder / "tiny.json").write_bytes(content)
     with pytest.raises(PresetError, match=reason) as caught:
         preset("tiny", folder)
@@ -266,7 +264,7 @@ def test_overrides_replace_the_description_with_a_true_one(tmp_path, capsys):
     assert _cli(capsys, "init", tmp_path, "--preset", "spatial_tiny", *args)[0] == 0
     assert load_exp(tmp_path).description == (
         "Preset 'spatial_tiny' with overrides: --set n_epochs=4; "
-        "--set linear_teacher.n_features=6; --axis net.N=[4,8]; --axis net.phi=[\"tanh\"]"
+        '--set linear_teacher.n_features=6; --axis net.N=[4,8]; --axis net.phi=["tanh"]'
     )
 
 

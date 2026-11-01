@@ -328,8 +328,7 @@ def _unknown_preset_message(
     message = f"unknown preset {name!r}; available in {folder}: {names}"
     if ignored:
         message += (
-            f". Ignored (the name before {PRESET_SUFFIX} must match {PRESET_NAME_RULE}): "
-            f"{ignored}"
+            f". Ignored (the name before {PRESET_SUFFIX} must match {PRESET_NAME_RULE}): {ignored}"
         )
     return message
 

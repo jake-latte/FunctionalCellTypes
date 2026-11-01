@@ -6,7 +6,7 @@
 #  jobs/fct_solve.sh runs this same script with FCT_STAGE=solve, which solves the mean-field
 #  saddle point of each setting instead (see that file).
 #  The axes live in ROOT/exp.json (write it first with
-#  `python -m fct exp init ROOT --preset full`, or `--preset lambda_exp --n-lambda 8`);
+#  `python -m fct exp init ROOT --preset full`, or `--preset lambda_exp`);
 #  this script only needs its size (`exp count`).
 #
 #  Usage (ROOT = experiment root, as the first argument or in $FCT_EXP_ROOT):
