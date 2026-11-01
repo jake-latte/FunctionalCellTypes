@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch
 
-from fct.grid_view import TuningView
+from fct.exp_view import TuningView
 from fct.spatial import (
     EmbeddingSpec,
     PopulationSpec,

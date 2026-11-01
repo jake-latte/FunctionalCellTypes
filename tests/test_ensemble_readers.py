@@ -1,4 +1,4 @@
-"""Readers of trained runs on an ensemble (net.B > 1): a sweep trains it end to end with the
+"""Readers of trained runs on an ensemble (net.B > 1): an experiment trains it end to end with the
 MIR monitor, readers that take a member index select one, and the others refuse loudly
 instead of reading member 0 (CPU only, on the tiny spatial preset)."""
 
@@ -7,24 +7,24 @@ import torch
 
 from fct.cli import CliError, _load_net
 from fct.config import MeanFieldConfig, NetConfig, resolve_dtype
-from fct.grid_view import load_setting_data
+from fct.exp import (
+    ExpError,
+    expand,
+    load_exp,
+    preset,
+    run_setting,
+    save_exp,
+    setting_dir,
+    with_axes,
+)
+from fct.exp_view import load_setting_data
 from fct.lrtune import evaluate_setting
 from fct.meanfield import solve
 from fct.model import EnsembleMLP, make_net
 from fct.monitor import MIR_MONITOR_KEYS
 from fct.report import SettingResult, load_setting_result
-from fct.spatial_grid import load_grid_run, select_setting
+from fct.spatial_exp import load_exp_run, select_setting
 from fct.spatial_view import train_in
-from fct.sweep import (
-    SweepError,
-    expand,
-    load_sweep,
-    preset,
-    run_setting,
-    save_sweep,
-    setting_dir,
-    with_grid,
-)
 from fct.train import load_trained
 
 B = 3
@@ -33,10 +33,10 @@ B = 3
 @pytest.fixture(scope="module")
 def root(tmp_path_factory):
     """spatial_tiny with one setting, an ensemble of B = 3, trained."""
-    root = tmp_path_factory.mktemp("ensemble_grid")
-    sweep = with_grid(preset("spatial_tiny"), {"net.B": [B]})
-    save_sweep(sweep, root)
-    run_setting(sweep, 0, root, log=lambda _: None)
+    root = tmp_path_factory.mktemp("ensemble_exp")
+    exp = with_axes(preset("spatial_tiny"), {"net.B": [B]})
+    save_exp(exp, root)
+    run_setting(exp, 0, root, log=lambda _: None)
     return root
 
 
@@ -45,7 +45,7 @@ def _directory_and_cfg(root):
     return chosen.directory, chosen.cfg
 
 
-def test_a_sweep_trains_an_ensemble_with_a_member_axis_in_the_monitor(root):
+def test_an_exp_trains_an_ensemble_with_a_member_axis_in_the_monitor(root):
     directory, cfg = _directory_and_cfg(root)
     net, history = load_trained(directory, cfg, torch.device("cpu"), resolve_dtype(cfg.dtype))
     assert isinstance(net, EnsembleMLP) and net.B == B
@@ -55,11 +55,11 @@ def test_a_sweep_trains_an_ensemble_with_a_member_axis_in_the_monitor(root):
     assert all(len(entry) == B for entry in history["loss"])
 
 
-def test_load_grid_run_takes_a_member_and_refuses_without_one(root):
+def test_load_exp_run_takes_a_member_and_refuses_without_one(root):
     chosen = select_setting(root, {"net.B": B})
     with pytest.raises(ValueError, match="ensemble of B=3"):
-        load_grid_run(chosen)
-    run, _ = load_grid_run(chosen, member=2)
+        load_exp_run(chosen)
+    run, _ = load_exp_run(chosen, member=2)
     cfg = chosen.cfg
     net, history = load_trained(
         chosen.directory, cfg, torch.device("cpu"), resolve_dtype(cfg.dtype)
@@ -70,10 +70,10 @@ def test_load_grid_run_takes_a_member_and_refuses_without_one(root):
 
 
 def test_the_report_refuses_an_ensemble(root):
-    sweep = load_sweep(root)
-    (setting,) = expand(sweep)
+    exp = load_exp(root)
+    (setting,) = expand(exp)
     with pytest.raises(ValueError, match="ensemble of B=3"):
-        load_setting_result(root, sweep, setting)
+        load_setting_result(root, exp, setting)
 
 
 def test_the_cli_refuses_an_ensemble(root):
@@ -82,21 +82,21 @@ def test_the_cli_refuses_an_ensemble(root):
         _load_net(directory, cfg)
 
 
-def test_the_sweep_solve_stage_refuses_a_trained_ensemble(root):
-    sweep = load_sweep(root)
-    with pytest.raises(SweepError, match="ensemble"):
-        run_setting(sweep, 0, root, log=lambda _: None, stage="solve")
-    assert setting_dir(root, expand(sweep)[0]).is_dir()
+def test_the_exp_solve_stage_refuses_a_trained_ensemble(root):
+    exp = load_exp(root)
+    with pytest.raises(ExpError, match="ensemble"):
+        run_setting(exp, 0, root, log=lambda _: None, stage="solve")
+    assert setting_dir(root, expand(exp)[0]).is_dir()
 
 
-def test_the_sweep_solve_stage_refuses_an_ensemble_before_it_is_trained(tmp_path):
+def test_the_exp_solve_stage_refuses_an_ensemble_before_it_is_trained(tmp_path):
     """A solve job that runs before training finishes must not solve (its result would read
     as stale once the ensemble is trained): it refuses at once, writing nothing."""
-    sweep = with_grid(preset("tiny"), {"net.B": [B]})
-    save_sweep(sweep, tmp_path)
-    with pytest.raises(SweepError, match="ensemble"):
-        run_setting(sweep, 0, tmp_path, log=lambda _: None, stage="solve")
-    assert not setting_dir(tmp_path, expand(sweep)[0]).exists()
+    exp = with_axes(preset("tiny"), {"net.B": [B]})
+    save_exp(exp, tmp_path)
+    with pytest.raises(ExpError, match="ensemble"):
+        run_setting(exp, 0, tmp_path, log=lambda _: None, stage="solve")
+    assert not setting_dir(tmp_path, expand(exp)[0]).exists()
 
 
 def test_the_solver_refuses_an_ensemble():
@@ -114,9 +114,9 @@ def test_the_spatial_view_refuses_to_train_an_ensemble(root, tmp_path):
     assert not any(tmp_path.iterdir())  # refused before writing anything
 
 
-def test_grid_view_refuses_an_ensemble(root):
-    sweep = load_sweep(root)
-    (setting,) = expand(sweep)
+def test_exp_view_refuses_an_ensemble(root):
+    exp = load_exp(root)
+    (setting,) = expand(exp)
     directory = setting_dir(root, setting).relative_to(root)
     result = SettingResult(setting, "done", directory, history={})  # as if the report had loaded it
     with pytest.raises(ValueError, match="ensemble of B=3"):
@@ -124,7 +124,7 @@ def test_grid_view_refuses_an_ensemble(root):
 
 
 def test_lrtune_evaluation_refuses_an_ensemble(root):
-    sweep = load_sweep(root)
-    (setting,) = expand(sweep)
+    exp = load_exp(root)
+    (setting,) = expand(exp)
     with pytest.raises(ValueError, match="ensemble of B=3"):
-        evaluate_setting(root, sweep, setting, held_out_seed=1)
+        evaluate_setting(root, exp, setting, held_out_seed=1)

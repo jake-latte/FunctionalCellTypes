@@ -1,6 +1,6 @@
 """`fct.phase_view`: the computation layer behind the phase-transition notebook, on synthetic
 inputs with known answers (hand-made embeddings and histories, small random ensembles) and on a
-tiny `phase_transition` sweep trained here on the CPU."""
+tiny `phase_transition` experiment trained here on the CPU."""
 
 import ast
 import dataclasses
@@ -17,7 +17,16 @@ from fct.activations import get_phi
 from fct.analyse import example_outputs
 from fct.config import DataConfig, NetConfig
 from fct.data import get_dataset, get_latent_lattice_dataset, make_dataset
-from fct.grid_view import tuning_view
+from fct.exp import (
+    expand,
+    preset,
+    run_setting,
+    save_exp,
+    setting_config,
+    setting_dir,
+    with_axes,
+)
+from fct.exp_view import tuning_view
 from fct.meanfield import readout_activities
 from fct.model import MLP, make_net
 from fct.modularity import information_overlap, rate_overlap
@@ -49,15 +58,6 @@ from fct.spatial import (
     weight_quadratic_form,
 )
 from fct.spatial_view import data_kernels, empirical_kernels
-from fct.sweep import (
-    expand,
-    preset,
-    run_setting,
-    save_sweep,
-    setting_config,
-    setting_dir,
-    with_grid,
-)
 from fct.tasks import Dataset, latent_lattice_dataset
 from notebooks import build_spatial
 
@@ -145,8 +145,8 @@ def test_random_test_set_refuses_the_training_seed_and_an_empty_set(small):
 
 
 def test_random_test_set_leaves_the_training_cache_alone(tmp_path):
-    sweep = _tiny_sweep()
-    cfg = setting_config(sweep, expand(sweep)[0])
+    exp = _tiny_exp()
+    cfg = setting_config(exp, expand(exp)[0])
     train = get_dataset(tmp_path, cfg)
     path = tmp_path / "data" / "dataset.pt"
     before = hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns
@@ -341,10 +341,10 @@ def test_ensemble_example_outputs_refuse_a_row_outside_the_dataset(small, sets):
         ensemble_example_outputs(net, sets[1], [0, 999])
 
 
-# --------------------------------------------------------------------------- the trained sweep
+# --------------------------------------------------------------------------- the trained experiment
 
 
-def _tiny_sweep():
+def _tiny_exp():
     """phase_transition at a few epochs and a small net: d in {2, 3} x lambda_max 0.5, B = 2."""
     base = preset("phase_transition").model_copy(
         update={
@@ -353,16 +353,16 @@ def _tiny_sweep():
             "linear_teacher": preset("tiny").linear_teacher.model_copy(update={"n_features": 8}),
         }
     )  # fmt: skip
-    return with_grid(base, {"spatial.d": [2, 3], "spatial.lambda_max": [0.5], "net.B": [2]})
+    return with_axes(base, {"spatial.d": [2, 3], "spatial.lambda_max": [0.5], "net.B": [2]})
 
 
 @pytest.fixture(scope="module")
 def root(tmp_path_factory):
     """Setting 0 (d = 2) trained; setting 1 (d = 3) never run."""
     root = tmp_path_factory.mktemp("phase")
-    sweep = _tiny_sweep()
-    save_sweep(sweep, root)
-    run_setting(sweep, 0, root, log=lambda _: None)
+    exp = _tiny_exp()
+    save_exp(exp, root)
+    run_setting(exp, 0, root, log=lambda _: None)
     return root
 
 
@@ -389,7 +389,7 @@ def test_loader_reports_a_setting_never_run_without_writing_anything(root):
 def test_loader_reads_the_latest_checkpoint_of_a_partly_trained_setting(root, tmp_path):
     copy = tmp_path / "copy"
     shutil.copytree(root, copy)
-    directory = setting_dir(copy, expand(_tiny_sweep())[0])
+    directory = setting_dir(copy, expand(_tiny_exp())[0])
     (directory / "train" / "final.pt").unlink()
     run = load_phase_run(copy, {"spatial.d": 2})
     assert run.setting.status == "partial"
@@ -398,9 +398,9 @@ def test_loader_reads_the_latest_checkpoint_of_a_partly_trained_setting(root, tm
 
 
 def test_loader_refuses_a_setting_that_is_not_an_ensemble(tmp_path):
-    sweep = with_grid(_tiny_sweep(), {"spatial.d": [2], "spatial.lambda_max": [0.5], "net.B": [1]})
-    save_sweep(sweep, tmp_path)
-    run_setting(sweep, 0, tmp_path, log=lambda _: None)
+    exp = with_axes(_tiny_exp(), {"spatial.d": [2], "spatial.lambda_max": [0.5], "net.B": [1]})
+    save_exp(exp, tmp_path)
+    run_setting(exp, 0, tmp_path, log=lambda _: None)
     with pytest.raises(ValueError, match="ensemble"):
         load_phase_run(tmp_path, {"spatial.d": 2})
 
@@ -638,7 +638,7 @@ def test_ensemble_example_outputs_come_back_on_the_cpu(small, sets):
 def test_loader_generates_in_memory_when_a_done_setting_lacks_its_dataset_file(root, tmp_path):
     copy = tmp_path / "copy"
     shutil.copytree(root, copy)
-    directory = setting_dir(copy, expand(_tiny_sweep())[0])
+    directory = setting_dir(copy, expand(_tiny_exp())[0])
     (directory / "data" / "dataset.pt").unlink()
     run = load_phase_run(copy, {"spatial.d": 2})
     assert run.setting.status == "done" and run.net is not None
@@ -650,7 +650,7 @@ def test_loader_generates_in_memory_when_a_done_setting_lacks_its_dataset_file(r
 def test_loader_reports_a_stale_setting_without_weights(root, tmp_path):
     copy = tmp_path / "copy"
     shutil.copytree(root, copy)
-    directory = setting_dir(copy, expand(_tiny_sweep())[0])
+    directory = setting_dir(copy, expand(_tiny_exp())[0])
     (directory / "train" / "final.pt").write_bytes(b"not a checkpoint")
     run = load_phase_run(copy, {"spatial.d": 2})
     assert run.setting.status == "stale"

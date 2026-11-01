@@ -16,7 +16,7 @@ relu the sufficient orthant floor `lambda(M + lambda_r I) >= -(1 - delta) lambda
 on the exemplar's relu problem (prior_scale 5, lambda_min(Sigma^-1) 0.0997, rate_tilt 0.02) the
 learning tilt's leading eigenvalue -0.349 is cut to -0.115 (33 % kept; fixed-point residual
 ~1), and at the library default prior_scale = 1/lambda_w = 1000 the cut is ~99.8 %, so every
-relu setting of the modularity sweep's solve stage ends in `UnconvergedSolveError` (loudly;
+relu setting of the modularity experiment's solve stage ends in `UnconvergedSolveError` (loudly;
 before this branch the same solves returned a wrong answer quietly). The exact relu condition
 is per orthant (2^P checks); the all-active orthant condition Sigma^-1 + M > 0 is necessary
 but not sufficient.
@@ -28,13 +28,13 @@ but not sufficient.
 2. Use the necessary condition Sigma^-1 + M > 0 for relu, backed by the existing Stein-mismatch
    and ESS backstops (risk: a non-normalisable density caught late).
 3. Exact per-orthant check for small P (the exemplar's P = 20 is 10^6 orthants: feasible once
-   per outer step with batching, not for the sweep's P), sufficient floor otherwise.
+   per outer step with batching, not for the experiment's P), sufficient floor otherwise.
 4. Drop the projection for relu and rely on the backstops (what `project_tilt=False` does).
 
 ## Acceptance criteria (once decided)
 - The analytic relu checks in `tests/test_hmc.py` / `test_meanfield.py` pass under the chosen
   rule with the default config; the exemplar's relu variant and one relu setting of the
-  modularity grid solve under the tripwire; the rule and its regime are stated in
+  modularity experiment solve under the tripwire; the rule and its regime are stated in
   `docs/design.md`.
 
 ## PI confirmation (2026-10-29)

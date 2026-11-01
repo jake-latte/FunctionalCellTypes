@@ -12,7 +12,7 @@ from fct import draw
 from fct.analyse import ExampleOutputs, GridPredictions, LayerPCA
 from fct.config import DataConfig
 from fct.data import Dataset
-from fct.grid_report import MirRecord
+from fct.exp_report import MirRecord
 from fct.tuning import tuning_curves
 from tests.draw_helpers import assert_png as _assert_png
 

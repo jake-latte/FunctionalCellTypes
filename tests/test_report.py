@@ -1,5 +1,5 @@
 """Notebook report: final-MIR table/heatmap on known values, prose from numbers, and the
-loader's handling of missing and partial settings on a real tiny sweep."""
+loader's handling of missing and partial settings on a real tiny experiment."""
 
 import dataclasses
 from pathlib import Path
@@ -12,9 +12,19 @@ import torch
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset
 from fct.draw import fig_mir_heatmaps, plot_mir_heatmap
+from fct.exp import (
+    LAYERS,
+    expand,
+    preset,
+    run_setting,
+    save_exp,
+    setting_dir,
+    with_axes,
+)
 from fct.monitor import make_mir_monitor
 from fct.report import (
     SettingResult,
+    exp_root_from_env,
     final_mir,
     find_result,
     load_results,
@@ -24,16 +34,6 @@ from fct.report import (
     setting_label,
     setting_text,
     summary_text,
-    sweep_root_from_env,
-)
-from fct.sweep import (
-    LAYERS,
-    expand,
-    preset,
-    run_setting,
-    save_sweep,
-    setting_dir,
-    with_grid,
 )
 from tests.report_helpers import known, modularity_setting, synthetic_history, synthetic_results
 
@@ -211,32 +211,33 @@ def test_hand_set_modular_net_scores_high_through_the_real_monitor_to_the_summar
 
 
 # ---------------------------------------------------------------- the root parameter
-def test_sweep_root_from_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("FCT_SWEEP_ROOT", str(tmp_path))
-    assert sweep_root_from_env() == tmp_path
-    monkeypatch.delenv("FCT_SWEEP_ROOT")
-    with pytest.raises(RuntimeError, match="FCT_SWEEP_ROOT"):
-        sweep_root_from_env()
+def test_exp_root_from_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("FCT_EXP_ROOT", str(tmp_path))
+    assert exp_root_from_env() == tmp_path
+    monkeypatch.delenv("FCT_EXP_ROOT")
+    with pytest.raises(RuntimeError, match="FCT_EXP_ROOT"):
+        exp_root_from_env()
 
 
-# ---------------------------------------------------------------- a real tiny sweep, partly run
+# ---------------------------------------------------------------- a real tiny experiment, partly
+# run
 def _index(task: str, L: int, phi: str, rate: float) -> int:
     return modularity_setting(task, L, phi, rate).index
 
 
 @pytest.fixture(scope="module")
 def partial_root(tmp_path_factory) -> Path:
-    """A tiny sweep of which only two of the 36 settings were run."""
-    root = tmp_path_factory.mktemp("sweep")
-    sweep = preset("tiny")
-    save_sweep(sweep, root)
-    run_setting(sweep, _index("linear_teacher", 1, "tanh", 0.0), root, **QUIET)
-    run_setting(sweep, _index("object_action", 3, "relu", 1e-3), root, **QUIET)
+    """A tiny experiment of which only two of the 36 settings were run."""
+    root = tmp_path_factory.mktemp("exp")
+    exp = preset("tiny")
+    save_exp(exp, root)
+    run_setting(exp, _index("linear_teacher", 1, "tanh", 0.0), root, **QUIET)
+    run_setting(exp, _index("object_action", 3, "relu", 1e-3), root, **QUIET)
     return root
 
 
-def test_load_results_marks_every_setting_missing_in_an_empty_sweep(tmp_path):
-    save_sweep(preset("tiny"), tmp_path)
+def test_load_results_marks_every_setting_missing_in_an_empty_exp(tmp_path):
+    save_exp(preset("tiny"), tmp_path)
     results = load_results(tmp_path)
     assert len(results) == 36
     assert {r.status for r in results} == {"missing"}
@@ -271,11 +272,11 @@ def test_setting_items_for_a_missing_setting_is_one_visible_message(partial_root
 
 
 def test_interrupted_setting_is_shown_as_provisional_from_its_checkpoint(tmp_path):
-    sweep = preset("tiny")
-    save_sweep(sweep, tmp_path)
-    run_setting(sweep, 0, tmp_path, **QUIET)
+    exp = preset("tiny")
+    save_exp(exp, tmp_path)
+    run_setting(exp, 0, tmp_path, **QUIET)
     # an interrupted run keeps its checkpoints but never wrote final.pt
-    (setting_dir(tmp_path, expand(sweep)[0]) / "train" / "final.pt").unlink()
+    (setting_dir(tmp_path, expand(exp)[0]) / "train" / "final.pt").unlink()
     r = load_results(tmp_path)[0]
     assert r.status == "partial" and r.provisional and r.history is not None
     text, *figs = setting_items(r)
@@ -284,7 +285,7 @@ def test_interrupted_setting_is_shown_as_provisional_from_its_checkpoint(tmp_pat
         plt.close(fig)
 
 
-def test_summary_over_a_partial_sweep_counts_the_finished_settings(partial_root):
+def test_summary_over_a_partial_exp_counts_the_finished_settings(partial_root):
     fm = final_mir(load_results(partial_root), "linear_teacher")
     assert "1 of 12" in summary_text(fm)
 
@@ -344,25 +345,25 @@ def test_find_result_returns_the_named_setting_and_rejects_unknown_ones():
         find_result(results, "linear_teacher", absent)
 
 
-def test_setting_label_of_the_modularity_grid_is_unchanged():
+def test_setting_label_of_the_modularity_experiment_is_unchanged():
     assert setting_label(synthetic_results()[0].setting) == "L1 tanh r=0"
     last = synthetic_results()[-1].setting
     assert setting_label(last) == "L5 relu r=0.001"
 
 
 def _phase_results() -> list[SettingResult]:
-    """A 2 x 2 grid whose settings differ only in the two lambdas."""
-    grid = {
+    """A 2 x 2 experiment whose settings differ only in the two lambdas."""
+    axes = {
         "net.L": [1],
         "net.phi": ["tanh"],
         "train.rate_lambda": [1e-3, 1.0],
         "train.weight_lambda": [1e-3, 1.0],
     }
-    sweep = with_grid(preset("tiny"), grid)
-    return [SettingResult(s, "missing", Path("nowhere")) for s in expand(sweep)]
+    exp = with_axes(preset("tiny"), axes)
+    return [SettingResult(s, "missing", Path("nowhere")) for s in expand(exp)]
 
 
-def test_find_result_on_a_phase_grid_needs_every_axis_and_rejects_ambiguity():
+def test_find_result_on_a_phase_experiment_needs_every_axis_and_rejects_ambiguity():
     results = _phase_results()
     full = {"net.L": 1, "net.phi": "tanh", "train.rate_lambda": 1.0, "train.weight_lambda": 1e-3}
     assert find_result(results, "linear_teacher", full) is results[2]
@@ -374,23 +375,23 @@ def test_find_result_on_a_phase_grid_needs_every_axis_and_rejects_ambiguity():
             find_result(results, "linear_teacher", partial)
 
 
-def test_setting_labels_of_a_phase_grid_are_distinct_and_show_every_axis():
+def test_setting_labels_of_a_phase_experiment_are_distinct_and_show_every_axis():
     labels = [setting_label(r.setting) for r in _phase_results()]
     assert len(set(labels)) == 4
     assert labels[1] == "L1 tanh r=0.001 weight_lambda=1"
 
 
-def test_load_results_rejects_a_grid_without_the_modularity_axes(tmp_path):
-    save_sweep(with_grid(preset("tiny"), {"net.N": [4, 6]}), tmp_path)
+def test_load_results_rejects_an_experiment_without_the_modularity_axes(tmp_path):
+    save_exp(with_axes(preset("tiny"), {"net.N": [4, 6]}), tmp_path)
     with pytest.raises(ValueError, match="net.L"):
         load_results(tmp_path)
 
 
 def test_loading_does_not_write_into_root_and_reports_a_missing_dataset(tmp_path):
-    sweep = preset("tiny")
-    save_sweep(sweep, tmp_path)
-    run_setting(sweep, 0, tmp_path, **QUIET)
-    dataset_file = setting_dir(tmp_path, expand(sweep)[0]) / "data" / "dataset.pt"
+    exp = preset("tiny")
+    save_exp(exp, tmp_path)
+    run_setting(exp, 0, tmp_path, **QUIET)
+    dataset_file = setting_dir(tmp_path, expand(exp)[0]) / "data" / "dataset.pt"
     dataset_file.unlink()
     before = sorted(p for p in tmp_path.rglob("*"))
     r = load_results(tmp_path)[0]

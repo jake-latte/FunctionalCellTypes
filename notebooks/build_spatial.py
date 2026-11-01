@@ -74,7 +74,7 @@ Set `CACHE_ROOT` in the first cell. The run is cached under it in a directory na
 the task, net, training and spatial settings, so re-running reloads a finished run, resumes an
 interrupted one, and changing any setting starts a new one."""
 
-# The notation block, shared with the spatial-grid notebook so the two cannot drift.
+# The notation block, shared with the spatial-experiment notebook so the two cannot drift.
 NOTATION = INTRO[INTRO.index("**Notation.**") : INTRO.index("Set `CACHE_ROOT`")].rstrip()
 
 TASK_AND_NET = """CACHE_ROOT = None  # directory for the cached runs; None reads $FCT_CACHE_ROOT
@@ -119,7 +119,7 @@ import torch
 from IPython.display import Markdown, display
 
 from fct.analyse import example_outputs, pick_examples, r_squared
-from fct.grid_view import tuning_view
+from fct.exp_view import tuning_view
 from fct.meanfield import readout_activities
 from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import (
@@ -139,7 +139,8 @@ from fct.spatial_view import (
 
 mpl.rcParams.update({"figure.dpi": 100, "font.size": 12, "axes.titlesize": 12})"""
 
-# What only the notebook that trains its own run needs; the grid notebook has its own extras.
+# What only the notebook that trains its own run needs; the spatial-experiment notebook has its own
+# extras.
 TRAIN_IMPORTS = """from fct.cache import cache_root_from_env
 from fct.data import get_latent_lattice_dataset
 from fct.spatial_view import make_config, train_run
@@ -1038,7 +1039,8 @@ def execute_notebook(
     root_name: str = "CACHE_ROOT",
 ) -> NotebookNode:
     """Run a copy of `nb` in a fresh kernel with the parameter `root_name` (CACHE_ROOT, or the
-    sweep ROOT of the grid notebook) and the `overrides` set; the source `nb` gains no outputs.
+    experiment ROOT of the spatial-experiment notebook) and the `overrides` set; the source `nb`
+    gains no outputs.
     A failing cell raises (nbclient.exceptions.CellExecutionError)."""
     values = {root_name: str(cache_root), **(overrides or {})}
     client = NotebookClient(

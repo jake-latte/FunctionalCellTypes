@@ -1,5 +1,5 @@
 """Command-line entry point: `python -m fct init|train|solve|plot|plot-example CACHE_DIR` and
-`python -m fct sweep init|list|count|status|run ROOT`.
+`python -m fct exp init|list|count|status|run ROOT`.
 
 Each subcommand is a thin wiring of library functions; all computation lives elsewhere.
 Expected user errors (missing config or prerequisites, stale cache) become one stderr line
@@ -42,6 +42,27 @@ from fct.draw import (
     fig_solver_history,
     plot_training_history,
 )
+from fct.exp import (
+    FIXED_AXES_PRESETS,
+    LAMBDA_PRESETS,
+    LEGACY_EXP_FILE,
+    PRESET_NAMES,
+    STAGES,
+    ExpConfig,
+    ExpError,
+    Stage,
+    UnmigratedExpError,
+    exp_path,
+    expand,
+    has_settings,
+    load_exp,
+    preset,
+    run_setting,
+    save_exp,
+    setting_dir,
+    setting_statuses,
+)
+from fct.exp_migrate import MigrationError, migrate_exp
 from fct.meanfield import (
     InadequateSamplerError,
     SpatialPriorUnsupportedError,
@@ -53,24 +74,6 @@ from fct.meanfield import (
 )
 from fct.model import MLP
 from fct.monitor import make_mir_monitor
-from fct.sweep import (
-    FIXED_GRID_PRESETS,
-    GRID_PRESETS,
-    PRESET_NAMES,
-    STAGES,
-    Stage,
-    SweepConfig,
-    SweepError,
-    expand,
-    has_settings,
-    load_sweep,
-    preset,
-    run_setting,
-    save_sweep,
-    setting_dir,
-    setting_statuses,
-    sweep_path,
-)
 from fct.train import History, load_trained, select_member, train_from_config
 
 FIGURE_DPI = 150
@@ -193,9 +196,9 @@ def cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
-# Errors the user fixes by changing a config or the sweep: reported as one line, no traceback.
+# Errors the user fixes by changing a config or the experiment: reported as one line, no traceback.
 USER_FIXABLE_ERRORS = (
-    SweepError,
+    ExpError,
     InadequateSamplerError,
     SpatialPriorUnsupportedError,
     UnconvergedSolveError,
@@ -334,49 +337,56 @@ def cmd_plot(args: argparse.Namespace) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------- sweep
-def _load_sweep(root: Path) -> SweepConfig:
-    path = sweep_path(root)
+# ---------------------------------------------------------------------------- experiment
+def _load_exp(root: Path) -> ExpConfig:
+    path = exp_path(root)
     try:
-        return load_sweep(root)
+        return load_exp(root)
+    except UnmigratedExpError as err:  # names `exp migrate`
+        raise CliError(str(err)) from err
     except FileNotFoundError as err:
-        raise CliError(f"{err}; run `python -m fct sweep init {root}` first") from err
+        raise CliError(f"{err}; run `python -m fct exp init {root}` first") from err
     except ValidationError as err:  # also covers invalid JSON
-        raise CliError(f"{path} is not a valid sweep config: {err}") from err
+        raise CliError(f"{path} is not a valid experiment config: {err}") from err
 
 
 def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
-    """Replace (or add) grid axes in a dumped sweep tree: each item is `config.path=[v1,v2]`."""
-    if axes and tree["grid"] is None:
+    """Replace (or add) axes in a dumped experiment tree: each item is `config.path=[v1,v2]`."""
+    if axes and tree["axes"] is None:
         raise CliError(
-            f"preset {preset_name!r} is the modularity grid, which has no editable axes; "
-            f"--axis needs one of {[*GRID_PRESETS, *FIXED_GRID_PRESETS]}"
+            f"preset {preset_name!r} is the modularity experiment, which has no editable axes; "
+            f"--axis needs one of {[*LAMBDA_PRESETS, *FIXED_AXES_PRESETS]}"
         )
     for item in axes:
         key, sep, text = item.partition("=")
         values = _parse_value(text)
         if not key or not sep or not isinstance(values, list):
             raise CliError(f"--axis expects config.path=[value, ...], got {item!r}")
-        tree["grid"][key] = values
+        tree["axes"][key] = values
 
 
-def _reject_grid_overrides(overrides: Sequence[str]) -> None:
+def _reject_axes_overrides(overrides: Sequence[str]) -> None:
     for item in overrides:
         key = item.partition("=")[0]
-        if key == "grid" or key.startswith("grid."):
-            raise CliError(f"--set {key}: the grid is edited with --axis PATH=[values]")
+        if key == "axes" or key.startswith("axes."):
+            raise CliError(f"--set {key}: the axes are edited with --axis PATH=[values]")
 
 
-def cmd_sweep_init(args: argparse.Namespace) -> int:
-    path = sweep_path(args.root)
+def cmd_exp_init(args: argparse.Namespace) -> int:
+    path = exp_path(args.root)
+    if (args.root / LEGACY_EXP_FILE).exists():
+        raise CliError(
+            f"{args.root} holds a legacy {LEGACY_EXP_FILE}; "
+            f"run `python -m fct exp migrate {args.root}` instead of starting over"
+        )
     if path.exists() and not args.force:
         raise CliError(f"{path} already exists; pass --force to overwrite it")
     if has_settings(args.root) and not args.force:
         raise CliError(
-            f"{args.root} already holds setting directories, which belong to the old sweep.json; "
-            "use a fresh ROOT, or pass --force to write a new sweep.json beside them"
+            f"{args.root} already holds setting directories, which belong to the old exp.json; "
+            "use a fresh ROOT, or pass --force to write a new exp.json beside them"
         )
-    _reject_grid_overrides(args.set)
+    _reject_axes_overrides(args.set)
     try:
         base = preset(args.preset, args.n_lambda)
     except ValueError as err:  # a missing or unwanted --n-lambda
@@ -384,10 +394,10 @@ def cmd_sweep_init(args: argparse.Namespace) -> int:
     try:
         tree = _override_tree(base.model_dump(), args.set)
         _override_axes(tree, args.axis, args.preset)
-        sweep = SweepConfig.model_validate(tree)
+        exp = ExpConfig.model_validate(tree)
     except ValidationError as err:
         raise CliError(str(err)) from err
-    save_sweep(sweep, args.root)
+    save_exp(exp, args.root)
     print(f"wrote {path}")
     return 0
 
@@ -396,22 +406,22 @@ def _setting_name(root: Path, setting) -> str:
     return str(setting_dir(root, setting).relative_to(root))
 
 
-def cmd_sweep_count(args: argparse.Namespace) -> int:
-    print(len(expand(_load_sweep(args.root))))
+def cmd_exp_count(args: argparse.Namespace) -> int:
+    print(len(expand(_load_exp(args.root))))
     return 0
 
 
-def cmd_sweep_list(args: argparse.Namespace) -> int:
-    for i, setting in enumerate(expand(_load_sweep(args.root))):
+def cmd_exp_list(args: argparse.Namespace) -> int:
+    for i, setting in enumerate(expand(_load_exp(args.root))):
         print(f"{i} {_setting_name(args.root, setting)}")
     return 0
 
 
-def cmd_sweep_status(args: argparse.Namespace) -> int:
-    sweep = _load_sweep(args.root)
+def cmd_exp_status(args: argparse.Namespace) -> int:
+    exp = _load_exp(args.root)
     states = [
         (i, state, _setting_name(args.root, s))
-        for i, s, state in setting_statuses(args.root, sweep, args.stage)
+        for i, s, state in setting_statuses(args.root, exp, args.stage)
     ]
     for i, state, name in states:
         print(f"{i} {state} {name}")
@@ -423,46 +433,64 @@ def cmd_sweep_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_all(sweep: SweepConfig, root: Path, stage: Stage) -> None:
+def _run_all(exp: ExpConfig, root: Path, stage: Stage) -> None:
     """Run every setting, continuing past failures; raise CliError listing the failed indices.
 
     A failure is printed with its index, exception type and message (plus the traceback for
     anything that is not a user-fixable error), so nothing is swallowed silently.
     """
     failed = []
-    for i in range(len(expand(sweep))):
+    for i in range(len(expand(exp))):
         try:
-            run_setting(sweep, i, root, log=print, stage=stage)
+            run_setting(exp, i, root, log=print, stage=stage)
         except Exception as err:  # noqa: BLE001 - reported with type, message and traceback
             failed.append(i)
             print(f"error: setting {i} failed: {type(err).__name__}: {err}", file=sys.stderr)
             if not isinstance(err, USER_FIXABLE_ERRORS):
                 traceback.print_exc()
     if failed:
-        raise CliError(f"{len(failed)} of {len(expand(sweep))} settings failed: {failed}")
+        raise CliError(f"{len(failed)} of {len(expand(exp))} settings failed: {failed}")
 
 
-def cmd_sweep_run(args: argparse.Namespace) -> int:
+def cmd_exp_run(args: argparse.Namespace) -> int:
     """One setting with --index (a SLURM array task), else every setting in order.
 
     Only the USER_FIXABLE_ERRORS (bad index or config mismatch, an inadequate sampler, a spatial
     config the solver refuses, a tripped tilt tripwire) become CliError; anything else raised by training or solving keeps
     its traceback.
     """
-    sweep = _load_sweep(args.root)
+    exp = _load_exp(args.root)
     if args.index is None:
-        _run_all(sweep, args.root, args.stage)
+        _run_all(exp, args.root, args.stage)
         return 0
     try:
-        run_setting(sweep, args.index, args.root, log=print, stage=args.stage)
+        run_setting(exp, args.index, args.root, log=print, stage=args.stage)
     except USER_FIXABLE_ERRORS as err:  # fixable by the user, no traceback
         raise CliError(str(err)) from err
     return 0
 
 
-def _add_sweep_parser(sub) -> None:
-    p_sweep = sub.add_parser("sweep", help="a grid of runs", description="a grid of runs")
-    actions = p_sweep.add_subparsers(dest="action", required=True)
+EXP_HELP = "an experiment: a batch of runs over varied hyperparameters (its axes)"
+
+
+def cmd_exp_migrate(args: argparse.Namespace) -> int:
+    try:
+        lines = migrate_exp(args.root)
+    except MigrationError as err:  # refused before anything was written
+        raise CliError(str(err)) from err
+    except OSError as err:  # a write failed part-way; the folder is still a legacy one
+        raise CliError(
+            f"{err}; run `python -m fct exp migrate {args.root}` again to finish"
+        ) from err
+    print("\n".join(lines))
+    return 0
+
+
+def _add_exp_parser(sub) -> None:
+    p_exp = sub.add_parser(
+        "exp", help="an experiment: runs over varied hyperparameters", description=EXP_HELP
+    )
+    actions = p_exp.add_subparsers(dest="action", required=True)
 
     def add(name: str, func, help_: str) -> argparse.ArgumentParser:
         p = actions.add_parser(name, help=help_, description=help_)
@@ -470,38 +498,37 @@ def _add_sweep_parser(sub) -> None:
         p.set_defaults(func=func)
         return p
 
-    p_init = add("init", cmd_sweep_init, "write ROOT/sweep.json from a preset")
+    p_init = add("init", cmd_exp_init, "write ROOT/exp.json from a preset")
     p_init.add_argument("--preset", choices=PRESET_NAMES, default="tiny")
     p_init.add_argument(
         "--n-lambda", type=int, default=None, metavar="N_LAMBDA",
-        help=f"points per log-spaced lambda axis (required by {list(GRID_PRESETS)}, else not allowed)",
+        help=f"points per log-spaced lambda axis (required by {list(LAMBDA_PRESETS)}, else not allowed)",
     )  # fmt: skip
     p_init.add_argument(
         "--axis", action="append", default=[], metavar="PATH=[V,...]",
-        help="replace or add a grid axis, e.g. --axis net.L=[1,2,3] (repeatable)",
+        help="replace or add an axis, e.g. --axis net.L=[1,2,3] (repeatable)",
     )  # fmt: skip
     p_init.add_argument(
         "--set", action="append", default=[], metavar="KEY=VALUE",
-        help="override a sweep entry by dotted key, e.g. --set n_epochs=100 (repeatable)",
+        help="override an experiment entry by dotted key, e.g. --set n_epochs=100 (repeatable)",
     )  # fmt: skip
     p_init.add_argument(
         "--force", action="store_true",
-        help="overwrite an existing sweep.json, and write one beside existing setting directories",
+        help="overwrite an existing exp.json, and write one beside existing setting directories",
     )  # fmt: skip
-    add("list", cmd_sweep_list, "print `index directory` for every setting")
-    add("count", cmd_sweep_count, "print the number of settings")
+    add("migrate", cmd_exp_migrate, "convert a folder written by older code to the exp.json layout")
+    add("list", cmd_exp_list, "print `index directory` for every setting")
+    add("count", cmd_exp_count, "print the number of settings")
     p_status = add(
-        "status", cmd_sweep_status, "print done / partial / missing / stale for every setting"
+        "status", cmd_exp_status, "print done / partial / missing / stale for every setting"
     )
-    p_run = add(
-        "run", cmd_sweep_run, "train or solve one setting (--index) or all of them in order"
-    )
+    p_run = add("run", cmd_exp_run, "train or solve one setting (--index) or all of them in order")
     for p in (p_status, p_run):
         p.add_argument(
             "--stage", choices=STAGES, default="train",
             help="train the nets, or solve the mean-field saddle points (default: train)",
         )  # fmt: skip
-    p_run.add_argument("--index", type=int, default=None, help="setting index (see `sweep list`)")
+    p_run.add_argument("--index", type=int, default=None, help="setting index (see `exp list`)")
 
 
 # ---------------------------------------------------------------------------- entry point
@@ -528,7 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_plot = add("plot", cmd_plot, "draw the figures that need trained / solved results")
     p_plot.add_argument("--which", choices=["all", *FIGURES], default="all")
     add("plot-example", cmd_plot_example, "draw the example figure (needs no results)")
-    _add_sweep_parser(sub)
+    _add_exp_parser(sub)
     return parser
 
 

@@ -1,24 +1,24 @@
-"""The sweep: one place that defines the settings of a grid and runs any one of them.
+"""The experiment: one place that defines the settings of a batch of runs and runs any one of them.
 
-A `SweepConfig` (stored as ROOT/sweep.json) fixes everything that is shared by the settings
-(sizes, optimiser, monitor, seeds, per-task data parameters) and, in `grid`, the axes that
-vary: each axis is a dotted `Config` path (`net.L`, `train.rate_lambda`, ...) with an explicit
+An `ExpConfig` (stored as ROOT/exp.json) fixes everything that is shared by the settings
+(sizes, optimiser, monitor, seeds, per-task data parameters) and, in `axes`, the hyperparameters
+that vary: each axis is a dotted `Config` path (`net.L`, `train.rate_lambda`, ...) with an explicit
 list of values. `expand` lists the Cartesian product in a stable order, so a SLURM array index
 and a local check name the same setting. Each setting is a normal fct cache directory that
 `run_setting` fills by the same path as `python -m fct train`: config.json, dataset, training
 with the MIR monitor.
 `run_setting(..., stage="solve")` instead solves the mean-field saddle point of the same
-setting into its `meanfield/` directory, with the sweep's `meanfield` section (problem fields
-plus the `solver` group; it never enters a training hash, so the same sweep.json defines both
-stages and a legacy sweep.json without it keeps its training hashes and directory names).
+setting into its `meanfield/` directory, with the experiment's `meanfield` section (problem fields
+plus the `solver` group; it never enters a training hash, so the same exp.json defines both
+stages and an exp.json without it keeps its training hashes and directory names).
 
-A sweep.json without `grid` is the 36-setting modularity grid (task x layers x phi x
-rate_lambda), kept with its original directory names ROOT/<task>/L{L}_{phi}_r{rate}/. A sweep
-with a `grid` uses ROOT/<task>/s{index:04d}_<label>/ and records the axis values in
+An exp.json without `axes` is the 36-setting modularity experiment (task x layers x phi x
+rate_lambda), kept with its original directory names ROOT/<task>/L{L}_{phi}_r{rate}/. An experiment
+with `axes` uses ROOT/<task>/s{index:04d}_<label>/ and records the axis values in
 setting.json beside config.json.
 
-This module is the I/O edge of the sweep: `expand`, `setting_config` and the config models are
-pure; `run_setting`, `setting_status`, `find_setting_dir` and the sweep.json functions touch disk.
+This module is the I/O edge of the experiment: `expand`, `setting_config` and the config models are
+pure; `run_setting`, `setting_status`, `find_setting_dir` and the exp.json functions touch disk.
 """
 
 import hashlib
@@ -67,7 +67,10 @@ from fct.monitor import make_mir_monitor
 from fct.spatial import EmbeddingSpec, KernelSpec, PopulationSpec, SpatialConfig
 from fct.train import load_trained, train_from_config
 
-SWEEP_FILE = "sweep.json"
+EXP_FILE = "exp.json"
+# The file and keys that older code wrote for the same things. Only `load_exp` (to tell the user
+# to migrate) and `fct.exp_migrate` read them.
+LEGACY_EXP_FILE = "sweep.json"
 SETTING_FILE = "setting.json"
 TASK_AXIS = "data.task"
 SPATIAL_PREFIX = "spatial."
@@ -78,26 +81,26 @@ MAX_LABEL_VALUE = 24
 # Setting directories are ROOT/<task>/<name>: `expand` builds `relpath` that way, and the lookups
 # below find them with this glob.
 SETTING_DIRS_GLOB = "*/*"
-# Index prefix of a grid directory name; zero-padded so names sort in index order, which holds up
-# to 10**INDEX_WIDTH settings (`expand` refuses more).
+# Index prefix of an indexed setting directory name; zero-padded so names sort in index order, which
+# holds up to 10**INDEX_WIDTH settings (`expand` refuses more).
 INDEX_WIDTH = 4
 # A float typed in a notebook finds the one that went through a JSON round trip.
 LOOKUP_REL_TOL = 1e-9
-# The modularity grid, used when sweep.json has no `grid`. Axis order is the order of `expand`
+# The modularity axes, used when exp.json has no `axes`. Axis order is the order of `expand`
 # (task slowest, rate_lambda fastest): changing it or a value list would move existing indices.
-SWEEP_TASKS = ("linear_teacher", "object_action", "what_where")
+EXP_TASKS = ("linear_teacher", "object_action", "what_where")
 LAYERS = (1, 3, 5)
 PHIS = ("tanh", "relu")
 RATE_LAMBDAS = (0.0, 1e-3)
-MODULARITY_GRID: dict[str, list] = {
-    TASK_AXIS: list(SWEEP_TASKS),
+MODULARITY_EXP_AXES: dict[str, list] = {
+    TASK_AXIS: list(EXP_TASKS),
     "net.L": list(LAYERS),
     "net.phi": list(PHIS),
     "train.rate_lambda": list(RATE_LAMBDAS),
 }
 MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda")
-# Config fields the sweep sets from its own fields; the sweep field to change instead.
-SWEEP_OWNED_AXES = {
+# Config fields the experiment sets from its own fields; the experiment field to change instead.
+EXP_OWNED_AXES = {
     "data.P": "P",
     "data.D_in": "the task parameters",
     "data.seed": "seeds.data",
@@ -115,17 +118,21 @@ Stage = Literal["train", "solve"]
 STAGES: tuple[Stage, ...] = ("train", "solve")
 
 
-class SweepError(ValueError):
-    """A sweep-level failure the user can fix: a bad index or a changed sweep config."""
+class ExpError(ValueError):
+    """An experiment-level failure the user can fix: a bad index or a changed experiment config."""
+
+
+class UnmigratedExpError(ExpError):
+    """ROOT holds the legacy experiment file but no exp.json: `fct exp migrate ROOT` converts it."""
 
 
 @dataclass(frozen=True)
 class Setting:
-    """One point of the grid: its position, the value of every axis, and its directory.
+    """One point of the experiment: its position, the value of every axis, and its directory.
 
-    `axes` maps each grid axis to this setting's value, in the grid's axis order. `task` is the
-    data task the setting trains on: the `data.task` axis if there is one, else the sweep's base
-    task. `relpath` is the setting's directory relative to the sweep ROOT.
+    `axes` maps each axis to this setting's value, in the experiment's axis order. `task` is the
+    data task the setting trains on: the `data.task` axis if there is one, else the experiment's
+    base task. `relpath` is the setting's directory relative to the experiment ROOT.
     """
 
     index: int
@@ -133,7 +140,7 @@ class Setting:
     task: str
     relpath: Path
 
-    # Axis values may be unhashable (lists); the index identifies a point of one grid.
+    # Axis values may be unhashable (lists); the index identifies a point of one experiment.
     def __hash__(self) -> int:
         return hash((self.index, self.relpath))
 
@@ -160,18 +167,18 @@ class Seeds(StrictModel):
     train: int = 0
 
 
-class SweepConfig(StrictModel):
-    """Shared settings of the runs, and the grid they are swept over; see `preset`.
+class ExpConfig(StrictModel):
+    """Shared settings of the runs, and the axes they vary over; see `preset`.
 
     The same data, net and training seeds are used for every setting, so settings differ only
-    in the grid axes. Everything else is the base `Config` a setting starts from (the shared
-    network and loss fields `L`, `g`, `phi`, `weight_lambda`, ... are the library defaults unless set). `grid` maps a dotted `Config` path to the list
-    of values that axis takes; None means the modularity grid. Any Config field may be an axis
-    and then wins over the sweep's shared field (`net.N` over `N`, `train.lr` over `lr`), except
-    the fields the sweep owns (`SWEEP_OWNED_AXES`: sizes of the data, seeds, log/save/monitor
-    schedules), which are rejected. Task parameters and the whole grid are validated at load time
+    in the axes. Everything else is the base `Config` a setting starts from (the shared
+    network and loss fields `L`, `g`, `phi`, `weight_lambda`, ... are the library defaults unless set). `axes` maps a dotted `Config` path to the list
+    of values that axis takes; None means the modularity axes. Any Config field may be an axis
+    and then wins over the experiment's shared field (`net.N` over `N`, `train.lr` over `lr`), except
+    the fields the experiment owns (`EXP_OWNED_AXES`: sizes of the data, seeds, log/save/monitor
+    schedules), which are rejected. Task parameters and the whole experiment are validated at load time
     by building every setting's `Config`, so a bad axis name, value or combination fails when
-    sweep.json is read, naming the axis.
+    exp.json is read, naming the axis.
 
     `meanfield` is the mean-field problem and its solver (`MeanFieldConfig`, library defaults;
     the rate tilt follows `train.rate_lambda` unless set). It is read by the solve stage only:
@@ -188,7 +195,7 @@ class SweepConfig(StrictModel):
     lr: PosFloat
     log_int: PosInt
     save_int: PosInt
-    monitor_int: PosInt  # the sweep always monitors: MIR over training is its point
+    monitor_int: PosInt  # the experiment always monitors: MIR over training is its point
     monitor_bins: Annotated[int, Field(ge=2)]
     monitor_shuffles: PosInt
     linear_teacher: LinearTeacherParams
@@ -197,7 +204,7 @@ class SweepConfig(StrictModel):
     seeds: Seeds = Seeds()
     dtype: Literal["float32", "float64"] = "float32"
     device: Literal["auto", "cpu", "cuda"] = "auto"
-    # The base task, used unless `data.task` is a grid axis.
+    # The base task, used unless `data.task` is an axis.
     task: Literal["linear_teacher", "object_action", "what_where"] = "linear_teacher"
     # Shared network and loss fields, the library defaults unless set; any of them may be an axis.
     L: PosInt = NetConfig().L
@@ -211,29 +218,29 @@ class SweepConfig(StrictModel):
     # prior (the plain weight L2). Its fields may be axes (`spatial.hidden.kernel.length_scale`).
     spatial: SpatialConfig | None = None
     meanfield: MeanFieldConfig = MeanFieldConfig()
-    grid: dict[str, list[Any]] | None = None
+    axes: dict[str, list[Any]] | None = None
 
     @model_validator(mode="after")
     def _task_parameters_are_consistent(self) -> Self:
-        for task in SWEEP_TASKS:
+        for task in EXP_TASKS:
             data_config(self, task)  # raises ValidationError naming the offending field
         return self
 
     @model_validator(mode="after")
-    def _grid_is_valid(self) -> Self:
-        if self.grid is not None:
-            _validate_grid(self, self.grid)
+    def _axes_are_valid(self) -> Self:
+        if self.axes is not None:
+            _validate_axes(self, self.axes)
         elif self.spatial is not None:
-            # The built-in grid: every setting must still build a valid Config (the spatial
-            # section ties weight_lambda to lambda_max). Sweeps without one have no such
+            # The built-in axes: every setting must still build a valid Config (the spatial
+            # section ties weight_lambda to lambda_max). Experiments without one have no such
             # cross-field rule, and the module-level presets are built before these helpers exist.
             _validate_combinations(self)
         return self
 
 
-def _task_fields(sweep: SweepConfig, task: str) -> dict:
+def _task_fields(exp: ExpConfig, task: str) -> dict:
     """The DataConfig fields set by the task's parameters (D_in only where the task has it)."""
-    params = getattr(sweep, task)
+    params = getattr(exp, task)
     if task == "linear_teacher":
         return {
             "D_in": params.n_features,
@@ -243,19 +250,19 @@ def _task_fields(sweep: SweepConfig, task: str) -> dict:
     return params.model_dump()
 
 
-def data_config(sweep: SweepConfig, task: str) -> DataConfig:
+def data_config(exp: ExpConfig, task: str) -> DataConfig:
     """DataConfig of `task` with `D_in` taken from `task_dims`, so the input size the task
-    fixes (2*G*G, 81) is never repeated in the sweep."""
-    fields = {"task": task, "P": sweep.P, "seed": sweep.seeds.data, **_task_fields(sweep, task)}
+    fixes (2*G*G, 81) is never repeated in the experiment."""
+    fields = {"task": task, "P": exp.P, "seed": exp.seeds.data, **_task_fields(exp, task)}
     # Unvalidated copy: object_action and what_where reject the default D_in, which `task_dims`
     # ignores for them. The returned config is fully validated.
     d_in, _ = task_dims(DataConfig.model_construct(**fields))
     return DataConfig(**{**fields, "D_in": d_in})
 
 
-_SIZE_PRESETS: dict[str, SweepConfig] = {
+_SIZE_PRESETS: dict[str, ExpConfig] = {
     # Seconds per setting on a CPU: for checking the pipeline, not for results.
-    "tiny": SweepConfig(
+    "tiny": ExpConfig(
         N=8,
         P=32,
         n_epochs=6,
@@ -271,7 +278,7 @@ _SIZE_PRESETS: dict[str, SweepConfig] = {
         device="cpu",
     ),
     # Cluster sizes; N, P and n_epochs are the knobs to tune before submitting.
-    "full": SweepConfig(
+    "full": ExpConfig(
         N=256,
         P=4096,
         n_epochs=15_000,
@@ -297,12 +304,12 @@ _SPATIAL_PRIOR = SpatialConfig(
 )
 
 
-def spatial_tiny() -> SweepConfig:
+def spatial_tiny() -> ExpConfig:
     """Seconds per setting on a CPU, for checking the spatial pipeline (not for results): a
     linear teacher, one hidden layer of N in {4, 8} units under the spatial prior, SGLD.
 
     weight_lambda 0.2 is under the lambda_w / (2 beta) convention: 2 beta x 1e-4 at beta 1e3."""
-    return SweepConfig(
+    return ExpConfig(
         N=8,
         P=16,
         n_epochs=6,
@@ -323,17 +330,17 @@ def spatial_tiny() -> SweepConfig:
         meanfield=MeanFieldConfig(n_points=16),  # at most P, so a solve reaches the solver
         spatial=_SPATIAL_PRIOR,
         device="cpu",
-        grid={"net.N": [4, 8]},
+        axes={"net.N": [4, 8]},
     )
 
 
-def spatial_n_scan() -> SweepConfig:
+def spatial_n_scan() -> ExpConfig:
     """Width scan of a spatially embedded linear-teacher net: N in {64, ..., 1024}, one hidden
     layer, SGLD, float64, with the MIR monitor.
 
     weight_lambda 60 is under the lambda_w / (2 beta) convention: 2 beta x 3e-3 at beta 1e4, the
     same effective prior as lambda_w = 3e-3 when the loss is lambda_w times the prior form."""
-    return SweepConfig(
+    return ExpConfig(
         N=64,
         P=164,
         n_epochs=250_000,
@@ -355,12 +362,12 @@ def spatial_n_scan() -> SweepConfig:
         beta=1e4,
         spatial=_SPATIAL_PRIOR,
         dtype="float64",
-        grid={"net.N": [64, 128, 256, 512, 1024]},
+        axes={"net.N": [64, 128, 256, 512, 1024]},
     )
 
 
-def spatial_grid() -> SweepConfig:
-    """Grid of spatially embedded linear-teacher nets, N = 512, one hidden layer, SGLD, float64,
+def spatial_exp() -> ExpConfig:
+    """Spatially embedded linear-teacher nets, N = 512, one hidden layer, SGLD, float64,
     with the MIR monitor: phi in {id, tanh, relu} x teacher latents in {2, 4} x hidden length
     scale in {0.05, 0.1, 0.15, 0.2} (24 settings).
 
@@ -370,7 +377,7 @@ def spatial_grid() -> SweepConfig:
     weight_lambda 20 is under the lambda_w / (2 beta) convention: 2 beta x 1e-3 at beta 1e4, the
     same effective prior as lambda_w = 1e-3 when the loss is lambda_w times the prior form.
 
-    `linear_teacher.n_latents` (2) in sweep.json is only the base value; the `data.n_latents`
+    `linear_teacher.n_latents` (2) in exp.json is only the base value; the `data.n_latents`
     axis wins in every setting.
 
     Caveat: with min_rel_eig 1e-2 at N = 512, about 500 of the 512 hidden eigenvalues are floored
@@ -378,7 +385,7 @@ def spatial_grid() -> SweepConfig:
     prior variance diag(M^-1) is therefore 1.62 / 2.26 / 2.90 / 3.54 for length scales 0.05 / 0.1
     / 0.15 / 0.2 (diag K = 1): the length-scale axis is confounded with prior strength."""
     base = spatial_n_scan().model_copy(update={"N": 512, "P": 128, "weight_lambda": 20.0})
-    return with_grid(  # validates the whole sweep, so a wrong axis or value fails here
+    return with_axes(  # validates the whole experiment, so a wrong axis or value fails here
         base,
         {
             "net.phi": ["id", "tanh", "relu"],
@@ -388,16 +395,16 @@ def spatial_grid() -> SweepConfig:
     )
 
 
-def with_grid(sweep: SweepConfig, grid: dict[str, list]) -> SweepConfig:
-    """A validated copy of `sweep` over `grid`."""
-    return SweepConfig.model_validate({**sweep.model_dump(), "grid": grid})
+def with_axes(exp: ExpConfig, axes: dict[str, list]) -> ExpConfig:
+    """A validated copy of `exp` over `axes`."""
+    return ExpConfig.model_validate({**exp.model_dump(), "axes": axes})
 
 
-def phase_transition() -> SweepConfig:
+def phase_transition() -> ExpConfig:
     """Phase transition of a linear one-hidden-layer net in the spatial dimension d and the
     prior strength: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9,
     0.99} (20 settings, d slowest), phi "id", L = 1, SGLD, float64, MIR monitor, the sizes of
-    `spatial_grid`, and an ensemble of B = 8 networks per setting.
+    `spatial_exp`, and an ensemble of B = 8 networks per setting.
 
     Every population is embedded at random (uniform on the d-torus, seed 0, so the members of an
     ensemble share one geometry), which makes any N valid in any d; the wrapped Gaussian is a
@@ -405,7 +412,7 @@ def phase_transition() -> SweepConfig:
     kernel is rescaled to top eigenvalue lambda_max, so the per-weight prior variance shrinks
     with the population size; weight_lambda is 1 (the `Config` rule under lambda_max).
 
-    B is a one-value axis rather than a shared field: a sweep.json written by every other preset
+    B is a one-value axis rather than a shared field: an exp.json written by every other preset
     then stays as it was.
 
     SGLD at lr 1e-2: the prior's stiffest curvature k grows like 1 / (min_rel_eig lambda_max)^2,
@@ -420,8 +427,8 @@ def phase_transition() -> SweepConfig:
     spatial = SpatialConfig(
         input=population, hidden=population, output=population, min_rel_eig=1e-2
     )
-    base = spatial_grid().model_copy(update={"phi": "id", "weight_lambda": 1.0, "spatial": spatial})
-    return with_grid(
+    base = spatial_exp().model_copy(update={"phi": "id", "weight_lambda": 1.0, "spatial": spatial})
+    return with_axes(
         base,
         {
             "spatial.d": [1, 2, 3, 4],
@@ -431,76 +438,83 @@ def phase_transition() -> SweepConfig:
     )
 
 
-# Presets with their own grid and no lambda axes, by name; each takes no argument.
-FIXED_GRID_PRESETS: dict[str, Callable[[], SweepConfig]] = {
+# Presets with their own axes and no lambda axes, by name; each takes no argument.
+FIXED_AXES_PRESETS: dict[str, Callable[[], ExpConfig]] = {
     "spatial_tiny": spatial_tiny,
     "spatial_n_scan": spatial_n_scan,
-    "spatial_grid": spatial_grid,
+    "spatial_exp": spatial_exp,
     "phase_transition": phase_transition,
 }
 
 
-def lambda_grid(n_lambda: int) -> SweepConfig:
-    """Linear-teacher sweep over depth, activation and both regularisers: L in {1, 2}, phi in
+def lambda_exp(n_lambda: int) -> ExpConfig:
+    """Linear-teacher experiment over depth, activation and both regularisers: L in {1, 2}, phi in
     {tanh, relu}, rate_lambda and weight_lambda each `n_lambda` log-spaced values in [1e-6, 1].
     Cluster sizes; the shared sizes are the knobs to tune before submitting."""
     if n_lambda < 1:
         raise ValueError(f"n_lambda must be at least 1, got {n_lambda}")
     lambdas = np.logspace(-6, 0, n_lambda).tolist()
-    grid = {
+    axes = {
         "net.L": [1, 2],
         "net.phi": ["tanh", "relu"],
         "train.rate_lambda": lambdas,
         "train.weight_lambda": lambdas,
     }
-    return with_grid(_SIZE_PRESETS["full"], grid)
+    return with_axes(_SIZE_PRESETS["full"], axes)
 
 
-# Presets with an explicit grid, by name; each takes n_lambda, the points per lambda axis.
-GRID_PRESETS: dict[str, Callable[[int], SweepConfig]] = {"lambda_grid": lambda_grid}
-PRESET_NAMES = ("tiny", "full", "modularity", *GRID_PRESETS, *FIXED_GRID_PRESETS)
+# Presets with explicit axes, by name; each takes n_lambda, the points per lambda axis.
+LAMBDA_PRESETS: dict[str, Callable[[int], ExpConfig]] = {"lambda_exp": lambda_exp}
+PRESET_NAMES = ("tiny", "full", "modularity", *LAMBDA_PRESETS, *FIXED_AXES_PRESETS)
 
 
-def preset(name: str, n_lambda: int | None = None) -> SweepConfig:
-    """A ready-made sweep. `tiny` and `full` are two sizes of the modularity grid (`modularity`
-    is `full`); the grid presets need `n_lambda`, the others reject it."""
+def preset(name: str, n_lambda: int | None = None) -> ExpConfig:
+    """A ready-made experiment. `tiny` and `full` are two sizes of the modularity
+    experiment (`modularity` is `full`); the lambda presets need `n_lambda`, the others reject
+    it."""
     if name not in PRESET_NAMES:
         raise ValueError(f"unknown preset {name!r}; valid: {sorted(PRESET_NAMES)}")
-    if name in FIXED_GRID_PRESETS:
+    if name in FIXED_AXES_PRESETS:
         if n_lambda is not None:
             raise ValueError(f"preset {name!r} has no lambda axes, so n_lambda does not apply")
-        return FIXED_GRID_PRESETS[name]()
-    if name in GRID_PRESETS:
+        return FIXED_AXES_PRESETS[name]()
+    if name in LAMBDA_PRESETS:
         if n_lambda is None:
             raise ValueError(f"preset {name!r} needs n_lambda (points per lambda axis)")
-        return GRID_PRESETS[name](n_lambda)
+        return LAMBDA_PRESETS[name](n_lambda)
     if n_lambda is not None:
         raise ValueError(f"preset {name!r} has no lambda axes, so n_lambda does not apply")
     return _SIZE_PRESETS["tiny" if name == "tiny" else "full"]
 
 
-def sweep_path(root: Path) -> Path:
-    return Path(root) / SWEEP_FILE
+def exp_path(root: Path) -> Path:
+    return Path(root) / EXP_FILE
 
 
-def save_sweep(sweep: SweepConfig, root: Path) -> None:
-    path = sweep_path(root)
+def save_exp(exp: ExpConfig, root: Path) -> None:
+    path = exp_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(sweep.model_dump_json(indent=2) + "\n")
+    path.write_text(exp.model_dump_json(indent=2) + "\n")
 
 
-def load_sweep(root: Path) -> SweepConfig:
-    """Read ROOT/sweep.json; FileNotFoundError if absent, ValidationError if invalid."""
-    path = sweep_path(root)
+def load_exp(root: Path) -> ExpConfig:
+    """Read ROOT/exp.json; FileNotFoundError if absent, ValidationError if invalid,
+    UnmigratedExpError if only the legacy file is there."""
+    path = exp_path(root)
     if not path.exists():
+        if (Path(root) / LEGACY_EXP_FILE).exists():
+            raise UnmigratedExpError(
+                f"{root} holds a legacy {LEGACY_EXP_FILE} and no {EXP_FILE}; "
+                f"run `python -m fct exp migrate {root}` once to convert it"
+            )
         raise FileNotFoundError(f"{path} not found")
-    return SweepConfig.model_validate_json(path.read_text())
+    return ExpConfig.model_validate_json(path.read_text())
 
 
-# ---------------------------------------------------------------------------- the grid
-def grid_of(sweep: SweepConfig) -> dict[str, list]:
-    """The sweep's axes: its `grid`, or the modularity grid when it has none."""
-    return MODULARITY_GRID if sweep.grid is None else sweep.grid
+# ---------------------------------------------------------------------------- the axes
+def axes_of(exp: ExpConfig) -> dict[str, list]:
+    """The experiment's axes: its `axes`, or the modularity axes when it has none."""
+    return MODULARITY_EXP_AXES if exp.axes is None else exp.axes
 
 
 def _is_section(node: Any) -> bool:
@@ -514,98 +528,96 @@ def _set_leaf(tree: dict, axis: str, value: Any) -> None:
     for part in parents:
         node = node.get(part)
         if not _is_section(node):
-            raise ValueError(f"grid axis {axis!r}: {part!r} is not a config section")
+            raise ValueError(f"axis {axis!r}: {part!r} is not a config section")
     if last not in node:
-        raise ValueError(f"grid axis {axis!r}: no config field {last!r}")
+        raise ValueError(f"axis {axis!r}: no config field {last!r}")
     if _is_section(node[last]):
-        raise ValueError(f"grid axis {axis!r} is a config section; name one of its fields")
+        raise ValueError(f"axis {axis!r} is a config section; name one of its fields")
     node[last] = value
 
 
-def _base_config(sweep: SweepConfig, task: str) -> Config:
-    """The shared part of every setting's `Config`; grid axes are written over it."""
+def _base_config(exp: ExpConfig, task: str) -> Config:
+    """The shared part of every setting's `Config`; the axes are written over it."""
     return Config(
-        data=data_config(sweep, task),
-        net=NetConfig(N=sweep.N, L=sweep.L, g=sweep.g, phi=sweep.phi, seed=sweep.seeds.net),
+        data=data_config(exp, task),
+        net=NetConfig(N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, seed=exp.seeds.net),
         train=TrainConfig(
-            n_epochs=sweep.n_epochs,
-            lr=sweep.lr,
-            weight_lambda=sweep.weight_lambda,
-            rate_lambda=sweep.rate_lambda,
-            optimizer=sweep.optimizer,
-            beta=sweep.beta,
-            log_int=sweep.log_int,
-            save_int=sweep.save_int,
-            seed=sweep.seeds.train,
-            monitor_int=sweep.monitor_int,
-            monitor_bins=sweep.monitor_bins,
-            monitor_shuffles=sweep.monitor_shuffles,
+            n_epochs=exp.n_epochs,
+            lr=exp.lr,
+            weight_lambda=exp.weight_lambda,
+            rate_lambda=exp.rate_lambda,
+            optimizer=exp.optimizer,
+            beta=exp.beta,
+            log_int=exp.log_int,
+            save_int=exp.save_int,
+            seed=exp.seeds.train,
+            monitor_int=exp.monitor_int,
+            monitor_bins=exp.monitor_bins,
+            monitor_shuffles=exp.monitor_shuffles,
         ),
-        meanfield=sweep.meanfield,
-        spatial=sweep.spatial,
-        dtype=sweep.dtype,
-        device=sweep.device,
+        meanfield=exp.meanfield,
+        spatial=exp.spatial,
+        dtype=exp.dtype,
+        device=exp.device,
     )
 
 
-def _config_from(sweep: SweepConfig, axes: Mapping[str, Any]) -> Config:
-    """The sweep's base `Config` for the task, with each axis value written over it."""
-    task = axes.get(TASK_AXIS, sweep.task)
-    if task not in SWEEP_TASKS:
-        raise ValueError(f"grid axis {TASK_AXIS!r}: unknown task {task!r}; valid: {SWEEP_TASKS}")
-    tree = _base_config(sweep, task).model_dump()
+def _config_from(exp: ExpConfig, axes: Mapping[str, Any]) -> Config:
+    """The experiment's base `Config` for the task, with each axis value written over it."""
+    task = axes.get(TASK_AXIS, exp.task)
+    if task not in EXP_TASKS:
+        raise ValueError(f"axis {TASK_AXIS!r}: unknown task {task!r}; valid: {EXP_TASKS}")
+    tree = _base_config(exp, task).model_dump()
     for axis, value in axes.items():
         if axis != TASK_AXIS:  # already chosen above, together with the task's own D_in
             _set_leaf(tree, axis, value)
     return Config.model_validate(tree)
 
 
-def _config_or_value_error(sweep: SweepConfig, axes: Mapping[str, Any], context: str) -> Config:
+def _config_or_value_error(exp: ExpConfig, axes: Mapping[str, Any], context: str) -> Config:
     """`_config_from`, with a pydantic ValidationError turned into a ValueError that starts
     with `context` (which axis or setting was being built)."""
     try:
-        return _config_from(sweep, axes)
+        return _config_from(exp, axes)
     except ValidationError as err:
         raise ValueError(f"{context}: {err}") from err
 
 
-def _validate_axis(sweep: SweepConfig, axis: str, values: list) -> None:
-    """One axis alone: sweep-owned fields are rejected, the values are non-empty, each builds
+def _validate_axis(exp: ExpConfig, axis: str, values: list) -> None:
+    """One axis alone: experiment-owned fields are rejected, the values are non-empty, each builds
     a valid Config, and no two build the same one (so `[0, 0.0]` counts as a repeat).
-    Each value is built under the sweep's base task, so a task-specific value that is valid
+    Each value is built under the experiment's base task, so a task-specific value that is valid
     only under a task named on a `data.task` axis is rejected here (loudly, naming the axis)."""
-    if axis.startswith(SPATIAL_PREFIX) and sweep.spatial is None:
-        raise ValueError(f"grid axis {axis!r}: set the sweep's spatial section first")
-    if axis in SWEEP_OWNED_AXES:
+    if axis.startswith(SPATIAL_PREFIX) and exp.spatial is None:
+        raise ValueError(f"axis {axis!r}: set the experiment's spatial section first")
+    if axis in EXP_OWNED_AXES:
         raise ValueError(
-            f"grid axis {axis!r} is set by the sweep's own {SWEEP_OWNED_AXES[axis]}; "
-            "change that instead of sweeping it"
+            f"axis {axis!r} is set by the experiment's own {EXP_OWNED_AXES[axis]}; "
+            "change that instead of varying it"
         )
     if not values:
-        raise ValueError(f"grid axis {axis!r} has no values")
-    configs = [
-        _config_or_value_error(sweep, {axis: v}, f"grid axis {axis!r} value {v!r}") for v in values
-    ]
+        raise ValueError(f"axis {axis!r} has no values")
+    configs = [_config_or_value_error(exp, {axis: v}, f"axis {axis!r} value {v!r}") for v in values]
     encoded = [cfg.model_dump_json() for cfg in configs]
     if len(set(encoded)) != len(encoded):
-        raise ValueError(f"grid axis {axis!r} repeats a value: {values}")
+        raise ValueError(f"axis {axis!r} repeats a value: {values}")
 
 
-def _validate_combinations(sweep: SweepConfig) -> None:
+def _validate_combinations(exp: ExpConfig) -> None:
     """Every setting of the product builds a valid Config (axes can be fine alone and wrong
-    together, e.g. more objects than grid cells)."""
-    for setting in expand(sweep):
-        context = f"grid setting {setting.index} {setting.axes}"
-        _config_or_value_error(sweep, setting.axes, context)
+    together, e.g. more objects than cells of the task's grid)."""
+    for setting in expand(exp):
+        context = f"setting {setting.index} {setting.axes}"
+        _config_or_value_error(exp, setting.axes, context)
 
 
-def _validate_grid(sweep: SweepConfig, grid: dict[str, list]) -> None:
+def _validate_axes(exp: ExpConfig, axes: dict[str, list]) -> None:
     """Axes first, one at a time, so an error names the culprit; then the combinations."""
-    if not grid:
-        raise ValueError("grid has no axes (a product over no axes would be one bare setting)")
-    for axis, values in grid.items():
-        _validate_axis(sweep, axis, values)
-    _validate_combinations(sweep)
+    if not axes:
+        raise ValueError("no axes (a product over no axes would be one bare setting)")
+    for axis, values in axes.items():
+        _validate_axis(exp, axis, values)
+    _validate_combinations(exp)
 
 
 def _label_part(axis: str, value: Any) -> str:
@@ -630,38 +642,38 @@ def _indexed_name(index: int, axes: Mapping[str, Any]) -> str:
 
 
 def _modularity_name(values: Mapping[str, Any]) -> str:
-    """`:g` gives `r0` and `r0.001`, distinct per value of the modularity grid."""
+    """`:g` gives `r0` and `r0.001`, distinct per value of the modularity axes."""
     return f"L{values['net.L']}_{values['net.phi']}_r{values['train.rate_lambda']:g}"
 
 
-def expand(sweep: SweepConfig) -> list[Setting]:
-    """All settings: the Cartesian product of the grid axes in the order they are written, the
-    first axis slowest. The order depends only on the grid, not on the sweep's sizes, so
-    index i names the same setting for every size of the same grid."""
-    grid = grid_of(sweep)
-    n_settings = math.prod(len(values) for values in grid.values())
-    if sweep.grid is not None and n_settings > 10**INDEX_WIDTH:
-        raise SweepError(
-            f"the grid has {n_settings} settings; directory names support at most "
+def expand(exp: ExpConfig) -> list[Setting]:
+    """All settings: the Cartesian product of the axes in the order they are written, the
+    first axis slowest. The order depends only on the axes, not on the experiment's sizes, so
+    index i names the same setting for every size of the same axes."""
+    varied = axes_of(exp)
+    n_settings = math.prod(len(values) for values in varied.values())
+    if exp.axes is not None and n_settings > 10**INDEX_WIDTH:
+        raise ExpError(
+            f"the experiment has {n_settings} settings; directory names support at most "
             f"{10**INDEX_WIDTH} (INDEX_WIDTH={INDEX_WIDTH})"
         )
-    built = built_values(sweep)
+    built = built_values(exp)
     settings = []
-    for index, combo in enumerate(itertools.product(*(enumerate(v) for v in grid.values()))):
-        axes = {axis: grid[axis][i] for axis, (i, _) in zip(grid, combo, strict=True)}
-        # Names come from the built values, the same ones the grid hash uses, so two spellings
+    for index, combo in enumerate(itertools.product(*(enumerate(v) for v in varied.values()))):
+        axes = {axis: varied[axis][i] for axis, (i, _) in zip(varied, combo, strict=True)}
+        # Names come from the built values, the same ones the exp hash uses, so two spellings
         # of one value (`1000000`, `1000000.0`) cannot hash alike yet name different directories.
-        named = {axis: built[axis][i] for axis, (i, _) in zip(grid, combo, strict=True)}
-        task = axes.get(TASK_AXIS, sweep.task)
-        name = _modularity_name(named) if sweep.grid is None else _indexed_name(index, named)
+        named = {axis: built[axis][i] for axis, (i, _) in zip(varied, combo, strict=True)}
+        task = axes.get(TASK_AXIS, exp.task)
+        name = _modularity_name(named) if exp.axes is None else _indexed_name(index, named)
         settings.append(Setting(index, axes, task, Path(task) / name))
     return settings
 
 
-def get_setting(sweep: SweepConfig, index: int) -> Setting:
-    settings = expand(sweep)
+def get_setting(exp: ExpConfig, index: int) -> Setting:
+    settings = expand(exp)
     if not 0 <= index < len(settings):
-        raise SweepError(f"index {index} is out of range; valid indices are 0..{len(settings) - 1}")
+        raise ExpError(f"index {index} is out of range; valid indices are 0..{len(settings) - 1}")
     return settings[index]
 
 
@@ -669,9 +681,9 @@ def setting_dir(root: Path, setting: Setting) -> Path:
     return Path(root) / setting.relpath
 
 
-def setting_config(sweep: SweepConfig, setting: Setting) -> Config:
+def setting_config(exp: ExpConfig, setting: Setting) -> Config:
     """The full fct `Config` of one setting."""
-    return _config_from(sweep, setting.axes)
+    return _config_from(exp, setting.axes)
 
 
 def _dump_at(dump: dict, axis: str) -> Any:
@@ -681,20 +693,20 @@ def _dump_at(dump: dict, axis: str) -> Any:
     return node
 
 
-def built_values(sweep: SweepConfig) -> dict[str, list]:
+def built_values(exp: ExpConfig) -> dict[str, list]:
     """Each axis's values as the built `Config` holds them (`0` becomes `0.0` for a float field),
     so two spellings of one value become one. This is the sameness `_validate_axis` enforces."""
     return {
-        axis: [_dump_at(_config_from(sweep, {axis: v}).model_dump(), axis) for v in values]
-        for axis, values in grid_of(sweep).items()
+        axis: [_dump_at(_config_from(exp, {axis: v}).model_dump(), axis) for v in values]
+        for axis, values in axes_of(exp).items()
     }
 
 
-def grid_hash(sweep: SweepConfig) -> str:
-    """Short hash of what the grid sets: the built values of every axis. The base task counts
+def exp_hash(exp: ExpConfig) -> str:
+    """Short hash of what the axes set: the built values of every axis. The base task counts
     only when `data.task` is not an axis. The sizes are not in it; config.json checks those."""
-    base_task = None if TASK_AXIS in grid_of(sweep) else sweep.task
-    canonical = json.dumps({"axes": built_values(sweep), "task": base_task})
+    base_task = None if TASK_AXIS in axes_of(exp) else exp.task
+    canonical = json.dumps({"axes": built_values(exp), "task": base_task})
     return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
@@ -721,9 +733,7 @@ def _artefact_status(directory: Path, current_hash: str) -> Status:
     return "partial" if latest_checkpoint(directory) is not None else "missing"
 
 
-def setting_status(
-    root: Path, sweep: SweepConfig, setting: Setting, stage: Stage = "train"
-) -> Status:
+def setting_status(root: Path, exp: ExpConfig, setting: Setting, stage: Stage = "train") -> Status:
     """State of one stage of a setting. "train": train/final.pt written under this setting's
     current data, net and train sections and the loss version. "solve": meanfield/final.pt
     written under those and the meanfield section. Otherwise as `_artefact_status`: stale
@@ -732,7 +742,7 @@ def setting_status(
     net is trained (`_solved_without_net`): it lacks the comparison with the net."""
     _check_stage(stage)
     paths = cache_paths(setting_dir(root, setting))
-    cfg = setting_config(sweep, setting)
+    cfg = setting_config(exp, setting)
     if stage == "train":
         return _artefact_status(paths.train, _train_hash(cfg))
     if _done_without_net(paths, cfg):
@@ -741,10 +751,10 @@ def setting_status(
 
 
 def setting_statuses(
-    root: Path, sweep: SweepConfig, stage: Stage = "train"
+    root: Path, exp: ExpConfig, stage: Stage = "train"
 ) -> list[tuple[int, Setting, Status]]:
-    """`(index, setting, status)` for every setting of the grid, in grid order."""
-    return [(i, s, setting_status(root, sweep, s, stage)) for i, s in enumerate(expand(sweep))]
+    """`(index, setting, status)` for every setting of the experiment, in index order."""
+    return [(i, s, setting_status(root, exp, s, stage)) for i, s in enumerate(expand(exp))]
 
 
 def _done_without_net(paths: CachePaths, cfg: Config) -> bool:
@@ -764,7 +774,7 @@ def _done_without_net(paths: CachePaths, cfg: Config) -> bool:
 def _write_config_once(cfg: Config, directory: Path) -> None:
     """Write config.json for a new setting; fail if an existing one differs in anything but the
     meanfield section, because the artefacts beside it belong to that config. The meanfield
-    section is the sweep's current solver (no training artefact depends on it, and `python -m
+    section is the experiment's current solver (no training artefact depends on it, and `python -m
     fct solve` reads it from here), so it is brought up to date."""
     path = cache_paths(directory).config
     if not path.exists():
@@ -772,48 +782,48 @@ def _write_config_once(cfg: Config, directory: Path) -> None:
         return
     existing = load_config(path)
     if existing.model_copy(update={"meanfield": cfg.meanfield}) != cfg:
-        raise SweepError(
-            f"{path} differs from the config sweep.json builds for this setting; "
+        raise ExpError(
+            f"{path} differs from the config exp.json builds for this setting; "
             "use a fresh ROOT or delete the setting directory"
         )
     if existing.meanfield != cfg.meanfield:
         save_config(cfg, path)
 
 
-def _setting_record(sweep: SweepConfig, setting: Setting) -> dict:
-    return {"index": setting.index, "grid_hash": grid_hash(sweep), "axes": setting.axes}
+def _setting_record(exp: ExpConfig, setting: Setting) -> dict:
+    return {"index": setting.index, "exp_hash": exp_hash(exp), "axes": setting.axes}
 
 
-def _write_setting_once(sweep: SweepConfig, setting: Setting, directory: Path) -> None:
-    """Record the setting's index, axis values and grid hash in setting.json; fail if an
-    existing record differs, because the grid then no longer puts this setting here."""
+def _write_setting_once(exp: ExpConfig, setting: Setting, directory: Path) -> None:
+    """Record the setting's index, axis values and exp hash in setting.json; fail if an
+    existing record differs, because the experiment then no longer puts this setting here."""
     path = directory / SETTING_FILE
-    record = _setting_record(sweep, setting)
+    record = _setting_record(exp, setting)
     if not path.exists():
         directory.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(record, indent=2) + "\n")
     elif json.loads(path.read_text()) != json.loads(json.dumps(record)):
-        raise SweepError(
-            f"{path} differs from what sweep.json gives this setting (another grid, or other "
+        raise ExpError(
+            f"{path} differs from what exp.json gives this setting (another experiment, or other "
             "axis values at this index); use a fresh ROOT or delete the setting directory"
         )
 
 
 def _read_setting(directory: Path, current_hash: str) -> dict:
     record = json.loads((Path(directory) / SETTING_FILE).read_text())
-    if record.get("grid_hash") != current_hash:
-        raise SweepError(
-            f"{directory} has no grid hash or was written under another grid than this "
-            "sweep.json's; use a fresh ROOT or delete the directory"
+    if record.get("exp_hash") != current_hash:
+        raise ExpError(
+            f"{directory} has no exp hash or was written under another experiment than this "
+            "exp.json's; use a fresh ROOT or delete the directory"
         )
     return record
 
 
-def read_setting(directory: Path, sweep: SweepConfig) -> dict:
-    """The `{"index", "grid_hash", "axes"}` record `run_setting` wrote in a setting directory.
-    SweepError, naming the directory, if it was written under another grid than `sweep`'s (or
-    carries no grid hash)."""
-    return _read_setting(directory, grid_hash(sweep))
+def read_setting(directory: Path, exp: ExpConfig) -> dict:
+    """The `{"index", "exp_hash", "axes"}` record `run_setting` wrote in a setting directory.
+    ExpError, naming the directory, if it was written under another experiment than `exp`'s (or
+    carries no exp hash)."""
+    return _read_setting(directory, exp_hash(exp))
 
 
 def has_settings(root: Path) -> bool:
@@ -836,21 +846,22 @@ def same_value(a: Any, b: Any) -> bool:
     return a == b
 
 
-def find_setting_dir(root: Path, sweep: SweepConfig, values: Mapping[str, Any]) -> Path:
-    """The directory of the one already-run setting of `sweep` whose axes equal `values`; a
+def find_setting_dir(root: Path, exp: ExpConfig, values: Mapping[str, Any]) -> Path:
+    """The directory of the one already-run setting of `exp` whose axes equal `values`; a
     subset of the axes is enough when it is unambiguous. LookupError if none or several match,
-    or an axis is not one of the sweep's; SweepError if a directory was written under another
-    grid. Only the sweep's own directories are considered, so strays in ROOT cannot match."""
-    if unknown := sorted(set(values) - set(grid_of(sweep))):
-        raise LookupError(f"unknown axis {unknown}; the grid has axes {list(grid_of(sweep))}")
-    directories = [setting_dir(root, s) for s in expand(sweep)]
+    or an axis is not one of the experiment's; ExpError if a directory was written under another
+    experiment. Only the experiment's own directories are considered, so strays in ROOT cannot
+    match."""
+    if unknown := sorted(set(values) - set(axes_of(exp))):
+        raise LookupError(f"unknown axis {unknown}; the experiment has axes {list(axes_of(exp))}")
+    directories = [setting_dir(root, s) for s in expand(exp)]
     run = [d for d in directories if (d / SETTING_FILE).exists()]
     if not run:
         raise LookupError(
-            f"no setting of this sweep has been run under {root} (settings run before "
-            f"{SETTING_FILE} existed get one on their next `sweep run`)"
+            f"no setting of this experiment has been run under {root} (settings run before "
+            f"{SETTING_FILE} existed get one on their next `exp run`)"
         )
-    current = grid_hash(sweep)  # once: it builds every setting's config
+    current = exp_hash(exp)  # once: it builds every setting's config
     records = [(directory, _read_setting(directory, current)["axes"]) for directory in run]
     matches = [
         directory
@@ -872,7 +883,7 @@ _STAGE_SECTIONS = {
 
 
 def run_setting(
-    sweep: SweepConfig,
+    exp: ExpConfig,
     index: int,
     root: Path,
     log: Callable[[str], None] = print,
@@ -883,21 +894,21 @@ def run_setting(
     with the trained net if there is one (see `_solve_setting`).
 
     StaleCacheError if the stage was finished under another config or loss definition: its
-    results would silently stand in for a run of the current one. SweepError for the solve
+    results would silently stand in for a run of the current one. ExpError for the solve
     stage of an ensemble setting (net.B > 1), before anything is written, whether or not it is
     trained yet: the solve compares with one trained network."""
     _check_stage(stage)
-    setting = get_setting(sweep, index)
+    setting = get_setting(exp, index)
     directory = setting_dir(root, setting)
-    cfg = setting_config(sweep, setting)
+    cfg = setting_config(exp, setting)
     if stage == "solve" and cfg.net.B > 1:
-        raise SweepError(
+        raise ExpError(
             f"setting {index}: the solve compares with one trained network, but the setting "
             f"is an ensemble of net.B={cfg.net.B}; solving ensembles is not supported"
         )
     _write_config_once(cfg, directory)
-    _write_setting_once(sweep, setting, directory)
-    status = setting_status(root, sweep, setting, stage)
+    _write_setting_once(exp, setting, directory)
+    status = setting_status(root, exp, setting, stage)
     paths = cache_paths(directory)
     if stage == "solve" and _done_without_net(paths, cfg):
         # Finished under the current config, only lacking the net: solve again with it.
@@ -908,16 +919,16 @@ def run_setting(
         raise StaleCacheError(
             f"setting {index}: {directory}/{_STAGE_DIRS[stage]}/final.pt was written under a "
             f"different config {_STAGE_SECTIONS[stage]} than the current one, or is unreadable, "
-            "so its results are not those of this sweep. To rerun it, delete the sweep ROOT or "
-            "use a fresh one."
+            "so its results are not those of this experiment. To rerun it, delete the experiment "
+            "ROOT or use a fresh one."
         )
     if status == "done":
         log(f"setting {index} ({directory}) already done ({stage})")
         return
     if stage == "solve" and cfg.meanfield.n_points > cfg.data.P:
-        raise SweepError(
+        raise ExpError(
             f"setting {index}: meanfield.n_points={cfg.meanfield.n_points} exceeds the dataset "
-            f"size P={cfg.data.P}; lower it in sweep.json"
+            f"size P={cfg.data.P}; lower it in exp.json"
         )
     log(f"setting {index}: {directory} ({stage})")
     dataset = get_dataset(directory, cfg)
@@ -929,13 +940,13 @@ def run_setting(
 
 def _check_checkpoint_matches_net(directory: Path, net) -> None:
     """A solver checkpoint continues the run it came from, which fixed whether a net is
-    compared; SweepError (one line, naming the file) if the net situation has changed since."""
+    compared; ExpError (one line, naming the file) if the net situation has changed since."""
     ckpt = latest_checkpoint(cache_paths(directory).meanfield)
     if ckpt is not None and (read_field(ckpt, "net_Phi") is not None) != (net is not None):
         was = "with the trained net, but there is no trained net now"
         if net is not None:
             was = "without the trained net, but there is a trained net now"
-        raise SweepError(f"{ckpt} was written {was}; delete {ckpt.parent} to solve again")
+        raise ExpError(f"{ckpt} was written {was}; delete {ckpt.parent} to solve again")
 
 
 def _solve_setting(
@@ -943,7 +954,7 @@ def _solve_setting(
 ) -> None:
     """Solve the setting's saddle point. The trained net, if train/final.pt exists, adds the
     comparison with the net to the history; without one the solve runs on its own. The choice
-    is fixed when a solve starts: resuming a checkpoint needs the same (SweepError otherwise,
+    is fixed when a solve starts: resuming a checkpoint needs the same (ExpError otherwise,
     see `_check_checkpoint_matches_net`). `run_setting` refuses ensembles (net.B > 1) before
     this. An InadequateSamplerError propagates and leaves no final.pt."""
     net = None

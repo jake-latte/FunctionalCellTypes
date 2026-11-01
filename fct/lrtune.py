@@ -1,4 +1,4 @@
-"""Learning-rate tuning of the sweep: score trained settings on held-out data, then pick a rate.
+"""Learning-rate tuning: score the experiment's trained settings on held-out data, then pick a rate.
 
 Layers (kept apart so the logic is testable without a disk or a GPU):
 - pure: `loss_curve_stats`, the table logic (`collapse_seeds`,
@@ -6,7 +6,8 @@ Layers (kept apart so the logic is testable without a disk or a GPU):
 - I/O edge: `evaluate_setting` (reads a finished setting, writes nothing), the CSV functions,
   `tuning_template`, `run_trials`, `collect_rows` and the command line (`python -m fct.lrtune`).
 
-Every trial is a normal sweep: one ROOT per (learning rate, seed) filled by `fct.sweep.run_setting`,
+Every trial is a normal experiment: one ROOT per (learning rate, seed) filled by
+`fct.exp.run_setting`,
 so tuning exercises the code path of the real run. A result row has the keys of `COLUMNS`.
 The held-out MSE and the regularised loss are the criteria; the MIR is recorded for context and
 never used to choose. Held-out data comes from `fct.tasks.resample`.
@@ -32,23 +33,23 @@ import torch
 from fct.cache import cache_paths
 from fct.config import Config, resolve_device, resolve_dtype
 from fct.data import get_dataset
-from fct.model import MLP
-from fct.sweep import (
+from fct.exp import (
+    EXP_TASKS,
     LAYERS,
-    SWEEP_TASKS,
+    ExpConfig,
     Seeds,
     Setting,
-    SweepConfig,
     expand,
     get_setting,
-    load_sweep,
+    load_exp,
     preset,
     run_setting,
-    save_sweep,
+    save_exp,
     setting_config,
     setting_dir,
     setting_status,
 )
+from fct.model import MLP
 from fct.tasks import Dataset, resample
 from fct.train import (
     compute_loss,
@@ -94,7 +95,7 @@ LEARNED_MARGIN = 0.9  # a net has learned if its held-out MSE is below this x th
 TAIL = 0.1  # the final fraction of the curve over which "still decreasing" is judged
 MAX_MEDIAN_GAP = 0.10  # verdict: median relative gap to each setting's best lr at most this ...
 MAX_WORST_RATIO = 2.0  # ... and no setting more than this many times worse than its best
-DEFAULT_LAYERS = (min(LAYERS), max(LAYERS))  # the shallow and deep extremes of the grid
+DEFAULT_LAYERS = (min(LAYERS), max(LAYERS))  # the shallow and deep extremes of the modularity axes
 LOGGED_POINTS = 100  # history entries per run (log_int = n_epochs / this)
 CHECKPOINTS = 10  # checkpoints per run
 MONITOR_CALLS = 4  # MIR monitor calls per run, besides the final one
@@ -383,12 +384,12 @@ def global_verdict(
 
 
 # ---------------------------------------------------------------------------- I/O: evaluation
-def _cpu_config(sweep: SweepConfig, setting: Setting) -> Config:
+def _cpu_config(exp: ExpConfig, setting: Setting) -> Config:
     """The setting's config on the CPU (the device is in no cache hash); evaluation is cheap."""
-    return setting_config(sweep, setting).model_copy(update={"device": "cpu"})
+    return setting_config(exp, setting).model_copy(update={"device": "cpu"})
 
 
-def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_seed: int) -> Row:
+def evaluate_setting(root: Path, exp: ExpConfig, setting: Setting, held_out_seed: int) -> Row:
     """Score one finished setting: final train and held-out MSE, loss curve stats, final MIR.
 
     Read-only on ROOT: the training dataset is loaded from its cache (never generated), and
@@ -397,7 +398,7 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
     is an ensemble (net.B > 1; learning rates are tuned on single networks).
     """
     directory = setting_dir(root, setting)
-    status = setting_status(root, sweep, setting)
+    status = setting_status(root, exp, setting)
     if status == "stale":
         raise FileNotFoundError(
             f"{directory} is stale: train/final.pt was written under another config or loss "
@@ -407,7 +408,7 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
         raise FileNotFoundError(f"{directory} is not finished (no train/final.pt)")
     if not (cache_paths(directory).data / "dataset.pt").exists():
         raise FileNotFoundError(f"{directory} has no data/dataset.pt; refusing to generate it")
-    cfg = _cpu_config(sweep, setting)
+    cfg = _cpu_config(exp, setting)
     device, dtype = resolve_device(cfg), resolve_dtype(cfg.dtype)
     train = get_dataset(directory, cfg)
     net, history = select_member(*load_trained(directory, cfg, device, dtype))
@@ -433,9 +434,9 @@ def evaluate_setting(root: Path, sweep: SweepConfig, setting: Setting, held_out_
         "L": setting.axes["net.L"],
         "phi": setting.axes["net.phi"],
         "rate_lambda": setting.axes["train.rate_lambda"],
-        "lr": sweep.lr,
-        "seed": sweep.seeds.train,
-        "n_epochs": sweep.n_epochs,
+        "lr": exp.lr,
+        "seed": exp.seeds.train,
+        "n_epochs": exp.n_epochs,
         "diverged": stats["diverged"] or not all(math.isfinite(v) for v in final),
         "train_mse": train_mse,
         "heldout_mse": held_mse,
@@ -479,7 +480,7 @@ def read_rows_csv(path: Path) -> list[Row]:
 # ---------------------------------------------------------------------------- I/O: trials
 def tuning_template(
     N: int, P: int, n_epochs: int, n_checks: int = MONITOR_CALLS, base: str = "full"
-) -> SweepConfig:
+) -> ExpConfig:
     """The `base` preset with tuning sizes, on the GPU, logging `LOGGED_POINTS` points and
     saving `CHECKPOINTS` checkpoints per run and monitoring MIR `n_checks` times (cheap, but the
     final MIR is always recorded)."""
@@ -497,7 +498,7 @@ def tuning_template(
     )
 
 
-def trial_sweep(template: SweepConfig, lr: float, seed: int) -> SweepConfig:
+def trial_exp(template: ExpConfig, lr: float, seed: int) -> ExpConfig:
     """The template with learning rate `lr`; data, net and training all use `seed`."""
     return template.model_copy(update={"lr": lr, "seeds": Seeds(data=seed, net=seed, train=seed)})
 
@@ -506,35 +507,33 @@ def trial_root(base: Path, lr: float, seed: int) -> Path:
     return Path(base) / f"lr_{lr:g}_seed{seed}"
 
 
-def subset_indices(sweep: SweepConfig, tasks: Sequence[str], layers: Sequence[int]) -> list[int]:
-    """Grid indices of the settings with the given tasks and layer counts."""
-    unknown = (set(tasks) - set(SWEEP_TASKS)) | (set(layers) - set(LAYERS))
+def subset_indices(exp: ExpConfig, tasks: Sequence[str], layers: Sequence[int]) -> list[int]:
+    """Indices of the settings with the given tasks and layer counts."""
+    unknown = (set(tasks) - set(EXP_TASKS)) | (set(layers) - set(LAYERS))
     if unknown:
         raise ValueError(f"unknown tasks or layer counts: {sorted(unknown, key=str)}")
-    return [i for i, s in enumerate(expand(sweep)) if s.task in tasks and s.axes["net.L"] in layers]
+    return [i for i, s in enumerate(expand(exp)) if s.task in tasks and s.axes["net.L"] in layers]
 
 
-def _prepare_root(sweep: SweepConfig, root: Path) -> None:
-    """Write ROOT/sweep.json, or check that the one there is the same sweep."""
-    if (root / "sweep.json").exists():
-        if load_sweep(root) != sweep:
-            raise ValueError(
-                f"{root}/sweep.json differs from the requested trial; use a fresh base"
-            )
+def _prepare_root(exp: ExpConfig, root: Path) -> None:
+    """Write ROOT/exp.json, or check that the one there is the same experiment."""
+    if (root / "exp.json").exists():
+        if load_exp(root) != exp:
+            raise ValueError(f"{root}/exp.json differs from the requested trial; use a fresh base")
     else:
-        save_sweep(sweep, root)
+        save_exp(exp, root)
 
 
-def _device_name(sweep: SweepConfig) -> str:
+def _device_name(exp: ExpConfig) -> str:
     """Name of the device a trial runs on; fails if cuda was asked for and is absent."""
-    if sweep.device == "cpu":
+    if exp.device == "cpu":
         return "cpu"
-    cfg = Config(device=sweep.device)
+    cfg = Config(device=exp.device)
     return torch.cuda.get_device_name(0) if resolve_device(cfg).type == "cuda" else "cpu"
 
 
 def run_trials(
-    template: SweepConfig,
+    template: ExpConfig,
     base: Path,
     lrs: Sequence[float],
     seeds: Sequence[int],
@@ -546,12 +545,12 @@ def run_trials(
     name = _device_name(template)
     log(f"device: {name}")
     for lr, seed in itertools.product(lrs, seeds):
-        sweep, root = trial_sweep(template, lr, seed), trial_root(base, lr, seed)
-        _prepare_root(sweep, root)
+        exp, root = trial_exp(template, lr, seed), trial_root(base, lr, seed)
+        _prepare_root(exp, root)
         for i in indices:
-            was_done = setting_status(root, sweep, get_setting(sweep, i)) == "done"
+            was_done = setting_status(root, exp, get_setting(exp, i)) == "done"
             start = time.perf_counter()
-            run_setting(sweep, i, root, log=log)
+            run_setting(exp, i, root, log=log)
             if not was_done:
                 _append_timing(base, lr, seed, i, time.perf_counter() - start, name)
 
@@ -566,7 +565,7 @@ def _append_timing(base: Path, lr: float, seed: int, index: int, seconds: float,
 
 
 def collect_rows(
-    template: SweepConfig,
+    template: ExpConfig,
     base: Path,
     lrs: Sequence[float],
     seeds: Sequence[int],
@@ -575,11 +574,9 @@ def collect_rows(
     """Evaluate every (lr, seed, setting); FileNotFoundError if any is not finished."""
     rows = []
     for lr, seed in itertools.product(lrs, seeds):
-        sweep, root = trial_sweep(template, lr, seed), trial_root(base, lr, seed)
+        exp, root = trial_exp(template, lr, seed), trial_root(base, lr, seed)
         held_out_seed = seed + HELD_OUT_SEED_OFFSET
-        rows += [
-            evaluate_setting(root, sweep, get_setting(sweep, i), held_out_seed) for i in indices
-        ]
+        rows += [evaluate_setting(root, exp, get_setting(exp, i), held_out_seed) for i in indices]
     return rows
 
 
@@ -683,7 +680,7 @@ def _parser() -> argparse.ArgumentParser:
         cmd.add_argument("base", type=Path)
         cmd.add_argument("--lrs", type=float, nargs="+", required=True)
         cmd.add_argument("--seeds", type=int, nargs="+", default=[0])
-        cmd.add_argument("--tasks", nargs="+", default=list(SWEEP_TASKS))
+        cmd.add_argument("--tasks", nargs="+", default=list(EXP_TASKS))
         cmd.add_argument("--layers", type=int, nargs="+", default=list(DEFAULT_LAYERS))
         if name == "collect":
             cmd.add_argument("--csv", type=Path, required=True)
@@ -700,11 +697,11 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_template(base: Path) -> SweepConfig:
+def _load_template(base: Path) -> ExpConfig:
     path = base / TUNING_FILE
     if not path.exists():
         raise FileNotFoundError(f"{path} not found; run `init` first")
-    return SweepConfig.model_validate_json(path.read_text())
+    return ExpConfig.model_validate_json(path.read_text())
 
 
 def _report(args: argparse.Namespace) -> int:

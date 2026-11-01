@@ -27,7 +27,7 @@ majority the checks never touch; auditing the cached history finds the affected 
 2. `load_meanfield` and `run_meanfield` (on a cache hit) run it: a non-empty audit refuses the
    cache loudly (a `StaleCacheError` subclass naming the steps, layers and values), with an
    explicit opt-out for inspection (e.g. `allow_unhealthy=True`) that logs the findings.
-3. The CLI and the sweep status report such a cache as one line / a distinct status
+3. The CLI and the exp status report such a cache as one line / a distinct status
    ("unhealthy"), not as fresh.
 
 ## Acceptance criteria

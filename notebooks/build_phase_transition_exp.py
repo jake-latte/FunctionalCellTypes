@@ -1,13 +1,14 @@
-"""Build and execute `phase_transition_grid.ipynb`: the figures of `spatial_grid.ipynb` for one
-setting of a `phase_transition` sweep, an ensemble of B networks with random embeddings in d
+"""Build and execute `phase_transition_exp.ipynb`: the figures of `spatial_exp.ipynb` for one
+setting of a `phase_transition` experiment, an ensemble of B networks with random embeddings in d
 dimensions.
 
-Give a sweep ROOT (made with `python -m fct sweep init ROOT --preset phase_transition`) and the
+Give an experiment ROOT (made with `python -m fct exp init ROOT --preset phase_transition`) and the
 axis values of one setting, `SETTING = {"spatial.d": 2, "spatial.lambda_max": 0.5}`. The notebook
-lists the grid, loads that setting through `fct.phase_view.load_phase_run` and draws the prior
-(covariance, effective covariance and penalty, with their spectra and the eigenvalue floor), the
-ensemble's loss curves, example outputs, the trained weight kernels, the data kernels A, the tuning
-of one member and the information and rate overlaps. A, the weight kernels and the overlaps come
+lists the experiment's settings, loads that setting through `fct.phase_view.load_phase_run` and
+draws the prior (covariance, effective covariance and penalty, with their spectra and the eigenvalue
+floor), the ensemble's loss curves, example outputs, the trained weight kernels, the data kernels A,
+the tuning of one member and the information and rate overlaps. A, the weight kernels and the
+overlaps come
 for member `MEMBER` and for the ensemble average. A setting that is not trained is reported in the
 cells and only its prior is drawn.
 
@@ -16,10 +17,10 @@ the cells that draw them. The plotting functions of the data-kernel figure are t
 `build_spatial.py` (taken verbatim, so the notebooks cannot drift); the others are written for the
 ensemble. Run
 
-    python notebooks/build_phase_transition_grid.py ROOT --set 'SETTING={"spatial.d": 2}'   # execute, write tmp/phase_transition_grid.ipynb
-    python notebooks/build_phase_transition_grid.py --no-execute                              # source only: notebooks/phase_transition_grid.ipynb
+    python notebooks/build_phase_transition_exp.py ROOT --set 'SETTING={"spatial.d": 2}'   # execute, write tmp/phase_transition_exp.ipynb
+    python notebooks/build_phase_transition_exp.py --no-execute                              # source only: notebooks/phase_transition_exp.ipynb
 
-ROOT is the sweep directory (the one holding sweep.json); `$FCT_SWEEP_ROOT` works in the notebook
+ROOT is the experiment directory (the one holding exp.json); `$FCT_EXP_ROOT` works in the notebook
 too. Only the source notebook is committed; an executed one records the ROOT path and its figures
 are large, so it goes to the git-ignored tmp/ unless --out says otherwise.
 """
@@ -31,10 +32,10 @@ from nbformat import NotebookNode
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 from notebooks import build_spatial as sp
-from notebooks.build_spatial_grid import GRID, GRID_TEXT, when_trained
+from notebooks.build_spatial_exp import SETTINGS_TABLE, SETTINGS_TEXT, when_trained
 
-SOURCE_OUT = Path(__file__).with_name("phase_transition_grid.ipynb")
-EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "phase_transition_grid.ipynb"
+SOURCE_OUT = Path(__file__).with_name("phase_transition_exp.ipynb")
+EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "phase_transition_exp.ipynb"
 
 
 def function_source(source: str, *names: str) -> str:
@@ -53,15 +54,15 @@ def function_source(source: str, *names: str) -> str:
 
 
 INTRO = (
-    r"""# The phase-transition grid: the figures of the spatial grid, for an ensemble
+    r"""# The phase-transition experiment: the figures of the spatial experiment, for an ensemble
 
-`ROOT` is a sweep made with `python -m fct sweep init ROOT --preset phase_transition`: settings
+`ROOT` is an experiment made with `python -m fct exp init ROOT --preset phase_transition`: settings
 that differ in the embedding dimension $d$ and in the top eigenvalue of the kernels
 $\lambda_{\max}$, each an ensemble of $B$ networks that share their random embeddings and differ in
 their initial weights and Langevin noise. `SETTING` is the axis values of one setting, e.g.
 `{"spatial.d": 2, "spatial.lambda_max": 0.5}`; a subset of the axes is enough when it picks one.
-The notebook lists the grid, loads that setting and draws what `spatial_grid.ipynb` draws for one
-network, adapted to an ensemble:
+The notebook lists the experiment's settings, loads that setting and draws what `spatial_exp.ipynb`
+draws for one network, adapted to an ensemble:
 
 - **the prior** of every weight layer: the covariance $K / \lambda_w$, the effective covariance the
   networks were trained under (the covariance with its small eigenvalues raised to the floor) and
@@ -73,8 +74,8 @@ network, adapted to an ensemble:
   overlaps** of the neurons, each for member `MEMBER` and for the ensemble average;
 - **the tuning of the neurons of member `MEMBER`** to the latents, to the first `N_NEURONS`.
 
-Three things differ from the spatial grid. Tuning and the overlaps use a fresh random test set of
-`P_TEST` samples of the training set's own teacher, not the training samples (a larger set lowers
+Three things differ from the spatial experiment. Tuning and the overlaps use a fresh random test set
+of `P_TEST` samples of the training set's own teacher, not the training samples (a larger set lowers
 the plug-in noise floor of the mutual information); the data kernels keep the held-out latent
 lattice of $3^k$ points. Every view that orders units uses their coordinate along axis `SORT_DIM`
 (see below). The first-layer weight image and the trial and pair grids of the spatial notebook
@@ -94,8 +95,8 @@ that is still running is drawn from its latest checkpoint and labelled provision
     + sp.NOTATION
 )
 
-PARAMETERS = """ROOT = None  # the sweep ROOT (holds sweep.json); None reads $FCT_SWEEP_ROOT
-SETTING = {"spatial.d": 2, "spatial.lambda_max": 0.5}  # axis values of the setting: a subset of the grid's axes that picks one
+PARAMETERS = """ROOT = None  # the experiment ROOT (holds exp.json); None reads $FCT_EXP_ROOT
+SETTING = {"spatial.d": 2, "spatial.lambda_max": 0.5}  # axis values of the setting: a subset of the experiment's axes that picks one
 MEMBER = 0  # the ensemble member of the single-network figures (0 .. B - 1)
 SORT_DIM = 0  # units are ordered by this coordinate of their position (0 .. d - 1)
 P_TEST = 2000  # samples of the random test set used for tuning and the overlaps
@@ -119,7 +120,7 @@ import torch
 from IPython.display import Markdown, display
 
 from fct.analyse import pick_examples, r_squared
-from fct.grid_view import tuning_view
+from fct.exp_view import tuning_view
 from fct.phase_view import (
     average_views,
     ensemble_example_outputs,
@@ -130,15 +131,15 @@ from fct.phase_view import (
     random_test_set,
     unit_order,
 )
-from fct.report import sweep_root_from_env
+from fct.report import exp_root_from_env
 from fct.spatial import latent_kernel
-from fct.spatial_grid import settings_table
+from fct.spatial_exp import settings_table
 from fct.tasks import latent_lattice_dataset
 from fct.train import prior_coefficient
 
 mpl.rcParams.update({"figure.dpi": 100, "font.size": 12, "axes.titlesize": 12})
 
-SWEEP_ROOT = ROOT or sweep_root_from_env()"""
+EXP_ROOT = ROOT or exp_root_from_env()"""
 
 SETTING_TEXT = """## The chosen setting
 
@@ -149,7 +150,7 @@ embedding dimension, so a bad value stops the notebook before any figure. The no
 training text above tell the reader to set `PRIOR_COEFF`, `DATA_SEED`, `RATE_LAMBDA`, `BETA` and
 `OPTIMIZER`; in this notebook they are read from the setting's config instead."""
 
-LOADER = r"""RUN = load_phase_run(SWEEP_ROOT, SETTING, DEVICE)
+LOADER = r"""RUN = load_phase_run(EXP_ROOT, SETTING, DEVICE)
 CHOSEN, CFG, SPACES, NET = RUN.setting, RUN.setting.cfg, RUN.spaces, RUN.net
 tc = CFG.train
 # the names the spatial notebook's cells read
@@ -235,8 +236,8 @@ covariance for that reason."""
 )
 
 FLOOR_TEXT = sp.FLOOR_TEXT[: sp.FLOOR_TEXT.index("At the defaults")] + (
-    r"In this sweep $\lambda_w = 1$ and every kernel is rescaled so that its top eigenvalue is "
-    r"`spatial.lambda_max`, so $\lambda_{\max}(K^p)$ is the same for every population and the floor "
+    r"In this experiment $\lambda_w = 1$ and every kernel is rescaled so that its top "
+    r"eigenvalue is `spatial.lambda_max`, so $\lambda_{\max}(K^p)$ is the same for every population and the floor "
     r"$\epsilon\, \lambda_{\max}(K^p)$ is set by $\epsilon$ (`MIN_REL_EIG`) and $\lambda_{\max}$ alone; "
     r"what changes from setting to setting is how many eigenvalues lie below it. The tables below give, for "
     r"this setting, how many eigenvalues of each population the floor raised, $\lambda_{\max}(K^p)$, "
@@ -828,8 +829,9 @@ plt.show()"""
 
 
 def build_notebook() -> NotebookNode:
-    """The notebook without outputs: parameters, the grid, the chosen setting, the prior (always
-    drawn), then the figures of the trained ensemble (a markdown cell with the equation, a code
+    """The notebook without outputs: parameters, the settings table, the chosen setting, the prior
+    (always drawn), then the figures of the trained ensemble (a markdown cell with the equation, a
+    code
     cell with the plotting function), guarded for an untrained setting."""
     nb = new_notebook(
         metadata={
@@ -841,8 +843,8 @@ def build_notebook() -> NotebookNode:
         new_code_cell(PARAMETERS, metadata={"tags": ["parameters"]}),
         new_markdown_cell(sp.SETUP_TEXT),
         new_code_cell(IMPORTS),
-        new_markdown_cell(GRID_TEXT),
-        new_code_cell(GRID),
+        new_markdown_cell(SETTINGS_TEXT),
+        new_code_cell(SETTINGS_TABLE),
         new_markdown_cell(SETTING_TEXT),
         new_code_cell(LOADER),
         new_markdown_cell(PRIOR_TEXT),
@@ -881,7 +883,7 @@ def main(argv: list[str] | None = None) -> int:
         "'SETTING={\"spatial.d\": 2}'",
         argv,
         root_name="ROOT",
-        root_help="the sweep ROOT (the directory holding sweep.json)",
+        root_help="the experiment ROOT (the directory holding exp.json)",
     )
 
 

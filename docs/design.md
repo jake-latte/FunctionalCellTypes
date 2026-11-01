@@ -25,21 +25,22 @@ fct/
   meanfield.py     # saddle-point solver (Algorithm 1) with checkpoint / resume
   analyse.py       # pure analysis functions + cached wrappers
   modularity.py    # neuron-factor mutual information, preference, MIR (pure)
-  tuning.py        # tuning_curves (MIR's bins) and select_neurons: pure helpers for the grid notebook
-  grid_report.py   # MirRecord and mir_grid: sweep records -> (layer, lambda_r, lambda_w) MIR array
-  grid_view.py     # sweep ROOT -> the figures of a lambda_grid sweep (the phase-transition notebook): setting snapping, MIR records of one depth/activation, tuning of one layer
+  tuning.py        # tuning_curves (MIR's bins) and select_neurons: pure helpers for the phase-transition notebook
+  exp_report.py   # MirRecord and mir_matrix: experiment records -> (layer, lambda_r, lambda_w) MIR array
+  exp_view.py     # experiment ROOT -> the figures of a lambda_exp experiment (the phase-transition notebook): setting snapping, MIR records of one depth/activation, tuning of one layer
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1}, the factorised weight quadratic form (pure)
-  spatial_grid.py  # spatial-grid notebook: pick one setting of a spatial sweep by axis values, load its trained net and the 3^k latent-lattice test set
+  spatial_exp.py  # spatial-experiment notebook: pick one setting of a spatial experiment by axis values, load its trained net and the 3^k latent-lattice test set
   spatial_view.py  # spatial-prior notebook: config, resumable run, ring/lattice layout of neurons and weights, empirical kernels (pure + one I/O function)
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
-  sweep.py         # a grid of Config fields: SweepConfig, expand, run_setting, status, presets
+  exp.py         # an experiment, a batch of runs over Config fields (its axes): ExpConfig, expand, run_setting, status, presets
+  exp_migrate.py # `exp migrate`: convert a folder written by older code (sweep.json, grid, grid_hash) to exp.json, axes, exp_hash
   explanations.py  # MIR_EXPLANATION: the notebook's markdown/LaTeX definition of raw, corrected and chance-baseline MIR
-  report.py        # what the results notebook shows: read-only load of a sweep ROOT, final-MIR table, prose from numbers
+  report.py        # what the results notebook shows: read-only load of an experiment ROOT, final-MIR table, prose from numbers
   exemplar.py      # the exemplar notebook's logic: config from flat settings, cache layout, cached train / solve, live refresh
-  cli.py           # argparse CLI: init / train / solve / plot / plot-example / sweep
+  cli.py           # argparse CLI: init / train / solve / plot / plot-example / experiment
   __main__.py      # `python -m fct ...` -> cli.main()
-notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_spatial_grid.py, build_phase_transition_grid.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
+notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_spatial_exp.py, build_phase_transition_exp.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
 docs/issues/*.md   # current work items (finished ones move to docs/issues/archive/)
@@ -87,13 +88,13 @@ Every artefact additionally depends on `dtype`; `section_hash` always includes i
 includes `train` also folds in `config.LOSS_VERSION`, the version of the loss definition in `compute_loss`. It is code,
 not a config field, and must be increased whenever the loss changes meaning. Version 3 sums the rate penalty over the
 samples (version 1 summed it, version 2 averaged it): every train cache (`train/ckpt_*.pt`, `train/final.pt`) and meanfield cache made before that
-change is rejected with `StaleCacheError` the next time it is loaded; data caches are unaffected. A sweep ROOT whose
-settings were finished before the change is not silently reused: `sweep status` lists them as `stale`, `run_setting` raises
+change is rejected with `StaleCacheError` the next time it is loaded; data caches are unaffected. An experiment ROOT whose
+settings were finished before the change is not silently reused: `exp status` lists them as `stale`, `run_setting` raises
 `StaleCacheError` instead of calling them done, and the results notebook shows them with a note and no results. Use fresh cache directories or
 delete the old ones. Likewise the hash of any set of sections that includes `net` folds in `config.MODEL_VERSION`, the
 version of the forward pass of `MLP`. Version 2 reads the output from the post-activations, `Z = V^T phi(h^L) / N`
 (version 1 read it from the pre-activation `h^L`): every train and meanfield cache made under version 1 is rejected with
-`StaleCacheError`, and a sweep ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
+`StaleCacheError`, and an experiment ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
 hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
 enters the hash by value.
 
@@ -350,7 +351,7 @@ def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
     # checkpoint every save_int epochs and at the end (final.pt); hash = section_hash("data","net","train")
     # monitor: required exactly when cfg.train.monitor_int > 0 (ValueError otherwise, before anything runs)
 def train_from_config(cfg: Config, dataset: Dataset, cache_dir: Path, log=print, monitor=None) -> tuple[MLP, History]
-    # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the sweep
+    # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the experiment
 def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
     # an EnsembleMLP and an ensemble history when cfg.net.B > 1 (load_latest_checkpoint likewise)
 def select_member(net: Net, history, member: int | None = None) -> tuple[MLP, History]   # a single net passes through (member None or 0);
@@ -374,9 +375,9 @@ B = 1 keeps the unbatched `MLP` (parameters without a member axis) and its code 
 and pinned number is unchanged: `tests/test_train_pins.py` reproduces a tiny Adam run and an SGLD run with a spatial
 prior, written before `net.B` existed, bit for bit (hash, every checkpoint, final file). A batched B = 1 would have
 changed every state_dict shape and cache. Readers that analyse one network call `select_member` and so refuse an
-ensemble unless given a member: `spatial_grid.load_grid_run(chosen, member=None)` takes one; the CLI's trained-net
-commands, `report.load_setting_result`, `grid_view.load_setting_data` and `lrtune.evaluate_setting` refuse; the
-mean-field `solve` raises for an ensemble, and the sweep's solve stage raises `SweepError` for an ensemble setting
+ensemble unless given a member: `spatial_exp.load_exp_run(chosen, member=None)` takes one; the CLI's trained-net
+commands, `report.load_setting_result`, `exp_view.load_setting_data` and `lrtune.evaluate_setting` refuse; the
+mean-field `solve` raises for an ensemble, and the experiment's solve stage raises `ExpError` for an ensemble setting
 before writing anything, trained or not (its solve status stays "missing").
 
 Cost: an ensemble is one batched run, measured in `docs/issues/ensemble-training.md` (`jobs/bench_ensemble.py`). It is
@@ -575,7 +576,7 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # Tilt tripwire: when, in some layer, the largest Stein fixed-point residual of Phi_hat over the last
     # solver.tilt_tripwire_steps outer steps is >= solver.tilt_tripwire_resid, solve raises UnconvergedSolveError (a
     # RuntimeError) instead of returning, so no final.pt is written (the checkpoints stay). It catches a lost tilt (Phi_hat
-    # near 0 has residual near 1), not non-convergence: an unconverged solve below it passes. The CLI (`solve`, `sweep run`)
+    # near 0 has residual near 1), not non-convergence: an unconverged solve below it passes. The CLI (`solve`, `exp run`)
     # reports it as a one-line error. history["phihat_change_rel"] is NaN for a step from a zero tilt; the log prints
     # margin=n/a for a bounded phi.
     # With project_tilt, phi needs a tilt_rule (ValueError up front otherwise).
@@ -585,7 +586,7 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
     # replaces the checkpoints; every checkpoint stores cfg.model_dump() as "meanfield_config" for provenance
 def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print, on_outer=None) -> SolveResult
     # raises SpatialPriorUnsupportedError (a ValueError) when cfg.spatial is set, before touching the cache: the solver knows only the iid prior;
-    # `python -m fct solve` and `python -m fct sweep run` (with or without --index) report it as a one-line error
+    # `python -m fct solve` and `python -m fct exp run` (with or without --index) report it as a one-line error
     # constants of the action: prior_scale, alpha, rate_tilt (2 beta rate_lambda) and learning_prefactor follow the network
     # (`network_constants`, beta = meanfield.beta or train.beta for SGLD / 1 for Adam); an explicit meanfield field overrides it.
     # X = dataset.x[:n_points], Y = dataset.y[:n_points]; lambda_w/lambda_r from cfg.train; phi/g/L from cfg.net
@@ -801,7 +802,7 @@ with k = 4 continuous latents and 8 bins that zeroes every neuron), and a per-me
 group of many binary members through whenever one passes by chance (noise neurons scored a
 corrected MIR of 0.77 on object-action). Its cost: within a group the comparison is with the sum of
 the members' biases, so a neuron selective for one of the 25 object bits survives only if its
-excess information exceeds ~112/P nats (0.03 at the sweeps' P = 4096; at P <= 512 every
+excess information exceeds ~112/P nats (0.03 at the experiments' P = 4096; at P <= 512 every
 object-selective neuron is zeroed, so small-P runs on object-action have no usable corrected MIR).
 The raw MIR has a cardinality-dependent
 floor: at P = 8192, 10 rate bins, noise neurons score ~0.89 with one 25-way plus two binary
@@ -880,95 +881,113 @@ member axis, which `train.member_history` removes before plotting). The monitor 
 `ValueError` for a missing key (the message names it), an empty history, columns of different length, or a
 different number of layers in different monitor calls.
 
-## sweep.py
+## exp.py
 
-A sweep is a grid over any `Config` fields, in one place so SLURM array jobs and local checks share a code path. The shared
-settings (sizes, optimiser, monitor, seeds, task parameters) are the base `Config`; `grid` lists the axes that vary. Layout under a
-sweep `ROOT`:
+An experiment is a batch of runs over varied `Config` fields, in one place so SLURM array jobs and local checks share a code path. The shared
+settings (sizes, optimiser, monitor, seeds, task parameters) are the base `Config`; `axes` lists the hyperparameters that vary. Layout under a
+experiment `ROOT`:
 
 ```
-ROOT/sweep.json                          # SweepConfig, written by `sweep init`
-ROOT/<task>/s{index:04d}_<label>/        # grid sweeps: one normal fct cache dir per setting, e.g. linear_teacher/s0001_L1_phitanh_rate_lambda1e-06_weight_lambda0.001
-ROOT/<task>/s.../setting.json            # {"index": 7, "grid_hash": "...", "axes": {"net.L": 2, ...}}, written by run_setting beside config.json
-ROOT/<task>/L{L}_{phi}_r{rate}/          # sweep.json without `grid` (the modularity grid): the original names, e.g. what_where/L3_relu_r0.001
+ROOT/exp.json                          # ExpConfig, written by `exp init`
+ROOT/<task>/s{index:04d}_<label>/        # experiments with axes: one normal fct cache dir per setting, e.g. linear_teacher/s0001_L1_phitanh_rate_lambda1e-06_weight_lambda0.001
+ROOT/<task>/s.../setting.json            # {"index": 7, "exp_hash": "...", "axes": {"net.L": 2, ...}}, written by run_setting beside config.json
+ROOT/<task>/L{L}_{phi}_r{rate}/          # exp.json without `axes` (the modularity experiment): the original names, e.g. what_where/L3_relu_r0.001
 ```
 
 The index makes a directory name unique (`:g` would print two close floats alike); the label (the last part of each axis path
 and its value, characters outside letters, digits and `._+-` replaced by `-`) is for people. The index is zero-padded to
-`INDEX_WIDTH = 4` digits so names sort in index order; `expand` refuses a grid of more than 10**4 settings. `setting.json` lets a
-notebook find a setting from its axis values (`find_setting_dir`) without recomputing the grid.
+`INDEX_WIDTH = 4` digits so names sort in index order; `expand` refuses an experiment of more than 10**4 settings. `setting.json` lets a
+notebook find a setting from its axis values (`find_setting_dir`) without recomputing the axes.
 
 ```python
-SWEEP_TASKS = ("linear_teacher", "object_action", "what_where"); LAYERS = (1, 3, 5); PHIS = ("tanh", "relu"); RATE_LAMBDAS = (0.0, 1e-3)
-MODULARITY_GRID = {"data.task": SWEEP_TASKS, "net.L": LAYERS, "net.phi": PHIS, "train.rate_lambda": RATE_LAMBDAS}   # used when sweep.json has no grid
-@dataclass(frozen=True) class Setting: index: int; axes: dict[axis, value] (grid order); task: str; relpath: Path
+EXP_TASKS = ("linear_teacher", "object_action", "what_where"); LAYERS = (1, 3, 5); PHIS = ("tanh", "relu"); RATE_LAMBDAS = (0.0, 1e-3)
+MODULARITY_EXP_AXES = {"data.task": EXP_TASKS, "net.L": LAYERS, "net.phi": PHIS, "train.rate_lambda": RATE_LAMBDAS}   # used when exp.json has no axes
+@dataclass(frozen=True) class Setting: index: int; axes: dict[axis, value] (axis order); task: str; relpath: Path
     # consumers read axes explicitly, e.g. setting.axes["net.L"]
-MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda"); SWEEP_OWNED_AXES: dict[axis, the sweep field to change instead]
-class SweepConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
+MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda"); EXP_OWNED_AXES: dict[axis, the experiment field to change instead]
+class ExpConfig(StrictModel)   # N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
-                             # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), grid: dict[str, list] | None = None
-    # Shared network and loss fields (library defaults, so a sweep without them builds the configs it always did): L, g, phi, weight_lambda,
+                             # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
+    # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, weight_lambda,
     # rate_lambda, optimizer, beta; an axis of the same name wins. spatial: SpatialConfig | None = None, the spatial weight prior of every setting
-    # (written to Config.spatial; training hashes change with it, grid_hash does not). A `spatial.<path>` axis varies a field of the section and
-    # is rejected at load ("set the sweep's spatial section first") when the sweep has none; `spatial` itself is a valid axis only while the
+    # (written to Config.spatial; training hashes change with it, exp_hash does not). A `spatial.<path>` axis varies a field of the section and
+    # is rejected at load ("set the experiment's spatial section first") when the experiment has none; `spatial` itself is a valid axis only while the
     # section is None (its values are whole dumps, or None). A dict- or list-valued axis value (or one whose text exceeds MAX_LABEL_VALUE = 24 characters) is labelled in directory names as `<axis>-<6 hex of the
     # sha256 of its sorted JSON>`, so names stay short; the solve stage raises SpatialPriorUnsupportedError per spatial setting
     # meanfield: the problem fields plus the `solver` group, library defaults (constants None: follow the network). It reaches every setting's
-    # Config.meanfield but never enters a training hash or a directory name, so a sweep.json without it (legacy) loads with the defaults and keeps both;
-    # its n_points must not exceed P, checked when a setting is solved (SweepError), not at load, so a train-only sweep with a small P still loads;
-    # it is read by the solve stage only (a meanfield.* path is also valid as a grid axis, as any Config field)
-    # grid: axis = dotted Config path (net.L, net.phi, train.rate_lambda, train.weight_lambda, data.task, ...), values = explicit lists; an axis
-    # overrides the base value (net.N over N, train.lr over lr, ...), except the fields the sweep owns, which are rejected: data.P, data.D_in,
+    # Config.meanfield but never enters a training hash or a directory name, so an exp.json without it (legacy) loads with the defaults and keeps both;
+    # its n_points must not exceed P, checked when a setting is solved (ExpError), not at load, so a train-only experiment with a small P still loads;
+    # it is read by the solve stage only (a meanfield.* path is also valid as an axis, as any Config field)
+    # axes: axis = dotted Config path (net.L, net.phi, train.rate_lambda, train.weight_lambda, data.task, ...), values = explicit lists; an axis
+    # overrides the base value (net.N over N, train.lr over lr, ...), except the fields the experiment owns, which are rejected: data.P, data.D_in,
     # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles (change the
-    # sweep field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
+    # experiment field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
     # build the same Config, so [0, 0.0] is a repeat), then every combination is built into a Config, so a bad axis name or value fails
-    # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the sweep's `weight_lambda` field (the TrainConfig default 2e-4 unless set) unless it is an axis
-def preset(name: str, n_lambda: int | None = None) -> SweepConfig   # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full" and "modularity": N=256, P=4096, 15000 epochs (placeholders to tune), the modularity grid;
-                                                                    # "lambda_grid": the sizes of "full" + lambda_grid(n_lambda); n_lambda is required there and rejected elsewhere; ValueError otherwise
-def spatial_tiny() -> SweepConfig                    # presets without lambda axes (FIXED_GRID_PRESETS; n_lambda is rejected): grid net.N [4, 8], P 16, linear teacher m 6 k 2, L 1, tanh, SGLD (beta 1e3, weight_lambda 0.2 = 2 beta x 1e-4), 6 epochs, CPU, spatial prior with grid embeddings, length scale 0.15, min_rel_eig 1e-2, meanfield.n_points 16
-def spatial_n_scan() -> SweepConfig                   # grid net.N [64, 128, 256, 512, 1024] (directories s000i_N<N>): P 164, m 64, k 2, L 1, tanh, g 1, weight_lambda 60 (under the lambda_w / (2 beta) convention; 3e-3 under the old lambda_w x form), rate_lambda 0, SGLD beta 1e4, lr 1e-2, 250000 epochs, float64, monitor every 5000 (8 bins, 5 shuffles), same spatial prior
-def spatial_grid() -> SweepConfig                    # grid net.phi [id, tanh, relu] x data.n_latents [2, 4] x spatial.hidden.kernel.length_scale [0.05, 0.1, 0.15, 0.2] (24 settings; the one hidden kernel is both K^1_post and K^2_pre with L = 1); input/output kernels 0.15; N 512, P 128, m 64, L 1, g 1, weight_lambda 20 (= 2 beta x 1e-3), rate_lambda 0, SGLD beta 1e4, lr 1e-2, 250000 epochs, float64, monitor every 5000; otherwise as spatial_n_scan; linear_teacher.n_latents is only the base value (the axis wins); caveat: min_rel_eig 1e-2 floors ~500 of 512 hidden eigenvalues at 1e-2 x lambda_max(K), so mean hidden diag(M^-1) = 1.62 / 2.26 / 2.90 / 3.54 for length 0.05 / 0.1 / 0.15 / 0.2: the length axis is confounded with prior strength
-def phase_transition() -> SweepConfig               # grid spatial.d [1, 2, 3, 4] x spatial.lambda_max [0.1, 0.5, 0.75, 0.9, 0.99] x net.B [8] (20 settings, d slowest; B is a one-value axis so no other sweep.json gains a field); phi id, L 1, weight_lambda 1 (the lambda_max rule), every population random-embedded (seed 0, shared by the ensemble members) with length scale 0.15, min_rel_eig 1e-2; otherwise as spatial_grid. Each kernel is rescaled to top eigenvalue lambda_max, so the per-weight prior variance shrinks with the population size (intended). SGLD at lr 1e-2: the check's quantity lr * c * stiffest (c = weight_lambda / (2 beta)) is lr * k / 2, k = 2 c r s the curvature of the stiffest prior mode, with stiffest = r s = 1 / (min_rel_eig lambda_max)^2 where the floor binds (4e4 at 0.5, 1e6 at 0.1; d = 4 is lower). It passes everywhere, but at lambda_max 0.1, d <= 3, lr * k = 1.0 on the stiffest modes, where Euler-Maruyama gives exactly 2x the target variance (target / (1 - lr k / 2)): the total prior power of U / V is inflated by about +13% / +3.6% / +0.8% at d = 1 / 2 / 3 and +0.2% at d = 4; every other lambda_max row is < 0.3% (the data term adds < 5e-4 to lr * k). Run length: the softest prior mode relaxes on tau ~ 2 beta lambda_max^2 / (lr weight_lambda) ~ 2e6 lambda_max^2 epochs (1e4 at 0.1, ~1e6 at 0.99), so at 250k epochs settings with lambda_max >= 0.5 are not fully stationary from the N(0, 1) init. This preset has no results reader or solve stage yet (the readers refuse B > 1 and need net.L, phi, rate_lambda)
-def lambda_grid(n_lambda) -> SweepConfig             # linear teacher; grid net.L [1,2], net.phi [tanh, relu], train.rate_lambda and train.weight_lambda both np.logspace(-6, 0, n_lambda): 4 * n_lambda**2 settings
-def save_sweep(sweep, root) / load_sweep(root) -> SweepConfig   # ROOT/sweep.json; load raises FileNotFoundError naming the path
-def expand(sweep) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given sweep.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow a grid in a fresh ROOT)
-def get_setting(sweep, index) -> Setting                 # SweepError (a ValueError) "index i is out of range; valid indices are 0..N-1"
+    # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the experiment's `weight_lambda` field (the TrainConfig default 2e-4 unless set) unless it is an axis
+def preset(name: str, n_lambda: int | None = None) -> ExpConfig   # "tiny": N=8, P=32, 6 epochs, CPU, seconds per setting (pipeline checks only); "full" and "modularity": N=256, P=4096, 15000 epochs (placeholders to tune), the modularity experiment;
+                                                                    # "lambda_exp": the sizes of "full" + lambda_exp(n_lambda); n_lambda is required there and rejected elsewhere; ValueError otherwise
+def spatial_tiny() -> ExpConfig                    # presets without lambda axes (FIXED_AXES_PRESETS; n_lambda is rejected): axes net.N [4, 8], P 16, linear teacher m 6 k 2, L 1, tanh, SGLD (beta 1e3, weight_lambda 0.2 = 2 beta x 1e-4), 6 epochs, CPU, spatial prior with grid embeddings, length scale 0.15, min_rel_eig 1e-2, meanfield.n_points 16
+def spatial_n_scan() -> ExpConfig                   # axes net.N [64, 128, 256, 512, 1024] (directories s000i_N<N>): P 164, m 64, k 2, L 1, tanh, g 1, weight_lambda 60 (under the lambda_w / (2 beta) convention; 3e-3 under the old lambda_w x form), rate_lambda 0, SGLD beta 1e4, lr 1e-2, 250000 epochs, float64, monitor every 5000 (8 bins, 5 shuffles), same spatial prior
+def spatial_exp() -> ExpConfig                    # axes net.phi [id, tanh, relu] x data.n_latents [2, 4] x spatial.hidden.kernel.length_scale [0.05, 0.1, 0.15, 0.2] (24 settings; the one hidden kernel is both K^1_post and K^2_pre with L = 1); input/output kernels 0.15; N 512, P 128, m 64, L 1, g 1, weight_lambda 20 (= 2 beta x 1e-3), rate_lambda 0, SGLD beta 1e4, lr 1e-2, 250000 epochs, float64, monitor every 5000; otherwise as spatial_n_scan; linear_teacher.n_latents is only the base value (the axis wins); caveat: min_rel_eig 1e-2 floors ~500 of 512 hidden eigenvalues at 1e-2 x lambda_max(K), so mean hidden diag(M^-1) = 1.62 / 2.26 / 2.90 / 3.54 for length 0.05 / 0.1 / 0.15 / 0.2: the length axis is confounded with prior strength
+def phase_transition() -> ExpConfig               # axes spatial.d [1, 2, 3, 4] x spatial.lambda_max [0.1, 0.5, 0.75, 0.9, 0.99] x net.B [8] (20 settings, d slowest; B is a one-value axis so no other exp.json gains a field); phi id, L 1, weight_lambda 1 (the lambda_max rule), every population random-embedded (seed 0, shared by the ensemble members) with length scale 0.15, min_rel_eig 1e-2; otherwise as spatial_exp. Each kernel is rescaled to top eigenvalue lambda_max, so the per-weight prior variance shrinks with the population size (intended). SGLD at lr 1e-2: the check's quantity lr * c * stiffest (c = weight_lambda / (2 beta)) is lr * k / 2, k = 2 c r s the curvature of the stiffest prior mode, with stiffest = r s = 1 / (min_rel_eig lambda_max)^2 where the floor binds (4e4 at 0.5, 1e6 at 0.1; d = 4 is lower). It passes everywhere, but at lambda_max 0.1, d <= 3, lr * k = 1.0 on the stiffest modes, where Euler-Maruyama gives exactly 2x the target variance (target / (1 - lr k / 2)): the total prior power of U / V is inflated by about +13% / +3.6% / +0.8% at d = 1 / 2 / 3 and +0.2% at d = 4; every other lambda_max row is < 0.3% (the data term adds < 5e-4 to lr * k). Run length: the softest prior mode relaxes on tau ~ 2 beta lambda_max^2 / (lr weight_lambda) ~ 2e6 lambda_max^2 epochs (1e4 at 0.1, ~1e6 at 0.99), so at 250k epochs settings with lambda_max >= 0.5 are not fully stationary from the N(0, 1) init. This preset has no results reader or solve stage yet (the readers refuse B > 1 and need net.L, phi, rate_lambda)
+def lambda_exp(n_lambda) -> ExpConfig             # linear teacher; axes net.L [1,2], net.phi [tanh, relu], train.rate_lambda and train.weight_lambda both np.logspace(-6, 0, n_lambda): 4 * n_lambda**2 settings
+def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json; load raises FileNotFoundError naming the path
+def expand(exp) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given exp.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow an experiment in a fresh ROOT)
+def get_setting(exp, index) -> Setting                 # ExpError (a ValueError) "index i is out of range; valid indices are 0..N-1"
 def setting_dir(root, setting) -> Path                   # ROOT / setting.relpath (see Layout)
-def data_config(sweep, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the sweep
-def setting_config(sweep, setting) -> Config             # base config for the setting's task (net seed = seeds.net, monitor_* from the sweep) with each axis value written over it
-def setting_status(root, sweep, setting, stage="train") -> "done" | "partial" | "missing" | "stale"   # stage "train": done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stage "solve": the same for meanfield/final.pt and the hash of data, net, train, meanfield (what run_meanfield writes); stale = a final.pt with another hash, or an unreadable one; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint). The stages are independent: a solve is stale when the solver or the training config changed, a trained net never when only the solver did
-def grid_hash(sweep) -> str                               # short hash of the built values of every axis (so [0, 1e-3] == [0.0, 1e-3]) plus the base task unless data.task is an axis; stored in setting.json
-def read_setting(directory, sweep) -> {"index", "grid_hash", "axes"}   # a setting directory's setting.json; SweepError naming the directory if it was written under another grid or has no grid hash
-def built_values(sweep) -> {axis: [values as the built Config holds them]}   # used by grid_hash and the directory labels, so a value has one spelling in both
-def find_setting_dir(root, sweep, values) -> Path         # the one run setting of `sweep` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
-                                                          # a subset of the axes is enough if unambiguous); only the sweep's own directories are considered; LookupError if none, several, or an unknown axis
-def has_settings(root) -> bool                            # ROOT already holds a setting directory; `sweep init` refuses to write a new sweep.json there without --force
-def run_setting(sweep, index, root, log=print, stage="train") -> None
-    # first validates/writes config.json and setting.json (SweepError if an existing one differs in data, net, train or the like: the sweep changed
-    # under existing artefacts; this check comes BEFORE the done check, so a changed sweep raises even for a done setting; only the meanfield section
-    # may differ, and config.json is then updated to the sweep's, so `python -m fct solve DIR` solves what the sweep does),
+def data_config(exp, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the experiment
+def setting_config(exp, setting) -> Config             # base config for the setting's task (net seed = seeds.net, monitor_* from the experiment) with each axis value written over it
+def setting_status(root, exp, setting, stage="train") -> "done" | "partial" | "missing" | "stale"   # stage "train": done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stage "solve": the same for meanfield/final.pt and the hash of data, net, train, meanfield (what run_meanfield writes); stale = a final.pt with another hash, or an unreadable one; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint). The stages are independent: a solve is stale when the solver or the training config changed, a trained net never when only the solver did
+def exp_hash(exp) -> str                               # short hash of the built values of every axis (so [0, 1e-3] == [0.0, 1e-3]) plus the base task unless data.task is an axis; stored in setting.json
+def read_setting(directory, exp) -> {"index", "exp_hash", "axes"}   # a setting directory's setting.json; ExpError naming the directory if it was written under another experiment or has no exp hash
+def built_values(exp) -> {axis: [values as the built Config holds them]}   # used by exp_hash and the directory labels, so a value has one spelling in both
+def find_setting_dir(root, exp, values) -> Path         # the one run setting of `exp` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
+                                                          # a subset of the axes is enough if unambiguous); only the experiment's own directories are considered; LookupError if none, several, or an unknown axis
+def has_settings(root) -> bool                            # ROOT already holds a setting directory; `exp init` refuses to write a new exp.json there without --force
+def run_setting(exp, index, root, log=print, stage="train") -> None
+    # first validates/writes config.json and setting.json (ExpError if an existing one differs in data, net, train or the like: the experiment changed
+    # under existing artefacts; this check comes BEFORE the done check, so a changed experiment raises even for a done setting; only the meanfield section
+    # may differ, and config.json is then updated to the experiment's, so `python -m fct solve DIR` solves what the experiment does),
     # StaleCacheError if the stage's final.pt is stale, returns at once if done (log "already done (<stage>)"), else get_dataset and
     #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_mir_monitor(dataset, cfg)); resumes a partial run exactly (see train.py)
     #   stage "solve": run_meanfield(cfg, dataset, net, dir, log) into DIR/meanfield/, net = the trained net if train/final.pt exists (history gets the
     #     net-comparison keys), else None (keys absent; "no trained net" is logged). Resumes from a solver checkpoint; the net-or-not choice is fixed
-    #     once a solve has started: a checkpoint written with the other choice raises SweepError (one line, naming the file; `sweep run --index` prints it
+    #     once a solve has started: a checkpoint written with the other choice raises ExpError (one line, naming the file; `exp run --index` prints it
     #     and exits 1), so train before solving, or delete meanfield/. A FINISHED solve that ran without the net is `stale` in the status once
     #     train/final.pt exists (its hash is unchanged; the stored net_Phi is None), and run_setting then deletes that final.pt and solves again
-    #     with the net, so a grid solved first and trained later ends up with the net comparison everywhere.
+    #     with the net, so an experiment solved first and trained later ends up with the net comparison everywhere.
     #     config.json is rewritten (atomically, save_config writes a .tmp sibling and renames it) BEFORE the stale check, so even a stale solve's
-    #     config.json already holds the sweep's current meanfield
+    #     config.json already holds the experiment's current meanfield
     #     An InadequateSamplerError (importance sampling below the ESS floor) propagates and leaves no final.pt
 ```
 
-CLI: `python -m fct sweep init ROOT --preset lambda_grid --n-lambda 8 [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`.
-`--set` overrides a shared entry by dotted key; `--axis PATH=[values]` replaces or adds a grid axis (JSON list; the modularity presets have no editable axes and reject it); `--set grid...` is rejected (use `--axis`). `sweep count|list|status|run --index i` all read the same `expand`, and `jobs/fct_sweep.sh` takes the array size
-from `sweep count`. `sweep status` and `sweep run` take `--stage train|solve` (default train): train the nets or solve the
-saddle points of the same initialised grid, locally or as an array job (`jobs/fct_solve.sh`); `list` and `count` do not depend on the stage.
-Solver settings are `meanfield` in sweep.json, set with `--set meanfield.n_points=50 --set meanfield.solver.n_outer=100 ...` at `sweep init`. `lrtune.py` and `notebooks/build_modularity.py` are written for the modularity grid (they read
+CLI: `python -m fct exp init ROOT --preset lambda_exp --n-lambda 8 [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`.
+`--set` overrides a shared entry by dotted key; `--axis PATH=[values]` replaces or adds an axis (JSON list; the modularity presets have no editable axes and reject it); `--set axes...` is rejected (use `--axis`). `exp count|list|status|run --index i` all read the same `expand`, and `jobs/fct_exp.sh` takes the array size
+from `exp count`. `exp status` and `exp run` take `--stage train|solve` (default train): train the nets or solve the
+saddle points of the same initialised experiment, locally or as an array job (`jobs/fct_solve.sh`); `list` and `count` do not depend on the stage.
+`exp migrate ROOT` (`fct/exp_migrate.py`, the only module that knows the legacy names) converts a folder that holds a legacy
+`sweep.json`: it becomes `exp.json` (key `grid` renamed `axes`, null or absent kept; a file with both keys is a `MigrationError`, an
+`ExpError` and so a ValueError) and every `setting.json` at the setting depth `SETTING_DIRS_GLOB` (never deeper, so a nested copy of an
+experiment is left alone) gets `grid_hash` renamed `exp_hash`, value kept; hashes and artefacts are untouched. The rename is cosmetic, so it
+keeps the old (in)consistency instead of judging it: a record left by an earlier experiment of the same folder (an `init --force` never
+deletes settings) is renamed too and reported as "kept from an earlier experiment", with ", `exp run` refuses it, as before" when its
+directory belongs to the current experiment under another hash. `plan_migration` reads and checks everything and writes nothing: the
+converted file must validate as `ExpConfig` (a legacy file that does not, say one carrying the removed `meanfield.readout`, is refused
+naming the field: the old code could not load it either, so the folder's results are stale under the current code), every
+setting.json must be readable JSON with exactly one of the two hash keys, and a record with the experiment's own hash must have the
+`index` and `axes` that the experiment gives its directory. `apply_plan` then converts the setting files, writes exp.json, and removes
+sweep.json last, each file by `<name>.tmp` and `os.replace`; a failed write (an `OSError`) leaves a folder that running the command
+again finishes. A folder with no setting files migrates. A sweep.json with no exp.json, or with an exp.json that is exactly its
+conversion, is an interrupted run: running the command again finishes it (setting files already converted are accepted whatever their
+`exp_hash`). It refuses, changing nothing, if exp.json exists without sweep.json ("already migrated"), if both exist and exp.json is not
+the conversion, if sweep.json is missing, or if any file is inconsistent. Nothing else should run the old code on the folder meanwhile (a
+checkout or SLURM job still on the old code would write `grid_hash` again). `load_exp` on a folder with sweep.json and no exp.json raises
+`UnmigratedExpError` naming `exp migrate`, so every command that loads the experiment (and `exp init`) stops with that message.
+Solver settings are `meanfield` in exp.json, set with `--set meanfield.n_points=50 --set meanfield.solver.n_outer=100 ...` at `exp init`. `lrtune.py` and `notebooks/build_modularity.py` are written for the modularity experiment (they read
 `setting.axes["net.L"]`, `["net.phi"]`, `["train.rate_lambda"]`); `report.py` needs those three axes too (see below).
 
-All settings share the seeds, so they differ only in the swept axes. The history of a finished setting has the `monitor_*` keys of
+All settings share the seeds, so they differ only in the varied axes. The history of a finished setting has the `monitor_*` keys of
 monitor.py. The monitor runs at epochs 0, k*monitor_int for every k with k*monitor_int < n_epochs, and n_epochs, so
 when n_epochs is not a multiple of monitor_int the last two entries are closer than monitor_int (n_epochs=7, monitor_int=2: 0, 2, 4, 6, 7).
 
@@ -980,7 +999,7 @@ axes line width 1.2), `LINE_WIDTH`, `MARKER_SIZE`, `ANNOTATION_SIZE` (heatmap ce
 `HEATMAP_WIDTH = FIG_WIDTH + 1` inches. Function bodies take text sizes from the rc parameters rather than hard-coding them.
 Heights stay in each `fig_*` and grow with the number of rows of panels. The legends of `plot_loss_curves` (right of the axis) and
 `plot_prediction_scatter` (below it) assume such a constrained-layout figure and may clip in a caller-supplied `ax`. The notebook
-sets `figure.dpi = 100` (about 1300 px wide; the executed notebook of the 36-setting sweep is ~14 MB and is not committed).
+sets `figure.dpi = 100` (about 1300 px wide; the executed notebook of the 36-setting experiment is ~14 MB and is not committed).
 
 ## report.py and notebooks/
 
@@ -990,16 +1009,16 @@ the rates, rank bins, plug-in MI, preference, MIR, dead neurons, the raw MIR and
 baseline and the corrected MIR, and how to read the plots and tables; it restates `fct/modularity.py`, and a test checks its
 numbers that have a source in the code (dead threshold `modularity.DEAD_TOL`, noise factor `modularity.NOISE_FACTOR`, the
 `TrainConfig` monitor defaults) are filled in from it, and tests recompute the quoted floor examples and check the `$`/`$$` equations are balanced), a summary cell per task, then a cell per setting, each selecting its setting by name with
-`find_result(RESULTS, task, {"net.L": L, "net.phi": phi, "train.rate_lambda": rate})`, so a reordered grid fails loudly instead of mislabelling), and
+`find_result(RESULTS, task, {"net.L": L, "net.phi": phi, "train.rate_lambda": rate})`, so reordered axes fail loudly instead of mislabelling), and
 `execute_notebook(nb, root)` runs a deep copy in a fresh kernel (no timing metadata, so equal runs give equal notebooks) after
 `with_root` has put `ROOT = '<root>'` into the tagged parameter cell; the source `nb` stays output-free. In the source the cell
-is `ROOT = None`, which falls back to `$FCT_SWEEP_ROOT`. `python notebooks/build_modularity.py ROOT` writes the executed
+is `ROOT = None`, which falls back to `$FCT_EXP_ROOT`. `python notebooks/build_modularity.py ROOT` writes the executed
 notebook to the git-ignored `tmp/modularity.ipynb` (it records the ROOT it was run on and its figures are large). Every code cell after setup is one `show(...)` call into `fct.report`,
 which carries all logic and tests. Only the source notebook (`--no-execute`, no outputs) is committed.
 
 ```python
 @dataclass SettingResult: setting; status ("done"|"partial"|"missing"|"stale"); directory (relative to ROOT); note; history, examples (ExampleOutputs), metrics, data_cfg, epoch, n_epochs
-    # the data fields are None unless done, or partial with a readable checkpoint; epoch = epochs completed (n_epochs for done), n_epochs = the sweep's total
+    # the data fields are None unless done, or partial with a readable checkpoint; epoch = epochs completed (n_epochs for done), n_epochs = the experiment's total
     # .provisional = status partial and history is not None (a running setting shown from its latest checkpoint); .progress = "epoch X of N" (ValueError if no data)
     # .mir_epoch = epoch of the last monitor call in the history: a checkpoint at epoch s never holds the monitor call of epoch s, so it lags `epoch`
     # note = why a partial setting has no data (dataset file missing, checkpoint unreadable or from another config)
@@ -1008,11 +1027,11 @@ which carries all logic and tests. Only the source notebook (`--no-execute`, no 
     # include provisional rows: use .finished_only() (provisional rows blanked) for any statistic. display_labels() add "* (MIR@m, ckpt e/N)"
     # to provisional rows (the MIR's epoch m is not the checkpoint's); row_status() gives draw.py's "provisional"
 
-def sweep_root_from_env() -> Path               # $FCT_SWEEP_ROOT; RuntimeError if unset
-def load_results(root) -> list[SettingResult]   # one entry per setting in grid order (36 for the modularity grid); FileNotFoundError if no sweep.json; ValueError if the grid lacks net.L, net.phi or train.rate_lambda
-    # (the report supports the modularity grid; a grid with those axes plus others, like lambda_grid, loads, and `setting_label` shows every axis so labels stay distinct)
+def exp_root_from_env() -> Path               # $FCT_EXP_ROOT; RuntimeError if unset
+def load_results(root) -> list[SettingResult]   # one entry per setting in index order (36 for the modularity experiment); FileNotFoundError if no exp.json; ValueError if the axes lack net.L, net.phi or train.rate_lambda
+    # (the report supports the modularity experiment; an experiment with those axes plus others, like lambda_exp, loads, and `setting_label` shows every axis so labels stay distinct)
     # read-only: nothing is generated, cached or written under ROOT (a running job may be writing to it); settings are read on the CPU,
-    # validated against the config rebuilt from sweep.json. done: from final.pt (StaleCacheError if written under another config).
+    # validated against the config rebuilt from exp.json. done: from final.pt (StaleCacheError if written under another config).
     # partial: from the latest checkpoint via train.load_latest_checkpoint -> the same data as a done setting (history exactly as
     # checkpointed, examples and metrics from the checkpointed weights) plus epoch/n_epochs, status stays "partial". The checkpoint
     # being replaced while read is retried once. A checkpoint that cannot be read, is from another config hash, or is inconsistent
@@ -1050,20 +1069,20 @@ repeated once after an OSError, e.g. a vanished file or a stale NFS handle durin
 
 A missing setting, or a partial one without usable data, renders as one bold line naming it, the reason and its directory (relative to ROOT); its row in
 the table and heatmap is labelled with the status. A running setting is drawn like a finished one but labelled "partial, epoch X of N" everywhere, its
-table and heatmap rows are marked provisional, and it never enters a summary statistic, so a provisional number cannot be read as a final one. Prediction metrics are on the whole training set (the sweep has no held-out data).
+table and heatmap rows are marked provisional, and it never enters a summary statistic, so a provisional number cannot be read as a final one. Prediction metrics are on the whole training set (the experiment has no held-out data).
 
 ## lrtune.py and lrplot.py (learning-rate tuning)
 
 A separate tool with its own entry point, `python -m fct.lrtune` (not a subcommand of `python -m fct`; folding it
-into `cli.py` is not planned for now). Every trial is a normal sweep: one ROOT per (lr, seed), `trial_root(base,
-lr, seed)` = `BASE/lr_<lr:g>_seed<seed>`, written with `sweep.run_setting`, so tuning uses the production path.
+into `cli.py` is not planned for now). Every trial is a normal experiment: one ROOT per (lr, seed), `trial_root(base,
+lr, seed)` = `BASE/lr_<lr:g>_seed<seed>`, written with `exp.run_setting`, so tuning uses the production path.
 
 ```python
 # result rows: dict with the keys of COLUMNS (also the CSV schema, docs/archive/lr_tuning_results.csv)
 COLUMNS = task, L, phi, rate_lambda, lr, seed, n_epochs, diverged, train_mse, heldout_mse, null_mse (held-out
           MSE of the zero net), loss (final regularised loss on the training data), max_spike, tail_drop,
           mir_corrected (final corrected MIR per layer, ';'-joined)
-evaluate_setting(root, sweep, setting, held_out_seed) -> Row   # read-only; FileNotFoundError if not done or no
+evaluate_setting(root, experiment, setting, held_out_seed) -> Row   # read-only; FileNotFoundError if not done or no
     # dataset cache; ValueError if the history lacks loss / monitor entries; held-out data from tasks.resample,
     # seed = training data seed + HELD_OUT_SEED_OFFSET
 loss_curve_stats(history) -> {diverged, max_spike, tail_drop}   # >= 2 logged points, loss > 0 else ValueError
@@ -1095,17 +1114,17 @@ python -m fct solve CACHE_DIR
 python -m fct plot CACHE_DIR [--which all|learning|representation|neurons|training|solver|kernels]   # result-dependent figures -> CACHE_DIR/figures/
 python -m fct plot-example CACHE_DIR                                 # result-independent figure
 
-python -m fct sweep init ROOT [--preset tiny|full] [--set n_epochs=100 ...] [--force]   # writes ROOT/sweep.json; --set takes dotted keys like `init`
-python -m fct sweep list ROOT      # "<index> <task>/L{L}_{phi}_r{rate}" per setting
-python -m fct sweep count ROOT     # 36
-python -m fct sweep status ROOT [--stage train|solve]   # "<index> done|partial|missing|stale <dir>" per setting, then "N done, N partial, N missing, N stale"
-python -m fct sweep run ROOT [--index i] [--stage train|solve]   # train (default) or solve setting i (a SLURM array task); without --index, all settings in order
+python -m fct exp init ROOT [--preset tiny|full] [--set n_epochs=100 ...] [--force]   # writes ROOT/exp.json; --set takes dotted keys like `init`
+python -m fct exp list ROOT      # "<index> <task>/L{L}_{phi}_r{rate}" per setting
+python -m fct exp count ROOT     # 36
+python -m fct exp status ROOT [--stage train|solve]   # "<index> done|partial|missing|stale <dir>" per setting, then "N done, N partial, N missing, N stale"
+python -m fct exp run ROOT [--index i] [--stage train|solve]   # train (default) or solve setting i (a SLURM array task); without --index, all settings in order
 ```
 
-The sweep subcommands exit 1 with one stderr line for a missing or invalid sweep.json, an out-of-range index, or a setting whose
-config.json differs from what sweep.json builds (`SweepError`); an error raised by training itself propagates with its traceback.
+The experiment subcommands exit 1 with one stderr line for a missing or invalid exp.json, an out-of-range index, or a setting whose
+config.json differs from what exp.json builds (`ExpError`); an error raised by training itself propagates with its traceback.
 `run` without `--index` continues past a failing setting, prints `error: setting i failed: <Type>: <message>` (and the traceback for
-anything but a `SweepError`), and exits 1 listing the failed indices. With `--index`, an `InadequateSamplerError` from a solve
+anything but a `ExpError`), and exits 1 listing the failed indices. With `--index`, an `InadequateSamplerError` from a solve
 (the importance sampler cannot represent the problem; see `meanfield.py`) is one stderr line and exit 1, with no final.pt written; in
 a run of all settings it is reported like any other failure and the remaining settings still run.
 
@@ -1114,30 +1133,30 @@ a run of all settings it is reported like any other failure and the remaining se
 `--set` takes dotted keys and JSON-ish values (`--set net.phi=tanh`,
 `--set data.cov=[[1,0],[0,1]]`); unknown keys fail loudly via pydantic.
 
-## jobs/fct_sweep.sh
+## jobs/fct_exp.sh
 
-SLURM array over the sweep settings; written for the PI to submit. Tests exercise `--submit` only against a recording fake `sbatch` on PATH; agents never run it.
+SLURM array over the experiment settings; written for the PI to submit. Tests exercise `--submit` only against a recording fake `sbatch` on PATH; agents never run it.
 
 ```
-bash jobs/fct_sweep.sh ROOT --submit [--index N|A:B]   # sbatch --array=0-35%4 (or =N, or =A-(B-1)%4), logs in <project>/tmp/logs/
-bash jobs/fct_sweep.sh ROOT --dry-run [--index N|A:B]  # print that sbatch command, run nothing
-bash jobs/fct_sweep.sh ROOT --list | --status      # `fct sweep list` / `fct sweep status`
+bash jobs/fct_exp.sh ROOT --submit [--index N|A:B]   # sbatch --array=0-35%4 (or =N, or =A-(B-1)%4), logs in <project>/tmp/logs/
+bash jobs/fct_exp.sh ROOT --dry-run [--index N|A:B]  # print that sbatch command, run nothing
+bash jobs/fct_exp.sh ROOT --list | --status      # `fct exp list` / `fct exp status`
 ```
 
-`ROOT` is the first argument or `$FCT_SWEEP_ROOT`; it must exist and hold a `sweep.json`. Array size comes from `fct sweep count`.
+`ROOT` is the first argument or `$FCT_EXP_ROOT`; it must exist and hold a `exp.json`. Array size comes from `fct exp count`.
 `FCT_MAX_CONCURRENT` (default 4) caps running tasks; `FCT_PYTHON` overrides `<project>/.venv/bin/python`. Each task runs
-`python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID --stage train` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
+`python -m fct exp run ROOT --index $SLURM_ARRAY_TASK_ID --stage train` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
 `--index` applies to `--submit`/`--dry-run` only: `N` is one setting, `A:B` the half-open range of settings A .. B-1 (like a Python
 slice; `0:10` is 0 to 9), both read as base 10; a range is capped by `FCT_MAX_CONCURRENT` like the full array; an empty range
-(A >= B) or a range past the sweep size (B > count) fails. A comma in the project or python path is rejected
+(A >= B) or a range past the experiment size (B > count) fails. A comma in the project or python path is rejected
 because `sbatch --export` is comma-delimited; a relative `FCT_PYTHON` is resolved against the caller's directory.
 `tests/test_slurm_script.py` puts a fake `sbatch` on PATH: non-submit actions must never call it; `--submit` is only exercised against it.
 
 `jobs/fct_solve.sh` is the same array job at the solve stage: a short script that sets `FCT_STAGE=solve`, `FCT_LOG_NAME=fct_solve`
-and `FCT_ENTRY` (the script `--submit` hands to sbatch) and execs `fct_sweep.sh`, so the two share every option, the
-fake-sbatch tests. Its `#SBATCH` header is a copy of `fct_sweep.sh`'s (job name `fct-solve`, one GPU per task), because sbatch reads
+and `FCT_ENTRY` (the script `--submit` hands to sbatch) and execs `fct_exp.sh`, so the two share every option, the
+fake-sbatch tests. Its `#SBATCH` header is a copy of `fct_exp.sh`'s (job name `fct-solve`, one GPU per task), because sbatch reads
 the header from the submitted file; a test checks that the two agree apart from `-J`. Each task runs
-`python -m fct sweep run ROOT --index $SLURM_ARRAY_TASK_ID --stage solve`; `--status` shows the solve stage; logs are
+`python -m fct exp run ROOT --index $SLURM_ARRAY_TASK_ID --stage solve`; `--status` shows the solve stage; logs are
 `tmp/logs/fct_solve_%A_%a.{out,err}`. Resubmitting is safe: a finished solve is skipped, a partial one resumes. Written and dry-run
 only, like the train script.
 
@@ -1187,7 +1206,7 @@ population: random embeddings differ between populations and seeds). Each `K` th
 prior `K^post (x) K^pre` has `lambda_max^2`. The floor and `penalty_matrix` act on the scaled `K` unchanged, and `Population.scale`
 records the factor applied (1.0 when unset). `lambda_max` absorbs the overall scale of the prior, so `Config` requires
 `train.weight_lambda == 1` and `SpatialConfig` requires every `kernel.amplitude == 1`; each error names its field. A `spatial.lambda_max`
-sweep axis works as any spatial axis (the sweep's `weight_lambda` must be 1). While unset, the field is left out of the section hash,
+experiment axis works as any spatial axis (the experiment's `weight_lambda` must be 1). While unset, the field is left out of the section hash,
 so every hash from before it existed is unchanged.
 
 ## Spatial weight prior in training
@@ -1220,29 +1239,29 @@ default, and what every `config.json` written before the field existed loads as)
 - Not covered: the initial weights are still iid `N(0, 1)` rather than drawn from the prior, so the prior term starts
   large for a wide kernel; the mean-field solver still assumes the L2 prior.
 
-## tuning.py, grid_report.py and the grid figures
+## tuning.py, exp_report.py and the phase-transition figures
 
-Sweep-independent helpers for the phase-transition notebook; all pure functions on plain inputs.
+Experiment-independent helpers for the phase-transition notebook; all pure functions on plain inputs.
 
 - `tuning.tuning_curves(rates (P,N), factors (P,K), n_bins) -> TuningCurves(mean, sem, centres, count)`: mean rate per neuron in the bins of each latent, other latents marginalised. The bins are exactly the MIR's (`modularity.factor_labels` per latent): a floating latent is rank-binned into `n_bins` (equal-count when its values are distinct; ties share a bin), an integer latent is categorical with one bin per level and its `centres` are the level values. Arrays are as wide as the largest latent's bin count; an empty or padded bin is NaN, as is the SEM of a bin with fewer than 2 samples. `factors` is one tensor, so a call is all-categorical (integer dtype) or all-float; integer factors cast to float are rank-binned with interior empty bins, so pass them as integers. `mean`/`sem` are `(N,K,B)`, `centres`/`count` `(K,B)`. The SEM uses sums of squares about each neuron's global mean so a large rate offset does not cancel it to 0.
 - `tuning.select_neurons(mir_per_neuron, n, order, seed)`: `order` in `random` (seeded), `mir_ascending`, `mir_descending`; `n` outside `1..N`, unknown order or NaN is an error.
 - `modularity.neuron_mir(r, K)`: per-neuron `(r - 1/K)/(1 - 1/K)` from `LayerMIR.r`; `mir` is its mean.
-- `grid_report.mir_grid(records: Iterable[MirRecord], lambda_r_values, lambda_w_values, n_layers) -> (n_layers, n_r, n_w)`, `MirRecord(lambda_r, lambda_w, layer, mir)` with 0-based integer layers; NaN where missing (a layer without records is a NaN plane). Duplicate cells, off-grid lambdas (matched to rtol 1e-9), layers outside `[0, n_layers)`, non-finite MIR, near-duplicate grid values and empty input raise.
+- `exp_report.mir_matrix(records: Iterable[MirRecord], lambda_r_values, lambda_w_values, n_layers) -> (n_layers, n_r, n_w)`, `MirRecord(lambda_r, lambda_w, layer, mir)` with 0-based integer layers; NaN where missing (a layer without records is a NaN plane). Duplicate cells, lambdas off the axis values (matched to rtol 1e-9), layers outside `[0, n_layers)`, non-finite MIR, near-duplicate grid values and empty input raise.
 - `draw` figures: see the draw.py block above. The lambda axes of `fig_mir_matrix` and `fig_mir_vs_ratio` must be positive (log scale).
 
-## grid_view.py and the phase-transition notebook
+## exp_view.py and the phase-transition notebook
 
-`fct/grid_view.py` wires a sweep ROOT to the helpers above; `notebooks/build_phase_transition.py` builds `phase_transition.ipynb` (source only; executed copies go to the ignored `tmp/`). It needs a sweep with the four axes `net.L`, `net.phi`, `train.rate_lambda`, `train.weight_lambda` (the `lambda_grid` preset); `report.load_results` supplies the results, so a partial setting is read from its latest checkpoint and is *provisional*.
+`fct/exp_view.py` wires an experiment ROOT to the helpers above; `notebooks/build_phase_transition.py` builds `phase_transition.ipynb` (source only; executed copies go to the ignored `tmp/`). It needs an experiment with the four axes `net.L`, `net.phi`, `train.rate_lambda`, `train.weight_lambda` (the `lambda_exp` preset); `report.load_results` supplies the results, so a partial setting is read from its latest checkpoint and is *provisional*.
 
-- Pure: `snap_to_grid(value, grid, log=False) -> Snapped(requested, value, exact)` (nearest grid value, the first of two equally near; `log=True` measures distance in log10 and needs everything positive). `axis_values(results)` gives each axis's values (numbers ascending, names in grid order). `choose_setting(results, L, phi, lambda_r, lambda_w) -> Choice(result, snapped)`: L snapped linearly, lambdas on a log scale, `phi` must match exactly (ValueError listing the activations); LookupError if the grid has more axes than these four. `snap_text(choice)` says what was selected and which values moved.
-- `grid_selection(results, depth, phi, kind) -> GridSelection(records, lambda_r_values, lambda_w_values, n_layers, provisional, n_settings)`: `MirRecord`s of the settings with that depth and activation, `kind` in `raw` / `corrected` (history keys `monitor_mir` / `monitor_mir_corrected`, last monitor call). The lambda values are the whole grid, so a setting with no MIR yet is a NaN cell in `mir_grid`; a partial setting with a monitor call is a record and listed in `provisional`; a done setting without monitor entries, or a history with the wrong number of layers, raises.
+- Pure: `snap_to_axis(value, candidates, log=False) -> Snapped(requested, value, exact)` (the nearest candidate, the first of two equally near; `log=True` measures distance in log10 and needs everything positive). `axis_values(results)` gives each axis's values (numbers ascending, names in index order). `choose_setting(results, L, phi, lambda_r, lambda_w) -> Choice(result, snapped)`: L snapped linearly, lambdas on a log scale, `phi` must match exactly (ValueError listing the activations); LookupError if the experiment has more axes than these four. `snap_text(choice)` says what was selected and which values moved.
+- `exp_selection(results, depth, phi, kind) -> ExpSelection(records, lambda_r_values, lambda_w_values, n_layers, provisional, n_settings)`: `MirRecord`s of the settings with that depth and activation, `kind` in `raw` / `corrected` (history keys `monitor_mir` / `monitor_mir_corrected`, last monitor call). The lambda values are all the axis values, so a setting with no MIR yet is a NaN cell in `mir_matrix`; a partial setting with a monitor call is a record and listed in `provisional`; a done setting without monitor entries, or a history with the wrong number of layers, raises.
 - `layer_rates(net, x, layer)`: phi(H) of one hidden layer (the rates the MIR is computed on, not H). `factor_matrix(factors)`: (P, K) latents, ValueError for a mix of integer and floating ones. `neuron_mir_values(rates, factors, groups, n_bins, kind, n_shuffles, seed)`: per-neuron MIR (`modularity.neuron_mir`), whose mean is the layer MIR the monitor records (with the same bins, shuffles and seed). `tuning_view(net, dataset, layer, n_bins, kind, n_shuffles, seed) -> TuningView(curves, neuron_mir, member_mi, raw_mi, null_mi, latent_names)`.
 - I/O: `load_setting_data(root, result) -> SettingData(net, dataset, cfg, epoch)` (`epoch` of the checkpoint actually read, used in the provisional label): final.pt for a done setting, the latest checkpoint for a partial one, ValueError for one with no data; CPU, nothing written.
-- Items for a notebook cell (a list of markdown strings and figures for `report.show`): `tuning_items(root, choice, layer, n_neurons, order, seed, kind)` (0-based `layer`; a setting without data gives one message and no figure), `matrix_items(results, depth, phi, kind)` (`draw.fig_mir_matrix`), `ratio_items(results, depth, phi, kind)` (`draw.fig_mir_vs_ratio`; lambda ratio from the grid values as they are). Figures from a provisional setting carry "provisional" in their title; with no MIR in any network yet the matrix and scatter items are one message.
+- Items for a notebook cell (a list of markdown strings and figures for `report.show`): `tuning_items(root, choice, layer, n_neurons, order, seed, kind)` (0-based `layer`; a setting without data gives one message and no figure), `matrix_items(results, depth, phi, kind)` (`draw.fig_mir_matrix`), `ratio_items(results, depth, phi, kind)` (`draw.fig_mir_vs_ratio`; lambda ratio from the axis values as they are). Figures from a provisional setting carry "provisional" in their title; with no MIR in any network yet the matrix and scatter items are one message.
 
 Notebook cells, in order: parameter cell (`ROOT`), setup (loads `RESULTS`), selector (`L`, `PHI`, `LAMBDA_R`, `LAMBDA_W`, `MIR_KIND`), the one-setting plot suite (`report.setting_items`: loss curves, example outputs, MIR over training), tuning (`N_PLOT_NEURONS`, `PLOT_LAYER` counted from 1, `NEURON_ORDER`, `NEURON_SEED`), the matrix and the scatter (`GLOBAL_L`, `GLOBAL_PHI`, by default the chosen setting's). Tuning curves use the rates phi(H), not H.
 
-Limits: the viewer needs positive lambdas. A grid containing lambda = 0 cannot be snapped on a log scale (`snap_to_grid` raises) and the figures use log axes. A request outside the grid snaps to the nearest endpoint, and the only signal is the "snapped to" line of `snap_text`. The global prose counts settings with no MIR yet apart from stale (other config) or unreadable ones, which it names with their lambdas and reason, and lists the provisional cells by their lambdas. `GridSelection.unusable` holds the latter.
+Limits: the viewer needs positive lambdas. Axes containing lambda = 0 cannot be snapped on a log scale (`snap_to_axis` raises) and the figures use log axes. A request outside the axis values snaps to the nearest endpoint, and the only signal is the "snapped to" line of `snap_text`. The global prose counts settings with no MIR yet apart from stale (other config) or unreadable ones, which it names with their lambdas and reason, and lists the provisional cells by their lambdas. `ExpSelection.unusable` holds the latter.
 
 ## exemplar.py and the exemplar notebook
 
@@ -1260,29 +1279,29 @@ Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD
 
 ## spatial_view.py and the spatial-prior notebook
 
-`notebooks/build_spatial.py` builds `spatial.ipynb` (source only; an executed copy goes to the ignored `tmp/`): one linear-teacher run under the spatial weight prior, trained through the normal cache, with the tuning of every neuron laid out by position. The library computes and the notebook draws: `fct/spatial_view.py` has the config, the run and the layout helpers (no plotting), `fct.spatial` the kernels and penalty matrices, `fct.grid_view.tuning_view` the tuning curves and per-neuron MIR, `fct.analyse` the example outputs. Every figure is drawn by a plotting function written out in full (plain matplotlib) in the code cell that shows it, and each such cell is preceded by a markdown cell defining the plotted quantity with an equation; the notebook does not import `fct.draw`. So the figure code exists once, in the notebook, where the reader sees it; its tests (`tests/test_build_spatial.py`) run those functions on synthetic inputs by executing the imports and function definitions of the generated cells. A new figure is one more markdown + code pair in `build_notebook`: settings, then the plotting function, then the call and `plt.show()`.
+`notebooks/build_spatial.py` builds `spatial.ipynb` (source only; an executed copy goes to the ignored `tmp/`): one linear-teacher run under the spatial weight prior, trained through the normal cache, with the tuning of every neuron laid out by position. The library computes and the notebook draws: `fct/spatial_view.py` has the config, the run and the layout helpers (no plotting), `fct.spatial` the kernels and penalty matrices, `fct.exp_view.tuning_view` the tuning curves and per-neuron MIR, `fct.analyse` the example outputs. Every figure is drawn by a plotting function written out in full (plain matplotlib) in the code cell that shows it, and each such cell is preceded by a markdown cell defining the plotted quantity with an equation; the notebook does not import `fct.draw`. So the figure code exists once, in the notebook, where the reader sees it; its tests (`tests/test_build_spatial.py`) run those functions on synthetic inputs by executing the imports and function definitions of the generated cells. A new figure is one more markdown + code pair in `build_notebook`: settings, then the plotting function, then the call and `plt.show()`.
 
 - Config and run: `population_spec(kind, length_scale, amplitude=1, shape=None, seed=0) -> PopulationSpec`; `make_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed, spatial, device) -> Config` (task `linear_teacher`, `D_in = m`, `n_latents = k`; `log_int = n_epochs // 50`, `save_int = n_epochs // 4`); `layer_spaces(cfg)` (the L + 1 `LayerSpace`s, `n_out = D_in`); `cache_dir_for(cfg, root) = root / "spatial_<section_hash(data, net, train)>"` (the hash includes the spatial section, so any change of setting is a new directory); `train_run(cfg, root, log) -> TrainRun(cache_dir, dataset, net, history)` writes `config.json`, loads or generates the dataset and calls `train_from_config`, so a finished run is loaded and an interrupted one resumes; `cache_root_from_env()` reads `$FCT_CACHE_ROOT`.
 - Layout (pure): `position_order(positions)` argsort around a ring (d = 1 only); `order_weights(W, pos_post, pos_pre) -> OrderedWeights(W, post_order, pre_order)` (rows by post position, columns by pre position; W is (post, pre), so `MLP.U` is (hidden, input)); `panel_grid(positions, n_cols) -> PanelGrid(n_rows, n_cols, cells)` with `cells[u] = (row, col)`: ring order along wrapped rows of `n_cols` for d = 1, the unit's lattice cell for d = 2 (column from x, row from y with y up; positions that do not form a full lattice, such as a random 2-D embedding, raise), d > 2 raises. `empirical_kernels(W) = (W W^T / n_pre, W^T W / n_post)`; `ordered_kernel_comparison(space, W) -> KernelComparison` has the prior and empirical kernels of one layer indexed in the same ring order.
-- Figures, each with its plotting function defined in its cell: `plot_layer_prior(space)` per weight layer (K_pre, K_post, every K_ij against torus distance with the profile `wrapped_gaussian_profile`, unit positions; d <= 2), `plot_loss_curves(history, title)` (loss and raw terms, log y), `plot_example_outputs(outputs, title)` (true and predicted output vectors and the pooled R^2 scatter), `plot_kernel_comparison(comparison, space)` (prior K_post / K_pre beside U U^T / m and U^T U / N, ring-sorted; d = 1), `plot_weights_by_position(W, space)` (U sorted by position; d = 1), `plot_tuning_by_position(view, positions, n_cols, bar_width)` (`view` a `TuningView`; bars drawn by the unlisted helper `_draw_information_bars`) (a curve panel and an information bar panel per neuron, placed by `panel_grid`, one curve and one bar per latent, from `grid_view.tuning_view`, so tuning and MIR are computed as in the phase-transition notebook). The kernels shown are weight-prior and weight second-moment kernels over units, not the mean-field Phi over samples of `meanfield.py` (the spatially indexed Phi is the next bullet); the markdown says so.
+- Figures, each with its plotting function defined in its cell: `plot_layer_prior(space)` per weight layer (K_pre, K_post, every K_ij against torus distance with the profile `wrapped_gaussian_profile`, unit positions; d <= 2), `plot_loss_curves(history, title)` (loss and raw terms, log y), `plot_example_outputs(outputs, title)` (true and predicted output vectors and the pooled R^2 scatter), `plot_kernel_comparison(comparison, space)` (prior K_post / K_pre beside U U^T / m and U^T U / N, ring-sorted; d = 1), `plot_weights_by_position(W, space)` (U sorted by position; d = 1), `plot_tuning_by_position(view, positions, n_cols, bar_width)` (`view` a `TuningView`; bars drawn by the unlisted helper `_draw_information_bars`) (a curve panel and an information bar panel per neuron, placed by `panel_grid`, one curve and one bar per latent, from `exp_view.tuning_view`, so tuning and MIR are computed as in the phase-transition notebook). The kernels shown are weight-prior and weight second-moment kernels over units, not the mean-field Phi over samples of `meanfield.py` (the spatially indexed Phi is the next bullet); the markdown says so.
 - Spatially indexed kernels (the paper's eq. kernel-def under the factorised prior): hidden layer l (0-based) is the pre population of `SPACES[l + 1]`, so K^pre = `SPACES[l + 1].pre.K` and K^post = `SPACES[l + 1].post.K` (the next hidden layer, or the output for the last one); psi is `meanfield.readout_activities` (phi(h) on every layer, the paper's eq. kernel-def), computed on the training device and moved to the CPU in float64 where the K live. Helpers defined in the cells and tested: `data_kernels(H, phi, spaces) -> (L, P, P)` and `layer_kernel_pairs(A, spaces, layer, trials) -> (post population, (S, S, n, n) blocks)`. Figures: `plot_data_kernels(A, order, sorted_by)` (one panel per hidden layer, A^(l) (P, P) sorted by `sample_order` on the latent `PHI_SORT_LATENT`, own symmetric scale, title with psi and tr A / P), `plot_trial_latents(factors, trials)` (bars of z_{f mu} of the `PHI_TRIALS` samples `spread_trials(order, S)` picks at evenly spaced ranks of the sorted order), and per hidden layer `plot_spatial_kernel_pairs(pairs, trials, unit_order, title)` (the S x S grid of (n_post, n_post) blocks Phi^{mu nu}_ij, units in `position_order` for d = 1 and index order otherwise, one symmetric colour scale for the grid, an all-zero grid shown on -1..1). The activities psi are those of the held-out test set (`fct.data.get_latent_lattice_dataset`, the 3^k lattice points, so A^(l) is (3^k, 3^k)): the cell's `TEST_DATASET` is made in the train cell, and `sample_order`, the trial picks and the pair grids all read it; the example outputs are drawn from it too: `plot_example_outputs(outputs, title, everything=None)` shows `N_EXAMPLES` test points as panels and, in the scatter, every entry of all 3^k test points with their pooled R^2 (`everything`; the shown examples only if omitted). `plot_data_kernels(A, order, sorted_by, B=None)` draws `fct.spatial.latent_kernel(factors)` = B = Z Z^T / k (P, P) first when given, in the same sample order, so each A^(l) is read against the kernel of a layer linear in the latents. The input kernel Phi^(0) is not drawn.
 - Notebook cells: task and network (the `parameters`-tagged cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `N`, `L`, `PHI`, `G`, seeds, `PRIOR_COEFF`, `RATE_LAMBDA`, `DEVICE`), training (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup (imports), spatial (`D`, `BOX`, `MIN_REL_EIG`, `INPUT`, `HIDDEN`, `OUTPUT`), the eigenvalue-floor and step-size tables, the prior kernels, train, loss curves, example outputs (`N_EXAMPLES`), first-layer kernels, first-layer weights, the data kernels A (`PHI_SORT_LATENT`), the chosen trials (`PHI_TRIALS`), the Phi grids, tuning (`N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). `build_spatial.set_parameters(nb, values)` rewrites the one-line `NAME = value` assignments (a name not assigned exactly once raises); `execute_notebook(nb, cache_root, overrides)` runs a copy with them set, and the CLI takes them as `--set NAME=literal`.
 - Default sizes: 16 hidden units on a ring, 12 inputs, kernel length scale 0.15, `MIN_REL_EIG = 1e-2`, `LR = 1e-2`, `PRIOR_COEFF = 3e-3`, the coefficient of the penalty in the loss; the config cell derives `weight_lambda = 2 * PRIOR_COEFF * beta (beta = 1 for Adam)`, so both optimisers train the same loss). SGLD is rejected unless `lr * weight_lambda / (2 beta) * lambda_max(M_l) < 1` for every layer, with `lambda_max(M_l) = lambda_max(M_post) lambda_max(M_pre)` and `lambda_max(M^p) = 1 / (min_rel_eig * lambda_max(K^p))` (here about 368, so the product is about 0.011), and the library default floor of 1e-6 starts even Adam with a prior term of order 1e9; both optimisers run 2000 epochs in a few seconds on a CPU. SGLD fits the teacher less closely than Adam in the same number of epochs (executed: final train mse 0.198 under SGLD, 0.124 under Adam).
 - Limits: kernels and tuning panels cover d <= 2; the weight image and the ring-sorted empirical kernels need d = 1. A hidden-layer panel per neuron gets large for N in the hundreds (the figure height grows with the rows).
 
-## spatial_grid.py and the spatial-grid notebook
+## spatial_exp.py and the spatial-experiment notebook
 
-`notebooks/build_spatial_grid.py` builds `spatial_grid.ipynb` (source only; an executed copy goes to the ignored `tmp/`): every figure of the spatial notebook for ONE setting of an already-run spatial sweep, instead of a net the notebook trains itself. Its cells are `build_spatial.py`'s, imported as module constants so the two notebooks cannot drift; only the parameters, the setup, the grid listing and the loader are its own.
+`notebooks/build_spatial_exp.py` builds `spatial_exp.ipynb` (source only; an executed copy goes to the ignored `tmp/`): every figure of the spatial notebook for ONE setting of an already-run spatial experiment, instead of a net the notebook trains itself. Its cells are `build_spatial.py`'s, imported as module constants so the two notebooks cannot drift; only the parameters, the setup, the settings listing and the loader are its own.
 
-- Parameters (the `parameters`-tagged cell): `ROOT` (the sweep ROOT, None reads `$FCT_SWEEP_ROOT`), `SETTING` (axis values of the setting, e.g. `{"net.N": 256}`, a subset of the grid's axes that picks one setting), `DEVICE`. The other `--set` parameters are the ones the shared cells assign (`PHI_SORT_LATENT`, `PHI_TRIALS`, `N_EXAMPLES`, `N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). The sweep must have a spatial section on a linear teacher (`layer_spaces` raises otherwise).
-- `fct.spatial_grid` (I/O + wiring, no plotting): `select_setting(root, values, device="cpu") -> GridSetting(setting, directory, cfg, status)` finds the directory through `fct.sweep.find_setting_dir` (values compared as `same_value`, so `8.0` finds `8`); the match is computed over the whole grid, so values or axes outside it, or matching several settings (run or not), raise `LookupError`, and a setting of the grid that was never run comes back with status `"missing"`; a run setting's directory is confirmed by `find_setting_dir`. `settings_table` shares its (index, setting, status) rows with `sweep status` (`fct.sweep.setting_statuses`). The device override is validated by `Config`. `settings_table(root)` is the markdown grid (index, every axis, `setting_status`); `load_grid_run(chosen) -> (TrainRun, test Dataset)` loads the trained net, history and training set and builds the 3^k test set, and raises `ValueError` unless the status is `"done"`; the loader sets `PRIOR_COEFF = fct.train.prior_coefficient(cfg.train)` (and `OPTIMIZER`, `BETA`, `LR`, `TRAIN_SEED`) from the setting's config for the shared cells.
+- Parameters (the `parameters`-tagged cell): `ROOT` (the experiment ROOT, None reads `$FCT_EXP_ROOT`), `SETTING` (axis values of the setting, e.g. `{"net.N": 256}`, a subset of the experiment's axes that picks one setting), `DEVICE`. The other `--set` parameters are the ones the shared cells assign (`PHI_SORT_LATENT`, `PHI_TRIALS`, `N_EXAMPLES`, `N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). The experiment must have a spatial section on a linear teacher (`layer_spaces` raises otherwise).
+- `fct.spatial_exp` (I/O + wiring, no plotting): `select_setting(root, values, device="cpu") -> ExpSetting(setting, directory, cfg, status)` finds the directory through `fct.exp.find_setting_dir` (values compared as `same_value`, so `8.0` finds `8`); the match is computed over the whole experiment, so values or axes outside it, or matching several settings (run or not), raise `LookupError`, and a setting of the experiment that was never run comes back with status `"missing"`; a run setting's directory is confirmed by `find_setting_dir`. `settings_table` shares its (index, setting, status) rows with `exp status` (`fct.exp.setting_statuses`). The device override is validated by `Config`. `settings_table(root)` is the markdown table (index, every axis, `setting_status`); `load_exp_run(chosen) -> (TrainRun, test Dataset)` loads the trained net, history and training set and builds the 3^k test set, and raises `ValueError` unless the status is `"done"`; the loader sets `PRIOR_COEFF = fct.train.prior_coefficient(cfg.train)` (and `OPTIMIZER`, `BETA`, `LR`, `TRAIN_SEED`) from the setting's config for the shared cells.
 - What is drawn from what: the Phi cells (data kernels A^(l) and the latent kernel B, the trial latents, the pair grids) and the example outputs (with R^2 over all 3^k test points) from the test set; the loss curves from the training history; weights, first-layer kernels, tuning and overlaps from the net and the training samples, as in the spatial notebook. The prior kernels and the floor tables need only the config, so they are drawn for any setting of the grid.
-- A setting that is not `"done"` (missing, partial or stale) is reported in the loader cell (`NOT_TRAINED`), and every cell that needs the run keeps its plotting function at the top level and runs the rest under `if TRAINED:` (else it repeats the note), via `build_spatial_grid.when_trained`. So a typo fails and an untrained setting reports.
+- A setting that is not `"done"` (missing, partial or stale) is reported in the loader cell (`NOT_TRAINED`), and every cell that needs the run keeps its plotting function at the top level and runs the rest under `if TRAINED:` (else it repeats the note), via `build_spatial_exp.when_trained`. So a typo fails and an untrained setting reports.
 - The net is loaded on `DEVICE` (default CPU); cells bring device tensors to the host through `.detach().cpu()`.
 
-## phase_view.py (the phase_transition sweep, as arrays)
+## phase_view.py (the phase_transition experiment, as arrays)
 
-The computation layer of the phase-transition notebook: one setting of a `phase_transition` sweep (an ensemble of B > 1 networks sharing their random embeddings) as the arrays its figures draw. No plotting; only `load_phase_run` reads disk.
+The computation layer of the phase-transition notebook: one setting of a `phase_transition` experiment (an ensemble of B > 1 networks sharing their random embeddings) as the arrays its figures draw. No plotting; only `load_phase_run` reads disk.
 
 - `load_phase_run(root, values, device="cpu") -> PhaseRun(setting, net, history, epoch, spaces, dataset)`: `select_setting` plus the weights of a done setting (`load_trained`) or the latest checkpoint of a partial one (`load_latest_checkpoint`, `epoch` = epochs reached); a missing or stale setting has `net = history = None`, `epoch = 0`, and its training set is generated in memory (nothing is written into a setting never run). `spaces` come from the config alone. `ValueError` for `net.B < 2`.
 - `unit_order(positions, sort_dim)`: stable argsort of the units by one coordinate; `ValueError` unless `0 <= sort_dim < d`.
@@ -1292,16 +1311,16 @@ The computation layer of the phase-transition notebook: one setting of a `phase_
 - `member_view(net, lattice, test, spaces, n_bins, kind, n_shuffles, seed) -> MemberView(A, info_overlap, rate_overlap, weight_kernels)` for one `MLP`: the notebook's data kernels A^(l) (`spatial_view.data_kernels`, on the lattice set), `information_overlap` and `rate_overlap` of `tuning_view` (on the random test set) and `empirical_kernels` of each weight in (post, pre) orientation. `ensemble_views(net, ...)` maps it over `net.member(b)` with shuffle seed `seed + b`; `average_views` takes the elementwise mean in unit-index space (members share the embedding), after which the units are ordered for display. The averaged overlap is the mean over members of each member's own overlap matrix (a second moment over members; for the corrected MIR the per-member clamping at zero biases it upward), not the overlap of the mean tuning. `random_test_set` raises unless the training set is exactly what `data_cfg` regenerates (compared in memory, so P, D_in, n_latents, latent range and seed all count). `FloorReport.floor` records min_rel_eig times the top eigenvalue of K, the floor the penalty factors report. `load_phase_run` is read-only: a done setting whose dataset file is missing gets its training set generated in memory.
 - `ensemble_example_outputs(net, dataset, indices) -> EnsembleExamples`: `y_pred` is (B, n_examples, D_out), one colour per member; `y_true` and `x` are the dataset rows.
 
-## phase_transition_grid.ipynb (the phase_transition sweep, drawn)
+## phase_transition_exp.ipynb (the phase_transition experiment, drawn)
 
-`notebooks/build_phase_transition_grid.py` builds `phase_transition_grid.ipynb` (source only; executed copies go to the ignored `tmp/`): the figures of `spatial_grid.ipynb` for one setting of a `phase_transition` sweep, over the `fct.phase_view` arrays. Parameters: `ROOT`, `SETTING`, `MEMBER`, `SORT_DIM`, `P_TEST`, `N_EIG`, `N_NEURONS`, `DEVICE` (plus `N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`, `N_EXAMPLES`, `PHI_SORT_LATENT`). The data-kernel figure's functions (`sample_order`, `plot_data_kernels`) and the information-bar helper of the tuning figure are taken verbatim from `build_spatial.py` cells (`function_source`); the other plotting functions are the notebook's own.
+`notebooks/build_phase_transition_exp.py` builds `phase_transition_exp.ipynb` (source only; executed copies go to the ignored `tmp/`): the figures of `spatial_exp.ipynb` for one setting of a `phase_transition` experiment, over the `fct.phase_view` arrays. Parameters: `ROOT`, `SETTING`, `MEMBER`, `SORT_DIM`, `P_TEST`, `N_EIG`, `N_NEURONS`, `DEVICE` (plus `N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`, `N_EXAMPLES`, `PHI_SORT_LATENT`). The data-kernel figure's functions (`sample_order`, `plot_data_kernels`) and the information-bar helper of the tuning figure are taken verbatim from `build_spatial.py` cells (`function_source`); the other plotting functions are the notebook's own.
 
 - The loader validates `MEMBER` (0..B-1) and builds a `unit_order` for every population from `SORT_DIM` before any figure, so a bad `SORT_DIM` raises (`sort_dim must lie in ...`) even for a setting never run. Every position-sorted view uses these orders; there is no `position_order`, since for d > 1 a coordinate is not a ring position.
-- A setting with weights (`done`, or `partial` from its latest checkpoint, labelled provisional) is trained; otherwise the cells needing the net are guarded by `when_trained` and only the prior is drawn (matrices and spectra). This differs from `spatial_grid`, which treats `partial` as untrained.
+- A setting with weights (`done`, or `partial` from its latest checkpoint, labelled provisional) is trained; otherwise the cells needing the net are guarded by `when_trained` and only the prior is drawn (matrices and spectra). This differs from `spatial_exp`, which treats `partial` as untrained.
 - The lattice (`latent_lattice_dataset`, pure) feeds A and the example outputs; the random test set (`random_test_set(..., P_TEST)`) feeds `ensemble_views` and the tuning figure, and member b's tuning uses shuffle seed `seed + b`, as in `ensemble_views`.
 - Prior figures: per weight layer, a 2 x 3 matrix figure (pre/post rows; covariance, effective covariance, penalty columns) and a 2 x 2 spectra figure (covariance and effective covariance largest-first with the floor line; penalty smallest-first with its ceiling line). Non-positive round-off eigenvalues of K are not drawn on the log axis.
 - Example outputs raise if B exceeds the colours of matplotlib's default cycle (10).
 - Sorted unit-by-unit matrices (prior factors, weight kernels) go through one helper, `draw_sorted_matrix`: it checks the order is a permutation of the units, draws antialiased on a diverging scale centred at 0, and ticks both axes with the units' coordinate along `SORT_DIM`; `plot_overlaps` uses the same checks and ticks. Colour scales: covariance and effective covariance share one per row, the penalty has its own; in the kernel figure the prior has its own and member and average share one per row; the member and average overlap figures share their scales.
 - Every figure title of a `partial` setting ends with `[PROVISIONAL: checkpoint at epoch E of N]` (`STATUS_TAG`).
 - The example panels draw `N_OUTPUT_DIMS` evenly spaced output dimensions (the R^2 scatter uses all); `NEURON_PICK` is `"first"` or `"spread"`. The member's tuning view is recomputed in the notebook (same seed as `ensemble_views` gives that member), since `MemberView` keeps only the overlaps.
-- `tests/test_build_phase_transition_grid.py` runs the notebook's cells in process (`Session`) and compares the arrays in the drawn figures with `phase_view` computed independently (member vs average, per-population orders, the tuning member), on a sweep where coordinates 0 and 1 and the input and output populations give different orders.
+- `tests/test_build_phase_transition_exp.py` runs the notebook's cells in process (`Session`) and compares the arrays in the drawn figures with `phase_view` computed independently (member vs average, per-population orders, the tuning member), on an experiment where coordinates 0 and 1 and the input and output populations give different orders.

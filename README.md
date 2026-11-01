@@ -31,16 +31,16 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `model.py`, `train.py` | MLP and the training loop with checkpoint / resume and an optional monitor hook |
 | `modularity.py` | rank binning, plug-in mutual information, preference ratio, MIR, dead neurons, shuffle baseline and bias correction (pure functions) |
 | `monitor.py` | `make_mir_monitor`: the training hook that records per-layer MIR during training |
-| `sweep.py` | a grid of runs over any `Config` fields: `SweepConfig`, `expand`, `run_setting`, `setting_status`, presets |
-| `report.py` | read-only loading of a sweep and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
-| `grid_view.py` | from a sweep ROOT to the figures of a `lambda_grid` sweep (the phase-transition notebook): snapping a setting to the grid, MIR records of one depth and activation, tuning curves of one layer |
+| `exp.py` | an experiment, a batch of runs over varied `Config` fields (its axes): `ExpConfig`, `expand`, `run_setting`, `setting_status`, presets |
+| `report.py` | read-only loading of an experiment and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
+| `exp_view.py` | from an experiment ROOT to the figures of a `lambda_exp` experiment (the phase-transition notebook): snapping a setting to the axis values, MIR records of one depth and activation, tuning curves of one layer |
 | `spatial_view.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels (the notebook draws its own figures) |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
-| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_grid.py`, `build_phase_transition_grid.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
-| `jobs/fct_sweep.sh` | SLURM array script for the sweep (train stage) |
+| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_exp.py`, `build_phase_transition_exp.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
+| `jobs/fct_exp.sh` | SLURM array script for the experiment (train stage) |
 | `jobs/fct_solve.sh` | the same array job at the solve stage (mean-field saddle points) |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
 
@@ -65,94 +65,107 @@ cardinality-dependent floor: the **raw** MIR, the **chance baseline** (the raw M
 factor labels shuffled) and the **corrected** MIR (the shuffled null removed). Their exact definitions,
 with equations, are in `notebooks/modularity.ipynb` and `fct/modularity.py`.
 
-**Sweep.** A sweep is a grid over any `Config` fields: `grid` in `ROOT/sweep.json` maps a dotted path
+**Experiment.** An experiment is a batch of runs over varied `Config` fields, defined entirely by the hyperparameters it varies: `axes` in `ROOT/exp.json` maps a dotted path
 (`net.L`, `net.phi`, `train.rate_lambda`, `train.weight_lambda`, `data.task`, ...) to a list of values, and the
 settings are the Cartesian product in the order written (first axis slowest), so index `i` is stable. Sizes,
 seeds and the task parameters are shared by all settings (`--set N=64 --set n_epochs=2000 ...`); an axis
-overrides the shared value, except fields the sweep owns (data size, seeds, log/save/monitor schedules).
+overrides the shared value, except fields the experiment owns (data size, seeds, log/save/monitor schedules).
 Presets: `tiny` (seconds per setting on a CPU, a pipeline check that learns nothing meaningful), `full` and
-`modularity` (cluster sizes, placeholders to tune; the 36-setting grid of 3 tasks x layers {1, 3, 5} x phi
+`modularity` (cluster sizes, placeholders to tune; the 36-setting experiment of 3 tasks x layers {1, 3, 5} x phi
 {tanh, relu} x rate regulariser {0, 1e-3}, directories `ROOT/<task>/L{L}_{phi}_r{rate}/`, weight regulariser at
-its library default), and `lambda_grid --n-lambda N_LAMBDA` (linear teacher, L in {1, 2}, phi in {tanh, relu},
-`rate_lambda` and `weight_lambda` each `N_LAMBDA` log-spaced values in [1e-6, 1]). Other grids use directories
+its library default), and `lambda_exp --n-lambda N_LAMBDA` (linear teacher, L in {1, 2}, phi in {tanh, relu},
+`rate_lambda` and `weight_lambda` each `N_LAMBDA` log-spaced values in [1e-6, 1]). Other experiments use directories
 `ROOT/<task>/s{index:04d}_<label>/`, each with a `setting.json` recording its axis values, so a notebook can
-find a setting from its values (`fct.sweep.find_setting_dir`). `--axis PATH=[values]` replaces or adds an axis.
+find a setting from its values (`fct.exp.find_setting_dir`). `--axis PATH=[values]` replaces or adds an axis.
 Indices follow the product order, so adding a value to any axis but the first renumbers the settings after it
-and orphans their directories (`status` then reports them missing): grow a grid in a fresh ROOT, or append to
+and orphans their directories (`status` then reports them missing): grow an experiment in a fresh ROOT, or append to
 the first axis only.
 
-**Spatial sweeps.** A sweep's optional `spatial` section (`SweepConfig.spatial`, a `fct.spatial.SpatialConfig`)
+**Spatial experiments.** An experiment's optional `spatial` section (`ExpConfig.spatial`, a `fct.spatial.SpatialConfig`)
 makes every setting train under the spatial weight prior `tr(M_post W M_pre W^T)` per layer; without it every
-setting trains under the plain weight L2. The grid may then vary any field of the section
+setting trains under the plain weight L2. The axes may then vary any field of the section
 (`--axis spatial.hidden.kernel.length_scale=[0.05,0.15,0.3]`, `spatial.hidden.embedding.kind`, `spatial.min_rel_eig`,
-`spatial.d`, ...); such an axis on a sweep without the section is rejected at load. The shared network and loss
+`spatial.d`, ...); such an axis on an experiment without the section is rejected at load. The shared network and loss
 fields the spatial presets set (`L`, `g`, `phi`, `weight_lambda`, `rate_lambda`, `optimizer`, `beta`) default to the
 library values, and an axis of the same name wins. Presets: `spatial_tiny` (N in {4, 8}, P 16, one hidden layer,
 SGLD, 6 epochs: a CPU pipeline check) and `spatial_n_scan` (the width scan N in {64, 128, 256, 512, 1024}: linear
 teacher P 164, m 64, k 2, tanh, SGLD beta 1e4, weight_lambda 60 (= 2 beta x 3e-3: the prior term is lambda_w / (2 beta) times the prior form), 250 000 epochs, float64, grid embeddings of
-length scale 0.15 in d = 1, MIR monitor every 5000 epochs), and `spatial_grid` (24 settings: net.phi in
+length scale 0.15 in d = 1, MIR monitor every 5000 epochs), and `spatial_exp` (24 settings: net.phi in
 {id, tanh, relu} x data.n_latents in {2, 4} x hidden kernel length scale in {0.05, 0.1, 0.15, 0.2}, one axis for
 both sides of the hidden kernel; N 512, P 128, weight_lambda 20, otherwise as `spatial_n_scan`; the
 `data.n_latents` axis wins over `linear_teacher.n_latents`. Caveat: at N 512 about 500 hidden eigenvalues sit at the
 min_rel_eig floor 1e-2 x lambda_max(K), which grows with the length scale, so the mean hidden prior variance
 diag(M^-1) is 1.62 / 2.26 / 2.90 / 3.54 for 0.05 / 0.1 / 0.15 / 0.2: the length-scale axis is confounded with
 prior strength).
-Preset `phase_transition` (20 settings: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9, 0.99}; linear (phi id), L = 1, weight_lambda 1, random embeddings of length scale 0.15 for every population, an ensemble of B = 8 per setting via a one-value `net.B` axis; otherwise as `spatial_grid`). Its results notebook is `notebooks/phase_transition_grid.ipynb` (`fct/phase_view.py`, built by `notebooks/build_phase_transition_grid.py`; see below); it has no solve stage yet, and the modularity readers (`fct.report`) refuse B > 1 and need `net.L`, `net.phi` and `rate_lambda` axes. At 250 000 epochs the settings with lambda_max >= 0.5 are not fully stationary from the initial N(0, 1) weights (the softest prior mode relaxes on about 2e6 lambda_max^2 epochs). A directory name shows a dict-valued axis value as a short
-hash. The mean-field solver knows only the iid prior, so `sweep run --stage solve` on a spatial setting fails with its
+Preset `phase_transition` (20 settings: `spatial.d` in {1, 2, 3, 4} x `spatial.lambda_max` in {0.1, 0.5, 0.75, 0.9, 0.99}; linear (phi id), L = 1, weight_lambda 1, random embeddings of length scale 0.15 for every population, an ensemble of B = 8 per setting via a one-value `net.B` axis; otherwise as `spatial_exp`). Its results notebook is `notebooks/phase_transition_exp.ipynb` (`fct/phase_view.py`, built by `notebooks/build_phase_transition_exp.py`; see below); it has no solve stage yet, and the modularity readers (`fct.report`) refuse B > 1 and need `net.L`, `net.phi` and `rate_lambda` axes. At 250 000 epochs the settings with lambda_max >= 0.5 are not fully stationary from the initial N(0, 1) weights (the softest prior mode relaxes on about 2e6 lambda_max^2 epochs). A directory name shows a dict-valued axis value as a short
+hash. The mean-field solver knows only the iid prior, so `exp run --stage solve` on a spatial setting fails with its
 one-line message. `net.phi` is one of `tanh`, `relu`, `sigmoid` or `id` (phi(h) = h: a linear network);
-the presets keep their activations, and an `id` grid is `--axis 'net.phi=["tanh","relu","id"]'`.
+the presets keep their activations, and a variant with `id` is `--axis 'net.phi=["tanh","relu","id"]'`.
 
 ```sh
-uv run python -m fct sweep init ROOT --preset tiny        # write ROOT/sweep.json (--set n_epochs=100 ...)
-uv run python -m fct sweep init ROOT --preset lambda_grid --n-lambda 8 --axis 'net.L=[1,2,3]'
-uv run python -m fct sweep list ROOT                      # "<index> <task>/<setting directory>"
-uv run python -m fct sweep count ROOT                     # number of settings (36 for modularity)
-uv run python -m fct sweep run ROOT --index 7             # train one setting (resumable); no --index: all
-uv run python -m fct sweep status ROOT                    # done / partial / missing / stale per setting
-uv run python -m fct sweep run ROOT --index 7 --stage solve    # solve one setting's saddle point (resumable)
-uv run python -m fct sweep status ROOT --stage solve      # the same states for the solves
+uv run python -m fct exp init ROOT --preset tiny        # write ROOT/exp.json (--set n_epochs=100 ...)
+uv run python -m fct exp init ROOT --preset lambda_exp --n-lambda 8 --axis 'net.L=[1,2,3]'
+uv run python -m fct exp list ROOT                      # "<index> <task>/<setting directory>"
+uv run python -m fct exp count ROOT                     # number of settings (36 for modularity)
+uv run python -m fct exp run ROOT --index 7             # train one setting (resumable); no --index: all
+uv run python -m fct exp status ROOT                    # done / partial / missing / stale per setting
+uv run python -m fct exp run ROOT --index 7 --stage solve    # solve one setting's saddle point (resumable)
+uv run python -m fct exp status ROOT --stage solve      # the same states for the solves
+uv run python -m fct exp migrate ROOT                   # convert a folder written by older code (once)
 ```
 
-An initialised grid can be trained, solved, or both, in either order (a solve finished before the net was
+A folder that holds a legacy `sweep.json` (with a `grid` key and `grid_hash` in
+every `setting.json`) is converted once, in place, by `uv run python -m fct exp migrate ROOT`: it renames those names,
+checks everything before writing anything, leaves every train / solve artefact and hash alone, and refuses a finished folder.
+The rename keeps the folder as it is: a `setting.json` left by an earlier experiment of the same folder (an old `init --force`
+never deleted settings) is renamed too and reported as "kept from an earlier experiment"; `exp run` still refuses it, as before.
+If the write fails part-way (disk full, say), run the command again to finish. A legacy `sweep.json` that no longer
+validates under the current config (for example one that still carries the removed `meanfield.readout`) is refused, naming
+the field: the old code could not load it either, so the folder's results are stale under the current code; make it validate
+first. Do not migrate a folder while any checkout or SLURM job still runs the old code: it would write `grid_hash` again.
+Every other `exp` command on an unmigrated folder stops and points to this one. The notebook environment variable is now
+`$FCT_EXP_ROOT` (it was `$FCT_SWEEP_ROOT`).
+
+An initialised experiment can be trained, solved, or both, in either order (a solve finished before the net was
 trained is reported `stale` and redone with the net, so the comparison with the net is never missing): `--stage train` (the default) trains the
 networks, `--stage solve` solves the mean-field saddle point of each setting into `<setting>/meanfield/`, using
 the trained network of that setting for the comparison if there is one and solving on its own otherwise. The solver
-settings are the `meanfield` section of `sweep.json` (for example
-`--set meanfield.n_points=50 --set meanfield.solver.sampler=importance` at `sweep init`); changing them never
+settings are the `meanfield` section of `exp.json` (for example
+`--set meanfield.n_points=50 --set meanfield.solver.sampler=importance` at `exp init`); changing them never
 invalidates a trained network, only the solves. An importance-sampling solve whose proposal cannot represent the
 problem fails that setting with `InadequateSamplerError` and writes no result.
 
-The results notebook and `fct.report` support the modularity grid (they need the axes `net.L`, `net.phi` and
+The results notebook and `fct.report` support the modularity experiment (they need the axes `net.L`, `net.phi` and
 `train.rate_lambda`).
 
-**Cluster.** `jobs/fct_sweep.sh` submits the sweep as a SLURM array on the GPU partition (one setting
+**Cluster.** `jobs/fct_exp.sh` submits the experiment as a SLURM array on the GPU partition (one setting
 per task, a concurrency cap, logs under `tmp/logs/`). Check what it would run before submitting:
 
 ```sh
-bash jobs/fct_sweep.sh ROOT --dry-run                     # print the sbatch command, run nothing
-bash jobs/fct_sweep.sh ROOT --submit [--index N]          # FCT_MAX_CONCURRENT caps running tasks (default 4)
-bash jobs/fct_sweep.sh ROOT --list | --status
+bash jobs/fct_exp.sh ROOT --dry-run                     # print the sbatch command, run nothing
+bash jobs/fct_exp.sh ROOT --submit [--index N]          # FCT_MAX_CONCURRENT caps running tasks (default 4)
+bash jobs/fct_exp.sh ROOT --list | --status
 bash jobs/fct_solve.sh ROOT --dry-run                     # the same array job at the solve stage
 ```
 
 **Results notebook.** The notebook shows, per task and setting, loss curves, example outputs of the
 trained network, and MIR per layer over training, plus a summary table and heatmap of the final MIR
-across the sweep. All logic is in `fct/report.py`; the cells only call it. Only the source notebook is
-committed. Build and execute it on a sweep (the output goes to the git-ignored `tmp/` by default):
+across the experiment. All logic is in `fct/report.py`; the cells only call it. Only the source notebook is
+committed. Build and execute it on an experiment (the output goes to the git-ignored `tmp/` by default):
 
 ```sh
 uv run python notebooks/build_modularity.py ROOT                 # execute on ROOT -> tmp/modularity.ipynb
 uv run python notebooks/build_modularity.py --no-execute         # rebuild the committed source notebook
 ```
 
-**Phase-transition notebook** (the viewer for the `lambda_grid` preset). For a sweep made with `--preset lambda_grid`: pick a setting by
-`L`, `PHI`, `LAMBDA_R`, `LAMBDA_W` (snapped to the nearest grid value, which is printed) to see its loss
+**Phase-transition notebook** (the viewer for the `lambda_exp` preset). For an experiment made with `--preset lambda_exp`: pick a setting by
+`L`, `PHI`, `LAMBDA_R`, `LAMBDA_W` (snapped to the nearest axis value, which is printed) to see its loss
 curves, example outputs, MIR over training and the tuning curves of its neurons; then the MIR of every
 network of one depth and activation, as a (lambda_r, lambda_w) matrix per hidden layer and against
 lambda_r / lambda_w. A setting still running is shown from its latest checkpoint and labelled
 provisional; a missing one gets a message. The default MIR is the shuffle-bias-corrected one (`MIR_KIND`
-switches to raw). The lambdas must be positive (log axes), and a request outside the grid snaps to its
-nearest endpoint, signalled only by the printed "snapped to" line. Logic is in `fct/grid_view.py`; only the source notebook is committed.
+switches to raw). The lambdas must be positive (log axes), and a request outside the axis values snaps to its
+nearest endpoint, signalled only by the printed "snapped to" line. Logic is in `fct/exp_view.py`; only the source notebook is committed.
 
 ```sh
 uv run python notebooks/build_phase_transition.py ROOT           # execute on ROOT -> tmp/phase_transition.ipynb
@@ -190,7 +203,7 @@ for a few samples spread over that latent the S x S grid of n_post x n_post bloc
 every neuron to every latent, one panel per neuron placed by its position (ring order for d = 1, lattice
 cell for d = 2). The default sizes are small so SGLD is stable and both optimisers take seconds on a CPU;
 the notebook text says why. The library computes (`fct/spatial_view.py`, `fct/spatial.py`,
-`fct/grid_view.py`); every figure is drawn by a plotting function written out in the cell that shows
+`fct/exp_view.py`); every figure is drawn by a plotting function written out in the cell that shows
 it, after a markdown cell with the equation of what is plotted. The kernels shown are the weight
 prior and the weights' second moments over units, not the activity kernels Phi^(l) over samples, which
 have their own figures. Only the
@@ -206,25 +219,25 @@ The spatial-prior notebook draws its spatially indexed kernels Phi^(l) (the data
 kernel B = Z Z^T / k, the chosen trials, the pair grids) and its example outputs (a few test points drawn as panels, the R^2 and the scatter over all of them) from the
 held-out test set, the 3^k points of the latent lattice (one per sign pattern), not from the training samples.
 
-**Spatial-grid notebook.** The same figures for one setting of an already-run spatial sweep (for instance
-`python -m fct sweep init ROOT --preset spatial_n_scan`, then `sweep run`): give the sweep ROOT and the axis values
+**Spatial-experiment notebook.** The same figures for one setting of an already-run spatial experiment (for instance
+`python -m fct exp init ROOT --preset spatial_n_scan`, then `exp run`): give the experiment ROOT and the axis values
 of the setting, `SETTING = {"net.N": 256}` (a subset of the axes is enough when it picks one). The notebook lists the
-grid with each setting's status, loads the setting's trained net, and shows the spatial notebook's figures with
-the Phi kernels and example outputs (and their R^2, over all 3^k test points) computed on the test set. A setting of the grid that is not trained is reported in
-the cells and only its prior is drawn; a setting that is not in the grid is an error. The cells are the spatial
-notebook's (`build_spatial_grid.py` imports them), so both build the same figures. Only the source notebook is committed.
+settings with each setting's status, loads the setting's trained net, and shows the spatial notebook's figures with
+the Phi kernels and example outputs (and their R^2, over all 3^k test points) computed on the test set. A setting of the experiment that is not trained is reported in
+the cells and only its prior is drawn; a setting that is not in the experiment is an error. The cells are the spatial
+notebook's (`build_spatial_exp.py` imports them), so both build the same figures. Only the source notebook is committed.
 
 ```sh
-uv run python notebooks/build_spatial_grid.py ROOT --set 'SETTING={"net.N": 256}'   # execute -> tmp/spatial_grid.ipynb
-uv run python notebooks/build_spatial_grid.py ROOT --set 'SETTING={"net.N": 8}' --set DEVICE=\'cuda\'
-uv run python notebooks/build_spatial_grid.py --no-execute                          # rebuild the committed source notebook
+uv run python notebooks/build_spatial_exp.py ROOT --set 'SETTING={"net.N": 256}'   # execute -> tmp/spatial_exp.ipynb
+uv run python notebooks/build_spatial_exp.py ROOT --set 'SETTING={"net.N": 8}' --set DEVICE=\'cuda\'
+uv run python notebooks/build_spatial_exp.py --no-execute                          # rebuild the committed source notebook
 ```
 
-**Phase-transition-grid notebook** (`phase_transition_grid.ipynb`; the viewer for the `phase_transition` preset, an ensemble of B networks per setting; not the lambda_grid viewer `phase_transition.ipynb`). Give the sweep ROOT and the axis values of one setting, `SETTING = {"spatial.d": 2, "spatial.lambda_max": 0.5}`, and the parameters `MEMBER` (the member of the single-network figures), `SORT_DIM` (every unit ordering uses this coordinate of the random embedding; with d > 1 it is one coordinate, not a ring position, and out of range raises), `P_TEST` (size of the fresh random test set of the tuning and information/rate overlaps; the data kernels A keep the 3^k latent lattice), `N_EIG` (spectra truncation) `N_NEURONS` with `NEURON_PICK` (the tuning figure shows the `"first"` N_NEURONS in SORT_DIM order, or `"spread"` evenly along it) and `N_OUTPUT_DIMS` (output dimensions drawn in the example panels). It draws, for the prior, the covariance K / lambda_w, the effective (floored) covariance the nets were trained under and the penalty lambda_w M side by side, and their spectra with the floor; the loss curves as mean +- sem over members; every member's example outputs on the same axes (one palette colour each, at most the palette's ten, a subset of the output dimensions); and, for member `MEMBER` and for the ensemble average, the trained weight kernels, the data kernels A and the overlaps (the average overlap is the mean over members of each member's overlap). The first-layer weight image and the trial and pair grids of the spatial notebook are not drawn. A setting that is not trained gets only its prior; a partly trained one is drawn from its latest checkpoint, and every figure title says so (PROVISIONAL, with the epoch reached). Logic is in `fct/phase_view.py`; only the source notebook is committed.
+**Phase-transition-experiment notebook** (`phase_transition_exp.ipynb`; the viewer for the `phase_transition` preset, an ensemble of B networks per setting; not the lambda_exp viewer `phase_transition.ipynb`). Give the experiment ROOT and the axis values of one setting, `SETTING = {"spatial.d": 2, "spatial.lambda_max": 0.5}`, and the parameters `MEMBER` (the member of the single-network figures), `SORT_DIM` (every unit ordering uses this coordinate of the random embedding; with d > 1 it is one coordinate, not a ring position, and out of range raises), `P_TEST` (size of the fresh random test set of the tuning and information/rate overlaps; the data kernels A keep the 3^k latent lattice), `N_EIG` (spectra truncation) `N_NEURONS` with `NEURON_PICK` (the tuning figure shows the `"first"` N_NEURONS in SORT_DIM order, or `"spread"` evenly along it) and `N_OUTPUT_DIMS` (output dimensions drawn in the example panels). It draws, for the prior, the covariance K / lambda_w, the effective (floored) covariance the nets were trained under and the penalty lambda_w M side by side, and their spectra with the floor; the loss curves as mean +- sem over members; every member's example outputs on the same axes (one palette colour each, at most the palette's ten, a subset of the output dimensions); and, for member `MEMBER` and for the ensemble average, the trained weight kernels, the data kernels A and the overlaps (the average overlap is the mean over members of each member's overlap). The first-layer weight image and the trial and pair grids of the spatial notebook are not drawn. A setting that is not trained gets only its prior; a partly trained one is drawn from its latest checkpoint, and every figure title says so (PROVISIONAL, with the epoch reached). Logic is in `fct/phase_view.py`; only the source notebook is committed.
 
 ```sh
-uv run python notebooks/build_phase_transition_grid.py ROOT --set 'SETTING={"spatial.d": 2}' --set MEMBER=1   # execute -> tmp/phase_transition_grid.ipynb
-uv run python notebooks/build_phase_transition_grid.py --no-execute                                          # rebuild the committed source notebook
+uv run python notebooks/build_phase_transition_exp.py ROOT --set 'SETTING={"spatial.d": 2}' --set MEMBER=1   # execute -> tmp/phase_transition_exp.ipynb
+uv run python notebooks/build_phase_transition_exp.py --no-execute                                          # rebuild the committed source notebook
 ```
 
 ## Python library: single runs and the mean-field solver

@@ -2,11 +2,11 @@
 
 Three layers, as in the rest of the package:
 
-- I/O: `load_results` reads a sweep ROOT into one `SettingResult` per grid setting. A finished
+- I/O: `load_results` reads an experiment ROOT into one `SettingResult` per setting. A finished
   setting is read from final.pt; one still running from its latest checkpoint, and is then
   *provisional*: the same data, plus the epoch reached. A setting with no checkpoint, or whose
   checkpoint or dataset file cannot be used, is returned with its status (and a note) and no
-  data, so a partial sweep still loads.
+  data, so a partial experiment still loads.
 - Analysis (pure): `final_mir` collects the last MIR of every layer of a task's settings into
   arrays (provisional rows are flagged, and `FinalMIR.finished_only` and `summary_text` leave
   them out of every statistic); `mir_table_markdown`, `summary_text` and `setting_text` turn
@@ -14,13 +14,14 @@ Three layers, as in the rest of the package:
 - Plotting: the figures come from `fct.draw`; `setting_items` and `task_items` assemble them.
   `show` is the only function that touches IPython.
 
-The report supports the modularity grid (settings varying task, net.L, net.phi and
-train.rate_lambda; other grids may add axes, as long as these exist): `load_results` raises on a
-sweep without them, and `final_mir` and the figures assume a layer count of at most `max(LAYERS)`.
+The report supports the modularity experiment (settings varying task, net.L, net.phi and
+train.rate_lambda; other experiments may add axes, as long as these exist): `load_results` raises
+on an experiment without them, and `final_mir` and the figures assume a layer count of at
+most `max(LAYERS)`.
 
 Loading is read-only: nothing is generated, cached or written under ROOT, which a running job
 may be writing to. Settings are loaded on the CPU whatever device they were trained on, and are
-validated against the config rebuilt from sweep.json (a stale final.pt raises, it is not shown;
+validated against the config rebuilt from exp.json (a stale final.pt raises, it is not shown;
 a stale or unreadable checkpoint of a running setting is reported in its note).
 """
 
@@ -49,25 +50,25 @@ from fct.draw import (
     fig_mir_heatmaps,
     fig_mir_history,
 )
-from fct.model import MLP
-from fct.sweep import (
+from fct.exp import (
     LAYERS,
     MODULARITY_AXES,
     TASK_AXIS,
+    ExpConfig,
     Setting,
     Status,
-    SweepConfig,
+    axes_of,
     expand,
-    grid_of,
-    load_sweep,
+    load_exp,
     same_value,
     setting_config,
     setting_dir,
     setting_status,
 )
+from fct.model import MLP
 from fct.train import History, load_latest_checkpoint, load_trained, select_member
 
-ROOT_ENV = "FCT_SWEEP_ROOT"
+ROOT_ENV = "FCT_EXP_ROOT"
 N_EXAMPLES = 6  # examples loaded per setting; fig_example_outputs draws up to its per-task default
 EXAMPLE_SEED = 0
 MIR_KINDS = {
@@ -84,10 +85,10 @@ Item = str | Figure  # what a notebook cell shows: markdown text or a figure
 
 @dataclass(frozen=True)
 class SettingResult:
-    """One grid setting; `directory` is relative to ROOT. `history`, `examples`, `metrics`,
+    """One setting; `directory` is relative to ROOT. `history`, `examples`, `metrics`,
     `data_cfg`, `epoch` and `n_epochs` are None unless there is something to show: a done
     setting, or a partial one whose latest checkpoint was read (then `provisional`). `epoch` is
-    the epochs completed (n_epochs for a done setting), `n_epochs` the sweep's total. `note`
+    the epochs completed (n_epochs for a done setting), `n_epochs` the experiment's total. `note`
     explains a setting that is not shown beyond what its status says (a dataset file that is
     missing, a checkpoint that cannot be used)."""
 
@@ -125,7 +126,7 @@ class SettingResult:
 
 @dataclass(frozen=True)
 class FinalMIR:
-    """Final MIR per layer of one task's settings, rows in grid order. Arrays are
+    """Final MIR per layer of one task's settings, rows in index order. Arrays are
     (n_settings, max layers); a layer the setting does not have, and every layer of a setting
     with no data, is NaN. A provisional setting's row holds the MIR of its last monitor call so
     far (NaN if there is none yet); `mir_epoch` is the epoch of that call and `epoch` /
@@ -205,7 +206,8 @@ def _label_value(value: Any) -> str:
 
 
 def setting_label(setting: Setting) -> str:
-    """Every axis except the task, in grid order, so two settings of a grid never share a label."""
+    """Every axis except the task, in index order, so two settings of an experiment never share
+    a label."""
     parts = []
     for axis, value in setting.axes.items():
         if axis == TASK_AXIS:
@@ -216,17 +218,17 @@ def setting_label(setting: Setting) -> str:
 
 
 # ---------------------------------------------------------------------------- I/O
-def sweep_root_from_env() -> Path:
-    """The sweep ROOT named by $FCT_SWEEP_ROOT; RuntimeError if it is not set."""
+def exp_root_from_env() -> Path:
+    """The experiment ROOT named by $FCT_EXP_ROOT; RuntimeError if it is not set."""
     root = os.environ.get(ROOT_ENV)
     if not root:
-        raise RuntimeError(f"set ${ROOT_ENV} to a sweep ROOT (the directory with sweep.json)")
+        raise RuntimeError(f"set ${ROOT_ENV} to an experiment ROOT (the directory with exp.json)")
     return Path(root)
 
 
-def _cpu_config(sweep: SweepConfig, setting: Setting) -> Config:
+def _cpu_config(exp: ExpConfig, setting: Setting) -> Config:
     """The setting's config with device cpu; the device is not part of any cache hash."""
-    return setting_config(sweep, setting).model_copy(update={"device": "cpu"})
+    return setting_config(exp, setting).model_copy(update={"device": "cpu"})
 
 
 def _with_data(
@@ -240,7 +242,7 @@ def _with_data(
     epoch: int,
 ) -> SettingResult:
     """The result of a net (final or checkpointed): its history, example outputs and metrics."""
-    # Predictions are scored on the whole training set: the sweep has no held-out data.
+    # Predictions are scored on the whole training set: the experiment has no held-out data.
     everything = example_outputs(net, dataset, torch.arange(len(dataset.x)))
     shown = pick_examples(len(dataset.x), min(N_EXAMPLES, len(dataset.x)), EXAMPLE_SEED)
     metrics = prediction_report(setting.task, everything.y_true, everything.y_pred, cfg.data)
@@ -265,7 +267,7 @@ _UNREADABLE = (OSError, ValueError, TypeError, RuntimeError, EOFError, pickle.Un
 STALE_NOTE = (
     "train/final.pt was written under a different config, model or loss definition (an "
     "older MODEL_VERSION or LOSS_VERSION, or another weight_lambda or setting); rerun in a "
-    "fresh sweep ROOT"
+    "fresh experiment ROOT"
 )
 
 
@@ -303,26 +305,26 @@ def _load_partial(directory: Path, relative: Path, setting: Setting, cfg: Config
     return _with_data(setting, "partial", relative, cfg, net, history, dataset, epoch)
 
 
-def load_setting_result(root: Path, sweep: SweepConfig, setting: Setting) -> SettingResult:
+def load_setting_result(root: Path, exp: ExpConfig, setting: Setting) -> SettingResult:
     """Load one setting: a done one from train/final.pt, a partial one from its latest
     checkpoint (then `provisional`, with the epoch reached), a missing one not at all, and a
     stale one (finished under another config or loss definition) not at all, with a note.
 
     Read-only: a setting whose data/dataset.pt is missing is reported as "partial" with a note,
     because loading it through `get_dataset` would generate and write the file. A finished
-    setting whose dataset or other artefacts do not match the sweep config raises; for a partial
-    one an unreadable or stale dataset or checkpoint file is reported in `note` instead, since its
-    checkpoint may be replaced by a running job at any moment. Other exceptions (from the
+    setting whose dataset or other artefacts do not match the experiment config raises; for a
+    partial one an unreadable or stale dataset or checkpoint file is reported in `note` instead,
+    since its checkpoint may be replaced by a running job at any moment. Other exceptions (from the
     model code) propagate: they are bugs, not bad files. An ensemble run (net.B > 1) raises
     ValueError (`fct.train.select_member`): the report shows one network per setting."""
     directory = setting_dir(root, setting)
     relative = directory.relative_to(root)
-    status = setting_status(root, sweep, setting)
+    status = setting_status(root, exp, setting)
     if status == "missing":
         return SettingResult(setting, status, relative)
     if status == "stale":
         return SettingResult(setting, status, relative, note=STALE_NOTE)
-    cfg = _cpu_config(sweep, setting)
+    cfg = _cpu_config(exp, setting)
     if status == "partial":
         return _load_partial(directory, relative, setting, cfg)
     missing = _dataset_missing(directory, relative, setting, "train/final.pt")
@@ -336,18 +338,20 @@ def load_setting_result(root: Path, sweep: SweepConfig, setting: Setting) -> Set
 
 
 def load_results(root: Path | str) -> list[SettingResult]:
-    """All settings of the sweep at `root`, in grid order. FileNotFoundError if `root` has no
-    sweep.json: with no sweep there is nothing to report. ValueError if the sweep's grid lacks
-    the axes net.L, net.phi and train.rate_lambda (the report supports the modularity grid)."""
+    """All settings of the experiment at `root`, in index order. FileNotFoundError if `root` has no
+    exp.json: with no experiment there is nothing to report. UnmigratedExpError (an ExpError)
+    if it holds only a legacy sweep.json: run `fct exp migrate ROOT`. ValueError if the
+    experiment's axes lack net.L, net.phi or train.rate_lambda (the report supports the
+    modularity experiment)."""
     root = Path(root)
-    sweep = load_sweep(root)
-    missing = [a for a in MODULARITY_AXES if a not in grid_of(sweep)]
+    exp = load_exp(root)
+    missing = [a for a in MODULARITY_AXES if a not in axes_of(exp)]
     if missing:
         raise ValueError(
-            f"{root}: the report supports the modularity grid, whose axes include {missing}; "
-            f"this sweep's axes are {list(grid_of(sweep))}"
+            f"{root}: the report supports the modularity experiment, whose axes include {missing}; "
+            f"this experiment's axes are {list(axes_of(exp))}"
         )
-    return list(map(partial(load_setting_result, root, sweep), expand(sweep)))
+    return list(map(partial(load_setting_result, root, exp), expand(exp)))
 
 
 def _varying_axes(setting: Setting) -> dict:
@@ -378,7 +382,7 @@ def _last_per_layer(result: SettingResult, which: str) -> list[float]:
     if history is None or not history.get(key):
         raise ValueError(
             f"{setting_label(result.setting)}: history has no monitor entries {key!r}; "
-            "was the sweep run with monitor_int > 0?"
+            "was the exp run with monitor_int > 0?"
         )
     return list(history[key][-1])
 
@@ -547,7 +551,7 @@ def _require_history(result: SettingResult) -> dict:
     if missing:
         raise ValueError(
             f"{setting_label(result.setting)}: history lacks {missing}; "
-            "was the sweep run with monitor_int > 0?"
+            "was the exp run with monitor_int > 0?"
         )
     return history
 

@@ -8,7 +8,7 @@ programs (2026-10-20 to 2026-10-27) and the first program's learning-rate tuning
 Train feed-forward nets (the `fct` MLP) on three tasks and measure whether hidden neurons become
 modular for the task factors. Tasks: (1) linear teacher, (2) object-action (G x G grid, agent cell +
 object map -> optimal action toward the nearest object), (3) what-where (9x9 grid of 3x3 motifs).
-Grid: hidden layers {1,3,5} x phi {tanh, relu} x rate regulariser {0, 1e-3} per task (36 settings);
+Modularity experiment: hidden layers {1,3,5} x phi {tanh, relu} x rate regulariser {0, 1e-3} per task (36 settings);
 N, P, steps tunable. Track the modularity index MIR per hidden layer through training. Deliver a
 notebook plotting per task and setting: loss curves, example outputs of the final net, MIR per layer
 over training. Local runs are tiny pipeline checks only; WRITE SLURM scripts (template
@@ -52,7 +52,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
   (`fct.meanfield.network_constants`): `prior_scale = 1/weight_lambda`, `alpha = weight_lambda P d_out / beta`,
   `rate_tilt = 2 beta rate_lambda`, `learning_prefactor = weight_lambda/2`, `beta = train.beta` (SGLD) or 1 (Adam); explicit
   `MeanFieldConfig` fields win. All four are exact for SGLD (a test on the exemplar's weight variance per beta, and one on `run_meanfield`'s defaults with the
-  library's own `meanfield.beta = None`, which follows `train.beta`, or 1 under Adam). Every earlier mean-field result is stale. Still open: the `lambda_grid` preset's `weight_lambda` axis
+  library's own `meanfield.beta = None`, which follows `train.beta`, or 1 under Adam). Every earlier mean-field result is stale. Still open: the `lambda_exp` preset's `weight_lambda` axis
   (log-spaced 1e-6..1) was not rescaled.
 - **Relu tilt rule (PI confirmed the item 2026-10-29; the PM chose the option; `relu-tilt-rule`).** For relu the tilt
   projection enforces positive definiteness of Sigma^-1 + M + lambda_r I, the all-active orthant's Gaussian condition
@@ -66,7 +66,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
   Details in docs/design.md, "The relu tilt rule".
 - Exemplar notebook: the solves are not converged at the default 40/80 outer steps (residual still falling);
   the importance sampler only works for small P (default P = 20; raises at 24).
-- Grid solve: `jobs/fct_solve.sh` duplicates the sbatch header of `jobs/fct_sweep.sh` (keep them in step by hand).
+- Experiment solve: `jobs/fct_solve.sh` duplicates the sbatch header of `jobs/fct_exp.sh` (keep them in step by hand).
 - Mean-field rate tilt defaults to `2 beta rate_lambda` (see above); `meanfield.rate_tilt` overrides.
 This was decided in `remove-rate-penalty-p-scaling`, not by the PI.
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};
@@ -121,6 +121,14 @@ x its form (beta = 1 under Adam), LOSS_VERSION 4, MODEL_VERSION 2; old weight_la
 x 2 beta (SGLD) or x 2 (Adam); the mean-field solver's constants follow the network. EVERY cache
 made before these merges is stale. Spatial presets (spatial_tiny 0.2, spatial_n_scan 60) are
 safe to run.
+
+Vocabulary (2026-11-01, `exp-rename`): a batch of runs over varied hyperparameters is an
+*experiment* ("exp"), defined by its `axes`; "sweep" and "grid" no longer name it. `fct/sweep.py` is
+`fct/exp.py` (`ExpConfig`, `ExpError`, `exp.json`, `axes`, `exp_hash`), the CLI is `fct exp ...`, and the
+notebook root variable is `$FCT_EXP_ROOT`. Hashes and numbers are unchanged (`tests/test_exp_hashes.py`
+pins every preset against the pre-rename code). A folder written by older code is converted once with
+`fct exp migrate ROOT`; until then every exp command stops and says so. The dated history sections of this file and
+`docs/archive/` keep the old words.
 
 Open:
 1. `solver-inner-step-control` (in review): see "Where it stopped" in its issue file. The

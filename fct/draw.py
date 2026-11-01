@@ -34,7 +34,7 @@ from fct.analyse import (
 )
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
-from fct.grid_report import MirRecord, check_finite_mir, check_layer
+from fct.exp_report import MirRecord, check_finite_mir, check_layer
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 from fct.tuning import TuningCurves
 
@@ -1273,7 +1273,7 @@ def fig_mir_heatmaps(
     return fig
 
 
-# --------------------------------------------------------------------------- tuning and grid MIR
+# --------------------------------------------------------------------------- tuning and MIR matrix
 TUNING_N_COLS = 4  # tuning panels per row
 # One colour per latent, none of them in LAYER_COLORS: a page can show layer k and latent k.
 LATENT_COLORS = ["#7b3294", "#8c510a", "#00a6b5", "#5c5c5c", "#b8a800", "#000000"]

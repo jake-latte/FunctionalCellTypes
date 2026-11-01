@@ -1,29 +1,29 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FunctionalCellTypes — grid sweep (any number of settings) as a SLURM array
+#  FunctionalCellTypes — experiment (any number of settings) as a SLURM array
 #
-#  One array task trains one setting: `python -m fct sweep run ROOT --index $TASK --stage train`.
+#  One array task trains one setting: `python -m fct exp run ROOT --index $TASK --stage train`.
 #  jobs/fct_solve.sh runs this same script with FCT_STAGE=solve, which solves the mean-field
 #  saddle point of each setting instead (see that file).
-#  The grid itself lives in ROOT/sweep.json (write it first with
-#  `python -m fct sweep init ROOT --preset full`, or `--preset lambda_grid --n-lambda 8`);
-#  this script only needs its size (`sweep count`).
+#  The axes live in ROOT/exp.json (write it first with
+#  `python -m fct exp init ROOT --preset full`, or `--preset lambda_exp --n-lambda 8`);
+#  this script only needs its size (`exp count`).
 #
-#  Usage (ROOT = sweep root, as the first argument or in $FCT_SWEEP_ROOT):
-#    bash jobs/fct_sweep.sh ROOT --submit              # submit the full array
-#    bash jobs/fct_sweep.sh ROOT --submit --index N    # submit ONLY setting N
-#    bash jobs/fct_sweep.sh ROOT --submit --index A:B  # submit settings A .. B-1 (half-open, like
+#  Usage (ROOT = experiment root, as the first argument or in $FCT_EXP_ROOT):
+#    bash jobs/fct_exp.sh ROOT --submit              # submit the full array
+#    bash jobs/fct_exp.sh ROOT --submit --index N    # submit ONLY setting N
+#    bash jobs/fct_exp.sh ROOT --submit --index A:B  # submit settings A .. B-1 (half-open, like
 #                                                      # a Python slice: 0:10 is 0, 1, ..., 9)
-#    bash jobs/fct_sweep.sh ROOT --dry-run [--index X]  # print the sbatch command, run nothing
-#    bash jobs/fct_sweep.sh ROOT --list                # index -> setting directory
-#    bash jobs/fct_sweep.sh ROOT --status              # done / partial / missing / stale per setting
+#    bash jobs/fct_exp.sh ROOT --dry-run [--index X]  # print the sbatch command, run nothing
+#    bash jobs/fct_exp.sh ROOT --list                # index -> setting directory
+#    bash jobs/fct_exp.sh ROOT --status              # done / partial / missing / stale per setting
 #
 #  Environment overrides:
 #    FCT_MAX_CONCURRENT  cap on simultaneously-running array tasks (default 4)
 #    FCT_PYTHON          interpreter (default <project>/.venv/bin/python)
 #    FCT_STAGE           train (default) or solve; set by jobs/fct_solve.sh, not normally by hand
 #    FCT_ENTRY, FCT_LOG_NAME   the script sbatch submits and the log-file prefix; set by the
-#                        wrapper (default: this script, fct_sweep)
+#                        wrapper (default: this script, fct_exp)
 #
 #  SLURM runs this script directly per array task (ROOT as its only argument).
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -32,7 +32,7 @@
 # --array, --output and --error are NOT set here: --submit passes them on the sbatch
 # command line, because #SBATCH lines cannot expand variables and the log directory
 # must follow the project location.
-#SBATCH -J fct-sweep
+#SBATCH -J fct-exp
 #SBATCH -p gpu
 #SBATCH --gres=gpu:1
 # Exclude the Quadro P5000s (sm_61); this torch build supports sm_75+ only.
@@ -50,7 +50,7 @@ MAX_CONCURRENT="${FCT_MAX_CONCURRENT:-4}"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 STAGE="${FCT_STAGE:-train}"
-LOG_NAME="${FCT_LOG_NAME:-fct_sweep}"
+LOG_NAME="${FCT_LOG_NAME:-fct_exp}"
 
 USAGE="Use: bash jobs/${LOG_NAME}.sh [ROOT] (--submit | --dry-run | --list | --status)"
 USAGE+=" [--index N|A:B]"
@@ -73,7 +73,7 @@ LOG_DIR="${PROJECT}/tmp/logs"
 ENTRY="${FCT_ENTRY:-${SELF_DIR}/$(basename "${BASH_SOURCE[0]}")}"
 
 # ── Parse CLI: ROOT, one action, optional --index N or A:B ────────────────────
-ROOT="${FCT_SWEEP_ROOT:-}"
+ROOT="${FCT_EXP_ROOT:-}"
 ROOT_GIVEN=""
 ACTION=""
 INDEX=""
@@ -111,8 +111,8 @@ if [[ -n "${INDEX_GIVEN}" ]]; then
         || die "--index only applies to --submit and --dry-run."
 fi
 
-[[ -n "${ROOT}" ]] || die "no sweep ROOT given (pass it as an argument or set FCT_SWEEP_ROOT). ${USAGE}"
-[[ -d "${ROOT}" ]] || die "sweep ROOT '${ROOT}' does not exist."
+[[ -n "${ROOT}" ]] || die "no experiment ROOT given (pass it as an argument or set FCT_EXP_ROOT). ${USAGE}"
+[[ -d "${ROOT}" ]] || die "experiment ROOT '${ROOT}' does not exist."
 ROOT="$(cd "${ROOT}" && pwd)"   # absolute: array tasks start in a different cwd
 
 fct() { (cd "${PROJECT}" && "${PYTHON}" -m fct "$@"); }
@@ -129,7 +129,7 @@ if [[ -z "${ACTION}" ]]; then
     echo "root=${ROOT}"
     echo "========================================================"
     echo "stage=${STAGE}"
-    fct sweep run "${ROOT}" --index "${SLURM_ARRAY_TASK_ID}" --stage "${STAGE}"
+    fct exp run "${ROOT}" --index "${SLURM_ARRAY_TASK_ID}" --stage "${STAGE}"
     EXIT_CODE=$?
     echo "Task ${SLURM_ARRAY_TASK_ID} finished with exit code ${EXIT_CODE}."
     exit ${EXIT_CODE}
@@ -137,20 +137,21 @@ fi
 
 # ── Read-only actions ─────────────────────────────────────────────────────────
 case "${ACTION}" in
-    --list)   fct sweep list "${ROOT}";   exit $? ;;
-    --status) fct sweep status "${ROOT}" --stage "${STAGE}"; exit $? ;;
+    --list)   fct exp list "${ROOT}";   exit $? ;;
+    --status) fct exp status "${ROOT}" --stage "${STAGE}"; exit $? ;;
 esac
 
 # ── --submit / --dry-run: build one sbatch command and either print or run it ─
-N_TOTAL=$(fct sweep count "${ROOT}") || die "could not read the sweep size from ${ROOT}/sweep.json."
-[[ "${N_TOTAL}" =~ ^[0-9]+$ ]] || die "could not determine sweep size (got '${N_TOTAL}')."
+N_TOTAL=$(fct exp count "${ROOT}") \
+    || die "could not read the experiment size from ${ROOT}/exp.json."
+[[ "${N_TOTAL}" =~ ^[0-9]+$ ]] || die "could not determine experiment size (got '${N_TOTAL}')."
 
 # --export is comma-delimited, so a comma in either path would split it.
 [[ "${PROJECT}${PYTHON}" != *,* ]] || die "project or python path contains a comma; sbatch --export cannot carry it."
 
 if [[ -n "${INDEX_GIVEN}" ]]; then
     if (( INDEX_TO > N_TOTAL )); then
-        die "--index '${INDEX}' out of range: the sweep has ${N_TOTAL} settings, 0 .. $((N_TOTAL-1))."
+        die "--index '${INDEX}' out of range: the experiment has ${N_TOTAL} settings, 0 .. $((N_TOTAL-1))."
     fi
     if (( INDEX_TO - INDEX_FROM == 1 )); then
         ARRAY_SPEC="${INDEX_FROM}"
@@ -173,7 +174,7 @@ SBATCH_CMD=(
 if [[ "${ACTION}" == "--dry-run" ]]; then
     echo "Dry run — nothing submitted. --submit would run:"
     printf '  %q' "${SBATCH_CMD[@]}"; echo
-    echo "  per task: ${PYTHON} -m fct sweep run ${ROOT} --index \$SLURM_ARRAY_TASK_ID --stage ${STAGE}"
+    echo "  per task: ${PYTHON} -m fct exp run ${ROOT} --index \$SLURM_ARRAY_TASK_ID --stage ${STAGE}"
     exit 0
 fi
 

@@ -1,25 +1,25 @@
-"""Selecting one setting of a spatial sweep and loading its trained net with the held-out
+"""Selecting one setting of a spatial experiment and loading its trained net with the held-out
 latent-lattice test set (CPU only, on the tiny spatial preset)."""
 
 import pytest
 import torch
 
+from fct.exp import preset, run_setting, save_exp, with_axes
 from fct.spatial import latent_kernel
-from fct.spatial_grid import (
-    load_grid_run,
+from fct.spatial_exp import (
+    load_exp_run,
     select_setting,
     settings_table,
 )
-from fct.sweep import preset, run_setting, save_sweep, with_grid
 
 
 @pytest.fixture(scope="module")
 def root(tmp_path_factory):
     """spatial_tiny (net.N in {4, 8}) with only N = 8 trained."""
-    root = tmp_path_factory.mktemp("grid")
-    sweep = preset("spatial_tiny")
-    save_sweep(sweep, root)
-    run_setting(sweep, 1, root, log=lambda _: None)
+    root = tmp_path_factory.mktemp("spatial_exp")
+    exp = preset("spatial_tiny")
+    save_exp(exp, root)
+    run_setting(exp, 1, root, log=lambda _: None)
     return root
 
 
@@ -37,17 +37,17 @@ def test_select_snaps_a_float_written_as_an_int(root):
     )
 
 
-def test_select_reports_a_setting_of_the_grid_that_was_never_run_as_missing(root):
+def test_select_reports_a_setting_of_the_experiment_that_was_never_run_as_missing(root):
     chosen = select_setting(root, {"net.N": 4})
     assert chosen.status == "missing" and chosen.cfg.net.N == 4
 
 
-def test_select_fails_loudly_on_a_value_that_is_not_in_the_grid(root):
+def test_select_fails_loudly_on_a_value_that_is_not_in_the_experiment(root):
     with pytest.raises(LookupError, match="net.N"):
         select_setting(root, {"net.N": 5})
 
 
-def test_select_fails_loudly_on_an_axis_that_is_not_in_the_grid(root):
+def test_select_fails_loudly_on_an_axis_that_is_not_in_the_experiment(root):
     with pytest.raises(LookupError, match="unknown axis"):
         select_setting(root, {"net.L": 1})
 
@@ -61,9 +61,9 @@ def test_settings_table_lists_every_setting_with_its_status(root):
     assert "| 8 |" in rows[1] and "done" in rows[1]
 
 
-def test_load_grid_run_gives_the_net_history_and_a_lattice_test_set(root):
+def test_load_exp_run_gives_the_net_history_and_a_lattice_test_set(root):
     chosen = select_setting(root, {"net.N": 8})
-    run, test = load_grid_run(chosen)
+    run, test = load_exp_run(chosen)
     k = chosen.cfg.data.n_latents
     assert len(test.x) == 3**k  # one point per sign pattern
     assert len(run.dataset.x) == chosen.cfg.data.P  # the training samples are kept apart
@@ -77,9 +77,9 @@ def test_load_grid_run_gives_the_net_history_and_a_lattice_test_set(root):
     assert torch.allclose(test.y, z @ teacher["W_Y"].T)
 
 
-def test_load_grid_run_refuses_a_setting_that_is_not_trained(root):
+def test_load_exp_run_refuses_a_setting_that_is_not_trained(root):
     with pytest.raises(ValueError, match="not trained"):
-        load_grid_run(select_setting(root, {"net.N": 4}))
+        load_exp_run(select_setting(root, {"net.N": 4}))
 
 
 def test_latent_kernel_is_the_gram_matrix_of_the_latents_over_k():
@@ -91,10 +91,10 @@ def test_latent_kernel_is_the_gram_matrix_of_the_latents_over_k():
 def test_select_refuses_an_ambiguous_request_whatever_was_run(tmp_path):
     """net.N [8] x train.lr [1e-2, 5e-3]: with the first trained, {"net.N": 8} names both settings
     and must not resolve to either; naming the lr picks one, run or not."""
-    sweep = preset("spatial_tiny")
-    sweep = with_grid(sweep, {"net.N": [8], "train.lr": [1e-2, 5e-3]})
-    save_sweep(sweep, tmp_path)
-    run_setting(sweep, 0, tmp_path, log=lambda _: None)
+    exp = preset("spatial_tiny")
+    exp = with_axes(exp, {"net.N": [8], "train.lr": [1e-2, 5e-3]})
+    save_exp(exp, tmp_path)
+    run_setting(exp, 0, tmp_path, log=lambda _: None)
     for values in ({"net.N": 8}, {}):
         with pytest.raises(LookupError, match="2 settings"):
             select_setting(tmp_path, values)

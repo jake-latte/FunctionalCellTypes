@@ -1,0 +1,33 @@
+{
+  "N": 8,
+  "P": 32,
+  "n_epochs": 6,
+  "lr": 0.01,
+  "log_int": 2,
+  "save_int": 2,
+  "monitor_int": 2,
+  "monitor_bins": 4,
+  "monitor_shuffles": 2,
+  "linear_teacher": {
+    "n_features": 8,
+    "n_latents": 3,
+    "latent_range": 1.0
+  },
+  "object_action": {
+    "grid_size": 3,
+    "max_objects": 2
+  },
+  "what_where": {
+    "n_motifs": 4
+  },
+  "seeds": {
+    "data": 0,
+    "net": 0,
+    "train": 0
+  },
+  "dtype": "float32",
+  "device": "cpu",
+  "meanfield": {
+    "readout": "post"
+  }
+}

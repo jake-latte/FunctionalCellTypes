@@ -1,16 +1,16 @@
 """Build and execute `phase_transition.ipynb`, the phase-transition notebook, the results viewer
-of a `lambda_grid` sweep.
+of a `lambda_exp` experiment.
 
-One viewer for a sweep made with `--preset lambda_grid`: pick a setting by (L, phi,
+One viewer for an experiment made with `--preset lambda_exp`: pick a setting by (L, phi,
 lambda_r, lambda_w) and see its loss curves, example outputs, MIR over training and the tuning
-curves of its neurons; then the MIR of the whole grid as one heat-map per hidden layer and as a
-scatter against lambda_r / lambda_w. All logic is in `fct.grid_view` and `fct.report`; each cell
+curves of its neurons; then the MIR of the whole experiment as one heat-map per hidden layer and as
+a scatter against lambda_r / lambda_w. All logic is in `fct.exp_view` and `fct.report`; each cell
 only calls it. Run
 
     python notebooks/build_phase_transition.py ROOT            # execute, write tmp/phase_transition.ipynb
     python notebooks/build_phase_transition.py --no-execute    # source only: notebooks/phase_transition.ipynb
 
-ROOT is the sweep directory (the one holding sweep.json); `$FCT_SWEEP_ROOT` works too. Only the
+ROOT is the experiment directory (the one holding exp.json); `$FCT_EXP_ROOT` works too. Only the
 source notebook is committed; an executed one records the ROOT path and its figures are large, so it
 goes to the git-ignored tmp/ unless --out says otherwise.
 """
@@ -29,21 +29,21 @@ from notebooks.build_modularity import execute_notebook, write_notebook
 SOURCE_OUT = Path(__file__).with_name("phase_transition.ipynb")
 EXECUTED_OUT = Path(__file__).parents[1] / "tmp" / "phase_transition.ipynb"
 
-INTRO = """# Phase transition in modularity: one setting, then the whole grid
+INTRO = """# Phase transition in modularity: one setting, then the whole experiment
 
-Set the sweep ROOT in the first code cell, then choose a setting in the selector cell. Requested
-values are snapped to the nearest grid value (lambdas on a log scale) and the value used is
-printed. A setting still running is shown from its latest checkpoint and labelled
+Set the experiment ROOT in the first code cell, then choose a setting in the selector cell.
+Requested values are snapped to the nearest axis value (lambdas on a log scale) and the value used
+is printed. A setting still running is shown from its latest checkpoint and labelled
 "provisional"; a setting with no checkpoint gets a message and no plots. The last two figures
 show every network of one depth and activation: layer-average MIR as a (lambda_r, lambda_w)
 matrix per hidden layer, and against lambda_r / lambda_w. `MIR_KIND` picks the
 shuffle-bias-corrected MIR (default) or the raw one for the tuning order and both global figures."""
 
-PARAMETERS = """ROOT = None  # the sweep ROOT (holds sweep.json); None reads $FCT_SWEEP_ROOT"""
+PARAMETERS = """ROOT = None  # the experiment ROOT (holds exp.json); None reads $FCT_EXP_ROOT"""
 
 SETUP = """import matplotlib as mpl
 
-from fct.grid_view import (
+from fct.exp_view import (
     DEPTH_AXIS,
     PHI_AXIS,
     choose_setting,
@@ -52,17 +52,17 @@ from fct.grid_view import (
     snap_text,
     tuning_items,
 )
-from fct.report import load_results, overview_text, setting_items, show, sweep_root_from_env
+from fct.report import exp_root_from_env, load_results, overview_text, setting_items, show
 
 mpl.rcParams["figure.dpi"] = 100
-ROOT = ROOT or sweep_root_from_env()
+ROOT = ROOT or exp_root_from_env()
 RESULTS = load_results(ROOT)
 show([overview_text(RESULTS)])"""
 
 SELECTOR = """L = 1  # hidden layers
-PHI = "tanh"  # activation ("tanh", "relu", "sigmoid" or "id"), exactly as in the sweep
-LAMBDA_R = 1e-3  # rate regulariser, snapped to the nearest grid value
-LAMBDA_W = 1e-3  # weight regulariser, snapped to the nearest grid value
+PHI = "tanh"  # activation ("tanh", "relu", "sigmoid" or "id"), exactly as in the experiment
+LAMBDA_R = 1e-3  # rate regulariser, snapped to the nearest axis value
+LAMBDA_W = 1e-3  # weight regulariser, snapped to the nearest axis value
 MIR_KIND = "corrected"  # "corrected" (shuffle-bias-corrected) or "raw"; used below
 
 CHOICE = choose_setting(RESULTS, L=L, phi=PHI, lambda_r=LAMBDA_R, lambda_w=LAMBDA_W)
@@ -106,7 +106,7 @@ def build_notebook() -> NotebookNode:
         new_code_cell(SETTING_PLOTS),
         new_markdown_cell("## Tuning of the neurons of one layer"),
         new_code_cell(TUNING),
-        new_markdown_cell("## MIR over the (lambda_r, lambda_w) grid, one matrix per layer"),
+        new_markdown_cell("## MIR over the (lambda_r, lambda_w) axes, one matrix per layer"),
         new_code_cell(MATRIX),
         new_markdown_cell("## MIR against lambda_r / lambda_w, one dot per network"),
         new_code_cell(RATIO),
@@ -120,7 +120,7 @@ def build_notebook() -> NotebookNode:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("root", nargs="?", type=Path, help=f"sweep ROOT (default ${ROOT_ENV})")
+    parser.add_argument("root", nargs="?", type=Path, help=f"experiment ROOT (default ${ROOT_ENV})")
     parser.add_argument(
         "--out", type=Path, help="default: the source notebook, or tmp/ if executed"
     )
@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_execute:
         root = args.root or os.environ.get(ROOT_ENV)
         if not root:
-            parser.error(f"give a sweep ROOT or set ${ROOT_ENV}")
+            parser.error(f"give an experiment ROOT or set ${ROOT_ENV}")
         nb = execute_notebook(nb, Path(root))
     out = args.out or (SOURCE_OUT if args.no_execute else EXECUTED_OUT)
     out.parent.mkdir(parents=True, exist_ok=True)

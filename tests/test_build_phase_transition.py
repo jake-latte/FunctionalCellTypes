@@ -1,15 +1,15 @@
-"""The phase-transition notebook (the viewer for the `lambda_grid` preset): structure of the source, and an end-to-end execution on a tiny
-phase-transition sweep with a done, a partial and many missing settings."""
+"""The phase-transition notebook (the viewer for the `lambda_exp` preset): structure of the source, and an end-to-end execution on a tiny
+phase-transition experiment with a done, a partial and many missing settings."""
 
 from pathlib import Path
 
 import nbformat
 import pytest
 
-from fct.sweep import expand, run_setting, save_sweep, setting_dir
+from fct.exp import expand, run_setting, save_exp, setting_dir
 from notebooks.build_modularity import execute_notebook, with_root
 from notebooks.build_phase_transition import build_notebook
-from tests.report_helpers import QUIET, tiny_phase_sweep
+from tests.report_helpers import QUIET, tiny_phase_exp
 
 N_SETTINGS = 16
 FIGURES_ONE_SETTING = 3  # loss curves, example outputs, MIR history
@@ -78,11 +78,11 @@ def test_with_root_injects_only_the_parameter_cell(tmp_path):
 def root(tmp_path_factory) -> Path:
     """Setting 0 done, 1 stopped at its checkpoint, the other 14 never run."""
     root = tmp_path_factory.mktemp("phase")
-    sweep = tiny_phase_sweep()
-    save_sweep(sweep, root)
+    exp = tiny_phase_exp()
+    save_exp(exp, root)
     for index in (0, 1):
-        run_setting(sweep, index, root, **QUIET)
-    (setting_dir(root, expand(sweep)[1]) / "train" / "final.pt").unlink()
+        run_setting(exp, index, root, **QUIET)
+    (setting_dir(root, expand(exp)[1]) / "train" / "final.pt").unlink()
     return root
 
 
@@ -91,7 +91,7 @@ def test_executes_on_a_done_a_partial_and_missing_settings(root):
     text = _text_outputs(nb)
     assert "ERROR" not in text
     assert f"1 done, 1 partial (provisional), {N_SETTINGS - 2} missing" in text
-    assert "snapped to" in text  # the default 1e-3 is off the 2-point grid
+    assert "snapped to" in text  # the default 1e-3 is off the 2-value lambda axes
     assert "provisional" in text  # the global figures say which cell is a checkpoint
     # the setting's three figures, the tuning figure, the matrix and the scatter
     assert _n_figures(nb) == FIGURES_ONE_SETTING + 3

@@ -1,10 +1,10 @@
-"""A sweep.json without `grid` is the modularity grid, and keeps its meaning.
+"""An exp.json without `axes` is the modularity experiment, and keeps its meaning.
 
-`modularity_sweep.json` is the `tiny` preset of commit e1492ca (the last before the grid became
+`modularity_exp.json` is the `tiny` preset of commit e1492ca (the last before the axes became
 configurable) as serialised, and `modularity_settings.json` holds, for each of the 36 settings it
-expanded to (in order), the directory and the swept values that code produced (extracted with
+expanded to (in order), the directory and the varied values that code produced (extracted with
 `git archive e1492ca fct | tar -x -C tmp/old`, run with `PYTHONPATH=tmp/old`). Those, and
-`test_it_builds_the_same_configs`, are the independent check against the pre-grid code.
+`test_it_builds_the_same_configs`, are the independent check against the code that had fixed axes.
 
 Each row's `train_hash` is NOT from that code: it is the `section_hash("data", "net", "train")`
 of the setting's config computed by the current code (LOSS_VERSION 4, MODEL_VERSION 2), a pin
@@ -19,11 +19,11 @@ import pytest
 
 import fct.config
 from fct.config import Config, NetConfig, TrainConfig
-from fct.sweep import (
-    SweepConfig,
+from fct.exp import (
+    ExpConfig,
     data_config,
     expand,
-    load_sweep,
+    load_exp,
     preset,
     setting_config,
     setting_dir,
@@ -34,42 +34,42 @@ FIXTURE_LOSS_VERSION, FIXTURE_MODEL_VERSION = 4, 2
 ROOT = Path("root")
 
 
-def _sweep(tmp_path) -> SweepConfig:
-    (tmp_path / "sweep.json").write_text((FIXTURES / "modularity_sweep.json").read_text())
-    return load_sweep(tmp_path)
+def _exp(tmp_path) -> ExpConfig:
+    (tmp_path / "exp.json").write_text((FIXTURES / "modularity_exp.json").read_text())
+    return load_exp(tmp_path)
 
 
 def _rows() -> list[dict]:
     return json.loads((FIXTURES / "modularity_settings.json").read_text())
 
 
-def _fixed_grid_config(sweep: SweepConfig, task, L, phi, rate_lambda) -> Config:
-    """The config the pre-grid code built for one setting."""
+def _fixed_axes_config(exp: ExpConfig, task, L, phi, rate_lambda) -> Config:
+    """The config the fixed-axes code built for one setting."""
     return Config(
-        data=data_config(sweep, task),
-        net=NetConfig(N=sweep.N, L=L, phi=phi, seed=sweep.seeds.net),
+        data=data_config(exp, task),
+        net=NetConfig(N=exp.N, L=L, phi=phi, seed=exp.seeds.net),
         train=TrainConfig(
-            n_epochs=sweep.n_epochs,
-            lr=sweep.lr,
+            n_epochs=exp.n_epochs,
+            lr=exp.lr,
             rate_lambda=rate_lambda,
-            log_int=sweep.log_int,
-            save_int=sweep.save_int,
-            seed=sweep.seeds.train,
-            monitor_int=sweep.monitor_int,
-            monitor_bins=sweep.monitor_bins,
-            monitor_shuffles=sweep.monitor_shuffles,
+            log_int=exp.log_int,
+            save_int=exp.save_int,
+            seed=exp.seeds.train,
+            monitor_int=exp.monitor_int,
+            monitor_bins=exp.monitor_bins,
+            monitor_shuffles=exp.monitor_shuffles,
         ),
-        dtype=sweep.dtype,
-        device=sweep.device,
+        dtype=exp.dtype,
+        device=exp.device,
     )
 
 
-def test_a_sweep_json_without_a_grid_loads(tmp_path):
-    assert _sweep(tmp_path).grid is None
+def test_an_exp_json_without_axes_loads(tmp_path):
+    assert _exp(tmp_path).axes is None
 
 
 def test_it_expands_to_the_same_settings_and_directories(tmp_path):
-    settings = expand(_sweep(tmp_path))
+    settings = expand(_exp(tmp_path))
     rows = _rows()
     assert len(settings) == len(rows) == 36
     for setting, row in zip(settings, rows, strict=True):
@@ -80,17 +80,17 @@ def test_it_expands_to_the_same_settings_and_directories(tmp_path):
 
 
 def test_it_builds_the_same_configs(tmp_path):
-    sweep = _sweep(tmp_path)
-    for setting, row in zip(expand(sweep), _rows(), strict=True):
-        expected = _fixed_grid_config(sweep, row["task"], row["L"], row["phi"], row["rate_lambda"])
-        assert setting_config(sweep, setting) == expected
+    exp = _exp(tmp_path)
+    for setting, row in zip(expand(exp), _rows(), strict=True):
+        expected = _fixed_axes_config(exp, row["task"], row["L"], row["phi"], row["rate_lambda"])
+        assert setting_config(exp, setting) == expected
 
 
 def test_its_train_hashes_are_pinned(tmp_path, monkeypatch):
     monkeypatch.setattr(fct.config, "LOSS_VERSION", FIXTURE_LOSS_VERSION)
     monkeypatch.setattr(fct.config, "MODEL_VERSION", FIXTURE_MODEL_VERSION)
-    sweep = _sweep(tmp_path)
-    hashes = [setting_config(sweep, s).section_hash("data", "net", "train") for s in expand(sweep)]
+    exp = _exp(tmp_path)
+    hashes = [setting_config(exp, s).section_hash("data", "net", "train") for s in expand(exp)]
     assert hashes == [row["train_hash"] for row in _rows()]
 
 

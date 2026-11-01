@@ -1,6 +1,6 @@
-"""The phase_transition_grid notebook: its source, one test per change the PI asked for (on the
+"""The phase_transition_exp notebook: its source, one test per change the PI asked for (on the
 built cells, on the plotting functions the cells define, and on executed outputs), and end-to-end
-executions on a tiny `phase_transition` sweep (CPU) with one trained and one never-run setting."""
+executions on a tiny `phase_transition` experiment (CPU) with one trained and one never-run setting."""
 
 import ast
 import shutil
@@ -17,7 +17,8 @@ from nbclient.exceptions import CellExecutionError
 
 from fct.config import DataConfig, NetConfig
 from fct.data import make_dataset
-from fct.grid_view import tuning_view
+from fct.exp import expand, run_setting, save_exp, setting_dir
+from fct.exp_view import tuning_view
 from fct.model import make_net
 from fct.phase_view import (
     average_views,
@@ -36,12 +37,11 @@ from fct.spatial import (
     SpatialConfig,
     build_spaces,
 )
-from fct.sweep import expand, run_setting, save_sweep, setting_dir
 from fct.tasks import latent_lattice_dataset
-from notebooks.build_phase_transition_grid import build_notebook, function_source
+from notebooks.build_phase_transition_exp import build_notebook, function_source
 from notebooks.build_spatial import execute_notebook, set_parameters
 from tests.test_build_spatial import _code, _n_figures_in, _text_outputs
-from tests.test_phase_view import _tiny_sweep
+from tests.test_phase_view import _tiny_exp
 
 CPU, F64 = torch.device("cpu"), torch.float64
 # One figure per weight layer for the prior matrices, the spectra and the weight kernels (L = 1:
@@ -50,7 +50,7 @@ CPU, F64 = torch.device("cpu"), torch.float64
 N_PRIOR_FIGURES = 2 + 2
 N_FIGURES = N_PRIOR_FIGURES + 1 + 1 + 2 + 2 + 1 + 2
 GUARDED_CELLS = 7  # trained-only code cells: loss, examples, kernels, A, tuning, overlaps, + loader
-N_LATENTS = _tiny_sweep().linear_teacher.n_latents
+N_LATENTS = _tiny_exp().linear_teacher.n_latents
 PARAMETERS = {"MEMBER": 1, "SORT_DIM": 1, "P_TEST": 40, "N_EIG": 3, "N_NEURONS": 4}
 
 
@@ -111,7 +111,7 @@ def test_source_notebook_validates_has_no_outputs_and_no_path():
 
 
 def test_the_committed_notebook_is_what_the_builder_produces():
-    path = Path(__file__).parents[1] / "notebooks" / "phase_transition_grid.ipynb"
+    path = Path(__file__).parents[1] / "notebooks" / "phase_transition_exp.ipynb"
     committed = nbformat.read(path, 4)
     assert [(c.cell_type, c.source) for c in committed.cells] == [
         (c.cell_type, c.source) for c in build_notebook().cells
@@ -273,7 +273,7 @@ def test_weight_kernels_show_the_prior_the_member_and_the_average(draw, spaces):
 
 def _tuning_view(n_neurons, k=2, n_bins=4):
     rng = np.random.default_rng(0)
-    from fct.grid_view import TuningView
+    from fct.exp_view import TuningView
     from fct.tuning import TuningCurves
 
     curves = TuningCurves(
@@ -350,9 +350,9 @@ def test_text_names_the_palette_limit_of_the_example_outputs():
 def root(tmp_path_factory):
     """phase_transition tiny (spatial.d in {2, 3}, B = 2) with only d = 2 trained."""
     root = tmp_path_factory.mktemp("phase_nb")
-    sweep = _tiny_sweep()
-    save_sweep(sweep, root)
-    run_setting(sweep, 0, root, log=lambda _: None)
+    exp = _tiny_exp()
+    save_exp(exp, root)
+    run_setting(exp, 0, root, log=lambda _: None)
     return root
 
 
@@ -370,7 +370,7 @@ def test_executes_on_a_trained_setting_and_draws_every_figure(trained):
     text = _text_outputs(trained)
     assert "ERROR" not in text
     assert _n_figures_in(trained) == N_FIGURES
-    assert "| 0 | 2 |" in text and "| 1 | 3 |" in text  # the grid
+    assert "| 0 | 2 |" in text and "| 1 | 3 |" in text  # the settings table
     assert "done" in text and "missing" in text
     for i, cell in enumerate(trained.cells):
         if any("image/png" in o.get("data", {}) for o in cell.get("outputs", [])):
@@ -431,7 +431,7 @@ def test_a_member_outside_the_ensemble_fails_loudly(root):
         _execute(root, {"spatial.d": 2}, MEMBER=2)
 
 
-def test_a_setting_outside_the_grid_fails_loudly(root):
+def test_a_setting_outside_the_experiment_fails_loudly(root):
     with pytest.raises(CellExecutionError, match="spatial.d"):
         _execute(root, {"spatial.d": 5})
 
@@ -439,7 +439,7 @@ def test_a_setting_outside_the_grid_fails_loudly(root):
 def test_a_partly_trained_setting_is_drawn_and_labelled_provisional(root, tmp_path):
     copy = tmp_path / "copy"
     shutil.copytree(root, copy)
-    (setting_dir(copy, expand(_tiny_sweep())[0]) / "train" / "final.pt").unlink()
+    (setting_dir(copy, expand(_tiny_exp())[0]) / "train" / "final.pt").unlink()
     nb = _execute(copy, {"spatial.d": 2})
     text = _text_outputs(nb)
     assert "ERROR" not in text and "provisional" in text.lower()
@@ -709,7 +709,7 @@ def test_the_figure_titles_carry_the_status_tag_when_given(draw, spaces):
 def test_every_figure_of_a_partly_trained_run_is_tagged_provisional(root, tmp_path):
     copy = tmp_path / "copy"
     shutil.copytree(root, copy)
-    (setting_dir(copy, expand(_tiny_sweep())[0]) / "train" / "final.pt").unlink()
+    (setting_dir(copy, expand(_tiny_exp())[0]) / "train" / "final.pt").unlink()
     partial = Session(build_notebook(), copy, {"spatial.d": 2})
     assert len(partial.figures) == N_FIGURES
     for _, fig in partial.figures:
@@ -741,7 +741,7 @@ def test_the_tuning_line_names_the_rate_bins_n_bins_not_b(trained):
     assert "P = 40, n_bins = 8" in text and "B = 8" not in text
 
 
-def test_the_text_fits_this_sweep():
+def test_the_text_fits_this_exp():
     text = _markdown(build_notebook())
     assert "tanh rates" not in text and "at the defaults" not in text
     assert "log y-axis" in text and "log axis" not in text.replace("log y-axis", "")
