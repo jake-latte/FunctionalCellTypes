@@ -1,6 +1,7 @@
-"""Every preset keeps the hashes the code gave before `grid_hash` became `exp_hash`.
+"""Every preset file keeps the hashes the Python presets gave.
 
-`fixtures/preset_hashes.json` was computed with the pre-rename code: for each preset the
+`fixtures/preset_hashes.json` was computed with the code that defined the presets in Python
+(`lambda_exp` at its 7 log-spaced points per axis): for each preset the
 experiment hash, and for each setting its train hash (`section_hash("data", "net", "train")`),
 its mean-field (solve) hash and its directory. A renamed or restructured experiment must not
 move any of them, or finished runs would be taken for stale.
@@ -12,11 +13,10 @@ from pathlib import Path
 import pytest
 
 from fct.exp import (
-    LAMBDA_PRESETS,
-    PRESET_NAMES,
     exp_hash,
     expand,
     preset,
+    preset_names,
     run_setting,
     save_exp,
     setting_config,
@@ -25,29 +25,20 @@ from fct.exp import (
 from fct.meanfield import meanfield_hash
 
 PINNED = json.loads((Path(__file__).parent / "fixtures" / "preset_hashes.json").read_text())
-N_LAMBDAS = (1, 3)
-
-
-def _pinned_key(name: str, n_lambda: int | None) -> str:
-    return name if n_lambda is None else f"{name}:{n_lambda}"
-
-
-CASES = [
-    (name, n) for name in PRESET_NAMES for n in (N_LAMBDAS if name in LAMBDA_PRESETS else (None,))
-]
 
 
 def test_the_pins_cover_every_preset():
-    assert set(PINNED) == {_pinned_key(*case) for case in CASES}
+    assert set(PINNED) == set(preset_names())
 
 
-@pytest.mark.parametrize(("name", "n_lambda"), CASES, ids=lambda c: str(c))
-def test_a_preset_keeps_its_hashes(name, n_lambda):
-    pinned = PINNED[_pinned_key(name, n_lambda)]
-    exp = preset(name, n_lambda)
+@pytest.mark.parametrize("name", sorted(PINNED))
+def test_a_preset_keeps_its_hashes(name):
+    pinned = PINNED[name]
+    exp = preset(name)
     settings = expand(exp)
     configs = [setting_config(exp, s) for s in settings]
     assert exp_hash(exp) == pinned["exp_hash"]
+    assert len(settings) == pinned["n_settings"]
     assert [str(s.relpath) for s in settings] == pinned["relpaths"]
     assert [c.section_hash("data", "net", "train") for c in configs] == pinned["train"]
     assert [meanfield_hash(c) for c in configs] == pinned["solve"]

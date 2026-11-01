@@ -1,0 +1,125 @@
+{
+  "description": "Linear-teacher experiment over depth, activation and both regularisers: net.L {1, 2} x net.phi {tanh, relu} x train.rate_lambda x train.weight_lambda, both over the 7 decades 1e-6 ... 1 (196 settings). Cluster sizes of `full`; the shared sizes are the knobs to tune before submitting. Viewed with the phase-transition notebook.",
+  "N": 256,
+  "P": 4096,
+  "n_epochs": 15000,
+  "lr": 0.001,
+  "log_int": 100,
+  "save_int": 500,
+  "monitor_int": 100,
+  "monitor_bins": 10,
+  "monitor_shuffles": 5,
+  "linear_teacher": {
+    "n_features": 64,
+    "n_latents": 3,
+    "latent_range": 1.0
+  },
+  "object_action": {
+    "grid_size": 5,
+    "max_objects": 3
+  },
+  "what_where": {
+    "n_motifs": 8
+  },
+  "seeds": {
+    "data": 0,
+    "net": 0,
+    "train": 0
+  },
+  "dtype": "float32",
+  "device": "auto",
+  "task": "linear_teacher",
+  "L": 3,
+  "g": 1.0,
+  "phi": "relu",
+  "weight_lambda": 0.0002,
+  "rate_lambda": 0.001,
+  "optimizer": "adam",
+  "beta": 1.0,
+  "spatial": null,
+  "meanfield": {
+    "n_points": 100,
+    "beta": null,
+    "prior_scale": null,
+    "alpha": null,
+    "learning_prefactor": null,
+    "rate_tilt": null,
+    "solver": {
+      "sampler": "hmc",
+      "n_outer": 300,
+      "n_inner_max": 30,
+      "inner_tol": 0.01,
+      "inner_tol_mc": 2.0,
+      "eta_phi": 0.05,
+      "eta_phihat": 0.05,
+      "eta_max": 0.25,
+      "eta_grow": 1.1,
+      "max_backtrack": 8,
+      "eta_min_rel": 0.001,
+      "max_div_frac": 0.02,
+      "max_h2_growth": 10.0,
+      "max_h2_prior_ratio": 100.0,
+      "max_mc_err_growth": 10.0,
+      "eps_collapse": 0.01,
+      "project_tilt": true,
+      "tilt_floor": 0.05,
+      "max_rel_step": 0.1,
+      "inner_step_control": "progress",
+      "eta_max_phihat": 0.25,
+      "phi_step_scale": "kernel",
+      "inner_start": "target",
+      "tilt_tripwire_resid": 0.9,
+      "tilt_tripwire_steps": 3,
+      "pd_floor_rel": 1e-08,
+      "inv_floor_rel": 0.0001,
+      "n_chains": 2048,
+      "n_trans": 2,
+      "n_trans_outer": 5,
+      "n_leap": 10,
+      "eps0": 0.05,
+      "target_accept": 0.75,
+      "adapt_rate": 0.05,
+      "warmup_trans": 200,
+      "sample_dtype": "float32",
+      "jitter_rel": 1e-06,
+      "precondition": true,
+      "n_importance_samples": 4096,
+      "importance_proposal_scale": 1.0,
+      "min_ess_drop": 0.1,
+      "min_ess_frac": 0.01,
+      "init": "lazy",
+      "n_init_samples": 20000,
+      "log_int": 5,
+      "save_int": 10,
+      "seed": 0
+    }
+  },
+  "axes": {
+    "net.L": [
+      1,
+      2
+    ],
+    "net.phi": [
+      "tanh",
+      "relu"
+    ],
+    "train.rate_lambda": [
+      1e-06,
+      9.999999999999999e-06,
+      0.0001,
+      0.001,
+      0.01,
+      0.1,
+      1.0
+    ],
+    "train.weight_lambda": [
+      1e-06,
+      9.999999999999999e-06,
+      0.0001,
+      0.001,
+      0.01,
+      0.1,
+      1.0
+    ]
+  }
+}

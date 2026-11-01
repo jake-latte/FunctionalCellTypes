@@ -43,13 +43,11 @@ from fct.draw import (
     plot_training_history,
 )
 from fct.exp import (
-    FIXED_AXES_PRESETS,
-    LAMBDA_PRESETS,
     LEGACY_EXP_FILE,
-    PRESET_NAMES,
     STAGES,
     ExpConfig,
     ExpError,
+    PresetError,
     Stage,
     UnmigratedExpError,
     exp_path,
@@ -57,6 +55,7 @@ from fct.exp import (
     has_settings,
     load_exp,
     preset,
+    preset_names,
     run_setting,
     save_exp,
     setting_dir,
@@ -355,7 +354,7 @@ def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
     if axes and tree["axes"] is None:
         raise CliError(
             f"preset {preset_name!r} is the modularity experiment, which has no editable axes; "
-            f"--axis needs one of {[*LAMBDA_PRESETS, *FIXED_AXES_PRESETS]}"
+            "--axis needs a preset that has axes"
         )
     for item in axes:
         key, sep, text = item.partition("=")
@@ -363,6 +362,13 @@ def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
         if not key or not sep or not isinstance(values, list):
             raise CliError(f"--axis expects config.path=[value, ...], got {item!r}")
         tree["axes"][key] = values
+
+
+def _derived_description(preset_name: str, sets: Sequence[str], axes: Sequence[str]) -> str:
+    """What an experiment made from a preset with overrides says about itself: the preset and
+    each override as it was given."""
+    given = [f"--set {item}" for item in sets] + [f"--axis {item}" for item in axes]
+    return f"Preset {preset_name!r} with overrides: {'; '.join(given)}"
 
 
 def _reject_axes_overrides(overrides: Sequence[str]) -> None:
@@ -388,12 +394,14 @@ def cmd_exp_init(args: argparse.Namespace) -> int:
         )
     _reject_axes_overrides(args.set)
     try:
-        base = preset(args.preset, args.n_lambda)
-    except ValueError as err:  # a missing or unwanted --n-lambda
+        base = preset(args.preset)
+    except PresetError as err:
         raise CliError(str(err)) from err
     try:
         tree = _override_tree(base.model_dump(), args.set)
         _override_axes(tree, args.axis, args.preset)
+        if args.set or args.axis:  # the preset's description would no longer be true
+            tree["description"] = _derived_description(args.preset, args.set, args.axis)
         exp = ExpConfig.model_validate(tree)
     except ValidationError as err:
         raise CliError(str(err)) from err
@@ -486,6 +494,22 @@ def cmd_exp_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+class _PresetChoices:
+    """The presets, read from the presets folder only when the parser needs them (`exp init
+    --help` or its error message), so a broken folder cannot affect the other subcommands.
+    Whether a name is a preset is decided by `preset`, whose error also lists the ignored files;
+    so `in` accepts every name, and an unreadable folder shows no choices instead of failing."""
+
+    def __iter__(self):
+        try:
+            return iter(preset_names())
+        except PresetError:  # `exp init` itself reports the folder's problem
+            return iter(())
+
+    def __contains__(self, name: object) -> bool:
+        return True
+
+
 def _add_exp_parser(sub) -> None:
     p_exp = sub.add_parser(
         "exp", help="an experiment: runs over varied hyperparameters", description=EXP_HELP
@@ -499,10 +523,9 @@ def _add_exp_parser(sub) -> None:
         return p
 
     p_init = add("init", cmd_exp_init, "write ROOT/exp.json from a preset")
-    p_init.add_argument("--preset", choices=PRESET_NAMES, default="tiny")
     p_init.add_argument(
-        "--n-lambda", type=int, default=None, metavar="N_LAMBDA",
-        help=f"points per log-spaced lambda axis (required by {list(LAMBDA_PRESETS)}, else not allowed)",
+        "--preset", choices=_PresetChoices(), default="tiny", metavar="NAME",
+        help="the base experiment, a file of fct/presets (default: tiny); one of: %(choices)s",
     )  # fmt: skip
     p_init.add_argument(
         "--axis", action="append", default=[], metavar="PATH=[V,...]",

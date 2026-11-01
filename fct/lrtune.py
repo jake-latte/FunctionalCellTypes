@@ -44,6 +44,7 @@ from fct.exp import (
     load_exp,
     preset,
     run_setting,
+    same_experiment,
     save_exp,
     setting_config,
     setting_dir,
@@ -487,6 +488,7 @@ def tuning_template(
     log_int = max(1, n_epochs // LOGGED_POINTS)
     return preset(base).model_copy(
         update={
+            "description": None,  # the base's description does not describe the tuning sizes
             "N": N,
             "P": P,
             "n_epochs": n_epochs,
@@ -518,7 +520,7 @@ def subset_indices(exp: ExpConfig, tasks: Sequence[str], layers: Sequence[int]) 
 def _prepare_root(exp: ExpConfig, root: Path) -> None:
     """Write ROOT/exp.json, or check that the one there is the same experiment."""
     if (root / "exp.json").exists():
-        if load_exp(root) != exp:
+        if not same_experiment(load_exp(root), exp):
             raise ValueError(f"{root}/exp.json differs from the requested trial; use a fresh base")
     else:
         save_exp(exp, root)

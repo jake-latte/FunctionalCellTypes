@@ -12,13 +12,12 @@ from fct.cli import main
 from fct.config import Config
 from fct.data import task_dims
 from fct.exp import (
-    FIXED_AXES_PRESETS,
-    PRESET_NAMES,
     exp_hash,
+    exp_text,
     expand,
-    lambda_exp,
     load_exp,
     preset,
+    preset_names,
     run_setting,
     setting_config,
     setting_dir,
@@ -29,19 +28,33 @@ from fct.train import _check_sgld_step_resolves_the_prior, load_trained
 
 DS = [1, 2, 3, 4]
 LAMBDAS = [0.1, 0.5, 0.75, 0.9, 0.99]
-# sha256 of the exp.json text of each other preset, and exp_hash of lambda_exp(2). The texts are
-# those of the code before phase_transition was added, with the key `grid` renamed `axes` (the
-# only change; the hashes of the old texts were checked to match once the key was swapped back).
-PINNED_EXP_JSON = {
+# sha256 of the exp.json text of each preset. OLD_EXP_JSON is the text the Python presets wrote
+# (lambda_exp at 7 points per axis, which is what the file holds); the file adds a description to
+# it and nothing else, so the text with that key removed must still be the old one.
+OLD_EXP_JSON = {
     "tiny": "712cdde2fac021c1e596ddf21d6d51c4f9f9ee73661b580ac9634f3465a1a14a",
     "full": "25b55b25a244b6337c2d33008c33dc862eb976644d62c847223fe4cee3bbcd73",
     "modularity": "25b55b25a244b6337c2d33008c33dc862eb976644d62c847223fe4cee3bbcd73",
-    "lambda_exp": "1da65a4c0ff88918780e6025e32ff40061e612c466a14fa9386644b93c9efd32",
+    "lambda_exp": "cbdfb5c226b67f4867e7f47d05fed64b283afa35bb148aa49ba04489ba15e1be",
     "spatial_tiny": "a00715e7482b7163121feaa9ea303ac246fdd5ba01aad86876054d3124e06a83",
     "spatial_n_scan": "1abd77565bc39ada4188857a397a7ca1222518915399aa85159479bf21e08c1e",
     "spatial_exp": "2165b782d399d9ec44373dabc3b0fdc096ef8b87fb0ab5772f3a8cbc5c7def4d",
+    "phase_transition": "391a7da6e4320bae43e8538d4af90a3ffca694ff22f5580a4657ecbd56c9b3e7",
 }
-PINNED_LAMBDA_EXP_HASH = "781bf3c7d26c"
+NEW_EXP_JSON = {
+    "tiny": "823146ddeb718c90fc68a9cbbd41b266996ae26ed32807eca6e10acd8d5d4bbb",
+    "full": "57031a961d366e8c7ec13f4d0d21e3d387bbbfaecef62c6bb30fc704019cfe28",
+    "modularity": "cecee2b541aaabe9b3149610cf61f92712e1b6ad8f7af28a0f878caada4b831c",
+    "lambda_exp": "7e356e4ea5c3cba61b9f462cd3ce2f9bb0ec1cc04a43d54672cff64e666f1dac",
+    "spatial_tiny": "ad809e96e9160749fb025d391bc0658ce63030979d901e4394401daf05938092",
+    "spatial_n_scan": "13d8e5a817bedf0548182143f4b94b42044e63a7fd601b22a334fca4207eb47c",
+    "spatial_exp": "10533d2be87cf11bf83d21bd3bc202d90fd1da0c7089b232abbde72a58512477",
+    "phase_transition": "3c1684daacf2f562ee3240c543fd9d1625605fa7473c4be229d2a761f08917fa",
+}
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _settings():
@@ -63,12 +76,6 @@ def _top_eigenvalue(K: torch.Tensor, iterations: int = 20_000) -> float:
         w = K @ v
         v = w / torch.linalg.norm(w)
     return (v @ K @ v).item()
-
-
-def test_the_preset_is_a_fixed_axes_preset_and_rejects_n_lambda():
-    assert "phase_transition" in FIXED_AXES_PRESETS
-    with pytest.raises(ValueError, match="n_lambda"):
-        preset("phase_transition", n_lambda=3)
 
 
 def test_the_twenty_settings_are_d_slowest_in_a_stable_order():
@@ -96,16 +103,18 @@ def test_the_exp_json_written_by_the_cli_loads_back_to_the_preset(tmp_path):
     assert exp_hash(loaded) == exp_hash(preset("phase_transition"))
 
 
-@pytest.mark.parametrize("name", sorted(set(PRESET_NAMES) - {"phase_transition"}))
-def test_every_other_preset_writes_the_exp_json_it_wrote_before(name):
-    exp = preset(name, 2) if name == "lambda_exp" else preset(name)
-    text = exp.model_dump_json(indent=2) + "\n"  # what save_exp writes
-    assert hashlib.sha256(text.encode()).hexdigest() == PINNED_EXP_JSON[name]
-    assert "B" not in exp.model_dump()
+def test_the_pins_cover_every_preset():
+    assert set(NEW_EXP_JSON) == set(OLD_EXP_JSON) == set(preset_names())
 
 
-def test_lambda_exp_keeps_the_exp_hash_the_old_preset_had():
-    assert exp_hash(lambda_exp(2)) == PINNED_LAMBDA_EXP_HASH
+@pytest.mark.parametrize("name", sorted(NEW_EXP_JSON))
+def test_a_preset_writes_the_exp_json_it_wrote_before_plus_its_description(name):
+    exp = preset(name)
+    text = exp_text(exp)
+    assert _sha(text) == NEW_EXP_JSON[name]
+    lines = text.splitlines(keepends=True)
+    assert lines[1].startswith('  "description": ')
+    assert _sha("".join(lines[:1] + lines[2:])) == OLD_EXP_JSON[name]
 
 
 @pytest.mark.parametrize("d", DS)
