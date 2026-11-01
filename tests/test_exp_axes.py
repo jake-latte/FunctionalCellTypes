@@ -125,7 +125,7 @@ def test_lambda_exp_preset_has_seven_lambdas_per_axis():
     assert len(pairs) == 49  # every weight/rate combination is a setting
 
 
-def test_lambda_exp_lambdas_are_the_seven_decades_from_1e_6_to_1():
+def test_lambda_exp_lambdas_are_seven_log_spaced_values_from_1e_6_to_1():
     exp = preset("lambda_exp")
     for axis in ("train.weight_lambda", "train.rate_lambda"):
         assert exp.axes[axis] == np.logspace(-6, 0, 7).tolist()

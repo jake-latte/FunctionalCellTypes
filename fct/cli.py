@@ -364,6 +364,10 @@ def _override_axes(tree: dict, axes: Sequence[str], preset_name: str) -> None:
         tree["axes"][key] = values
 
 
+def _sets_description(sets: Sequence[str]) -> bool:
+    return any(item.partition("=")[0] == "description" for item in sets)
+
+
 def _derived_description(preset_name: str, sets: Sequence[str], axes: Sequence[str]) -> str:
     """What an experiment made from a preset with overrides says about itself: the preset and
     each override as it was given."""
@@ -400,7 +404,9 @@ def cmd_exp_init(args: argparse.Namespace) -> int:
     try:
         tree = _override_tree(base.model_dump(), args.set)
         _override_axes(tree, args.axis, args.preset)
-        if args.set or args.axis:  # the preset's description would no longer be true
+        # With overrides the preset's description would no longer be true; an explicit
+        # `--set description=...` (even null) is the user's own and stays.
+        if (args.set or args.axis) and not _sets_description(args.set):
             tree["description"] = _derived_description(args.preset, args.set, args.axis)
         exp = ExpConfig.model_validate(tree)
     except ValidationError as err:

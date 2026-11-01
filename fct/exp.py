@@ -296,7 +296,8 @@ def _folder(directory: Path | str | None) -> Traversable:
 
 
 def _is_preset_file(entry: Traversable) -> bool:
-    """A regular file `<stem>.json`, not hidden, that is a candidate for a preset."""
+    """A regular file `<stem>.json`, not hidden, that is a candidate for a preset (a symlink to a
+    file counts; one to a folder or to nothing does not)."""
     name = entry.name
     return entry.is_file() and name.endswith(PRESET_SUFFIX) and not name.startswith(".")
 

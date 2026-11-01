@@ -1,5 +1,5 @@
 {
-  "description": "The modularity experiment, 36 settings: data.task {linear_teacher, object_action, what_where} x net.L {1, 3, 5} x net.phi {tanh, relu} x train.rate_lambda {0, 1e-3} (the built-in axes, used because `axes` is null; directories ROOT/<task>/L{L}_{phi}_r{rate}/), weight regulariser at its library default. Cluster sizes (N 256, P 4096, 15000 epochs); N, P and n_epochs are placeholders to tune before submitting. Same as `modularity`.",
+  "description": "The modularity experiment, 36 settings: data.task {linear_teacher, object_action, what_where} x net.L {1, 3, 5} x net.phi {tanh, relu} x train.rate_lambda {0, 1e-3} (the built-in axes, used because `axes` is null; directories ROOT/<task>/L{L}_{phi}_r{rate}/), weight regulariser frozen at 0.0002. Cluster sizes (N 256, P 4096, 15000 epochs); N, P and n_epochs are placeholders to tune before submitting. Same as `modularity`.",
   "N": 256,
   "P": 4096,
   "n_epochs": 15000,

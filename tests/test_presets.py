@@ -89,7 +89,7 @@ def test_full_and_modularity_are_two_files_of_the_same_experiment():
     assert preset("full").description != preset("modularity").description
 
 
-def test_lambda_exp_is_four_axes_of_which_two_are_seven_decades():
+def test_lambda_exp_is_four_axes_of_which_two_hold_seven_log_spaced_values():
     exp = preset("lambda_exp")
     assert len(expand(exp)) == 2 * 2 * 7 * 7
     assert [len(v) for v in exp.axes.values()] == [2, 2, 7, 7]
@@ -297,7 +297,7 @@ def test_save_exp_writes_utf_8(tmp_path):
     exp = preset("tiny").model_copy(update={"description": "lambda λ, ≥"})
     save_exp(exp, tmp_path)
     raw = (tmp_path / "exp.json").read_bytes()
-    assert "λ".encode() in raw or b"\\u03bb" in raw
+    assert "λ".encode() in raw
     assert load_exp(tmp_path).description == exp.description
     assert not list(tmp_path.glob("*.tmp"))
 
@@ -381,3 +381,23 @@ def test_migration_still_writes_the_exp_json_without_a_description(tmp_path):
     migrate_exp(tmp_path)
     assert "description" not in json.loads((tmp_path / "exp.json").read_text(encoding="utf-8"))
     assert load_exp(tmp_path) == ExpConfig.model_validate(tree)
+
+
+def test_set_description_is_kept_over_the_derived_one(tmp_path, capsys):
+    args = ["--set", "N=16", "--set", "description=my own words"]
+    assert _cli(capsys, "init", tmp_path, "--preset", "tiny", *args)[0] == 0
+    assert load_exp(tmp_path).description == "my own words"
+
+
+def test_set_description_null_gives_no_description(tmp_path, capsys):
+    assert _cli(capsys, "init", tmp_path, "--preset", "tiny", "--set", "description=null")[0] == 0
+    assert load_exp(tmp_path).description is None
+    assert "description" not in json.loads((tmp_path / "exp.json").read_text(encoding="utf-8"))
+
+
+def test_the_frozen_regulariser_and_the_tiny_solve_size_are_in_the_descriptions():
+    assert "0.0002" in preset("tiny").description
+    assert "0.0002" in preset("full").description
+    assert "0.0002" in preset("modularity").description
+    assert "at most P" in preset("spatial_tiny").description
+    assert "decades" not in preset("lambda_exp").description

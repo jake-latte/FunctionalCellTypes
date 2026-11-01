@@ -1,5 +1,5 @@
 {
-  "description": "Linear-teacher experiment over depth, activation and both regularisers: net.L {1, 2} x net.phi {tanh, relu} x train.rate_lambda x train.weight_lambda, both over the 7 decades 1e-6 ... 1 (196 settings). Cluster sizes of `full`; the shared sizes are the knobs to tune before submitting. Viewed with the phase-transition notebook.",
+  "description": "Linear-teacher experiment over depth, activation and both regularisers: net.L {1, 2} x net.phi {tanh, relu} x train.rate_lambda x train.weight_lambda, both 7 log-spaced values, one per decade, 1e-6 ... 1 (196 settings). Cluster sizes of `full`; the shared sizes are the knobs to tune before submitting. Viewed with the phase-transition notebook.",
   "N": 256,
   "P": 4096,
   "n_epochs": 15000,

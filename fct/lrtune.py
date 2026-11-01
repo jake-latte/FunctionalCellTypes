@@ -39,6 +39,7 @@ from fct.exp import (
     ExpConfig,
     Seeds,
     Setting,
+    exp_text,
     expand,
     get_setting,
     load_exp,
@@ -49,6 +50,7 @@ from fct.exp import (
     setting_config,
     setting_dir,
     setting_status,
+    write_exp_text,
 )
 from fct.model import MLP
 from fct.tasks import Dataset, resample
@@ -703,7 +705,7 @@ def _load_template(base: Path) -> ExpConfig:
     path = base / TUNING_FILE
     if not path.exists():
         raise FileNotFoundError(f"{path} not found; run `init` first")
-    return ExpConfig.model_validate_json(path.read_text())
+    return ExpConfig.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def _report(args: argparse.Namespace) -> int:
@@ -729,7 +731,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             update={"device": args.device}
         )
         args.base.mkdir(parents=True, exist_ok=True)
-        (args.base / TUNING_FILE).write_text(template.model_dump_json(indent=2) + "\n")
+        write_exp_text(args.base / TUNING_FILE, exp_text(template))
         return 0
     if args.command == "report":
         return _report(args)

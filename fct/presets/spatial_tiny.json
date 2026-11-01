@@ -1,5 +1,5 @@
 {
-  "description": "Seconds per setting on a CPU, for checking the spatial pipeline (not for results): a linear teacher, one hidden layer of N in {4, 8} units under the spatial prior, SGLD. weight_lambda 0.2 is under the lambda_w / (2 beta) convention: 2 beta x 1e-4 at beta 1e3.",
+  "description": "Seconds per setting on a CPU, for checking the spatial pipeline (not for results): a linear teacher, one hidden layer of N in {4, 8} units under the spatial prior, SGLD. weight_lambda 0.2 is under the lambda_w / (2 beta) convention: 2 beta x 1e-4 at beta 1e3. meanfield.n_points is 16, at most P, so a solve reaches the solver.",
   "N": 8,
   "P": 16,
   "n_epochs": 6,

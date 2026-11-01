@@ -42,11 +42,11 @@ OLD_EXP_JSON = {
     "phase_transition": "391a7da6e4320bae43e8538d4af90a3ffca694ff22f5580a4657ecbd56c9b3e7",
 }
 NEW_EXP_JSON = {
-    "tiny": "823146ddeb718c90fc68a9cbbd41b266996ae26ed32807eca6e10acd8d5d4bbb",
-    "full": "57031a961d366e8c7ec13f4d0d21e3d387bbbfaecef62c6bb30fc704019cfe28",
-    "modularity": "cecee2b541aaabe9b3149610cf61f92712e1b6ad8f7af28a0f878caada4b831c",
-    "lambda_exp": "7e356e4ea5c3cba61b9f462cd3ce2f9bb0ec1cc04a43d54672cff64e666f1dac",
-    "spatial_tiny": "ad809e96e9160749fb025d391bc0658ce63030979d901e4394401daf05938092",
+    "tiny": "f42d0b55033e3b77cb42f9b289bb07f417fcd065146eaafc7cf6e42fde01e3ae",
+    "full": "f910c5de65dee0f40ba9779f96c1c8754544fe9b8020904a30b44c0051b5b304",
+    "modularity": "7f4c526e57140c010d9f7fa1f063f6756e12461132a32b82037c74561fb2da64",
+    "lambda_exp": "1790f54686c064dd97cfac9daac4c62f64565475f1fbc150c10fce08288402c2",
+    "spatial_tiny": "dc9d9a2e902d202592063b9172241e067141cd661426c9f72cac329b0d6b10fe",
     "spatial_n_scan": "13d8e5a817bedf0548182143f4b94b42044e63a7fd601b22a334fca4207eb47c",
     "spatial_exp": "10533d2be87cf11bf83d21bd3bc202d90fd1da0c7089b232abbde72a58512477",
     "phase_transition": "3c1684daacf2f562ee3240c543fd9d1625605fa7473c4be229d2a761f08917fa",

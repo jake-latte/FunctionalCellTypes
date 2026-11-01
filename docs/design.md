@@ -928,7 +928,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
     # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the experiment's `weight_lambda` field (the TrainConfig default 2e-4 unless set) unless it is an axis
 # Presets: base experiments stored as data. fct/presets/<name>.json, one complete ExpConfig per file (no inheritance, no comments), is the only
 # definition of a preset; its `description` carries the prose and caveats, so read the file rather than a copy here. The names are tiny, full,
-# modularity (the same as full, two files: both names are in use), lambda_exp (the two lambda axes are the fixed 7 decades np.logspace(-6, 0, 7)),
+# modularity (the same as full, two files: both names are in use), lambda_exp (the two lambda axes are 7 log-spaced values, one per decade, np.logspace(-6, 0, 7)),
 # spatial_tiny, spatial_n_scan, spatial_exp, phase_transition. To change a preset edit its file; to add one, add `<name>.json` with name matching
 # [A-Za-z_][A-Za-z0-9_]*. Files are read at call time, so a new file is seen at once with an editable install; a wheel holds the files it was built with.
 def preset(name, directory=None) -> ExpConfig    # the base experiment <directory or fct/presets>/<name>.json, read through importlib.resources (so also from inside a wheel) and validated; PresetError (an ExpError, so a ValueError) naming the full path if the name is unknown (the message lists the presets and the ignored files) or the file is unreadable or invalid

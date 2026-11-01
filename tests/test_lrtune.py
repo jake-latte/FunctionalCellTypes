@@ -2,6 +2,7 @@
 settings, the runner and the command line on a tiny CPU experiment."""
 
 import itertools
+import json
 import math
 from pathlib import Path
 
@@ -584,3 +585,16 @@ def test_evaluate_setting_says_stale_for_a_final_from_another_loss_version(tmp_p
     monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION + 1)
     with pytest.raises(FileNotFoundError, match="stale"):
         evaluate_setting(tmp_path, exp, setting, held_out_seed=77)
+
+
+def test_a_template_with_a_non_ascii_description_round_trips_as_utf_8(tmp_path):
+    base = tmp_path / "base"
+    assert (
+        main(["init", str(base), "--N", "8", "--P", "16", "--epochs", "6", "--device", "cpu"]) == 0
+    )
+    path = base / "template.json"
+    tree = json.loads(path.read_text(encoding="utf-8"))
+    path.write_bytes(
+        json.dumps({**tree, "description": "\u03bb scan"}, ensure_ascii=False).encode()
+    )
+    assert lrtune._load_template(base).description == "\u03bb scan"
