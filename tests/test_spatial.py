@@ -19,6 +19,7 @@ from fct.spatial import (
     periodic_gaussian_kernel,
     spatial_kernel_pairs,
     torus_distance,
+    wrapped_gaussian_profile,
 )
 
 
@@ -170,6 +171,62 @@ def test_periodic_gaussian_kernel_is_circulant_on_a_grid_ring(shift):
     torch.testing.assert_close(K, K.roll((shift, shift), (0, 1)))
 
 
+# ------------------------------------------------------------------ length_scale = 0 (identity)
+
+
+def _grid_2d():
+    return make_embedding(EmbeddingSpec(kind="grid", shape=[5, 6]), 30, d=2, box=1.0).positions
+
+
+@pytest.mark.parametrize("name", ["ring10", "random1d", "grid2d", "random2d"])
+def test_zero_length_scale_kernel_is_amplitude_times_identity(name):
+    x = {
+        "ring10": _ring(10),
+        "random1d": make_embedding(EmbeddingSpec(kind="random"), 20, d=1, box=1.0).positions,
+        "grid2d": _grid_2d(),
+        "random2d": _random_2d(),
+    }[name]
+    K = periodic_gaussian_kernel(x, x, 0.0, 1.0, 1.7)
+    assert K.dtype == DTYPE
+    assert torch.equal(K, 1.7 * torch.eye(len(x), dtype=DTYPE))
+
+
+def test_zero_length_scale_kernel_counts_whole_box_shifts_as_coinciding():
+    x = torch.tensor([[0.25, 0.5], [0.75, 0.0]], dtype=DTYPE)
+    shifted = x + torch.tensor([[3.0, -2.0]], dtype=DTYPE)
+    K = periodic_gaussian_kernel(shifted, x, 0.0, 1.0, 2.0)
+    assert K.dtype == DTYPE
+    assert torch.equal(K, 2.0 * torch.eye(2, dtype=DTYPE))
+
+
+def test_zero_length_scale_kernel_needs_every_axis_to_coincide():
+    x = torch.tensor([[0.25, 0.5]], dtype=DTYPE)
+    y = torch.tensor([[1.25, 0.6], [0.25, 0.5]], dtype=DTYPE)
+    K = periodic_gaussian_kernel(x, y, 0.0, 1.0, 1.0)
+    assert K.dtype == DTYPE
+    assert torch.equal(K, torch.tensor([[0.0, 1.0]], dtype=DTYPE))
+
+
+def test_zero_length_scale_kernel_has_the_requested_rectangular_shape():
+    xp = torch.tensor([[0.0], [0.5]], dtype=DTYPE)
+    xq = torch.tensor([[0.95], [0.5], [1.0]], dtype=DTYPE)
+    K = periodic_gaussian_kernel(xp, xq, 0.0, 1.0, 3.0)
+    assert torch.equal(K, torch.tensor([[0.0, 0.0, 3.0], [0.0, 3.0, 0.0]], dtype=DTYPE))
+
+
+def test_zero_length_scale_profile_is_amplitude_at_multiples_of_box_else_zero():
+    delta = torch.tensor([-2.0, -0.5, -0.25, 0.0, 0.25, 1.0, 3.0, 3.25], dtype=DTYPE)
+    out = wrapped_gaussian_profile(delta, 0.0, 1.0, 4.0)
+    assert torch.equal(out, torch.tensor([4.0, 0.0, 0.0, 4.0, 0.0, 4.0, 4.0, 0.0], dtype=DTYPE))
+
+
+def test_zero_length_scale_profile_keeps_an_amplitude_float32_cannot_represent():
+    delta = torch.tensor([0.0, 0.3], dtype=DTYPE)
+    out = wrapped_gaussian_profile(delta, 0.0, 1.0, 1.7)
+    assert out.dtype == DTYPE
+    assert torch.equal(out, torch.tensor([1.7, 0.0], dtype=DTYPE))
+
+
 # ------------------------------------------------------------------ penalty_matrix
 
 
@@ -277,9 +334,10 @@ def test_spatial_config_is_strict_about_types():
         SpatialConfig(d="1")
 
 
-def test_kernel_spec_rejects_non_positive_length_scale():
+def test_kernel_spec_accepts_zero_length_scale_and_rejects_negative():
+    assert KernelSpec(length_scale=0.0).length_scale == 0.0
     with pytest.raises(ValidationError):
-        KernelSpec(length_scale=0.0)
+        KernelSpec(length_scale=-0.1)
 
 
 def test_spatial_config_rejects_grid_shape_of_wrong_length():
@@ -348,6 +406,48 @@ def test_build_spaces_rejects_grid_shape_not_matching_population_size():
     hidden = PopulationSpec(embedding=EmbeddingSpec(shape=[5]))
     with pytest.raises(ValueError, match="multiply"):
         build_spaces(SpatialConfig(hidden=hidden), 4, 6, 2, 3)
+
+
+def _identity_hidden_cfg(**kwargs):
+    return SpatialConfig(
+        hidden=PopulationSpec(kernel=KernelSpec(length_scale=0.0, **kwargs)),
+        input=PopulationSpec(kernel=KernelSpec(length_scale=0.15)),
+        output=PopulationSpec(kernel=KernelSpec(length_scale=0.15)),
+    )
+
+
+def test_build_spaces_zero_length_scale_hidden_gives_identity_prior_and_penalty():
+    pop = build_spaces(_identity_hidden_cfg(), m=4, N=12, L=2, n_out=3)[0].post
+    eye = torch.eye(12, dtype=DTYPE)
+    assert torch.equal(pop.K, eye)
+    assert torch.equal(pop.M, eye)
+    assert pop.report.n_floored == 0
+    assert pop.scale == 1.0
+
+
+def test_build_spaces_zero_length_scale_with_amplitude_gives_a_I_and_I_over_a():
+    pop = build_spaces(_identity_hidden_cfg(amplitude=4.0), m=4, N=12, L=1, n_out=3)[0].post
+    eye = torch.eye(12, dtype=DTYPE)
+    assert torch.equal(pop.K, 4.0 * eye)
+    torch.testing.assert_close(pop.M, eye / 4.0, atol=0, rtol=1e-14)
+    assert pop.report.n_floored == 0
+
+
+def test_build_spaces_zero_length_scale_under_lambda_max_gives_c_I_and_scale_c():
+    cfg = SpatialConfig(hidden=PopulationSpec(kernel=KernelSpec(length_scale=0.0)), lambda_max=2.5)
+    pop = build_spaces(cfg, m=4, N=12, L=1, n_out=3)[0].post
+    torch.testing.assert_close(pop.K, 2.5 * torch.eye(12, dtype=DTYPE), atol=1e-15, rtol=0)
+    assert pop.scale == pytest.approx(2.5, rel=1e-14)
+
+
+def test_build_spaces_mixed_zero_hidden_does_not_leak_into_input_and_output():
+    cfg = _identity_hidden_cfg()
+    spaces = build_spaces(cfg, m=6, N=8, L=1, n_out=4)
+    inp, hid, out = spaces[0].pre, spaces[0].post, spaces[1].post
+    assert torch.equal(hid.K, torch.eye(8, dtype=DTYPE))
+    for pop in (inp, out):
+        pos = pop.embedding.positions
+        assert torch.equal(pop.K, periodic_gaussian_kernel(pos, pos, 0.15, cfg.box, 1.0))
 
 
 # ------------------------------------------------------------------ the spatially indexed kernels

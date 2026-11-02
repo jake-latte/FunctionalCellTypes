@@ -29,6 +29,15 @@ the point (the +1 is a margin) and contributes less than exp(-32) ~ 1e-14 of the
 The cut has to be that deep: the eigenvalues on a ring decay like
 exp(-2 pi^2 length_scale^2 j^2 / box^2), so a shallower cut leaves negative eigenvalues.
 
+length_scale = 0 is the limit of K as length_scale -> 0: K_ij = amplitude if x_i = x_j (mod box)
+on every axis and 0 otherwise. "Equal" means delta reduces to exactly 0 in floating point, with
+no tolerance, so positions shifted by a whole box coincide only when the arithmetic is exact
+(e.g. a dyadic box). For distinct positions, which grid embeddings have by construction and
+random ones almost surely, K = amplitude * I (an unstructured prior, the plain weight L2 up to
+scale) and the penalty is I / amplitude; under `lambda_max`, K = lambda_max * I and
+M = I / lambda_max. Positions from `make_embedding` lie in [0, box), so within a population only
+the diagonal coincides.
+
 The penalty. M comes from the symmetric eigendecomposition with eigenvalues floored at
 `min_rel_eig` times the largest. A smooth kernel has many eigenvalues far below that (83%
 of a 100-unit ring at the defaults), so the floor is not just a round-off guard: it caps the
@@ -49,7 +58,7 @@ from typing import Annotated, Literal, Self
 import torch
 from pydantic import Field, model_validator
 
-from fct.schema import PosFloat, PosInt, StrictModel
+from fct.schema import NonNegFloat, PosFloat, PosInt, StrictModel
 
 DTYPE = torch.float64
 # Dropped images lie beyond this many length scales; exp(-N_IMAGE_SIGMAS^2 / 2) = exp(-32) ~ 1e-14.
@@ -85,7 +94,9 @@ class EmbeddingSpec(StrictModel):
 
 
 class KernelSpec(StrictModel):
-    length_scale: PosFloat = 0.1  # same units as `box`
+    # Same units as `box`. 0 gives the identity kernel (amplitude * I), the limit of the wrapped
+    # Gaussian as length_scale -> 0: an unstructured prior on that population's factor.
+    length_scale: NonNegFloat = 0.1
     amplitude: PosFloat = 1.0
 
 
@@ -198,10 +209,14 @@ def wrapped_gaussian_profile(
     delta: torch.Tensor, length_scale: float, box: float, amplitude: float
 ) -> torch.Tensor:
     """The kernel along one axis, amplitude * W(delta) / W(0), for any signed `delta`: K itself
-    for d = 1, and K along a coordinate axis for d > 1."""
+    for d = 1, and K along a coordinate axis for d > 1. length_scale = 0 gives the limit of the
+    profile: `amplitude` where delta reduces to exactly 0 (a whole number of boxes, in exact
+    floating point arithmetic), 0 elsewhere."""
     # Reduce to [0, box/2] (W is even): the images are centred, and K_ij and K_ji sum the same
     # terms in the same order, so K is symmetric to the bit.
     delta = (delta - box * torch.round(delta / box)).abs()
+    if length_scale == 0:  # the Gaussian formula would divide by zero
+        return amplitude * (delta == 0).to(delta.dtype)
     zero = _wrapped_gaussian_1d(torch.zeros(1, dtype=delta.dtype), length_scale, box)
     return amplitude * _wrapped_gaussian_1d(delta, length_scale, box) / zero
 
