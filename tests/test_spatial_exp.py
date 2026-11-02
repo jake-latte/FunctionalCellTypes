@@ -8,6 +8,7 @@ from fct.exp import preset, run_setting, save_exp, with_axes
 from fct.spatial import latent_kernel
 from fct.spatial_exp import (
     load_exp_run,
+    load_setting,
     select_setting,
     settings_table,
 )
@@ -105,3 +106,15 @@ def test_select_refuses_an_ambiguous_request_whatever_was_run(tmp_path):
 def test_select_refuses_a_device_name_that_is_not_one(root):
     with pytest.raises(ValueError, match="device"):
         select_setting(root, {"net.N": 8}, device="tpu")
+
+
+def test_load_setting_gives_the_net_and_history_without_a_test_set(root):
+    chosen = select_setting(root, {"net.N": 8})
+    net, history = load_setting(chosen)
+    assert net.U.shape[0] == 8
+    assert len(history["loss"]) > 0
+
+
+def test_load_setting_refuses_a_setting_that_is_not_trained(root):
+    with pytest.raises(ValueError, match="not trained"):
+        load_setting(select_setting(root, {"net.N": 4}))

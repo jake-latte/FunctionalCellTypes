@@ -55,6 +55,7 @@ from fct.exp import (
     load_exp,
     preset,
     preset_names,
+    refuse_legacy,
     run_setting,
     setting_dir,
     setting_statuses,
@@ -382,6 +383,10 @@ def _reject_axes_overrides(overrides: Sequence[str]) -> None:
 
 def cmd_exp_init(args: argparse.Namespace) -> int:
     path = exp_path(args.root)
+    try:
+        refuse_legacy(args.root)  # first: a root with both files is for `migrate`, not --force
+    except ExpError as err:
+        raise CliError(str(err)) from err
     if path.exists() and not args.force:
         raise CliError(f"{path} already exists; pass --force to overwrite it")
     _reject_axes_overrides(args.set)
@@ -402,7 +407,8 @@ def cmd_exp_init(args: argparse.Namespace) -> int:
     try:
         init_root(exp, args.root, force=args.force)  # legacy file and stray settings are refused
     except ExpError as err:
-        raise CliError(str(err)) from err
+        # the library says force=True; on the command line that is --force
+        raise CliError(str(err).replace("force=True", "--force")) from err
     print(f"wrote {path}")
     return 0
 

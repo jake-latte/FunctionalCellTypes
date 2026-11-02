@@ -27,8 +27,9 @@ from fct.exp import (
     setting_status,
     setting_statuses,
 )
+from fct.model import MLP
 from fct.spatial_view import TrainRun
-from fct.train import load_trained, select_member
+from fct.train import History, load_trained, select_member
 
 
 class ExpSetting(NamedTuple):
@@ -85,17 +86,24 @@ def settings_table(root: Path) -> str:
     return "\n".join(rows)
 
 
-def load_exp_run(chosen: ExpSetting, member: int | None = None) -> tuple[TrainRun, Dataset]:
-    """The trained run of `chosen` and its test set: the 3^k latent-lattice points of the same
-    teacher. ValueError if the setting is not trained. For an ensemble (net.B > 1) `member`
-    picks the network (and its history) and is required (`fct.train.select_member`)."""
+def load_setting(chosen: ExpSetting, member: int | None = None) -> tuple[MLP, History]:
+    """The trained net and training history of `chosen`, on the device its config names.
+    ValueError if the setting is not trained. For an ensemble (net.B > 1) `member` picks the
+    network (and its history) and is required (`fct.train.select_member`)."""
     if chosen.status != "done":
         raise ValueError(f"setting {chosen.setting.axes} is not trained ({chosen.status})")
     cfg = chosen.cfg
-    net, history = select_member(
+    return select_member(
         *load_trained(chosen.directory, cfg, resolve_device(cfg), resolve_dtype(cfg.dtype)),
         member,
     )
+
+
+def load_exp_run(chosen: ExpSetting, member: int | None = None) -> tuple[TrainRun, Dataset]:
+    """The trained run of `chosen` and its test set: the 3^k latent-lattice points of the same
+    teacher. ValueError if the setting is not trained; `member` as in `load_setting`."""
+    cfg = chosen.cfg
+    net, history = load_setting(chosen, member)
     run = TrainRun(chosen.directory, get_dataset(chosen.directory, cfg), net, history)
     test = get_latent_lattice_dataset(chosen.directory, cfg)
     if len(test.x) != 3**cfg.data.n_latents:  # one point per sign pattern
