@@ -175,11 +175,13 @@ class ExpConfig(StrictModel):
 
     `description` is free text saying what the experiment is. It is documentation only: it never
     enters a hash or a directory name, `same_experiment` ignores it, and exp.json omits it when
-    it is None.
+    it is None. exp.json also omits `B` (the ensemble size) at its default, so an absent `B`
+    means the default.
 
     The same data, net and training seeds are used for every setting, so settings differ only
     in the axes. Everything else is the base `Config` a setting starts from (the shared
-    network and loss fields `L`, `g`, `phi`, `B` (the ensemble size), `weight_lambda`, ... are the library defaults unless set). `axes` maps a dotted `Config` path to the list
+    network and loss fields `L`, `g`, `phi`, `B`, `weight_lambda`, ... are the library defaults
+    unless set). `axes` maps a dotted `Config` path to the list
     of values that axis takes; None means the modularity axes. Any Config field may be an axis
     and then wins over the experiment's shared field (`net.N` over `N`, `train.lr` over `lr`), except
     the fields the experiment owns (`EXP_OWNED_AXES`: sizes of the data, seeds, log/save/monitor
@@ -357,12 +359,14 @@ def exp_path(root: Path) -> Path:
 
 
 def exp_text(exp: ExpConfig) -> str:
-    """The text of exp.json. The description is left out when there is none, and B when it is 1,
-    so an experiment without them has the text it had before those fields existed."""
+    """The text of exp.json. `description` is left out when None and `B` when it is the library
+    default, so exp.json files written before those fields existed (and the pinned texts in
+    test_phase_transition_preset.py) stay byte-identical; an absent `B` therefore means the
+    default."""
     exclude = set()
     if exp.description is None:
         exclude.add("description")
-    if exp.B == 1:
+    if exp.B == NetConfig().B:
         exclude.add("B")
     return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
 

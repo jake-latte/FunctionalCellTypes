@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: simple
-status: in progress
+status: in review
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -23,3 +23,8 @@ PI request (2026-11-02): the phase_transition preset should set B as an ordinary
 - Every setting's Config hash, and so its directory and cache, is the same for shared `B = 8` as for a one-value `net.B: [8]` axis with the same other fields. If the setting's relative path differs (axis values may enter directory names), say so in your report rather than changing it.
 - `B: 0` is rejected.
 - The full test suite passes.
+
+## Results
+- Shared `B = 8` and a one-value `net.B: [8]` axis (same other fields) give identical `Config`s, train hashes and solve hashes, so the cache is shared.
+- The relative path differs: the axis spelling puts `_B8` in the directory name and in `exp_hash`, so the shared spelling's directories lack that suffix and `same_experiment` is False. Not changed, as instructed; `tests/test_exp_hashes.py` pins this.
+- exp.json omits `B` at the library default, so every exp.json written before `B` existed, and the exp.json text pins in `tests/test_phase_transition_preset.py`, stay byte-identical.
