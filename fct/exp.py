@@ -406,6 +406,50 @@ def load_exp(root: Path) -> ExpConfig:
     return ExpConfig.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def refuse_legacy(root: Path) -> None:
+    """ExpError if ROOT holds the legacy experiment file: `migrate` converts it, starting over
+    would orphan its settings."""
+    if (Path(root) / LEGACY_EXP_FILE).exists():
+        raise ExpError(
+            f"{root} holds a legacy {LEGACY_EXP_FILE}; "
+            f"run `python -m fct exp migrate {root}` instead of starting over"
+        )
+
+
+def init_root(exp: ExpConfig, root: Path, force: bool = False) -> None:
+    """Make `root` the home of `exp`: write ROOT/exp.json if it is absent, leave it if it already
+    holds the same experiment. ExpError, telling the user to change ROOT or delete it, for a legacy
+    sweep.json, for setting directories whose exp.json is gone (they belong to some other
+    experiment), for an exp.json that is unreadable, invalid or holds a different experiment.
+    `force` replaces an existing exp.json instead and also skips the stray-settings check (the
+    legacy check still applies)."""
+    root, path = Path(root), exp_path(root)
+    refuse_legacy(root)
+    if force:
+        save_exp(exp, root)
+        return
+    if path.exists():
+        try:
+            existing = load_exp(root)
+        except ValidationError as err:
+            raise ExpError(
+                f"{path} is not a valid experiment config ({err.error_count()} errors); "
+                "change ROOT or delete it"
+            ) from err
+        except (OSError, UnicodeDecodeError) as err:
+            raise ExpError(f"cannot read {path}: {err}; change ROOT or delete it") from err
+        if not same_experiment(existing, exp):
+            raise ExpError(f"{root} already holds a different experiment; change ROOT or delete it")
+        return
+    if has_settings(root):
+        raise ExpError(
+            f"{root} already holds setting directories, which belong to the old exp.json; "
+            "use a fresh ROOT (change ROOT or delete it), or pass force=True to write a new "
+            "exp.json beside them"
+        )
+    save_exp(exp, root)
+
+
 # ---------------------------------------------------------------------------- the axes
 def axes_of(exp: ExpConfig) -> dict[str, list]:
     """The experiment's axes: its `axes`, or the modularity axes when it has none."""

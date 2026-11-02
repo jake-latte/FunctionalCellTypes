@@ -43,7 +43,6 @@ from fct.draw import (
     plot_training_history,
 )
 from fct.exp import (
-    LEGACY_EXP_FILE,
     STAGES,
     ExpConfig,
     ExpError,
@@ -52,12 +51,12 @@ from fct.exp import (
     UnmigratedExpError,
     exp_path,
     expand,
-    has_settings,
+    init_root,
     load_exp,
     preset,
     preset_names,
+    refuse_legacy,
     run_setting,
-    save_exp,
     setting_dir,
     setting_statuses,
 )
@@ -384,18 +383,12 @@ def _reject_axes_overrides(overrides: Sequence[str]) -> None:
 
 def cmd_exp_init(args: argparse.Namespace) -> int:
     path = exp_path(args.root)
-    if (args.root / LEGACY_EXP_FILE).exists():
-        raise CliError(
-            f"{args.root} holds a legacy {LEGACY_EXP_FILE}; "
-            f"run `python -m fct exp migrate {args.root}` instead of starting over"
-        )
+    try:
+        refuse_legacy(args.root)  # first: a root with both files is for `migrate`, not --force
+    except ExpError as err:
+        raise CliError(str(err)) from err
     if path.exists() and not args.force:
         raise CliError(f"{path} already exists; pass --force to overwrite it")
-    if has_settings(args.root) and not args.force:
-        raise CliError(
-            f"{args.root} already holds setting directories, which belong to the old exp.json; "
-            "use a fresh ROOT, or pass --force to write a new exp.json beside them"
-        )
     _reject_axes_overrides(args.set)
     try:
         base = preset(args.preset)
@@ -411,7 +404,11 @@ def cmd_exp_init(args: argparse.Namespace) -> int:
         exp = ExpConfig.model_validate(tree)
     except ValidationError as err:
         raise CliError(str(err)) from err
-    save_exp(exp, args.root)
+    try:
+        init_root(exp, args.root, force=args.force)  # legacy file and stray settings are refused
+    except ExpError as err:
+        # the library says force=True; on the command line that is --force
+        raise CliError(str(err).replace("force=True", "--force")) from err
     print(f"wrote {path}")
     return 0
 

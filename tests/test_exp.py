@@ -13,9 +13,11 @@ from fct.config import load_config
 from fct.exp import (
     EXP_TASKS,
     ExpConfig,
+    ExpError,
     exp_path,
     expand,
     get_setting,
+    init_root,
     load_exp,
     preset,
     run_setting,
@@ -260,6 +262,86 @@ def test_cli_init_refuses_overwrite_and_applies_set(tmp_path, capsys):
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny")
     assert code == 1 and "--force" in err
     assert _cli(capsys, "init", tmp_path, "--preset", "tiny", "--force")[0] == 0
+
+
+def test_init_root_writes_exp_json_only_when_absent(tiny, tmp_path):
+    init_root(tiny, tmp_path / "new")
+    assert load_exp(tmp_path / "new") == tiny
+    written = (tmp_path / "new" / "exp.json").read_bytes()
+    # The same experiment (a different description is the same one) is left untouched: the
+    # bytes, hence the original description, are unchanged (mtime is unreliable on NFS).
+    init_root(tiny.model_copy(update={"description": "other words"}), tmp_path / "new")
+    assert (tmp_path / "new" / "exp.json").read_bytes() == written
+    assert load_exp(tmp_path / "new").description == tiny.description
+
+
+def test_init_root_refuses_a_different_experiment_and_keeps_the_file(tiny, tmp_path):
+    save_exp(tiny, tmp_path)
+    before = (tmp_path / "exp.json").read_text()
+    with pytest.raises(ExpError, match="different experiment.*change ROOT or delete it"):
+        init_root(tiny.model_copy(update={"n_epochs": 7}), tmp_path)
+    assert (tmp_path / "exp.json").read_text() == before
+
+
+def test_init_root_refuses_a_legacy_file(tiny, tmp_path):
+    (tmp_path / "sweep.json").write_text("{}")
+    with pytest.raises(ExpError, match="legacy sweep.json"):
+        init_root(tiny, tmp_path)
+    assert not (tmp_path / "exp.json").exists()
+
+
+def test_init_root_refuses_setting_directories_without_exp_json(tiny, tmp_path):
+    run_setting(tiny.model_copy(update={"n_epochs": 2}), 0, tmp_path, **QUIET)
+    with pytest.raises(ExpError, match="setting directories.*change ROOT or delete it"):
+        init_root(tiny, tmp_path)
+    assert not (tmp_path / "exp.json").exists()
+
+
+def test_init_root_wraps_an_invalid_exp_json(tiny, tmp_path):
+    (tmp_path / "exp.json").write_text('{"N": 8}')
+    with pytest.raises(ExpError, match="not a valid experiment.*change ROOT or delete it"):
+        init_root(tiny, tmp_path)
+
+
+def test_init_root_wraps_a_malformed_exp_json(tiny, tmp_path):
+    (tmp_path / "exp.json").write_text("{not json")
+    with pytest.raises(ExpError, match="not a valid experiment.*change ROOT or delete it"):
+        init_root(tiny, tmp_path)
+
+
+def test_init_root_wraps_an_unreadable_exp_json(tiny, tmp_path):
+    (tmp_path / "exp.json").write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(ExpError, match="cannot read"):
+        init_root(tiny, tmp_path)
+
+
+def test_init_root_message_is_not_cli_wording(tiny, tmp_path):
+    run_setting(tiny.model_copy(update={"n_epochs": 2}), 0, tmp_path, **QUIET)
+    with pytest.raises(ExpError, match="force=True") as err:
+        init_root(tiny, tmp_path)
+    assert "--force" not in str(err.value)
+
+
+def test_init_root_force_skips_the_stray_settings_check(tiny, tmp_path):
+    run_setting(tiny.model_copy(update={"n_epochs": 2}), 0, tmp_path, **QUIET)
+    init_root(tiny, tmp_path, force=True)
+    assert load_exp(tmp_path) == tiny
+
+
+@pytest.mark.parametrize("also_exp_json", [False, True])
+def test_cli_init_refuses_a_legacy_root_and_points_to_migrate(tmp_path, capsys, also_exp_json):
+    (tmp_path / "sweep.json").write_text("{}")
+    if also_exp_json:
+        save_exp(preset("tiny"), tmp_path)
+    code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny")
+    assert code == 1 and "legacy sweep.json" in err and "exp migrate" in err
+    assert "--force" not in err
+
+
+def test_init_root_force_replaces_the_experiment(tiny, tmp_path):
+    save_exp(tiny, tmp_path)
+    init_root(tiny.model_copy(update={"n_epochs": 7}), tmp_path, force=True)
+    assert load_exp(tmp_path).n_epochs == 7
 
 
 def test_monitor_schedule_when_n_epochs_is_not_a_multiple(tiny, tmp_path):
