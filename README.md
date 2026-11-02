@@ -82,8 +82,8 @@ makes every setting train under the spatial weight prior `tr(M_post W M_pre W^T)
 setting trains under the plain weight L2. The axes may then vary any field of the section
 (`--axis spatial.hidden.kernel.length_scale=[0.05,0.15,0.3]`, `spatial.hidden.embedding.kind`, `spatial.min_rel_eig`,
 `spatial.d`, ...); such an axis on an experiment without the section is rejected at load. The shared network and loss
-fields the spatial presets set (`L`, `g`, `phi`, `weight_lambda`, `rate_lambda`, `optimizer`, `beta`) default to the
-library values, and an axis of the same name wins. The spatial presets are `spatial_tiny`, `spatial_n_scan`, `spatial_exp` and `phase_transition`; the
+fields the spatial presets set (`L`, `g`, `phi`, `B`, `weight_lambda`, `rate_lambda`, `optimizer`, `beta`) default to the
+library values, and an axis of the same name wins (`phase_transition` sets its ensemble size, `B = 8`, through a `net.B` axis). The spatial presets are `spatial_tiny`, `spatial_n_scan`, `spatial_exp` and `phase_transition`; the
 description in each JSON file (see Presets) carries the details and caveats. The results notebook of `phase_transition`
 is `notebooks/phase_transition_exp.ipynb` (`fct/phase_view.py`, built by `notebooks/build_phase_transition_exp.py`; see
 below); it has no solve stage yet, and the modularity readers (`fct.report`) refuse B > 1 and need `net.L`, `net.phi`

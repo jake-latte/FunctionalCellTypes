@@ -36,6 +36,11 @@ def _with_axes(axes: dict, **updates) -> ExpConfig:
     return with_axes(preset("tiny").model_copy(update=updates), axes)
 
 
+def _with_B(**updates) -> ExpConfig:
+    """The tiny preset with `updates`, built through validation."""
+    return ExpConfig.model_validate({**preset("tiny").model_dump(), **updates})
+
+
 @pytest.fixture
 def small() -> ExpConfig:
     return _with_axes({"net.L": [1, 2], "net.phi": ["tanh", "relu"]})
@@ -67,6 +72,18 @@ def test_an_axis_overrides_the_shared_value():
     exp = _with_axes({"net.N": [4, 6]})
     assert [setting_config(exp, s).net.N for s in expand(exp)] == [4, 6]
     assert preset("tiny").N == 8  # the shared value is the default of the axes that do not vary
+
+
+def test_a_shared_B_reaches_every_setting():
+    exp = _with_B(B=8)
+    assert [setting_config(exp, s).net.B for s in expand(exp)] == [8] * len(expand(exp))
+    default = preset("tiny")
+    assert {setting_config(default, s).net.B for s in expand(default)} == {1}
+
+
+def test_a_B_axis_overrides_the_shared_B():
+    exp = with_axes(_with_B(B=8), {"net.B": [2, 4]})
+    assert [setting_config(exp, s).net.B for s in expand(exp)] == [2, 4]
 
 
 def test_the_task_axis_selects_that_tasks_parameters():

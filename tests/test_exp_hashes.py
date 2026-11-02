@@ -13,11 +13,13 @@ from pathlib import Path
 import pytest
 
 from fct.exp import (
+    ExpConfig,
     exp_hash,
     expand,
     preset,
     preset_names,
     run_setting,
+    same_experiment,
     save_exp,
     setting_config,
     with_axes,
@@ -58,3 +60,23 @@ def test_the_setting_record_stores_the_hash_under_exp_hash(tmp_path):
     record = json.loads(next(tmp_path.glob("*/*/setting.json")).read_text())
     assert record["exp_hash"] == exp_hash(exp)
     assert "grid_hash" not in record
+
+
+def test_a_shared_B_and_a_one_value_B_axis_hash_alike_but_name_different_directories():
+    """Both spellings train the same networks, so train and solve hashes and Configs agree.
+    The axis spelling puts `_B8` in the directory name and in `exp_hash`, so the experiments
+    are different ones to `same_experiment` and the directories differ."""
+    base = ExpConfig.model_validate({**preset("tiny").model_dump(), "B": 8})
+    shared = with_axes(base, {"net.L": [1, 2]})
+    axis = with_axes(preset("tiny"), {"net.B": [8], "net.L": [1, 2]})
+    shared_configs = [setting_config(shared, s) for s in expand(shared)]
+    axis_configs = [setting_config(axis, s) for s in expand(axis)]
+    assert shared_configs == axis_configs
+    assert [c.section_hash("data", "net", "train") for c in shared_configs] == [
+        c.section_hash("data", "net", "train") for c in axis_configs
+    ]
+    assert [meanfield_hash(c) for c in shared_configs] == [meanfield_hash(c) for c in axis_configs]
+    shared_paths = [s.relpath for s in expand(shared)]
+    assert shared_paths != [s.relpath for s in expand(axis)]
+    assert exp_hash(shared) != exp_hash(axis)
+    assert not same_experiment(shared, axis)

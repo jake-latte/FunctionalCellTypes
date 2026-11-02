@@ -390,3 +390,8 @@ def test_an_unreadable_final_is_stale_not_a_crash(tiny, tmp_path):
     assert setting_status(tmp_path, tiny, settings[0]) == "stale"
     with pytest.raises(StaleCacheError, match="unreadable"):
         run_setting(tiny, 0, tmp_path, **QUIET)
+
+
+def test_a_B_of_zero_is_rejected():
+    with pytest.raises(ValidationError, match="B"):
+        ExpConfig.model_validate({**preset("tiny").model_dump(), "B": 0})

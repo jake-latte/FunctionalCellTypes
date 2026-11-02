@@ -12,6 +12,7 @@ from fct.cli import main
 from fct.config import Config
 from fct.data import task_dims
 from fct.exp import (
+    ExpConfig,
     exp_hash,
     exp_text,
     expand,
@@ -19,6 +20,7 @@ from fct.exp import (
     preset,
     preset_names,
     run_setting,
+    same_experiment,
     setting_config,
     setting_dir,
     with_axes,
@@ -115,6 +117,16 @@ def test_a_preset_writes_the_exp_json_it_wrote_before_plus_its_description(name)
     lines = text.splitlines(keepends=True)
     assert lines[1].startswith('  "description": ')
     assert _sha("".join(lines[:1] + lines[2:])) == OLD_EXP_JSON[name]
+
+
+@pytest.mark.parametrize("name", sorted(NEW_EXP_JSON))
+def test_an_exp_json_written_before_B_existed_loads_with_the_default_B(name):
+    text = exp_text(preset(name))
+    assert _sha(text) == NEW_EXP_JSON[name]  # the pinned text, written by the code without B
+    assert "B" not in json.loads(text)
+    loaded = ExpConfig.model_validate_json(text)
+    assert loaded.B == 1
+    assert same_experiment(loaded, preset(name))
 
 
 @pytest.mark.parametrize("d", DS)

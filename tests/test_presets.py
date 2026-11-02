@@ -293,6 +293,20 @@ def test_an_exp_json_without_a_description_loads_with_none(tmp_path):
     assert load_exp(tmp_path).description is None
 
 
+def test_B_is_omitted_from_exp_json_at_the_default_and_written_otherwise():
+    assert "B" not in json.loads(exp_text(preset("tiny")))
+    exp = ExpConfig.model_validate({**preset("tiny").model_dump(), "B": 8})
+    assert json.loads(exp_text(exp))["B"] == 8
+
+
+def test_a_shared_B_survives_the_save_load_round_trip(tmp_path):
+    exp = ExpConfig.model_validate({**preset("tiny").model_dump(), "B": 8})
+    save_exp(exp, tmp_path)
+    loaded = load_exp(tmp_path)
+    assert loaded.B == 8
+    assert same_experiment(loaded, exp)
+
+
 def test_save_exp_writes_utf_8(tmp_path):
     exp = preset("tiny").model_copy(update={"description": "lambda λ, ≥"})
     save_exp(exp, tmp_path)
