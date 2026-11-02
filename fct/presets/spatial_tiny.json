@@ -31,6 +31,7 @@
   "task": "linear_teacher",
   "L": 1,
   "g": 1.0,
+  "B": 1,
   "phi": "tanh",
   "weight_lambda": 0.2,
   "rate_lambda": 0.001,

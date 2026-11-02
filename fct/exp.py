@@ -179,7 +179,7 @@ class ExpConfig(StrictModel):
 
     The same data, net and training seeds are used for every setting, so settings differ only
     in the axes. Everything else is the base `Config` a setting starts from (the shared
-    network and loss fields `L`, `g`, `phi`, `weight_lambda`, ... are the library defaults unless set). `axes` maps a dotted `Config` path to the list
+    network and loss fields `L`, `g`, `phi`, `B` (the ensemble size), `weight_lambda`, ... are the library defaults unless set). `axes` maps a dotted `Config` path to the list
     of values that axis takes; None means the modularity axes. Any Config field may be an axis
     and then wins over the experiment's shared field (`net.N` over `N`, `train.lr` over `lr`), except
     the fields the experiment owns (`EXP_OWNED_AXES`: sizes of the data, seeds, log/save/monitor
@@ -217,6 +217,7 @@ class ExpConfig(StrictModel):
     # Shared network and loss fields, the library defaults unless set; any of them may be an axis.
     L: PosInt = NetConfig().L
     g: PosFloat = NetConfig().g
+    B: PosInt = NetConfig().B
     phi: Phi = NetConfig().phi
     weight_lambda: NonNegFloat = TrainConfig().weight_lambda
     rate_lambda: NonNegFloat = TrainConfig().rate_lambda
@@ -356,9 +357,13 @@ def exp_path(root: Path) -> Path:
 
 
 def exp_text(exp: ExpConfig) -> str:
-    """The text of exp.json. The description is left out when there is none, so an experiment
-    without one has the text it had before the field existed."""
-    exclude = {"description"} if exp.description is None else None
+    """The text of exp.json. The description is left out when there is none, and B when it is 1,
+    so an experiment without them has the text it had before those fields existed."""
+    exclude = set()
+    if exp.description is None:
+        exclude.add("description")
+    if exp.B == 1:
+        exclude.add("B")
     return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
 
 
@@ -426,7 +431,7 @@ def _base_config(exp: ExpConfig, task: str) -> Config:
     """The shared part of every setting's `Config`; the axes are written over it."""
     return Config(
         data=data_config(exp, task),
-        net=NetConfig(N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, seed=exp.seeds.net),
+        net=NetConfig(N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, B=exp.B, seed=exp.seeds.net),
         train=TrainConfig(
             n_epochs=exp.n_epochs,
             lr=exp.lr,
