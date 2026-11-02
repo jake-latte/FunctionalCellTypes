@@ -9,6 +9,7 @@ from pathlib import Path
 
 import nbformat
 import pytest
+import torch
 from nbclient import NotebookClient
 from nbclient.exceptions import CellExecutionError
 
@@ -38,11 +39,11 @@ def _run(root: Path, overrides: dict | None = None):
 
 
 def _snapshot(root: Path) -> dict[str, tuple[int, str]]:
-    """{path: (mtime, md5)} of every file under ROOT except exp.json, which a run may rewrite."""
+    """{path: (mtime, md5)} of every file under ROOT, exp.json included: a re-run rewrites none."""
     return {
         str(p.relative_to(root)): (p.stat().st_mtime_ns, hashlib.md5(p.read_bytes()).hexdigest())
         for p in sorted(root.rglob("*"))
-        if p.is_file() and p.name != "exp.json"
+        if p.is_file()
     }
 
 
@@ -95,7 +96,9 @@ def test_a_second_run_trains_nothing_new(trained_root, monkeypatch):
 
 def test_loads_a_setting_given_as_axes_on_the_auto_device(trained_root, monkeypatch):
     monkeypatch.setenv("FCT_PLAYGROUND_ROOT", str(trained_root))
-    _run(trained_root, {**FAST, "LOAD_DEVICE": "auto", "SETTING": {"net.L": 2}})
+    nb = _run(trained_root, {**FAST, "LOAD_DEVICE": "auto", "SETTING": {"net.L": 2}})
+    printed = "".join(out.get("text", "") for cell in nb.cells for out in cell.get("outputs", []))
+    assert "{'net.L': 2} | device " + ("cuda" if torch.cuda.is_available() else "cpu") in printed
 
 
 def test_a_different_experiment_in_root_is_refused_not_overwritten(trained_root, monkeypatch):

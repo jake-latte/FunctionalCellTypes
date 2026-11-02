@@ -18,8 +18,8 @@ It has no builder script (unlike the other notebooks/*.ipynb, which are generate
 
 ## Inputs / outputs / interfaces
 Use the public exp API only; do not reimplement anything the library has. The relevant functions:
-- `fct.exp`: `preset`, `with_axes`, `ExpConfig.model_validate`, `save_exp`, `load_exp`, `same_experiment`, `get_setting`, `setting_config`, `setting_status`, `setting_dir`, `run_setting(exp, index, root, log=print)`, `find_setting_dir`.
-- For loading a trained setting, read `fct/phase_view.py` (`load_phase_run`), `fct/exp_view.py` (`load_setting_data`) and `fct/spatial_view.py`, and use whichever library loader fits.
+- `fct.exp`: `preset`, `with_axes`, `ExpConfig.model_validate`, `init_root`, `load_exp`, `get_setting`, `setting_config`, `setting_status`, `setting_dir`, `run_setting(exp, index, root, log=print)`, `find_setting_dir`.
+- For loading a trained setting: `fct.spatial_exp.select_setting` finds it and `fct.spatial_exp.load_setting` loads its net and history (`load_exp_run` calls it and adds a lattice test set that only exists for the linear teacher); the training data is `fct.data.get_dataset`.
 - Read README.md's experiment section and fct/exp.py's ExpConfig docstring first.
 
 Notebook structure, as markdown and code cells:
@@ -29,17 +29,18 @@ Notebook structure, as markdown and code cells:
    - `PRESET`: the base preset name.
    - `OVERRIDES`: a dict of base-field overrides, e.g. `{"n_epochs": 2000, "N": 64}`.
    - `AXES`: a dict of axis name to list of values, or None to keep the preset's.
-   - `DEVICE`.
+   - `LOAD_DEVICE`: where the net is loaded for analysis (`cpu`, `cuda` or `auto`). It is not part of the experiment; the device used for training comes from the experiment, so pin it with `"device"` in `OVERRIDES`.
+   - `SETTING` (an index or a dict of axis values) and `MEMBER` (which network of an ensemble), for the load cell.
    - The defaults must train in about a minute on CPU in total; pick a small preset such as `spatial_tiny` or `tiny` and shrink it with OVERRIDES/AXES.
 3. **Define the experiment**:
    - Build the ExpConfig from the preset plus OVERRIDES via validation (`ExpConfig.model_validate({**base.model_dump(), **OVERRIDES})`, then `with_axes` if AXES is given).
    - Print its settings (index, axis values, status).
-   - Save it to ROOT. If ROOT already holds a *different* experiment (`not same_experiment`), raise a clear error telling the user to change ROOT or delete it. Never silently overwrite it.
+   - Save it with `init_root(exp, ROOT)`, which writes exp.json if absent and leaves the same experiment alone. It raises `ExpError`, telling the user to change ROOT or delete it, for a different experiment, an invalid or unreadable exp.json, setting directories without an exp.json, or a legacy sweep.json. Never silently overwrite. `fct exp init` uses the same function and a shared `refuse_legacy`.
 4. **Train**:
    - Loop over the settings and call `run_setting(..., log=print)` so log lines stream in the cell as training runs.
    - run_setting already resumes partial runs and skips done ones, so re-running the cell is cheap; say so in a comment.
    - After training, plot each setting's loss curve from its saved history with plain matplotlib.
-5. **Load**: a cell that loads one chosen setting (`SETTING` = a dict of axis values or an index) into named variables: the config, the trained net, the training data, and the history. The analysis cells use these.
+5. **Load**: a cell that loads one chosen setting (`SETTING` = a dict of axis values or an index) with `select_setting` and `load_setting` into named variables: the config, the trained net, the training data, and the history. The analysis cells use these.
 6. **Analysis playground**:
    - A markdown cell listing the main analysis entry points, with one line each, e.g. `fct.analyse` (r_squared, pick_examples…), `fct.tuning`, `fct.spatial` (build_spaces, data_kernel…), `fct.phase_view` (layer_priors, member_view…), `fct.exp_view` (tuning_view…). Check each name exists.
    - One or two short example cells, e.g. the R² of the trained net on its training data and one simple plot.
