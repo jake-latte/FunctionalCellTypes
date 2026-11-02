@@ -13,9 +13,11 @@ from fct.config import load_config
 from fct.exp import (
     EXP_TASKS,
     ExpConfig,
+    ExpError,
     exp_path,
     expand,
     get_setting,
+    init_root,
     load_exp,
     preset,
     run_setting,
@@ -260,6 +262,49 @@ def test_cli_init_refuses_overwrite_and_applies_set(tmp_path, capsys):
     code, _, err = _cli(capsys, "init", tmp_path, "--preset", "tiny")
     assert code == 1 and "--force" in err
     assert _cli(capsys, "init", tmp_path, "--preset", "tiny", "--force")[0] == 0
+
+
+def test_init_root_writes_exp_json_only_when_absent(tiny, tmp_path):
+    init_root(tiny, tmp_path / "new")
+    assert load_exp(tmp_path / "new") == tiny
+    marker = (tmp_path / "new" / "exp.json").stat().st_mtime_ns
+    # The same experiment (a different description is the same one) is left untouched.
+    init_root(tiny.model_copy(update={"description": "other words"}), tmp_path / "new")
+    assert (tmp_path / "new" / "exp.json").stat().st_mtime_ns == marker
+
+
+def test_init_root_refuses_a_different_experiment_and_keeps_the_file(tiny, tmp_path):
+    save_exp(tiny, tmp_path)
+    before = (tmp_path / "exp.json").read_text()
+    with pytest.raises(ExpError, match="different experiment.*change ROOT or delete it"):
+        init_root(tiny.model_copy(update={"n_epochs": 7}), tmp_path)
+    assert (tmp_path / "exp.json").read_text() == before
+
+
+def test_init_root_refuses_a_legacy_file(tiny, tmp_path):
+    (tmp_path / "sweep.json").write_text("{}")
+    with pytest.raises(ExpError, match="legacy sweep.json"):
+        init_root(tiny, tmp_path)
+    assert not (tmp_path / "exp.json").exists()
+
+
+def test_init_root_refuses_setting_directories_without_exp_json(tiny, tmp_path):
+    run_setting(tiny.model_copy(update={"n_epochs": 2}), 0, tmp_path, **QUIET)
+    with pytest.raises(ExpError, match="setting directories.*change ROOT or delete it"):
+        init_root(tiny, tmp_path)
+    assert not (tmp_path / "exp.json").exists()
+
+
+def test_init_root_wraps_an_invalid_exp_json(tiny, tmp_path):
+    (tmp_path / "exp.json").write_text('{"N": 8}')
+    with pytest.raises(ExpError, match="not a valid experiment.*change ROOT or delete it"):
+        init_root(tiny, tmp_path)
+
+
+def test_init_root_force_replaces_the_experiment(tiny, tmp_path):
+    save_exp(tiny, tmp_path)
+    init_root(tiny.model_copy(update={"n_epochs": 7}), tmp_path, force=True)
+    assert load_exp(tmp_path).n_epochs == 7
 
 
 def test_monitor_schedule_when_n_epochs_is_not_a_multiple(tiny, tmp_path):
