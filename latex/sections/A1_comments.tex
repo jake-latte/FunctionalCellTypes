@@ -89,14 +89,14 @@ Suppose you observe the kernels $\Phi^{(l-1)}$ and $\Phi^{(l)}$ and you wanted a
 
 It's not clear that this $\hat \phi$ would correspond to a physical quantity. But consider that, because the conjugate vanishes for untrained (i.e. test-time) patterns, then the single site for those pre-activations has the Gaussian part
 \begin{align*}
-  \int \mathcal D h^{\star} \mathcal D \hat \phi
+  \int \mathcal D h_{\star} \mathcal D \hat \phi
     \exp \left \{
-      - \frac12 (h^{\star})^T [A^{\star\star} - (A^{\star})^T A^{-1} A^{\star}]^{-1} h^{\star}
+      - \frac12 h_{\star}^T [A_{\star\star} - A_{\star}^T A^{-1} A_{\star}]^{-1} h_{\star}
       - \frac12 \hat \phi^T (B^{-1} - \sigma_{(1)}^2 A) \hat \phi
-      + \sigma_{(1)} \hat \phi^T A (A^{-1})^{\star} h^{\star}
+      + \sigma_{(1)} \hat \phi^T A (A^{-1})_{\star} h_{\star}
     \right \}
 \end{align*}
-which says that if we want to estimate the response of the network to test data, we use the same field as from training time (and project it with $A (A^{-1})^{\star}$). A biological intuition then might be had with respect to meta-learning and sleep (see below).
+which says that if we want to estimate the response of the network to test data, we use the same field as from training time (and project it with $A (A^{-1})_{\star}$). A biological intuition then might be had with respect to meta-learning and sleep (see below).
 
 \paragraph{Evolution and Meta-Learning}
 
@@ -158,7 +158,7 @@ where the first term is the usual rank-one weight update, and the latter is the 
 \begin{align*}
   J^{(l)\medbullet,\medcirc}_{\blacksquare, \square}
   \equiv
-  \frac{\partial \psi^{(l)\mu,\nu}_{\alpha, \beta}}{\partial \Phi^{(l-1)m,n}_{a,b}}
+  \frac{\partial \psi^{(l)\mu,\nu}_{\alpha, \beta}}{\partial \Phi^{(l-1)\,m,n}_{a,b}}
   = \frac12 
     \left. (\Phi^{(l-1)})^{-1} \right|^{m, i_1}_{a, j_1}
     \left(
@@ -181,7 +181,7 @@ and
   \equiv
   \frac{\partial \psi^{(l)\mu,\nu}_{\alpha, \beta}}{\partial K^{(l)}_{i,a,j,b}}
   = \frac12 
-    \hat \Phi^{(l)k_1,k_2}_{i,j}
+    \hat \Phi^{(l)\,k_1,k_2}_{i,j}
     \left(
       \langle 
         \phi^{\mu}_{\alpha} \phi^{\nu}_{\beta} \phi^{k_1}_{a} \phi^{k_2}_{b}
