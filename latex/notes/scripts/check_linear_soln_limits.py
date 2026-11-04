@@ -286,13 +286,14 @@ def fixed_point_case(rng, skew):
 
 
 def section_a():
-    """Re-derivation: the ansatz-free NP x NP fixed point against the scalar equation."""
-    rng = np.random.default_rng(SEED)
+    """Re-derivation: the ansatz-free NP x NP fixed point against the scalar equation.
+    Both cases reseed, so the skewed case is the same task (same Z, W_X, W_Y) with the
+    columns of W_Y rescaled, not a fresh draw."""
     cases = [
         ("orthonormal W_Y (ansatz exact)", None),
         ("W_Y skewed (ansatz approximate)", A_WY_SKEW),
     ]
-    return {label: fixed_point_case(rng, skew) for label, skew in cases}
+    return {label: fixed_point_case(np.random.default_rng(SEED), skew) for label, skew in cases}
 
 
 def report_a(res):
