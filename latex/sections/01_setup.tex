@@ -68,7 +68,7 @@ We then turn our focus to the partition function of \eqref{eq:theta-distr}:
     \int \mathcal{D} \Theta \mathcal{D} \xi \mathcal{D} \hat \xi
     \exp \Bigg \{
       -i \hat \xi^{(l)\mu}_{i} \left[
-        \xi^{(l)\mu}_{i} - \frac{1}{\sigma^{(l)}} W^{(l-1)}_{i,a} \varphi^{(l-1)\mu}_{a} 
+        \xi^{(l)\mu}_{i} - \fix{\frac{1}{\sigma^{(l-1)}}} W^{(l-1)}_{i,a} \varphi^{(l-1)\mu}_{a} 
       \right]
       - \frac{\beta N}{2 P n} ( f^{\mu}_{\alpha} - y^{\mu}_{\alpha})^2
       - \mathcal{P}_{\text{weight}}(\Theta)
@@ -93,6 +93,7 @@ where for brevity we have introduced
     \sqrt{N} & \text{otherwise}
   \end{cases}
 \end{align*}
+\fixnote{The constraint carried $1/\sigma^{(l)}$ next to $W^{(l-1)}$, but $\sigma$ is indexed by the weight layer (the cases above give $\sigma^{(0)} = \sqrt m$ for $W^{(0)}$ and $\sigma^{(L)} = N$ for the readout), so as written the first layer would be normalised by $\sqrt N$ and the readout by $\sqrt N$. The weight integral below already uses the matching pair $W^{(l)}/\sigma^{(l)}$, so nothing downstream changes; the constraint now reads $W^{(l-1)}/\sigma^{(l-1)}$.}
 
 We begin with the integral over $\Theta$, in effect averaging over the prior \eqref{eq:prior-weights}.
 \begin{align*}
@@ -133,7 +134,7 @@ Note that, unlike the $\Phi^{(l)}$ kernels we are familiar with, \eqref{eq:kerne
   \Phi^{\mu,\nu}_{i,j} = 
   K^{\text{post}}_{i,j} 
   \underbrace{
-    \frac1N \sum_q \lambda^{\text{pre}}_q \tilde \phi^{\mu}_{q} \tilde \phi^{\nu}_q
+    \frac1N \sum_q \lambda^{\text{pre}}_q \fix{\tilde \phi^{\mu *}_{q}} \tilde \phi^{\nu}_q
   }_{
     C^{\mu,\nu}
   }
@@ -141,6 +142,7 @@ Note that, unlike the $\Phi^{(l)}$ kernels we are familiar with, \eqref{eq:kerne
   K^{\text{post}}_{i,j} C^{\mu,\nu}
   \label{eq:phi-diagonalised}
 \end{align}
+\fixnote{With $K^{\text{pre}} = V \Lambda^{\text{pre}} V^{*}$ and real rates, $\phi^{\mu\top} K^{\text{pre}} \phi^{\nu} = \sum_q \lambda^{\text{pre}}_q \tilde\phi^{\mu *}_q \tilde\phi^{\nu}_q$; the conjugate was missing, which matters for a complex eigenbasis such as the Fourier basis of Section~\ref{sec:rg} (without it $C$ is not Hermitian). The equation is illustrative and is not used downstream; the conjugate has been added.}
 As we will see later, $\Phi^{(l)}$ shows up as the input to layer $l+1$; \eqref{eq:phi-diagonalised} is telling us that the prior we chose for the post-synaptic weights \typo{constrains} how information is sent into that layer \textit{over space} (i.e. carrying the $(i,j)$ index), while the prior we chose for the pre-synaptic weights constrains how information is sent into that layer \textit{over data} (i.e. carrying the $(\mu,\nu)$ index).
 
 To enforce these constraints, we \typo{multiply} $\mathcal Z$ by unity:
@@ -212,9 +214,10 @@ The remaining partition function is then
     \exp \Bigg \{
       - i \hat h^{(l)\mu}_{i} h^{(l)\mu}_{i} 
       - \frac12 \hat h^{(l)\mu}_{i} \Phi^{(l-1)\mu,\nu}_{i,j} \hat h^{(l)\nu}_{j}
-      - \frac12 \phi^{(l)\mu}_{i} \left( i \hat \Phi^{(l)\mu,\nu}_{\alpha,\beta} K^{(l)}_{\alpha,i,\beta,j} + G^{(l)}_{i,j} \delta^{\mu,\nu}  \right) \phi^{(l)\nu}_{j}
+      \fix{{} + \frac12 \phi^{(l)\mu}_{i} \left( i \hat \Phi^{(l)\mu,\nu}_{\alpha,\beta} K^{(l)}_{\alpha,i,\beta,j} - G^{(l)}_{i,j} \delta^{\mu,\nu}  \right) \phi^{(l)\nu}_{j}}
     \Bigg \}
 \end{align*}
+\fixnote{The rate term had the wrong sign on $i\hat\Phi K$: inserting unity contributes $+i\frac N2 \hat\Phi \cdot \frac1N \phi K \phi$ and the rate penalty $-\frac12 \phi G \phi$, so the exponent is $+\frac12 \phi(i\hat\Phi K - G)\phi$. Kept, the old sign would give $\Phi = -\frac1N\langle\phi K \phi\rangle$ at the saddle; \eqref{eq:single-site} below already carries the correct sign, so nothing downstream changes.}
 
 \paragraph{Input Noise}
 
@@ -336,17 +339,18 @@ The last element of the standard mean-field treatment is to find the distributio
 with moments
 \begin{align*}
   \mu^{\star}_{\alpha} & = 
-    \Phi^{(L)\star,\mu}_{\alpha,a} 
-    \left. (\Phi^{(L)} + \kappa^{-1} I) \right|^{\mu,\nu}_{a,b} 
-    y^{\nu}_b
+    \Phi^{(L)\star,\mu}_{\alpha,\fix{\alpha'}}
+    \left. \fix{(\Phi^{(L)} + \kappa^{-1} I)^{-1}} \right|^{\mu,\nu}_{\fix{\alpha',\beta'}}
+    y^{\nu}_{\fix{\beta'}}
   \\ 
   \text{ and }
   \Sigma^{\star}_{\alpha,\beta} & =
     \Phi^{(L)\star,\star}_{\alpha,\beta} 
-    - \Phi^{(L)\star,\mu}_{\alpha,a}
-    \left. (\Phi^{(L)} + \kappa^{-1} I) \right|^{\mu,\nu}_{a,b} 
-    \Phi^{(L)\nu,\star}_{a,\beta}
+    - \Phi^{(L)\star,\mu}_{\alpha,\fix{\alpha'}}
+    \left. \fix{(\Phi^{(L)} + \kappa^{-1} I)^{-1}} \right|^{\mu,\nu}_{\fix{\alpha',\beta'}}
+    \Phi^{(L)\nu,\star}_{\fix{\beta'},\beta}
 \end{align*}
+\fixnote{The regularised kernel must be inverted, as in any GP posterior: with prior $f \sim \mathcal N(0, \Phi^{(L)}/N)$ and likelihood variance $1/(N\kappa)$ the mean is $\Phi^{(L)\star\mu}[(\Phi^{(L)}/N + I/(N\kappa))^{-1}]^{\mu\nu} y^\nu/N$, which is the expression above. The summed indices live in output space, so they are now output indices $\alpha',\beta'$ (they were the input labels $a,b$, and the last factor carried $a$ where the contraction needs the second index). Nothing in the saddle-point equations depends on this side result.}
 as $N \rightarrow \infty$, this concentrates at $\mathbf{\bar f}^{\star}$
 
 \end{document}
