@@ -31,12 +31,12 @@ $i\hat\Phi K$ term are also recorded.
 
 Throughout, summation over repeated indices (layer, data and spatial) is
 implied, $\Phit^{(L)} \equiv \Phi^{(L)} + \kappa^{-1} I$, and
-$\mathbb Y^{\mu\nu}_{\alpha\beta} = y^\mu_\alpha y^\nu_\beta$.
+$\mathbb Y^{\mu,\nu}_{\alpha,\beta} = y^\mu_\alpha y^\nu_\beta$.
 The kernel constraint is inserted as
 \begin{equation}
   1 = \int \D\Phi\,\D\hat\Phi\,
-  \exp\Big(-\tfrac{iN}{2}\,\hat\Phi^{(l)\mu\nu}_{ij}
-  \Big[\Phi^{(l)\mu\nu}_{ij} - \tfrac1N\phi^{(l)\mu}_a K^{(l)}_{i,a,j,b}\phi^{(l)\nu}_b\Big]\Big).
+  \exp\Big(-\tfrac{iN}{2}\,\hat\Phi^{(l)\mu,\nu}_{i,j}
+  \Big[\Phi^{(l)\mu,\nu}_{i,j} - \tfrac1N\phi^{(l)\mu}_a K^{(l)}_{i,a,j,b}\phi^{(l)\nu}_b\Big]\Big).
   \label{eq:unity}
 \end{equation}
 Collecting the $\phi$-dependent part with the rate penalty
@@ -44,8 +44,8 @@ $-\frac12\phi G\phi$ gives, for the neurons of layer $l$ (which are pre-synaptic
 to $W^{(l)}$, hence the \emph{second} and \emph{fourth} slots of
 $K^{(l)}_{\text{post},\text{pre},\text{post},\text{pre}}$),
 \begin{equation}
-  +\tfrac12\,\phi^{(l)\mu}_i\Big(i\hat\Phi^{(l)\mu\nu}_{\alpha\beta}K^{(l)}_{\alpha,i,\beta,j}
-  - G^{(l)}_{ij}\delta^{\mu\nu}\Big)\phi^{(l)\nu}_j ,
+  +\tfrac12\,\phi^{(l)\mu}_i\Big(i\hat\Phi^{(l)\mu,\nu}_{\alpha,\beta}K^{(l)}_{\alpha,i,\beta,j}
+  - G^{(l)}_{i,j}\delta^{\mu,\nu}\Big)\phi^{(l)\nu}_j ,
   \label{eq:tilt-msr}
 \end{equation}
 and the remaining $\Phi$-dependent part of the exponent is
@@ -77,11 +77,11 @@ With $\Sact_{\text{MSR}} = \frac12 y\,\Phit^{(L)-1}y + \frac i2\hat\Phi\cdot\Phi
 - \frac1N\sum_l\log\W[\Phi^{(l-1)},\hat\Phi^{(l)}]$ and $\W$ containing
 \eqref{eq:tilt-msr},
 \begin{align}
-  \frac{\partial\Sact_{\text{MSR}}}{\partial\hat\Phi^{(l)\mu\nu}_{ij}}
-  &= \frac i2\Phi^{(l)\mu\nu}_{ij}
+  \frac{\partial\Sact_{\text{MSR}}}{\partial\hat\Phi^{(l)\mu,\nu}_{i,j}}
+  &= \frac i2\Phi^{(l)\mu,\nu}_{i,j}
    - \frac1N\cdot\frac i2 K^{(l)}_{i,a,j,b}\langle\phi^\mu_a\phi^\nu_b\rangle^{(l)} = 0
   &&\Longrightarrow&
-  \Phi^{(l)\mu\nu}_{ij} &= \frac1N K^{(l)}_{i,a,j,b}\langle\phi^\mu_a\phi^\nu_b\rangle^{(l)},
+  \Phi^{(l)\mu,\nu}_{i,j} &= \frac1N K^{(l)}_{i,a,j,b}\langle\phi^\mu_a\phi^\nu_b\rangle^{(l)},
   \label{eq:forward}\\
   \frac{\partial\Sact_{\text{MSR}}}{\partial\Phi^{(L)}}
   &= -\frac12\Phit^{(L)-1}\mathbb Y\,\Phit^{(L)-1} + \frac i2\hat\Phi^{(L)} = 0
@@ -129,8 +129,8 @@ Dropping the prime, the consistent real set is
           - \frac1N\sum_{l=1}^L\log\W[\Phi^{(l-1)},\hat\Phi^{(l)}],\\
   \W[\Phi,\hat\Phi] &= \det(2\pi\Phi)^{-1/2}\!\int\!\D h\,
      \exp\Big\{-\tfrac12 h\Phi^{-1}h
-     + \tfrac12\phi^\mu_i\big(\hat\Phi^{\mu\nu}_{\alpha\beta}K_{\alpha,i,\beta,j}
-     - G_{ij}\delta^{\mu\nu}\big)\phi^\nu_j\Big\},\\
+     + \tfrac12\phi^\mu_i\big(\hat\Phi^{\mu,\nu}_{\alpha,\beta}K_{\alpha,i,\beta,j}
+     - G_{i,j}\delta^{\mu,\nu}\big)\phi^\nu_j\Big\},\\
   \Phi^{(l)} &= \tfrac1N K^{(l)}\langle\phi\phi\rangle^{(l)},\qquad
   \hat\Phi^{(L)} = \Phit^{(L)-1}\mathbb Y\,\Phit^{(L)-1}.
 \end{align}
@@ -154,7 +154,7 @@ and the single site already used by Section~2.
   \item \textbf{Appendix A1.} A1 writes $B = iK\hat\Phi$, which is the MSR
     convention; under the rotation this is $B = K\hat\Phi$. A1 should say which
     convention it uses. A1 also writes the tilt as
-    $\phi_a K^{(l+1)}_{a,\alpha,b,\beta}\hat\Phi_{\alpha\beta}\phi_b$, with the
+    $\phi_a K^{(l+1)}_{a,\alpha,b,\beta}\hat\Phi_{\alpha,\beta}\phi_b$, with the
     pre-synaptic index first; for consistency with the kernel definition it
     should be $K^{(l+1)}_{\alpha,a,\beta,b}$ (only the order matters if $K$ is
     not symmetric under swapping pre and post slots).

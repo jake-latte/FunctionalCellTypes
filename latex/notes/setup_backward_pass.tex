@@ -71,7 +71,11 @@ prefactor. The prefactor is irrelevant for averages \emph{at fixed} $\Phi$ (so
 the forward equation for $\Phi^{(l)}$ is unaffected), but $\Phi$ is now a
 variable of the action and the prefactor contributes
 $-\frac12\log\det\Phi$ to $\log\W$. It is $O(N)$, the same order as the rest of
-$\log\W$, so it cannot be dropped at the saddle point.
+$\log\W$, so it cannot be dropped at the saddle point. By contrast, the
+analogous $\Phi^{(L)}$-dependent factors left by the $\hat f$ and $f$ integrals
+of Section~1, which combine to $\det(I + \kappa\Phi^{(L)})^{-1/2}$, can be
+dropped: they are determinants of $(nP)\times(nP)$ matrices, hence $O(1)$ in the
+exponent against the $O(N)$ action, whereas the factor here is $NP\times NP$.
 
 \section{Derivation of the correct equation}
 
@@ -120,7 +124,7 @@ $f = \nabla V^\top$,
 \end{equation}
 and so, combining with \eqref{eq:bp},
 \begin{equation}
-  \hat\Phi^{(l)\mu\nu}_{ij} = \frac1N\Big\langle
+  \hat\Phi^{(l)\mu,\nu}_{i,j} = \frac1N\Big\langle
     \frac{\partial V}{\partial h^\mu_i}\frac{\partial V}{\partial h^\nu_j}
     + \frac{\partial^2V}{\partial h^\mu_i\,\partial h^\nu_j}\Big\rangle^{(l+1)} .
   \label{eq:stein}

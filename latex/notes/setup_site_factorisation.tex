@@ -21,9 +21,9 @@ integrals, $\W = \prod_i \W_i$, the free energy as a spatial average
 $\F = -\frac1N\sum_i\log\W_i$, and the saddle-point equations as
 $\frac1N\sum_k\langle\cdot\rangle_k$, ``conditioned on spatial position $k$''.
 None of these holds: in the spatially embedded theory the neurons of a layer
-are coupled through $\Phi^{-1}_{ij}$ and through $K$, so only the
+are coupled through $\Phi^{-1}_{i,j}$ and through $K$, so only the
 \emph{integrand} factorises. The correct saddle-point equation is
-$\Phi^{(l)}_{ij} = \frac1N\sum_{a,b}K^{(l)}_{i,a,j,b}\langle\phi_a\phi_b\rangle^{(l)}$,
+$\Phi^{(l)}_{i,j} = \frac1N\sum_{a,b}K^{(l)}_{i,a,j,b}\langle\phi_a\phi_b\rangle^{(l)}$,
 an average over the joint distribution of the layer. Reading the site sum with
 identical sites silently drops this $1/N$, which is what Section~2 does; the
 fix turns the sum over modes in \texttt{eq:linear-soln} into a mode
@@ -37,43 +37,44 @@ Write the layer's single site (in the rotated convention of
 \texttt{setup\_conjugate\_rotation.tex}; dropping the layer index) as
 \begin{gather}
   \W[\Phi,\hat\Phi] = \det(2\pi\Phi)^{-1/2}\int\D h\,\exp\Big\{
-   -\tfrac12 h^\mu_i(\Phi^{-1})^{\mu\nu}_{ij}h^\nu_j
-   + \tfrac12\phi^\mu_i B^{\mu\nu}_{ij}\phi^\nu_j\Big\},
+   -\tfrac12 h^\mu_i(\Phi^{-1})^{\mu,\nu}_{i,j}h^\nu_j
+   + \tfrac12\phi^\mu_i B^{\mu,\nu}_{i,j}\phi^\nu_j\Big\},
   \label{eq:W}\\
-  B^{\mu\nu}_{ij} \equiv \hat\Phi^{\mu\nu}_{\alpha\beta}K_{\alpha,i,\beta,j} - G_{ij}\delta^{\mu\nu},
+  B^{\mu,\nu}_{i,j} \equiv \hat\Phi^{\mu,\nu}_{\alpha,\beta}K_{\alpha,i,\beta,j} - G_{i,j}\delta^{\mu,\nu},
   \nonumber
 \end{gather}
 where $\int\D h$ runs over all $NP$ preactivations of the layer. Section~1 then
 asserts
 \begin{equation}
   \W = \prod_{i=1}^N \W_i,\qquad
-  \W_i = \int\D h\,\exp\Big\{-\sum_j\tfrac12 h^\mu_i(\Phi^{-1})^{\mu\nu}_{ij}h^\nu_j
-   + \tfrac12\phi^\mu_i B^{\mu\nu}_{ij}\phi^\nu_j\Big\},
+  \W_i = \int\D h\,\exp\Big\{-\sum_j\tfrac12 h^\mu_i(\Phi^{-1})^{\mu,\nu}_{i,j}h^\nu_j
+   + \tfrac12\phi^\mu_i B^{\mu,\nu}_{i,j}\phi^\nu_j\Big\},
   \qquad
   -\F = \frac1N\sum_i\log\W_i ,
   \label{eq:claim}
 \end{equation}
 and builds the action and the saddle-point equations on it:
 $\Sact \ni -\frac1N\sum_k\log\W_k$,
-$\Phi^{(l)}_{ij} = \frac1N\sum_k\langle\phi_aK_{i,a,j,b}\phi_b\rangle_k$, and the
+$\Phi^{(l)}_{i,j} = \frac1N\sum_k\langle\phi_aK_{i,a,j,b}\phi_b\rangle_k$, and the
 analogous $\frac1N\sum_k\langle\cdot\rangle_k$ in the conjugate equations.
 
 \section{Why it is wrong}
 
 The exponent of \eqref{eq:W} is a sum over $i$ of terms $E_i(h)$, but each
-$E_i$ depends on $h_j$ for every $j$ with $\Phi^{-1}_{ij}\neq0$ or
-$B_{ij}\neq0$. Hence
+$E_i$ depends on $h_j$ for every $j$ with $\Phi^{-1}_{i,j}\neq0$ or
+$B_{i,j}\neq0$. Hence
 \begin{equation}
   \W \propto \int\D h\,\prod_i e^{E_i(h)}
   \;\neq\; \prod_i\int\D h\,e^{E_i(h)} .
 \end{equation}
 If $\int\D h$ in $\W_i$ runs over all sites, the right-hand side is not even
-finite: for two uncoupled sites with $\Phi=I$, $B=0$, $\W = 2\pi$ but
-$\W_1 = \int dh_1dh_2\,e^{-h_1^2/2} = \infty$. If instead $\W_i$ integrates
+finite: for two uncoupled sites with $\Phi=I$, $B=0$ and $P=1$,
+\eqref{eq:W} gives $\W = (2\pi)^{-1}\int dh_1dh_2\,e^{-(h_1^2+h_2^2)/2} = 1$, but
+$\int dh_1dh_2\,e^{-h_1^2/2} = \infty$. If instead $\W_i$ integrates
 over $h_i$ alone, it is a function of the other $h_j$ and the product is not a
 number. Either way \eqref{eq:claim} fails as soon as the layer has spatial
 structure, which is the whole point of the construction. The only case in
-which it holds is $\Phi^{-1}_{ij}\propto\delta_{ij}$ and $B_{ij}\propto\delta_{ij}$,
+which it holds is $\Phi^{-1}_{i,j}\propto\delta_{i,j}$ and $B_{i,j}\propto\delta_{i,j}$,
 the non-spatial theory.
 
 A spatial average \emph{does} arise after a change of basis that decouples the
@@ -89,11 +90,11 @@ basis in general.
 With $\Sact = \dots + \frac12\hat\Phi\cdot\Phi - \frac1N\sum_l\log\W[\Phi^{(l-1)},\hat\Phi^{(l)}]$
 and $\W$ as in \eqref{eq:W},
 \begin{equation}
-  0 = \frac{\partial\Sact}{\partial\hat\Phi^{(l)\mu\nu}_{ij}}
-  = \frac12\Phi^{(l)\mu\nu}_{ij}
+  0 = \frac{\partial\Sact}{\partial\hat\Phi^{(l)\mu,\nu}_{i,j}}
+  = \frac12\Phi^{(l)\mu,\nu}_{i,j}
    - \frac1N\cdot\frac12\sum_{a,b=1}^N K^{(l)}_{i,a,j,b}\langle\phi^\mu_a\phi^\nu_b\rangle^{(l)}
   \;\Longrightarrow\;
-  \Phi^{(l)\mu\nu}_{ij} = \frac1N\sum_{a,b=1}^N K^{(l)}_{i,a,j,b}\langle\phi^\mu_a\phi^\nu_b\rangle^{(l)},
+  \Phi^{(l)\mu,\nu}_{i,j} = \frac1N\sum_{a,b=1}^N K^{(l)}_{i,a,j,b}\langle\phi^\mu_a\phi^\nu_b\rangle^{(l)},
   \label{eq:forward}
 \end{equation}
 where $\langle\cdot\rangle^{(l)}$ is the average over the \emph{joint}
@@ -113,13 +114,13 @@ times too large.
 
 \paragraph{Section~2 and \texttt{eq:linear-soln}.}
 Section~2 uses exactly this $N$-times-too-large form:
-$\Phi^{\mu\nu}_{\alpha\beta} = k_1\delta_{\alpha\beta}\langle\phi^\mu_iK_{ij}\phi^\nu_j\rangle$
-and $C^{\mu\nu} = \sum_{ij}K_{ij}\langle\phi^\mu_i\phi^\nu_j\rangle = \sum_q\lambda_q\Sigma^{\mu\nu}_q$.
+$\Phi^{\mu,\nu}_{\alpha,\beta} = k_1\delta_{\alpha,\beta}\langle\phi^\mu_iK_{i,j}\phi^\nu_j\rangle$
+and $C^{\mu,\nu} = \sum_{i,j}K_{i,j}\langle\phi^\mu_i\phi^\nu_j\rangle = \sum_q\lambda_q\Sigma^{\mu,\nu}_q$.
 With the kernel definition (equivalently \eqref{eq:forward}) and
-$K^{(1)}_{\alpha,i,\beta,j} = k_1\delta_{\alpha\beta}K_{ij}$,
+$K^{(1)}_{\alpha,i,\beta,j} = k_1\delta_{\alpha,\beta}K_{i,j}$,
 \begin{equation}
-  C^{\mu\nu} = \frac1N\sum_{i,j}K_{ij}\langle\phi^\mu_i\phi^\nu_j\rangle
-  = \frac1N\sum_q\lambda_q\Sigma^{\mu\nu}_q,
+  C^{\mu,\nu} = \frac1N\sum_{i,j}K_{i,j}\langle\phi^\mu_i\phi^\nu_j\rangle
+  = \frac1N\sum_q\lambda_q\Sigma^{\mu,\nu}_q,
   \qquad
   D_C = \frac1N\sum_q\lambda_qD_q + \frac1{k_1\kappa}I_P .
 \end{equation}
@@ -152,7 +153,8 @@ joint average and a single overall $1/N$ from the action.
 
 \begin{enumerate}
   \item Replace the product of integrals by a product of integrands,
-    $\W = \det(2\pi\Phi)^{-1/2}\int\D h\prod_iw_i[h]$, and say explicitly that
+    \[\W = \det(2\pi\Phi)^{-1/2}\int\D h\prod_iw_i[h],\]
+    and say explicitly that
     $\F = -\frac1N\log\W$ is not a site average (done, in red, in Section~1).
   \item Write the action with $-\frac1N\sum_l\log\W[\Phi^{(l-1)},\hat\Phi^{(l)}]$
     and every saddle-point equation with the joint
@@ -163,19 +165,19 @@ joint average and a single overall $1/N$ from the action.
 \end{enumerate}
 
 \paragraph{A related open caveat (not an edit).}
-For $L\ge2$ the hidden kernels $\Phi^{(l)}_{ij}$, $1\le l\le L-1$, are
+For $L\ge2$ the hidden kernels $\Phi^{(l)}_{i,j}$, $1\le l\le L-1$, are
 $N^2P^2$ order parameters, against a large parameter $N$ in the exponent.
 Each entry is $\frac1N\sum_{a,b}K_{i,a,j,b}\phi_a\phi_b$; it concentrates only if,
 for fixed $(i,j)$, $K_{i,a,j,b}$ has support on $O(N)$ pre-synaptic neurons, so
 that the sum genuinely averages over the layer. This holds for the factorised
-$K = K^{\text{post}}K^{\text{pre}}$, where every entry is $K^{\text{post}}_{ij}$
+$K = K^{\text{post}}K^{\text{pre}}$, where every entry is $K^{\text{post}}_{i,j}$
 times one $P\times P$ matrix averaged over all $a,b$. It fails for kernels that
 are local jointly in the post- and pre-synaptic positions (a neuron $a$ wired
 only to nearby $i$): then each entry is a sum over $O(1)$ neurons divided by
 $N$, does not concentrate, and the saddle point is not controlled by $N$
 alone. Section~1 already flags that
 ``more work will be required'' here. The one-hidden-layer case of Section~2 is
-not affected: its only integrated kernel is $\Phi^{(1)}_{\alpha\beta}$ with
+not affected: its only integrated kernel is $\Phi^{(1)}_{\alpha,\beta}$ with
 output indices, $n^2P^2$ entries each averaging over all $N$ hidden neurons.
 
 \end{document}
