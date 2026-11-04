@@ -9,13 +9,13 @@
 We study a feedforward network with $L$ hidden layers whose preactivations are denoted by $\{ h^{(l)\mu}_{i} \}$, and whose outputs are denoted by $\{ f^{\mu}_\alpha \}$. To each neuron with index $i$ we associate a position in space given by $\mathbf{x}_i \in \mathbb{R}^d$. We will say more about the nature of this embedding later. Similarly, to each input index $a \in 1, \dots, m$ and output index $\alpha \in 1, \dots, n$, we associate a location in space, $\mathbf{x}_a$ and $\mathbf{x}_{\alpha}$, respectively.
 \begin{align}
   h^{(1)\mu}_{i} =
-    \frac{1}{\sqrt{m}} \sum_{d=1}^{m} W^{(0)}_{i,a} x^{\mu}_a + \eta^{\mu}_i, \hfill
+    \frac{1}{\sqrt{m}} \sum_{\typo{a}=1}^{m} W^{(0)}_{i,a} x^{\mu}_a + \eta^{\mu}_i, \hfill
   &&
-  h^{(l+1)\mu}_{i} = 
-    \frac{1}{\sqrt{N}} \sum_{i=1}^N W^{(l)}_{i,j} \phi(h^{(l)\mu}_{j}), \hfill 
+  h^{(l+1)\mu}_{i} =
+    \frac{1}{\sqrt{N}} \sum_{\typo{j}=1}^N W^{(l)}_{i,j} \phi(h^{(l)\mu}_{j}), \hfill
   &&
   f^{\mu}_{\alpha} =
-    \frac{1}{N} \sum_{i=1}^{N} W^{(L)}_{d,j} \phi(h^{(L)\mu}_{j})
+    \frac{1}{N} \sum_{\typo{j}=1}^{N} W^{(L)}_{\typo{\alpha},j} \phi(h^{(L)\mu}_{j})
   \label{eq:ff-network}
 \end{align}
 where $\eta$ is Gaussian noise, $\eta \sim \mathcal{N}(0, \sigma^2)$ (which we introduce to ensure positive-definiteness later on). We assume the network has trained to convergence under SGLD:
@@ -38,7 +38,7 @@ Such that we have the equilibrium distribution over parameters given by
 The $\mathcal{P}$ terms are regularisers which enact the spatial embedding:
 \begin{align}
   \mathcal{P}_{\text{weight}} &=
-    \frac12 \sum_{l=0}^{L} \sum_{i,j=1}^\text{Post(l)} \sum_{a,b=1}^{\text{Pre}(l)} W^{(l)}_{i,a} M^{(l)}_{i,a,j,b} W^{(l)}_{j,b} \label{eq:prior-weights}
+    \frac12 \sum_{l=0}^{L} \sum_{i,j=1}^{\typo{\text{Post}(l)}} \sum_{a,b=1}^{\text{Pre}(l)} W^{(l)}_{i,a} M^{(l)}_{i,a,j,b} W^{(l)}_{j,b} \label{eq:prior-weights}
 \end{align}
 with 
 \begin{align*}
@@ -104,7 +104,7 @@ We begin with the integral over $\Theta$, in effect averaging over the prior \eq
   \right) 
   \propto 
   \exp \left(
-    -\frac1{(\sigma^{(l)})^2} \hat \xi^{(l+1)\mu}_{i} \varphi^{(l)\mu}_{a} K^{(l)}_{i,a,j,b} \varphi^{(l)\nu}_{b} \hat \xi^{(l+1)\nu}_{j}
+    -\typo{\frac{1}{2(\sigma^{(l)})^2}} \hat \xi^{(l+1)\mu}_{i} \varphi^{(l)\mu}_{a} K^{(l)}_{i,a,j,b} \varphi^{(l)\nu}_{b} \hat \xi^{(l+1)\nu}_{j}
   \right)
 \end{align*}
 
@@ -141,9 +141,9 @@ Note that, unlike the $\Phi^{(l)}$ kernels we are familiar with, \eqref{eq:kerne
   K^{\text{post}}_{i,j} C^{\mu,\nu}
   \label{eq:phi-diagonalised}
 \end{align}
-As we will see later, $\Phi^{(l)}$ shows up as the input to layer $l+1$; \eqref{eq:phi-diagonalised} is telling us that the prior we chose for the post-synaptic weights constraints how information is sent into that layer \textit{over space} (i.e. carrying the $(i,j)$ index), while the prior we chose for the pre-synaptic weights constrains how information is sent into that layer \textit{over data} (i.e. carrying the $(\mu,\nu)$ index).
+As we will see later, $\Phi^{(l)}$ shows up as the input to layer $l+1$; \eqref{eq:phi-diagonalised} is telling us that the prior we chose for the post-synaptic weights \typo{constrains} how information is sent into that layer \textit{over space} (i.e. carrying the $(i,j)$ index), while the prior we chose for the pre-synaptic weights constrains how information is sent into that layer \textit{over data} (i.e. carrying the $(\mu,\nu)$ index).
 
-To enforce these constraints, we multpily $\mathcal Z$ by unity:
+To enforce these constraints, we \typo{multiply} $\mathcal Z$ by unity:
 \begin{align*}
   1 
   = \int \mathcal D \Phi \int \mathcal D \hat \Phi \exp \left(
@@ -164,7 +164,7 @@ Returning to the path integral, we now integrate out $\hat f$
     -\frac{N}{2} f^{\mu}_{\alpha} \big([\Phi^{(L)}]^{-1}\big)^{\mu,\nu}_{\alpha,\beta} f^{\nu}_{\beta}
   \right)
 \end{align*}
-and subsequently $f$. For this we open up the quadaratic exponent $||F-Y||^2_2$ and define $\kappa = \frac{\beta}{Pn}$:
+and subsequently $f$. For this we open up the \typo{quadratic} exponent $||F-Y||^2_2$ and define $\kappa = \frac{\beta}{Pn}$:
 \begin{align*}
   & \int \mathcal{D} f \exp \left(
     -\frac{N}{2} f^{\mu}_{\alpha} \left[
@@ -218,9 +218,9 @@ The remaining partition function is then
 
 \paragraph{Input Noise}
 
-Until now I have suppressed the $\eta$ that were introduced \eqref{eq:ff-network}. However, we can here take an expectation over them to get
+Until now I have suppressed the $\eta$ that were introduced \typo{in} \eqref{eq:ff-network}. However, we can here take an expectation over them to get
 \begin{align}
-  \int \mathcal D \eta \exp \left(-\frac{1}{2\sigma^2} \eta^{\mu}_i [\delta^{\mu,\nu} \delta_{i,j}] \eta^{\nu}_i + i \eta^{\mu}_i \hat h^{(1)\mu}_i \right)
+  \int \mathcal D \eta \exp \left(-\frac{1}{2\sigma^2} \eta^{\mu}_i [\delta^{\mu,\nu} \delta_{i,j}] \eta^{\nu}_{\typo{j}} + i \eta^{\mu}_i \hat h^{(1)\mu}_i \right)
   \propto
   \exp \left(-\frac{\sigma^2}{2} [\hat h^{(1)\mu}_i]^2 \right)
   \label{eq:single-site-reg}
@@ -281,7 +281,7 @@ and we can see that $\mathcal F$ takes the form of an average over space.
   =
   \frac1N \sum_{i=1}^N \log \mathcal W_i[\Phi, \hat \Phi]
 \end{align*}
-This is for now a conceptual aide, rather than a genuine result: $\mathcal W_i$ still includes an extensive sum in its exponent, and so we have no reason to believe the spatial average is actually $O(1)$. More work will be required to find a convergent density.
+This is for now a conceptual \typo{aid}, rather than a genuine result: $\mathcal W_i$ still includes an extensive sum in its exponent, and so we have no reason to believe the spatial average is actually $O(1)$. More work will be required to find a convergent density.
 
 \subsection{Saddle-Point}
 
@@ -301,7 +301,7 @@ we obtain the self-consistency relation
   \implies \Phi^{(l)\mu,\nu}_{i,j}
     = \frac1N \sum_{k=1}^N \left \langle \phi^{\mu}_a K^{(l)}_{i,a,j,b} \phi^{\nu}_b \right \rangle_{k}^{(l)}
 \end{align*}
-where have defined $\langle \cdot \rangle_{k}^{(l)}$ as the expectation over the neuon response distribution \eqref{eq:single-site} for layer $l$ (i.e. with input drive $\Phi^{(l-1)}$ and tilting $\hat \Phi^{(l)}$), conditioned on spatial position $k$. For the tilting we obtain for $l \in 1, \dots, L-1$.
+where \typo{we} have defined $\langle \cdot \rangle_{k}^{(l)}$ as the expectation over the \typo{neuron} response distribution \eqref{eq:single-site} for layer $l$ (i.e. with input drive $\Phi^{(l-1)}$ and tilting $\hat \Phi^{(l)}$), conditioned on spatial position $k$. For the tilting we obtain for $l \in 1, \dots, L-1$.
 \begin{align}
   \frac{\partial \mathcal S}{\partial \Phi^{(l)}} = 0
   \implies \hat \Phi^{(l)\mu,\nu}_{i,j} 
@@ -328,7 +328,7 @@ where we have defined $\mathbb Y^{\mu,\nu}_{\alpha,\beta} = y^{\mu}_{\alpha} y^{
 
 \subsection{Predictive Distribution}
 
-The last element of the standard mean-field treatment is to find the distribution over test outputs $f^{\star}_{\alpha}$ corresponding to test inputs $x^{\mu}_a$. This has the standard form of a Gaussian process regression:
+The last element of the standard mean-field treatment is to find the distribution over test outputs $f^{\star}_{\alpha}$ corresponding to test inputs $\typo{x^{\star}_a}$. This has the standard form of a Gaussian process regression:
 \begin{align*}
   f^{\star}_{\alpha} | \Phi^{(L)} \sim
     \mathcal N (\mu^{\star}_{\alpha}, \frac1N \Sigma^{\star}_{\alpha,\beta})
