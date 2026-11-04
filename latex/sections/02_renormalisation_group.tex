@@ -44,7 +44,7 @@ and studying the simplest possible case, where we have only one hidden layer. Re
             \right\rangle
         = k_1 \delta_{\alpha,\beta} \underbrace{ \left \langle \phi^{\mu}_i K_{i,j} \phi^{\nu}_j \right \rangle }_{C^{\mu,\nu}}
 \end{align*}
-$C$ here measure the aggregate correlation in the hidden layer, and is the natural analogue of the more familar non-spatial kernels. 
+$C$ here \typo{measures} the aggregate correlation in the hidden layer, and is the natural analogue of the more \typo{familiar} non-spatial kernels.
 For convenience we define the regularised kernel
 \begin{align*}
     \tilde \Phi^{\mu,\nu}_{\alpha,\beta} 
@@ -72,7 +72,7 @@ In the path integral, this $\hat \Phi^{\mu,\nu}_{\alpha,\beta}$ term is contract
     =
     k^{-1}_1 \delta_{\alpha,\beta} [(\tilde C)^{-1}]^{\mu,m} \delta_{\alpha,a} y^m_a y^n_b \delta_{b, \beta} [(\tilde C^{-1})]^{n,\nu}
     =
-    k_1^{-1} [(\tilde C)^{-1}]^{\mu,m} y^m_{\alpha} y^n_{\alpha}  [(\tilde C)^{-1}]^{\mu,m}
+    k_1^{-1} [(\tilde C)^{-1}]^{\mu,m} y^m_{\alpha} y^n_{\alpha}  \typo{[(\tilde C)^{-1}]^{n,\nu}}
 \end{align*}
 or in matrix notation
 \begin{align*}
@@ -93,9 +93,9 @@ The exponent in the path integral features a kernel of the form
 \end{align*}
 We can diagonalise this in space by choosing a basis for $K$; in this case, we will use the Fourier basis (tantamount to assuming translation invariance and periodic boundaries in the $i,j$ index). We denote by $F_{i,q}$ the discrete Fourier transform matrix with plane waves of frequency $q$ in the columns, such that $K = F \Lambda F^{*}$. We can therefore write the kernel as
 \begin{align*}
-    A^{\mu,\nu} \underbrace{ F_{i,q} \lambda_{q} F^*_{j,q} }_{K_{i,j}} + \sigma_2 \delta^{\mu,\nu} \underbrace{ F_{i,q} F^*_{j,q} }_{\delta_{i,j}}
+    A^{\mu,\nu} \underbrace{ F_{i,q} \lambda_{q} F^*_{j,q} }_{K_{i,j}} + \typo{\sigma^2} \delta^{\mu,\nu} \underbrace{ F_{i,q} F^*_{j,q} }_{\delta_{i,j}}
     =
-    F_{i,q} ( \lambda_{q} A^{\mu,\nu} + \sigma^2 \delta^{\mu,\nu}) F_{j,q}
+    F_{i,q} ( \lambda_{q} A^{\mu,\nu} + \sigma^2 \delta^{\mu,\nu}) \typo{F^*_{j,q}}
 \end{align*}
 We therefore define the kernel that is block-diagonal in Fourier space
 \begin{align*}
@@ -146,7 +146,7 @@ Without Jacobian penalty ($|F|=1$), we make the change of variables $\phi^{\mu}_
     \tilde \phi^{\nu *}_q 
   \Bigg \}
 \end{align*}
-We have here obtained the frequency-dependent data-interaction matrix $\Sigma_q$. For each $q$, this matrix can in principle have a different eigenbasis--these are the directions in data-space that define our functional cell types: the eigendirections of a low-frequency data interaction matrix describe response profiles common to all cells; the directions associated with an intermediate frequency describe functional variations between, say, areas, or equivalently describe course functional variation; and the directions associated with high frequency modes describe functional cells. So the task then is to diagonlise these $\Sigma_q$ and ask how these directions vary with $q$.
+We have here obtained the frequency-dependent data-interaction matrix $\Sigma_q$. For each $q$, this matrix can in principle have a different eigenbasis--these are the directions in data-space that define our functional cell types: the eigendirections of a low-frequency data interaction matrix describe response profiles common to all cells; the directions associated with an intermediate frequency describe functional variations between, say, areas, or equivalently describe \typo{coarse} functional variation; and the directions associated with high frequency modes describe functional cells. So the task then is to \typo{diagonalise} these $\Sigma_q$ and ask how these directions vary with $q$.
 
 \paragraph{Diagonalising Function}
 
@@ -249,7 +249,7 @@ Let us denote by $d_q$ an element on the diagonal of $D_q$; by $a_q$ and $b_q$ e
     &&
     \hat s_Y^2 = \frac{s_Y^2}{k_1}
     &&
-    \hat \sigma^2_q = \frac{\hat \sigma^2}{\lambda_q}
+    \hat \sigma^2_q = \frac{\typo{\sigma^2}}{\lambda_q}
     &&
     \delta = \frac{1}{k_1 \kappa}
 \end{align*}
