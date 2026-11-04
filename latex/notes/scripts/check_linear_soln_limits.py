@@ -65,7 +65,9 @@ PREDICTIONS = {
     "P5 noise-dominated": (4.0, 0.001, 1.0, 1.0, 0.0, 0.25),
 }
 P3_BETA_SWEEP = [0.25, 1.0, 2.0, 5.0, 10.0]
+P7_ELL_SWEEP = [2.0, 4.0, 8.0]
 P8_K_SWEEP = [0.01, 0.1, 1.0, 10.0, 100.0]
+RATIO_Q_MAX = 12  # d_q(mode 1) / d_q(mode 2) is printed for |q| = 0, ..., RATIO_Q_MAX
 FIGURE_PANELS = [
     "P1 prior-shaped (weak target, no rate penalty)",
     "P2 rate-penalty whitening",
@@ -160,15 +162,22 @@ def tau_of(lam, sx2, sy2, sig2, g2, delta):
     return sy2 * h_of(lam, sx2, sig2, g2).max() / c**2
 
 
+def autocorrelation(d):
+    """R(r) = (1/N) sum_q d_q e^{2 pi i q r / N}, r = 0, ..., N-1, of the power spectrum d_q."""
+    return np.fft.ifft(d).real
+
+
 def autocorr_lag1(d):
     """R(1)/R(0) of the tuning map whose power spectrum is d_q (DFT order)."""
-    R = np.fft.ifft(d).real
+    R = autocorrelation(d)
     return R[1] / R[0]
 
 
-def half_power_q(d, floor):
-    """Largest |q| at which d_q - floor is at least half of d_0 - floor (d in DFT order)."""
+def half_power_q(d):
+    """Largest |q| at which d_q - d_{N/2} is at least half of d_0 - d_{N/2} (d in DFT order):
+    the floor is the measurable Nyquist value, as in the note's definition of q_{1/2}."""
     q = np.abs(np.fft.fftfreq(d.size) * d.size)
+    floor = d[d.size // 2]
     return q[(d - floor) >= 0.5 * (d[0] - floor)].max()
 
 
@@ -542,7 +551,7 @@ def whitening_check(lam):
                 "sx2": sx2,
                 "gamma": g2 * lam[0] * sx2,
                 "max_dev": np.abs(d - floor - pred).max(),
-                "half_power_q": half_power_q(d, floor),
+                "half_power_q": half_power_q(d),
             }
         )
     return rows
@@ -672,7 +681,7 @@ def mode_numbers(lam, sx2, sy2, sig2, g2, delta):
         "rho": lam[0] * sx2 / sig2,
         "gamma": g2 * lam[0] * sx2,
         "tau": sy2 * h_of(lam, sx2, sig2, g2).max() / c**2,
-        "half_power_q": half_power_q(d, floor),
+        "half_power_q": half_power_q(d),
         "share0": d[0] / d.sum(),
         "d0_over_floor": d[0] / floor,
         "lag1": autocorr_lag1(d),
@@ -680,11 +689,13 @@ def mode_numbers(lam, sx2, sy2, sig2, g2, delta):
 
 
 def prediction_numbers(ell, k0, k1, sig2, g2, beta):
-    """Regime numbers of modes 1 (mean direction) and 2 (contrast) for one parameter set."""
+    """Regime numbers of modes 1 (mean direction) and 2 (contrast) for one parameter set,
+    and the ratio d_q^(1) / d_q^(2) at q = 0, ..., RATIO_Q_MAX."""
     lam = ring_spectrum(PRED_N, ell)
     sx2, sy2, delta = latent_modes(PRED_P, PRED_K, PRED_A, PRED_M, k0, k1, PRED_NOUT, beta)
     modes = [mode_numbers(lam, a, b, sig2, g2, delta) for a, b in zip(sx2[:2], sy2[:2])]
-    return {"delta": delta, "modes": modes}
+    d1, d2 = prediction_spectra(ell, k0, k1, sig2, g2, beta)[1]
+    return {"delta": delta, "modes": modes, "ratio": (d1 / d2)[: RATIO_Q_MAX + 1]}
 
 
 def share0_sweep(settings):
@@ -692,12 +703,34 @@ def share0_sweep(settings):
     return [[d[0] / d.sum() for d in prediction_spectra(*s)[1]] for s in settings]
 
 
+def correlation_length_check(ell):
+    """P7: setting P1 at length scale `ell`. For each mode, R(0) and the largest deviation
+    of R(r)/R(0) from the kernel K(r) over 1 <= r <= 2 ell, plus the Gaussian width read off
+    at r = ell, sqrt(-ell^2 / (2 ln(R(ell)/R(0))))."""
+    _, k0, k1, sig2, g2, beta = PREDICTIONS["P1 prior-shaped (weak target, no rate penalty)"]
+    kernel = wrapped_gaussian(PRED_N, ell)
+    r = np.arange(1, int(2 * ell) + 1)
+    rows = []
+    for d in prediction_spectra(ell, k0, k1, sig2, g2, beta)[1]:
+        R = autocorrelation(d)
+        rows.append(
+            {
+                "R0": R[0],
+                "max_dev": np.abs(R[r] / R[0] - kernel[r]).max(),
+                "width": np.sqrt(-(ell**2) / (2 * np.log(R[int(ell)] / R[0]))),
+            }
+        )
+    return rows
+
+
 def section_e():
-    """Regime numbers of the numbered predictions, the P3 beta sweep and the P8 k sweep."""
+    """Regime numbers of the numbered predictions, the P3 beta sweep, the P7 length-scale
+    sweep and the P8 k sweep."""
     ell, k0, k1, sig2, g2, beta = PREDICTIONS["P3 target condensation"]
     return {
         "predictions": {name: prediction_numbers(*p) for name, p in PREDICTIONS.items()},
         "p3_beta_sweep": share0_sweep([(ell, k0, k1, sig2, g2, b) for b in P3_BETA_SWEEP]),
+        "p7_ell_sweep": {ell7: correlation_length_check(ell7) for ell7 in P7_ELL_SWEEP},
         "p8_k_sweep": share0_sweep([(ell, k, k, sig2, g2, beta) for k in P8_K_SWEEP]),
     }
 
@@ -723,10 +756,20 @@ def report_e(res):
                 f"q=0 share = {m['share0']:.3f}, d_0/sigma_0^2 = {m['d0_over_floor']:9.2f}, "
                 f"R(1)/R(0) = {m['lag1']:.3f}"
             )
+        ratio = ", ".join(f"{x:.2f}" for x in r["ratio"])
+        print(f"    d_q(mode 1) / d_q(mode 2) at |q| = 0..{RATIO_Q_MAX}: {ratio}")
     ell, k0, k1, sig2, g2, beta = PREDICTIONS["P3 target condensation"]
     print(f"  P3 beta sweep at sig2 = {sig2}, g2 = {g2}: q = 0 share (mode 1, mode 2)")
     for b, shares in zip(P3_BETA_SWEEP, res["p3_beta_sweep"]):
         print(f"    beta = {b:5.2f}: " + ", ".join(f"{s:.3f}" for s in shares))
+    print("  P7 setting P1 at ell = " + ", ".join(f"{e:g}" for e in P7_ELL_SWEEP) + ":")
+    for ell7, rows in res["p7_ell_sweep"].items():
+        for mode, m in enumerate(rows, start=1):
+            print(
+                f"    ell = {ell7:g}, mode {mode}: R(0) = {m['R0']:7.3f}, "
+                f"max |R(r)/R(0) - K(r)| (1 <= r <= 2 ell) = {m['max_dev']:.1e}, "
+                f"Gaussian width at r = ell: {m['width']:.3f}"
+            )
     print(
         f"  P8 common k sweep at sig2 = {sig2}, g2 = {g2}, beta = {beta}: "
         "q = 0 share (mode 1, mode 2)"
