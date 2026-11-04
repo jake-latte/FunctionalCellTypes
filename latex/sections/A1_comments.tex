@@ -12,7 +12,8 @@ How can we calculate $\log \mathcal W[\Phi, \hat \Phi]$? The non-linearity sitti
 \begin{align*}
   \sigma_{(k)} = \left. \frac{\partial^k \phi(h)}{\partial h^k} \right|_{h=0}
 \end{align*}
-Though we could expand the $\phi$ directly, the intuition comes by making a different opening move:
+Though we could expand the $\phi$ directly, the intuition comes by making a different opening move\fix{, an identity insertion with the contour rotated, $\phi \to i \phi$}:
+\fixnote{The second line inserts $1 = \int \mathcal D \phi \, \delta(\phi - i \phi(h))$ rather than $\delta(\phi - \phi(h))$: the delta function sets $\phi_a = i \phi(h_a)$, so $-\frac12 \phi B \phi$ becomes $+\frac12 \phi(h) B \phi(h)$, as required. This deliberate contour rotation (it makes the $\phi$ integral a convergent Gaussian for positive $B$) was made silently; every later line is consistent with it, and it is now stated.}
 \begin{align*}
   &
   \log \mathcal W[\Phi, \hat \Phi] \\
@@ -42,7 +43,7 @@ Though we could expand the $\phi$ directly, the intuition comes by making a diff
         -\mathcal H[h, \hat \phi]
       }
       \underbrace{
-        -i \hat \phi_a [\typo{-}\frac{i\sigma_{(2)}}{2} h_a^2 - \cdots]
+        -i \hat \phi_a [\fix{-}\frac{i\sigma_{(2)}}{2} h_a^2 - \cdots]
       }_{
         -\mathcal U[h, \hat \phi]
       }
@@ -51,6 +52,7 @@ Though we could expand the $\phi$ directly, the intuition comes by making a diff
       \int \mathcal D h \mathcal D \hat \phi
         \exp \left \{ - \mathcal H - \mathcal U \right \}
 \end{align*}
+\fixnote{The minus sign in front of $\frac{i\sigma_{(2)}}{2} h_a^2$, present in the Taylor-expanded line above, was dropped in the definition of $\mathcal U$. That flips the sign of $\mathcal U$; \eqref{eq:corrections} silently uses the correct sign, so only this line changes.}
 where we use $A$ and $B$ for generality: in the standard case, $A_{a, b} \equiv \Phi^{\mu,\nu}$ for $a \in 1, \dots, P$, and similarly $B_{a,b} = i \hat \Phi^{\mu,\nu}$. In the spatial case, $a$ and $b$ enumerate data-position pairs $(\mu,i)$: $A_{a,b} \equiv \Phi^{\mu,\nu}_{i,j}$ and $B_{a,b} = i K_{\alpha,i,\beta,j} \hat \Phi^{\mu,\nu}_{\alpha,\beta} \fix{- G_{i,j} \delta^{\mu,\nu}}$ for $a=(\mu,i)$ and $b=(\nu,j)$.
 \fixnote{The rate penalty $G$ of \eqref{eq:single-site} was dropped from $B$. It only shifts $B$, so nothing below changes once $B$ is read as including it; the same reading applies to the tilt in $\psi$ below.}
 
@@ -84,7 +86,7 @@ If we examine the structure of the Gaussian ensemble, it has a nicely physical i
     \exp \left \{ -\frac12 h_a A^{-1}_{a,b} h_b - \frac12 \hat \phi_a B^{-1}_{a,b} \hat \phi_b - \sigma_{(1)} \hat \phi_a h_a \right \}
   \label{eq:gaussian-ensemble}
 \end{align}
-\eqref{eq:gaussian-ensemble} says that $h$ is a field with covariance $A \equiv \Phi$, under the influence of an external field $\hat \phi$ that itself has covariance $B \approx \hat \Phi$. In general, this influence is non-linear and can only be approximated with the corrections \eqref{eq:corrections}; but at a first approximation, it pushes $h$ with strength $\sigma_{(1)} = \left. \partial_h \phi(h) \right|_{h=0}$. This is perfectly natural when we remember that $B$ encodes the covariance of that layer's pre-activations with respect to their inputs \eqref{eq:saddle-phi-hat}. 
+\eqref{eq:gaussian-ensemble} says that $h$ is a field with covariance $A \equiv \Phi$, under the influence of an external field $\hat \phi$ that itself has covariance $B \approx \typo{i \hat \Phi}$. In general, this influence is non-linear and can only be approximated with the corrections \eqref{eq:corrections}; but at a first approximation, it pushes $h$ with strength $\sigma_{(1)} = \left. \partial_h \phi(h) \right|_{h=0}$. This is perfectly natural when we remember that $B$ encodes the covariance of that layer's pre-activations with respect to their inputs \eqref{eq:saddle-phi-hat}. 
 
 Suppose you observe the kernels $\Phi^{(l-1)}$ and $\Phi^{(l)}$ and you wanted a model of the voltages in layer $l$. So model them with the Gaussian process $h$ driven by the activities of the previous layer $\Phi^{(l-1)}$. But we need those activities to be consistent with our observations $\Phi^{(l)}$, so we immerse $h$ in the field $\hat \phi$ to push it towards compatibility. 
 
@@ -97,7 +99,7 @@ It's not clear that this $\hat \phi$ would correspond to a physical quantity. Bu
       \fix{- \sigma_{(1)} \hat \phi^T A_{\star} A_{\star\star}^{-1} h_{\star}}
     \right \}
 \end{align*}
-\fixnote{The exponent as written mixed the covariance of $h_{\star}$ conditioned on the training $h$ with the marginal precision of $\hat \phi$, and does not follow from integrating out the training pre-activations. Integrating the training $h$ out of the joint Gaussian over $(h, h_{\star}, \hat \phi)$, with joint covariance blocks $A, A_{\star}, A_{\star\star}$, gives the corrected form (checked numerically). The reading is unchanged except that the projection is $A_{\star} A_{\star\star}^{-1}$: the field couples to the regression of the training pre-activations on the test ones.}
+\fixnote{The exponent as written mixed the covariance of $h_{\star}$ conditioned on the training $h$ with the marginal precision of $\hat \phi$, and does not follow from integrating out the training pre-activations. Integrating the training $h$ out of the joint Gaussian over $(h, h_{\star}, \hat \phi)$, with joint covariance blocks $A, A_{\star}, A_{\star\star}$, gives the corrected form. This is checked by \texttt{latex/notes/scripts/check\_a1\_test\_gaussian.py} (seed 1, $3$ training and $2$ test patterns, $\sigma_{(1)} = 0.8$, random positive-definite joint covariance and $B$), where all three blocks of the corrected form match the exact marginal precision to $4 \times 10^{-15}$ and those of the original form are off by $0.2$ to $1$. The reading is unchanged except that the projection is $A_{\star} A_{\star\star}^{-1}$: the field couples to the regression of the training pre-activations on the test ones.}
 which says that if we want to estimate the response of the network to test data, we use the same field as from training time (and project it with $\fix{A_{\star} A_{\star\star}^{-1}}$). A biological intuition then might be had with respect to meta-learning and sleep (see below).
 
 \paragraph{Evolution and Meta-Learning}
