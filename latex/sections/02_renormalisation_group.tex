@@ -273,34 +273,39 @@ Let us denote by $d_q$ an element on the diagonal of $D_q$; by $a_q$ and $b_q$ e
     =
     a_q^{-1} - b_q
     =
-    \frac{1}{\lambda_q \hat s_X^2 + \sigma^2} - \frac{\lambda_q \hat s_Y^2}{c} + g^2
+    \frac{1}{\lambda_q \hat s_X^2 + \sigma^2} - \major{\frac{\lambda_q \hat s_Y^2}{c^2}} + g^2
     =
-    \frac{\lambda_q}{h_q} - \frac{\lambda_q \hat S_Y^2}{c}
+    \frac{\lambda_q}{h_q} - \major{\frac{\lambda_q \typo{\hat s_Y^2}}{c^2}}
 \end{align*}
+\majornote{rg\_diagonal\_reduction.tex}
 where we have introduced
 \begin{align*}
     h_q 
     =
-    \frac{\lambda_q \hat s_X^2 + \sigma^2 }{\lambda_q^{-1} + g^2 (\lambda_q \hat s_X^2 + \hat \sigma^2_q)}
+    \frac{\lambda_q \hat s_X^2 + \sigma^2 }{\lambda_q^{-1} + g^2 (\major{\hat s_X^2} + \hat \sigma^2_q)}
 \end{align*}
+\majornote{rg\_diagonal\_reduction.tex}
 this gives
 \begin{align*}
-    d_q = \left(\frac{\lambda_q}{h_q} - \frac{\lambda_q \hat s_Y^2}{c} \right)^{-1}
+    d_q = \left(\frac{\lambda_q}{h_q} - \major{\frac{\lambda_q \hat s_Y^2}{c^2}} \right)^{-1}
     =
-    \frac{c h_q / \lambda_q}{c - \hat s_Y^2 h_q}
+    \major{\frac{c^2 h_q / \lambda_q}{c^2 - \hat s_Y^2 h_q}}
 \end{align*}
+\majornote{rg\_diagonal\_reduction.tex}
 and therefore
 \begin{align*}
     c 
     = 
-    \sum_q \lambda_q d_q  + \delta
+    \major{\frac1N} \sum_q \lambda_q d_q  + \delta
     =
-    c \sum_q \frac{h_q}{c - \hat s_Y^2 h_q} + \delta 
+    \major{\frac{c^2}{N} \sum_q \frac{h_q}{c^2 - \hat s_Y^2 h_q}} + \delta 
 \end{align*}
+\majornote{rg\_kernel\_normalisation.tex} \majornote{rg\_diagonal\_reduction.tex}
 which leaves the final implicit solution
 \begin{align}
-    1 - \frac{\delta}{c} = \sum_q \frac{h_q}{c - \hat s_Y^2 h_q}
+    1 - \frac{\delta}{c} = \major{\frac{c}{N} \sum_q \frac{h_q}{c^2 - \hat s_Y^2 h_q}}
     \label{eq:linear-soln}
 \end{align}
+\majornote{rg\_diagonal\_reduction.tex}
 
 \end{document}
