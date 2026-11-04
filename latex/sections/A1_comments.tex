@@ -1,0 +1,214 @@
+\section{Some Comments on Neuroscience}
+
+\paragraph{Interpreting the Conjugate}
+
+The conjugate kernels $\hat \Phi$ maintiain a somewhat enigmatic position in this theory. They do admit some interpretations: literally, as the Fourier coefficients of the delta function that enforces the self-consistency of $\Phi$; somewhat more intuitively, as Lagrange multiplier-like objects, that sit around just to enforce a constraint; as the correlation of the derivative of the subsequent layer with respect to its input, which the $\hat \Phi$ is involved in generating \eqref{eq:saddle-phi-hat}. These interpretations are not overly illuminating, though they all get at this notion that the conjugate sits around to encode something about the realities of the network: we could achieve minimum error on our task by simply taking $\Phi^{(L)}=\mathbb Y$, but this might not be physically realisable, or entropically prohibitive; the conjugates constrain learning by pushing back against these unrealistic solutions. Here we propose an analytical development of this intuition based on a perturbation expansion.
+
+How can we calculate $\log \mathcal W[\Phi, \hat \Phi]$? The non-linearity sitting in the exponent prohibits analytic tractability. The physicist's recourse is to Taylor-expand $\phi(h)$ around $h=0$ (for simplicity, assuming $\phi(0)=0$). We define
+\begin{align*}
+  \sigma_{(k)} = \left. \frac{\partial^k \phi(h)}{\partial h^k} \right|_{h=0}
+\end{align*}
+Though we could expand the $\phi$ directly, the intuition comes by making a different opening move:
+\begin{align*}
+  &
+  \log \mathcal W[\Phi, \hat \Phi] \\
+  &=
+    \int \mathcal D h \exp \left \{
+      -\frac12 h_a A^{-1}_{a,b} h_b + \frac12 \phi(h_a) B_{a,b} \phi(h_b)
+    \right \} \\
+  &=
+    \int \mathcal D h \mathcal D \phi \mathcal D \hat \phi \exp \left \{
+      -\frac12 h_a A^{-1}_{a,b} h_b 
+      -\frac12 \phi_a B_{a,b} \phi_b 
+      -i \hat \phi_a[\phi_a - i \phi(h_a)]
+    \right \} \\
+  &=
+    \int \mathcal D h \mathcal D \phi \mathcal D \hat \phi \exp \left \{
+      -\frac12 h_a A^{-1}_{a,b} h_b 
+      -\frac12 \phi_a B_{a,b} \phi_b 
+      -i \hat \phi_a[\phi_a - i\sigma_{(1)} h_a - \frac{i\sigma_{(2)}}{2} h_a^2 - \cdots]
+    \right \} \\
+  &=
+    \int \mathcal D h \mathcal D \hat \phi \exp \Bigg \{
+      \underbrace{
+        -\frac12 h_a A^{-1}_{a,b} h_b 
+        -\frac12 \hat \phi_a B_{a,b}^{-1} \hat \phi_b 
+        - \sigma_{(1)} \hat \phi_a h_a 
+      }_{
+        -\mathcal H[h, \hat \phi]
+      }
+      \underbrace{
+        -i \hat \phi_a [\frac{i\sigma_{(2)}}{2} h_a^2 - \cdots]
+      }_{
+        -\mathcal U[h, \hat \phi]
+      }
+    \Bigg \} \\
+    &= 
+      \int \mathcal D h \mathcal D \hat \phi
+        \exp \left \{ - \mathcal H - \mathcal U \right \}
+\end{align*}
+where we use $A$ and $B$ for generality: in the standard case, $A_{a, b} \equiv \Phi^{\mu,\nu}$ for $a \in 1, \dots, P$, and similarly $B_{a,b} = i \hat \Phi^{\mu,\nu}$. In the spatial case, $a$ and $b$ enumerate data-position pairs $(\mu,i)$: $A_{a,b} \equiv \Phi^{\mu,\nu}_{i,j}$ and $B_{a,b} = i K_{\alpha,i,\beta,j} \hat \Phi^{\mu,\nu}_{\alpha,\beta}$ for $a=(\mu,i)$ and $b=(\nu,j)$.
+
+By $\mathcal H$ we denote the Gaussian part of the theory that we can solve. Assuming $\mathcal U$ is small, we can reformulate its terms as corrections to the Gaussian theory:
+\begin{align*}
+  \mathcal W
+  = & \int \mathcal D h \mathcal D \phi e^{-\mathcal H - \mathcal U} \\
+  = & \int \mathcal D h \mathcal D \phi e^{- \mathcal H}[1 - \mathcal U + \frac12 \mathcal U^2 + \cdots] \\
+  = & \mathcal W_0 \langle 1 - \mathcal U + \frac12 \mathcal U^2 + \cdots \rangle_0 \\
+  = & \mathcal W_0 e^{\log \langle 1 - \mathcal U + \frac12 \mathcal U^2 + \cdots \rangle_0} \\
+  = & \mathcal W_0 e^{-\langle \mathcal U \rangle_0 
+      +\frac12 (\langle \mathcal U^2 \rangle_0 - \langle \mathcal U \rangle_0^2)
+      + \cdots}
+\end{align*}
+where by $\langle \cdot \rangle_0$ we mean an average over the Gaussian ensemble $\mathcal H$, and by $\mathcal W_0$ its partition function. Finally then, we have
+\begin{align*}
+  \log \mathcal W = 
+    \log \mathcal W_0 
+    -\langle \mathcal U \rangle_0 
+    +\frac12 (\langle \mathcal U^2 \rangle_0 - \langle \mathcal U \rangle_0^2)
+    +\cdots
+\end{align*}
+For example, one of the terms among these corrections is
+\begin{align}
+  -\frac{\sigma_{(2)}}{2} \langle h_a^2 \hat \phi_a \rangle_0
+  \label{eq:corrections}
+\end{align}
+If we examine the structure of the Gaussian ensemble, it has a nicely physical interpretation
+\begin{align}
+  \frac{1}{\mathcal W_0} \int \mathcal D h \mathcal D \hat \phi 
+    \exp \left \{ -\frac12 h_a A^{-1}_{a,b} h_b - \frac12 \hat \phi_a B^{-1}_{a,b} \hat \phi_b - \sigma_{(1)} \hat \phi_a h_a \right \}
+  \label{eq:gaussian-ensemble}
+\end{align}
+\eqref{eq:gaussian-ensemble} says that $h$ is a field with covariance $A \equiv \Phi$, under the influence of an external field $\hat \phi$ that itself has covariance $B \approx \hat \Phi$. In general, this influence is non-linear and can only be approximated with the corrections \eqref{eq:corrections}; but at a first approximation, it pushes $h$ with strength $\sigma_{(1)} = \left. \partial_h \phi(h) \right|_{h=0}$. This is perfectly natural when we remember that $B$ encodes the covariance of that layer's pre-activations with respect to their inputs \eqref{eq:saddle-phi-hat}. 
+
+Suppose you observe the kernels $\Phi^{(l-1)}$ and $\Phi^{(l)}$ and you wanted a model of the voltages in layer $l$. So model them with the Gaussian process $h$ driven by the activities of the previous layer $\Phi^{(l-1)}$. But we need those activities to be consistent with our observations $\Phi^{(l)}$, so we immerse $h$ in the field $\hat \phi$ to push it towards compatibility. 
+
+It's not clear that this $\hat \phi$ would correspond to a physical quantity. But consider that, because the conjugate vanishes for untrained (i.e. test-time) patterns, then the single site for those pre-activations has the Gaussian part
+\begin{align*}
+  \int \mathcal D h_{\star} \mathcal D \hat \phi 
+    \exp \left \{
+      - \frac12 h_{\star}^T [A_{\star\star} - A_{\star}^T A^{-1} A_{\star}]^{-1} h_{\star} 
+      - \frac12 \hat \phi^T (B^{-1} - \sigma_{(1)}^2 A) \hat \phi
+      + \sigma_{(1)} \hat \phi^T A (A^{-1})_{\star} h_{\star}
+    \right \}
+\end{align*}
+which says that if we want to estimate the response of the network to test data, we use the same field as from training time (and project it with $A (A^{-1})_{\star}$). A biological intuition then might be had with respect to meta-learning and sleep (see below).
+
+\paragraph{Evolution and Meta-Learning}
+
+By introducing the spatial kernels $K^{(l)}$, we now have on our hands something that might actually be more useful than just predicting the behaviour of a neural network. In particular, we can reformulate the saddle point equations as an effective feedforward network. To improve the clarity of the analogy with \eqref{eq:ff-network}, I will denote by round things--$\medbullet$ or $\medcirc$--the data pairs $(\mu,\nu)$, and by pointy things--$\blacksquare, \square, \blacktriangle$ or $\triangle$--the spatial pairs $(i,j)$. In this way we can re-write the stationary conditions as
+\begin{align}
+  \Phi^{(l), \medbullet}_{\blacksquare} = \sum_{\square} K_{\blacksquare, \square}^{(l)} \psi^{\medbullet}_{\square}( \Phi^{(l-1)} )
+  \label{eq:forward-pass}
+\end{align}
+where $K^{(l)}_{\blacksquare, \square} \equiv K^{(l)}_{i,a,j,b}$ and the activation function $\psi$ is now vector-valued, rather than the familiar point-wise object. Somewhat awkwardly, it is now a function of $\hat \Phi^{(l)}$ and $K^{(l)}$.
+\begin{align*}
+  \psi^{\medbullet}_{\blacksquare}(\Phi^{(l)}) 
+  \equiv \psi^{\mu,\nu}_{i,j} (\Phi^{(l)}) = 
+    \frac{1}{\mathcal W} \int \mathcal D h \
+      \phi^{\mu}_i \phi^{\nu}_j \exp \left(
+        - \frac12 h^{m}_a \left. (\Phi^{(l)})^{-1} \right|^{m,n}_{a,b} h^{n}_b 
+        + \frac12 \phi^{m}_a K^{(l+1)}_{a,\alpha,b,\beta} \hat \Phi^{(l+1)m,n}_{\alpha,\beta} \phi^{n}_{b}
+      \right)
+\end{align*}
+This forward pass assumes the conjugates $\hat \Phi$ are sitting at their stationary condition, where self-consistency is satisfied; it obscures the other half of the saddle, which says that the $\Phi$s themselves are sitting at their stationary condition, which takes the form of an entropy-constrained MAP estimate. This effective network consists in two passes: a 'forward' pass, where the conjugates are taken as given and the $\Phi$ are propagated by \eqref{eq:forward-pass}; and a 'backward' pass, where the kernels are taken as given and the conjugates are updated by \eqref{eq:backward-pass}. 
+
+It is not hard to imagine then a scheme in which we learn the spatial priors $K$, in analogy with evolution: clearly there is a spatial prior on wiring in the nervous system, encoded in genetic and epigenetic parameters. Inidividuals learn by some local optimisation procedure, acting on the weights directly, but the species learns by doing some global optimisation, modifying priors based on an expectation over the population. There is an amortised learning ocurring evolutionarily that we can realise here. We assume a parametric form for the kernel between the synapse from layer $l-1$ to layer $l$ with parameters $\vartheta^{(l)}$, such that$K^{(l)}_{i,a,j,b} = k^{(l)}_{\vartheta}((i, a), (j, b))$. By interleaving the forward and backward passes on a dataset $\{x^{\mu}, y^{\mu} \}_{\mu}$, we will eventually converge to an effective network which captures the expected bevhaiour of any individual realisation; from this, we can do a forward pass with some test dataset $\{ x^{\star}, y^{\star} \}_{\star}$, obtain $f^{\star}$, and then backprop through the loss 
+\begin{align*}
+  \mathcal H = \frac12 ||y^{\star} - f^{\star}||^2_2
+\end{align*}
+to the parameters $\vartheta^{(l)}$. The population-dependent activation function $\psi$ has the effect of turning the diagonal Jacobian that usually appears in the backprop recursion into a dense Jacobian; additionally, because $\psi$ itself is a function of the kernel weights at that layer, there is an additional term in the final step. Defining the adjoint
+\begin{align*}
+  g^{(l), \star}_{\blacksquare} = \frac{\partial \mathcal H}{\partial \Phi^{(l),\star}_{\blacksquare} }
+\end{align*}
+and the jacobians
+\begin{align*}
+  J^{(l), \medbullet, \medcirc}_{\blacksquare, \square} = \frac{\partial \psi^{(l), \medbullet}_{\blacksquare}}{\partial \Phi^{(l-1), \medcirc}_{\square}}
+&&
+  Q^{(l), \medbullet}_{\blacksquare, \square, \blacktriangle} = \frac{\partial \psi^{(l), \medbullet}_{\blacksquare}}{\partial K^{(l)}_{\square, \blacktriangle}}
+\end{align*}
+then we can formulate the recursion as
+\begin{align*}
+  g^{(l), \star}_{\blacksquare}
+  =
+  J^{(l+1), \medbullet, \star}_{\square, \blacksquare}
+  K^{(l+1)}_{\square, \blacktriangle} 
+  g^{(l+1), \medbullet}_{\blacktriangle}
+  &&
+  g^{(L), \star}_{\blacksquare} 
+  \equiv
+  g^{(L), \star, \mu}_{\alpha, \beta} 
+  =
+  (f^{\star}_{\alpha} - y^{\star}_{\alpha}) 
+    \left. (\Phi^{(L)} + \kappa^{-1} I)^{-1} \right|^{\mu,\nu}_{\beta, b} 
+    y^{\nu}_b
+\end{align*}
+with the gradients
+\begin{align*}
+  \frac{\partial \mathcal H}{\partial K^{(l)}_{\blacksquare, \square}}
+  =
+  g^{(l), \star}_{\blacksquare} \psi^{(l), \star}_{\square} 
+  + g^{(l), \star}_{\blacktriangle} K^{(l)}_{\blacktriangle, \triangle} Q^{(l), \star}_{\triangle, \blacksquare, \square}
+\end{align*}
+where the first term is the usual rank-one weight update, and the latter is the high-rank term coming from the dependence of $\psi$ on the kernel $K$ of the corresponding layer. We could project these gradients into the PSD cone and update $K$ directly, or continue the recursion to the parameters $\vartheta$. Additionally, because $\psi$ is an expectation over a distribution, we can formulate its gradients, using the score trick, as contracted cumulants:
+\begin{align*}
+  J^{(l), \medbullet, \medcirc}_{\blacksquare, \square}
+  \equiv
+  \frac{\partial \psi^{(l), \mu, \nu}_{\alpha, \beta}}{\partial \Phi^{(l-1), m,n}_{a,b}}
+  = \frac12 
+    \left. (\Phi^{(l-1)})^{-1} \right|^{m, i_1}_{a, j_1}
+    \left(
+      \langle 
+        \phi^{\mu}_{\alpha} \phi^{\nu}_{\beta} h^{i_1}_{j_1} h^{i_2}_{j_2}
+      \rangle
+      -
+      \langle
+        \phi^{\mu}_{\alpha} \phi^{\nu}_{\beta}
+      \rangle
+      \langle
+        h^{i_1}_{j_1} h^{i_2}_{j_2}
+      \rangle
+    \right) 
+    \left. (\Phi^{(l-1)})^{-1} \right|^{i_2, n}_{j_2, b}
+\end{align*}
+and
+\begin{align*}
+  Q^{(l), \medbullet}_{\blacksquare, \square, \blacktriangle}
+  \equiv
+  \frac{\partial \psi^{(l), \mu, \nu}_{\alpha, \beta}}{\partial K^{(l)}_{i,a,j,b}}
+  = \frac12 
+    \hat \Phi^{(l), k_1, k_2}_{i,j}
+    \left(
+      \langle 
+        \phi^{\mu}_{\alpha} \phi^{\nu}_{\beta} \phi^{k_1}_{a} \phi^{k_2}_{b}
+      \rangle
+      -
+      \langle
+        \phi^{\mu}_{\alpha} \phi^{\nu}_{\beta}
+      \rangle
+      \langle
+        \phi^{k_1}_{a} \phi^{k_2}_{b}
+      \rangle
+    \right) 
+\end{align*}
+In this way, we can embed prior knowledge about the task before we ever actually a sample a network to train.
+
+\paragraph{Continual Learning and Sleep}
+
+Beyond just meta-learning, we could also conceptualise the above scheme in terms of sleep. Suppose we sample a network from our priors. It spends the day learning, and its weights drift from those priors. During the day, it will learn some useful things and some not-so useful things--possibly overfitting to a particular experience, or interfering destructively with previous learning. Then we put the network to sleep, during which time we use the above scheme to arrive to an effective network using a known dataset (think a structured input-output relationship, \textit{à la} non-REM sleep), backprop to the priors using the day's experiences as the $\star$ dataset, and then degrade the synapses using the new $L_2$ regularisation corresponding to these priors. In this way we combat overfitting with the degraded synapses while encouraging future learning is consistent with that day's by the spatial prior.
+
+\paragraph{Development}
+
+Another avenue this opens is a mechanism by which we can model the development of a nevous system. Suppose you're a neuroblast, undergoing mitosis and unsure where to send your axons, or where to establish dendrites, among neurons that are already established. A spatial prior is like the chemical gradient that guides these processes. If our prior is reasonably performant, than we might expect to be able to add more neurons without massively disrupting the learning that thas already ocurred in the network. In machine learning, this could be read as a way to increase the size of a network without having to scrap its weights, or for transferring weights from one learned network to a new one.
+
+\paragraph{Low-Rankness}
+
+Low-rank networks are of course all the rage in theoretical and computational neuroscience, for properties all their own but also for the fact that a tiny network (think the toy models of the Saxe group or the Tiny RNNs of the Engel lab) can be realised in a large network with low-rank structure. This spatial embedding gives a physical intuition to the emergence of low-rankness. Consider for example a spatial kernel that is constructed from Gaussian bumps.
+\begin{align*}
+  u_a(x) = \exp \left(-\frac{||x-\mu_a||^2}{2 \sigma^2}\right) 
+  &&
+  K(x,x') = \sum_{a=1}^r u_a(x) u_a(x')
+  &&
+  k(x_i, x_j, x_k, x_l) = K(x_i, x_k) K(x_j, x_l) 
+\end{align*}
+The weight matrix sampled from this prior will have rank at most $r$. But now we have an anatomical interpretation: neurons in layer $l$ tend to form dendrites at locations $\mu_a$, and neurons in layer $l-1$ tend to send their axons to these locations, meaning the activity along each mode (the typical low-rank network perspective) obtains the intepretation as activity around location $\mu_a$. 

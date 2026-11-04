@@ -1,0 +1,23 @@
+\documentclass[../main.tex]{subfiles}
+\begin{document}
+
+\section{Motivation}
+\label{sec:motivation}
+
+\subsection{Background}
+
+The emergence of functional cell types in artificial and biological neural networks a surprising phenomenon. In the brain, it's not obvious that neurons in cortex synaptically distant from the sensory periphery should develop response properties that recognisably correlate with features in the external world, such as the direction the organism is facing, where it is in the room, where the wine is, etc. The same is true of units in the deep layers of artifical networks, and yet these too seem to develop interpretable tuning (and, apparently, in LLMs it is in fact the deep neurons that sparsely correlate with abstract notions like 'roundness' and 'anxiety'). We should like to provide a theoretical account of how such properties arise in networks trained to perform a particular computation.
+
+\subsection{Technical Approach}
+
+This theory will use methods from Statistical Physics to tackle the problem. The first conceit is that of 'end-of-learning', whereby we can treat the objective the network was trained on as a Boltzman energy and get to marginalising. This is standard; apart from this, we will turn to some rather more dramatic methods to answer our questions.
+
+\paragraph{Spatial Embedding}
+
+The problem with mean-field methods as they are typically invoked in neuroscience is that they reduce to describing the distribution of the "average neuron's" response. But we are presently attempting to address a phenomenon that is fundamentally about heterogeneity; how can we observe functionally distinct neurons through such a narrow aperture? The solution, to our minds, is to introduce an additional axis of variation along which we can track functional changes. The coarse single-site methods are akin to describing the magnetisation of a a lump of particles by a single scalar, and declaring it magnetised when that scalar is positive; the next step one takes in a StatPhys course is to allow spatial variation in magnetisation (the Landau-Ginzberg model). What we will do is much the same; by allowing spatial variation in the average neuron distribution, we can see how the response of a neuron might vary in space.
+
+\paragraph{Renormalisation Group}
+
+Spatial variation also allows us to enjoy one of the other tools central in physics: the Renormalisation Group. In particular, this will allow us to 'zoom out' of the cortical tissue under examination, and determine which factors of spatial variation persist. This allows us to study the effect of a non-linearity in the network, which has the interpretation here of introducing additional spatial interactions above the linear activation, and also to study what factors in the task given to the newtork are relevant for generating functional cells.
+
+\end{document}

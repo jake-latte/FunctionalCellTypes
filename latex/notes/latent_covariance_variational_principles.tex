@@ -1,0 +1,481 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\KL}{D_{\mathrm{KL}}}
+\newcommand{\E}{\mathbb E}
+\newcommand{\R}{\mathbb R}
+\newcommand{\Id}{\mathrm I}
+\newcommand{\N}{\mathcal N}
+\newcommand{\F}{\mathcal F}
+\newcommand{\Splus}{\mathbb S_{++}^{P}}
+\newtheorem{proposition}{Proposition}
+\title{Variational and information-theoretic interpretations\\of a latent-structured covariance equation}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+The positive-definite solution of $CA^{-1}C-sC-B=0$ uniquely minimises
+$\tr(A^{-1}C)+\tr(BC^{-1})-s\log\det C$.
+We derive four complementary interpretations: an entropy--energy balance;
+a compromise between Gaussian KL divergences in opposite directions;
+reward for input-side latent overlap under covariance penalties; and,
+after separating the isotropic background, genuine Gaussian-channel mutual-information maximisation under two costs.
+We specify the random variables behind each information statement and distinguish information in a representation from information lost when the same matrix is interpreted as noise.
+\end{abstract}
+
+\section{Setup, domain, and two necessary qualifications}
+Let
+\begin{align}
+ A&=S_X+aI_P,& S_X&=ZG_XZ^\top,& a&=\sigma_A^2,\\
+ B&=S_Y+bI_P,& S_Y&=ZG_YZ^\top,& b&=\sigma_B^2,\\
+ G_X&=W_X^\top K_XW_X,&
+ G_Y&=W_Y^\top K_Y^{-1}W_Y.
+\end{align}
+Here $Z\in\R^{P\times K}$, $K<P$, the columns of $W_X,W_Y$ are orthonormal,
+and $K_X,K_Y$ are positive definite. Consequently $G_X,G_Y\succ0$:
+for example, $v^\top G_Xv=(W_Xv)^\top K_X(W_Xv)>0$ for $v\ne0$.
+Throughout the main derivation, $a>0$, $b\ge0$, and $s>0$.
+
+First, $Z$ cannot have full \emph{row} rank when $K<P$; we assume full
+\emph{column} rank $K$. Second, the equation does not have a unique solution
+over all symmetric matrices. Even in one dimension, for $A,B>0$, it has
+one positive and one negative root. The relevant uniqueness statement is
+\emph{uniqueness over $C\succ0$}, appropriate when $C$ is a covariance.
+If $a=0$, the full-space inverse $A^{-1}$ does not exist. Section~\ref{sec:zero}
+treats the reduced-space formulation and the limit $a\downarrow0$ separately.
+
+All logarithms are natural. Additive constants in objectives are independent
+of the optimisation variable. Covariances are expressed in fixed units;
+a reference covariance can be inserted in every log determinant without
+changing any minimiser.
+
+\section{The basic convex variational principle}
+\begin{proposition}
+For $A\succ0$, $B\succeq0$, $s>0$, the functional
+\begin{equation}\label{eq:F}
+ \boxed{\F(C)=\tr(A^{-1}C)+\tr(BC^{-1})-s\log\det C,
+ \qquad C\succ0}
+\end{equation}
+has a unique global minimiser, and its stationarity equation is
+\begin{equation}\label{eq:riccati}
+ CA^{-1}C-sC-B=0.
+\end{equation}
+\end{proposition}
+\begin{proof}
+For a symmetric variation $H$, use
+$dC^{-1}[H]=-C^{-1}HC^{-1}$ and $d\log\det C[H]=\tr(C^{-1}H)$.
+Then
+\begin{equation}
+ d\F(C)[H]=\tr\!\left[
+ (A^{-1}-C^{-1}BC^{-1}-sC^{-1})H\right].
+\end{equation}
+Multiplying the vanishing gradient on the left and right by $C$ gives
+\eqref{eq:riccati}. This does not require $A,B,C$ to commute.
+
+For strict convexity, put $T=C^{-1/2}HC^{-1/2}$ and
+$D=C^{-1/2}BC^{-1/2}\succeq0$. The second variation is
+\begin{equation}
+ d^2\F(C)[H,H]=2\tr(DT^2)+s\tr(T^2)>0\quad(H\ne0).
+\end{equation}
+The first term is nonnegative since both $D$ and $T^2$ are positive
+semidefinite. Existence follows from coercivity: with
+$m=\lambda_{\min}(A^{-1})>0$,
+\begin{equation}
+ \F(C)\ge\sum_{i=1}^P\bigl[m\lambda_i(C)-s\log\lambda_i(C)\bigr].
+\end{equation}
+Each scalar summand diverges at zero and infinity and is bounded below.
+Thus sublevel sets stay away from the boundary and from infinity.
+\end{proof}
+
+For completeness, whiten by $A$:
+\begin{equation}
+ Q=A^{-1/2}CA^{-1/2},\qquad D=A^{-1/2}BA^{-1/2}.
+\end{equation}
+The equation becomes $Q^2-sQ-D=0$. Hence $Q$ commutes with $D$, and
+positive definiteness selects the positive scalar root in every eigenspace:
+\begin{equation}\label{eq:solution}
+ \boxed{C^*=A^{1/2}\left[\frac{s}{2}I+
+ \left(\frac{s^2}{4}I+A^{-1/2}BA^{-1/2}\right)^{1/2}\right]A^{1/2}.}
+\end{equation}
+For $D=0$ the positive root is $s$, not zero. In particular
+$C^*\succeq sA$, with strict inequality if $B\succ0$.
+
+\section{Interpretation I: maximum entropy with two quadratic costs}
+Introduce independent auxiliary Gaussian vectors
+$h\sim\N(0,C)$ and $y\sim\N(0,B)$ (the latter may be degenerate).
+Then
+\begin{align}
+ \E[h^\top A^{-1}h]&=\tr(A^{-1}C),\\
+ \E[y^\top C^{-1}y]&=\tr(BC^{-1}),\\
+ \mathsf h(h)&=\tfrac12\log\det C+\tfrac P2\log(2\pi e).
+\end{align}
+Consequently
+\begin{equation}\label{eq:entropy}
+ \F(C)=\E\|h\|_{A^{-1}}^2+\E\|y\|_{C^{-1}}^2
+ -2s\mathsf h(h)+\text{constant}.
+\end{equation}
+This is a maximum-entropy covariance subject to two competing costs.
+The first controls representation variance in the metric supplied by $A$:
+variance in a large-eigenvalue direction of $A$ is relatively cheap.
+The second prevents $C$ from assigning too little variance to directions
+that occur in $B$. Entropy rewards a large occupied volume and prevents
+collapse, even in directions where $B$ vanishes.
+
+Equivalently, let $e_X^*=\tr(A^{-1}C^*)$ and
+$e_Y^*=\tr(B(C^*)^{-1})$. Then $C^*$ uniquely maximises
+$\log\det C$ subject to
+\begin{equation}
+ \tr(A^{-1}C)\le e_X^*,\qquad \tr(BC^{-1})\le e_Y^*.
+\end{equation}
+Indeed, a feasible covariance with a larger log determinant would have
+smaller $\F$, contradicting optimality. The parameter $s$ sets the
+entropy reward in the penalised formulation; it does not by itself specify
+either of these two budgets independently.
+
+The latent structure enters both costs. Writing
+$y=ZG_Y^{1/2}v+\sqrt b\,\epsilon$ with independent standard normal vectors,
+\begin{equation}\label{eq:Ytrace}
+ \tr(BC^{-1})=
+ \|C^{-1/2}ZG_Y^{1/2}\|_F^2+b\tr(C^{-1}).
+\end{equation}
+Thus the output-side cost measures how large the latent signal remains
+after whitening by the candidate covariance. Minimising it encourages
+coverage of that signal by $C$. It is not, without an additional observation
+model, a latent reconstruction error.
+
+\section{Interpretation II: Gaussian KL compromise}
+For positive-definite $U,V$,
+\begin{equation}\label{eq:KL}
+ 2\KL\bigl(\N(0,U)\Vert\N(0,V)\bigr)
+ =\tr(V^{-1}U)-P+\log\det V-\log\det U.
+\end{equation}
+Taking $U=C$, $V=sA$ gives the exact identity, up to a constant,
+\begin{equation}\label{eq:oneKL}
+ \boxed{\F(C)=2s\KL\bigl(\N(0,C)\Vert\N(0,sA)\bigr)
+ +\tr(BC^{-1})+\text{constant}.}
+\end{equation}
+So $C$ stays close to an input-side reference covariance $sA$, while
+expanding to cover output-side fluctuations. This form remains valid for
+$b=0$ because it never puts a degenerate $B$ into a Gaussian KL divergence.
+
+If $B\succ0$, choose any $r>0$ and set $t=r+s$. Then
+\begin{align}
+ 2t\KL\bigl(\N(0,C)\Vert\N(0,tA)\bigr)
+ &=\tr(A^{-1}C)-t\log\det C+\text{constant},\\
+ 2r\KL\bigl(\N(0,B/r)\Vert\N(0,C)\bigr)
+ &=\tr(BC^{-1})+r\log\det C+\text{constant}.
+\end{align}
+Adding yields
+\begin{equation}\label{eq:twoKL}
+ \boxed{\F(C)=2t\KL\bigl(\N(0,C)\Vert\N(0,tA)\bigr)
+ +2r\KL\bigl(\N(0,B/r)\Vert\N(0,C)\bigr)+\text{constant}.}
+\end{equation}
+For example $r=s$, $t=2s$ produces weights $4s,2s$ and references
+$2sA,B/s$. The rescaling of the reference covariances is essential:
+an arbitrary weighted sum using unscaled $A,B$ does not generally give
+the original equation.
+
+The first divergence penalises putting representation variance where the
+input reference has little variance. The second penalises failing to cover
+variance present in the output reference. Both refer to the same latent
+subspace but use different latent metrics $G_X,G_Y$.
+The freedom in $r$ shows that this interpretation is not a uniquely
+identified probabilistic model; these are equivalent objective decompositions.
+For $b=0$ the full-space second KL is infinite, so use \eqref{eq:oneKL}
+or the reduced-space version below.
+
+\section{Interpretation III: reward for input-side latent overlap}
+This formulation makes explicit the reward for alignment with $Z$.
+Define the symmetric matrix
+\begin{equation}
+ H_X=S_X(S_X+aI)^{-1}=I-aA^{-1}.
+\end{equation}
+It is supported on $\operatorname{col}(Z)$, has eigenvalues in $[0,1)$,
+and assigns larger weight to stronger input-side signal directions.
+Since $A^{-1}=a^{-1}(I-H_X)$, equation~\eqref{eq:F} becomes
+\begin{equation}\label{eq:overlap}
+ \boxed{\F(C)=\frac1a\tr C-\frac1a\tr(H_XC)
+ +\tr(BC^{-1})-s\log\det C.}
+\end{equation}
+Equivalently, $C^*$ maximises
+\begin{equation}
+ \underbrace{\tr(H_XC)}_{\text{input latent overlap}}
+ +\underbrace{as\log\det C}_{\text{volume reward}}
+ -\underbrace{\tr C}_{\text{total variance cost}}
+ -\underbrace{a\tr(BC^{-1})}_{\text{output coverage cost}}.
+\end{equation}
+This is a direct overlap-maximisation statement, although the exact overlap
+is with a noise-weighted latent kernel, not generally with $ZZ^\top$.
+
+To see its latent-coordinate form, let
+\begin{equation}
+ V_X=\left(G_X^{-1}+a^{-1}Z^\top Z\right)^{-1}.
+\end{equation}
+Woodbury gives
+\begin{equation}
+ A^{-1}=a^{-1}I-a^{-2}ZV_XZ^\top,
+ \qquad \tr(H_XC)=a^{-1}\tr(V_XZ^\top CZ).
+\end{equation}
+Thus $Z^\top CZ$ is rewarded through a specific latent metric.
+Only when that metric is proportional to the identity is this proportional
+to the unweighted overlap $\tr(Z^\top CZ)$.
+
+There is also a posterior interpretation. In the input-side model
+\begin{equation}
+ u\sim\N(0,G_X),\qquad h\mid u\sim\N(Zu,aI),
+\end{equation}
+the posterior is $u\mid h\sim\N(m(h),V_X)$, with
+$m(h)=a^{-1}V_XZ^\top h$. Averaging over the candidate law $h\sim\N(0,C)$,
+\begin{equation}
+ \E_C[m(h)^\top V_X^{-1}m(h)]
+ =a^{-2}\tr(V_XZ^\top CZ)=a^{-1}\tr(H_XC).
+\end{equation}
+The overlap reward is therefore the mean squared inferred latent amplitude,
+measured in posterior-uncertainty units. This is posterior activation,
+not automatically accuracy relative to a true latent variable: the averaging
+law is $\N(0,C)$, which need not equal the input model's marginal $\N(0,A)$.
+
+Equivalently, the log Bayes factor of the structured input model against
+pure isotropic noise is
+\begin{equation}
+ \log\frac{p_A(h)}{p_{aI}(h)}
+ =\frac1{2a}h^\top H_Xh-\frac12\log\det(A/a).
+\end{equation}
+Hence the negative overlap term in \eqref{eq:overlap} is exactly
+$-2\E_C\log[p_A(h)/p_{aI}(h)]$ plus a constant. It rewards samples whose
+fluctuations provide evidence for the input latent model.
+
+\section{The exact latent-subspace reduction}\label{sec:reduction}
+Put $R=(Z^\top Z)^{1/2}$ and $U=ZR^{-1}$, so that $U^\top U=I_K$,
+$Z=UR$, and $\Pi=UU^\top$ projects onto the latent subspace.
+Define
+\begin{equation}
+ A_L=RG_XR+aI_K,\qquad B_L=RG_YR+bI_K.
+\end{equation}
+In the decomposition $\R^P=\operatorname{col}(Z)\oplus\operatorname{col}(Z)^\perp$,
+$A=A_L\oplus aI$ and $B=B_L\oplus bI$.
+Formula~\eqref{eq:solution} therefore implies
+\begin{equation}\label{eq:blocks}
+ C^*=UC_L^*U^\top+c_0(I-\Pi),\qquad
+ c_0=\frac{sa+\sqrt{s^2a^2+4ab}}2,
+\end{equation}
+where $C_L^*$ uniquely minimises
+\begin{equation}\label{eq:FL}
+ \F_L(C_L)=\tr(A_L^{-1}C_L)+\tr(B_LC_L^{-1})-s\log\det C_L.
+\end{equation}
+The complementary contribution is
+$(P-K)[c_0/a+b/c_0-s\log c_0]$.
+All non-isotropic structure lies in the $K$-dimensional latent subspace,
+irrespective of the ambient dimension $P$.
+
+An additional useful fact is
+\begin{equation}\label{eq:floor}
+ C_L^*\succ c_0I_K.
+\end{equation}
+To prove it, take a unit eigenvector $v$ of $C_L^*$ with eigenvalue $c>0$.
+Since $A_L\succ aI$ and $B_L\succ bI$,
+\begin{equation}
+ c^2v^\top A_L^{-1}v=sc+v^\top B_Lv,
+ \qquad \frac{c^2}{a}>sc+b.
+\end{equation}
+The positive root of $c^2/a-sc-b=0$ is $c_0$, so $c>c_0$.
+Consequently there is a unique $M^*\succ0$ such that
+\begin{equation}\label{eq:M}
+ C^*=c_0I+ZM^*Z^\top,\qquad
+ M^*=R^{-1}(C_L^*-c_0I)R^{-1}.
+\end{equation}
+The value of $c_0$ is determined explicitly from $a,b,s$; finding it does
+not require knowing $C^*$.
+
+\section{Interpretation IV: information maximisation in a latent channel}\label{sec:MI}
+The preceding reduction supplies a precise positive mutual-information
+interpretation. Restrict to
+\begin{equation}
+ C(M)=c_0I+ZMZ^\top,\qquad M\succeq0.
+\end{equation}
+This restriction preserves the global optimum by \eqref{eq:M}.
+Introduce a fixed standard Gaussian latent vector $u\in\R^K$ and a
+representation $h\in\R^P$ through
+\begin{equation}\label{eq:channel}
+ u\sim\N(0,I_K),\qquad
+ h=ZM^{1/2}u+\epsilon,\qquad
+ \epsilon\sim\N(0,c_0I_P),\quad \epsilon\perp u.
+\end{equation}
+Its marginal covariance is $C(M)$ and its conditional noise covariance
+does not depend on $M$. Subtracting the two Gaussian entropies gives
+\begin{align}
+ \Id_M(u;h)
+ &=\mathsf h(h)-\mathsf h(h\mid u)\\
+ &=\frac12\log\det C(M)-\frac P2\log c_0\\
+ &=\frac12\log\det\left(I_K+c_0^{-1}M^{1/2}Z^\top ZM^{1/2}\right).
+\end{align}
+Thus an exact variational principle for the same $C^*$ is
+\begin{equation}\label{eq:MIobjective}
+ \boxed{M^*=\arg\min_{M\succeq0}\left\{
+ \tr(A^{-1}C(M))+\tr(BC(M)^{-1})-2s\Id_M(u;h)\right\}.}
+\end{equation}
+This is not a bound or a large-noise approximation.
+Although the parametrisation of the channel uses a square root, the objective
+is strictly convex in $M$: it equals $\F(C(M))$ plus a constant, and
+$M\mapsto ZMZ^\top$ is injective.
+
+\paragraph{What is being learned?}
+The optimisation chooses the strength and mixing of latent signal transmitted
+through the fixed patterns in $Z$. Mutual information rewards a representation
+from which the Gaussian coefficients $u$ can be inferred. The first trace
+charges for representation variance according to the input-side metric.
+The second discourages allocating too little covariance to output-relevant
+latent directions. The tradeoff therefore selects an informative latent
+representation that respects both input and output structure.
+
+This also has an exact uncertainty interpretation. Completing the square gives
+\begin{equation}
+ \operatorname{Cov}(u\mid h)
+ =\left(I_K+c_0^{-1}M^{1/2}Z^\top ZM^{1/2}\right)^{-1},
+\end{equation}
+so $2\Id_M(u;h)=-\log\det\operatorname{Cov}(u\mid h)$.
+The reward reduces the posterior uncertainty volume of the latent
+coefficients. It need not maximise every coordinate's accuracy independently.
+
+As in Section 3, at the attained budgets $e_X^*,e_Y^*$, $M^*$ also solves
+\begin{equation}
+ \max_{M\succeq0}\ \Id_M(u;h)
+ \quad\text{subject to}\quad
+ \tr(A^{-1}C(M))\le e_X^*,\quad
+ \tr(BC(M)^{-1})\le e_Y^*.
+\end{equation}
+Information alone would increase without bound as signal strength grows;
+the trace costs are an essential part of this interpretation.
+
+\paragraph{Scope of the information statement.}
+Here $Z$ is a fixed loading matrix, not a random variable. The mutual
+information is between random latent coefficients and their representation
+\emph{conditional on that fixed design}. It is not $\Id(Z;C)$, nor is it
+automatically mutual information between a randomly sampled row $z^\mu$
+and an observed feature. Those quantities require a prior over $Z$, or a
+specified sampling and observation model for its rows.
+The original equation alone supplies neither. The channel in
+\eqref{eq:channel} is an explicit, compatible interpretation of the objective,
+not a uniquely implied data-generating process.
+
+\section{Why a different channel can reverse the information interpretation}
+To avoid confusing covariance-as-signal with covariance-as-noise, consider
+instead a fixed output-side latent signal with \emph{noise} covariance $C$:
+\begin{equation}
+ v\sim\N(0,I_K),\qquad
+ \widetilde y=ZG_Y^{1/2}v+\eta_C,\qquad \eta_C\sim\N(0,C).
+\end{equation}
+Set $T=C^{-1/2}S_YC^{-1/2}$. Direct Gaussian entropy and KL calculations give
+\begin{align}
+ 2\Id(v;\widetilde y)&=\log\det(I+T),\\
+ 2\KL\bigl(\N(0,C+S_Y)\Vert\N(0,C)\bigr)
+ &=\tr T-\log\det(I+T).
+\end{align}
+Hence the identity
+\begin{equation}
+ \tr(S_YC^{-1})=2\Id(v;\widetilde y)
+ +2\KL\bigl(\N(0,C+S_Y)\Vert\N(0,C)\bigr)
+\end{equation}
+is exact, and
+\begin{align}
+ \F(C)={}&2s\KL\bigl(\N(0,C)\Vert\N(0,sA)\bigr)
+ +2\Id(v;\widetilde y)\nonumber\\
+ &+2\KL\bigl(\N(0,C+S_Y)\Vert\N(0,C)\bigr)
+ +b\tr(C^{-1})+\text{constant}.
+\end{align}
+Here the information term has a positive sign in a minimisation objective:
+larger $C$ masks a fixed signal. There is no contradiction with
+Section~\ref{sec:MI}, where $C$ is the \emph{total representation covariance}
+and the observation noise is fixed at $c_0I$. One must specify which of
+these roles $C$ plays before claiming information preservation or suppression.
+
+\section{Modes, invariances, and the limits of latent identification}
+If $A_L$ and $B_L$ commute, let their simultaneous eigenvalues be
+$\alpha_i>0,\beta_i>0$. Then
+\begin{equation}
+ c_i^*=\frac{s\alpha_i+
+ \sqrt{s^2\alpha_i^2+4\alpha_i\beta_i}}2,
+ \qquad
+ \F_L=\sum_i\left[\frac{c_i}{\alpha_i}+\frac{\beta_i}{c_i}-s\log c_i\right].
+\end{equation}
+Input variance makes a mode cheap, output variance makes its coverage
+valuable, and entropy opposes collapse. Each $c_i^*$ increases with both
+$\alpha_i$ and $\beta_i$. In this case the channel information at the optimum is
+\begin{equation}
+ \Id(u;h)=\frac12\sum_{i=1}^K\log(c_i^*/c_0).
+\end{equation}
+The determinant formula remains valid without commutation, but there need
+not be a common Euclidean eigenbasis for the input and output kernels.
+
+For $a>0$, full-column-rank $Z$ gives
+$\operatorname{range}(C^*-c_0I)=\operatorname{col}(Z)$.
+Thus the latent subspace is recoverable from the exact optimum, provided
+the background level is known. The coordinates of $Z$ are not identifiable:
+for any invertible $T\in\R^{K\times K}$, the simultaneous transformations
+\begin{equation}
+ Z\mapsto ZT,\qquad
+ G_X\mapsto T^{-1}G_XT^{-\top},\qquad
+ G_Y\mapsto T^{-1}G_YT^{-\top}
+\end{equation}
+leave $A,B,C^*$ unchanged. Consequently the equation encodes latent
+geometry through $S_X,S_Y$, not a distinguished set of latent coordinates.
+
+\section{Zero-noise cases}\label{sec:zero}
+\paragraph{$a>0$, $b=0$.}
+The original equation and convex functional remain well defined.
+Here $B$ is singular, but strict convexity and existence still hold because
+$s>0$. The complementary variance is $c_0=sa>0$, so the exact channel
+interpretation remains valid. Use \eqref{eq:oneKL}, rather than a full-space
+KL with singular $B$ as its first covariance. On the latent subspace,
+$B_L=RG_YR\succ0$, so the two-KL formulation is valid there.
+
+\paragraph{$a=0$, with $b\ge0$.}
+The original full-space equation is undefined, since $A=S_X$ has rank $K<P$.
+One well-defined replacement is the equation on the latent subspace:
+\begin{equation}
+ C_L(RG_XR)^{-1}C_L-sC_L-(RG_YR+bI_K)=0.
+\end{equation}
+Its strictly convex functional is \eqref{eq:FL} with $a=0$, and all
+positive-definite Gaussian and entropy arguments apply in dimension $K$.
+
+Alternatively, take the solutions with $a>0$ and then let $a\downarrow0$.
+The latent block converges to the solution just displayed, while
+$c_0\to0$. The full-space limit is singular and supported on
+$\operatorname{col}(Z)$; it is not a solution involving the nonexistent
+ordinary inverse of $S_X$. Objective values on the complementary subspace
+can diverge and must be removed as constants before comparing reduced
+objectives. Merely replacing $A^{-1}$ by $A^+$ is a different problem:
+for a supported candidate $C$, its complementary equation would read
+$-bI=0$, which fails when $b>0$.
+
+The specific mutual-information model of Section~\ref{sec:MI} uses
+$c_0>0$. As $a\downarrow0$, its noise vanishes and its mutual information
+diverges for a nondegenerate continuous latent signal. Thus it does not
+give a finite information value at exactly zero noise. A reduced-space
+channel with an explicitly chosen positive noise floor can be introduced,
+but that is an additional modelling choice rather than a finite noiseless
+limit of the displayed channel.
+
+\section{Which formulation best answers the latent-information question?}
+The common mathematical core is the strictly convex objective
+\eqref{eq:F}. For covariance fitting, \eqref{eq:oneKL} is particularly
+direct: retain input-side Gaussian structure while covering output-side
+variance. For an input-centred geometric interpretation,
+\eqref{eq:overlap} explicitly rewards the latent overlap
+$\tr(V_XZ^\top CZ)$, balanced against total variance, output coverage,
+and entropy. For a literal positive information objective,
+\eqref{eq:MIobjective} is exact: it maximises information transmitted
+through the latent patterns in $Z$ at a fixed isotropic noise level,
+subject to the two covariance costs.
+
+These interpretations are compatible, but they answer different questions.
+None licenses an unqualified claim that $C$ maximises information about
+an unspecified random $Z$. Once the latent observation model is stated,
+the precise information quantity, its sign, and its regularising costs
+follow explicitly.
+\end{document}

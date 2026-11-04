@@ -1,0 +1,58 @@
+% =============================================================================
+%  macros.tex -- mathematical notation
+%  Change notation here and it propagates through every section.
+% =============================================================================
+
+% --- Number sets ------------------------------------------------------------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\C}{\mathbb{C}}
+
+% --- Vectors, matrices, operators -------------------------------------------
+\newcommand{\vb}[1]{\bm{#1}}            % vector:  \vb{x}
+\newcommand{\mat}[1]{\bm{#1}}           % matrix:  \mat{W}
+\newcommand{\T}{\mathsf{T}}             % transpose:  A^\T
+\DeclareMathOperator{\Tr}{Tr}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\rank}{rank}
+\DeclareMathOperator{\sign}{sign}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+% --- Delimiters (starred form auto-sizes: \norm*{...}) ----------------------
+\DeclarePairedDelimiter{\abs}{\lvert}{\rvert}
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
+\DeclarePairedDelimiter{\floor}{\lfloor}{\rfloor}
+\DeclarePairedDelimiter{\ceil}{\lceil}{\rceil}
+\DeclarePairedDelimiterX{\inner}[2]{\langle}{\rangle}{#1,\,#2}   % \inner{x}{y}
+\DeclarePairedDelimiter{\set}{\{}{\}}
+
+% --- Probability and statistics ---------------------------------------------
+\DeclareMathOperator{\E}{\mathbb{E}}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator{\Cov}{Cov}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\one}{\mathds{1}}           % indicator function
+\newcommand{\given}{\,\middle|\,}       % conditioning bar inside \left...\right
+\newcommand{\KL}[2]{D_{\mathrm{KL}}\left(#1\,\middle\|\,#2\right)}
+\newcommand{\indep}{\perp\!\!\!\perp}
+\newcommand{\iid}{\overset{\text{i.i.d.}}{\sim}}
+
+% --- Calculus ---------------------------------------------------------------
+\newcommand{\dd}{\mathrm{d}}            % differential:  \dd x
+\newcommand{\pd}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\od}[2]{\frac{\dd #1}{\dd #2}}
+\newcommand{\grad}{\nabla}
+\newcommand{\bigO}{\mathcal{O}}
+
+% --- Renormalisation group --------------------------------------------------
+\newcommand{\RG}{\mathcal{R}}           % RG map
+\newcommand{\coarse}[1]{\tilde{#1}}     % coarse-grained variable
+\newcommand{\fixed}[1]{#1^{*}}          % fixed point
+
+% --- Miscellaneous ----------------------------------------------------------
+\newcommand{\defeq}{\coloneqq}
+\newcommand{\eqdef}{\eqqcolon}
+\newcommand{\st}{\text{ s.t. }}
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}

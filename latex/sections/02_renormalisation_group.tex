@@ -1,0 +1,295 @@
+\documentclass[../main.tex]{subfiles}
+\begin{document}
+
+\section{Renormalisation Group}
+\label{sec:rg}
+
+Our main object of interest is the single-site distribution:
+\begin{align*}
+  \mathcal W[\Phi, \hat \Phi]
+  &= 
+  \int \mathcal{D} h \exp \Bigg \{
+    - \frac12 h^{\mu}_i [(\Phi + \sigma^2 I)^{-1}]^{\mu,\nu}_{i,j} h^{\nu}_j 
+    + \frac12 \phi^{\mu}_i \left( \hat \Phi^{\mu,\nu}_{\alpha,\beta} K_{\alpha,i,\beta,j} - G_{i,j} \delta^{\mu,\nu}  \right) \phi^{\nu}_j
+  \Bigg \}
+\end{align*}
+Eventually we will use the Renormalisation Group to attempt to handle this thing; but to begin with, we will develop intuition in the simplest possible case.
+
+\subsection{Linear Activation, One Hidden Layer}
+We begin by making some simplifying assumptions for the spatial kernels:
+\begin{align*}
+    K^{(0), \text{post}} = K^{(1), \text{pre}} \equiv K, 
+    &&
+    K^{(0), \text{pre}} = k_0 I,
+    &&
+    K^{(1), \text{post}} = k_1 I,
+    &&
+    G = g^2 I
+\end{align*}
+and studying the simplest possible case, where we have only one hidden layer. Redefining terms, we write:
+\begin{align*}
+    & \mathbb X \equiv \Phi^{(0)},
+    \qquad
+        \mathbb X^{\mu,\nu}_{i,j} = 
+            K^{(0), \text{post}}_{i,j} 
+            x^{\mu}_a K^{(0), \text{pre}}_{a,b} x^{\nu}_b
+        = k_0 x^{\mu}_a x^{\nu}_a K_{i,j}
+    \\
+    & \Phi \equiv \Phi^{(1)},
+    \qquad
+        \Phi^{\mu,\nu}_{\alpha, \beta} =
+            K^{(1), \text{post}}_{\alpha,\beta}
+            \left\langle
+                \phi^{\mu}_i K^{(1), \text{pre}}_{i,j} \phi^{\nu}_j
+            \right\rangle
+        = k_1 \delta_{\alpha,\beta} \underbrace{ \left \langle \phi^{\mu}_i K_{i,j} \phi^{\nu}_j \right \rangle }_{C^{\mu,\nu}}
+\end{align*}
+$C$ here measure the aggregate correlation in the hidden layer, and is the natural analogue of the more familar non-spatial kernels. 
+For convenience we define the regularised kernel
+\begin{align*}
+    \tilde \Phi^{\mu,\nu}_{\alpha,\beta} 
+    =
+    \Phi^{\mu,\nu}_{\alpha,\beta} + \kappa^{-1} \delta^{\mu,\nu} \delta_{\alpha,\beta}
+    = 
+    k_1 \delta_{\alpha,\beta} \underbrace{ \left( C^{\mu,\nu} + \frac{1}{k_1 \kappa} \delta^{\mu,\nu} \right) }_{\tilde C^{\mu,\nu}}
+    &&
+    [\tilde \Phi^{-1}]^{\mu,\nu}_{\alpha,\beta} =  k_1^{-1} \delta_{\alpha,\beta} [\tilde C^{-1}]^{\mu,\nu}
+\end{align*}
+The saddle point condition is
+\begin{align*}
+    \hat \Phi 
+    & 
+    \equiv 
+    \hat \Phi^{(1)} 
+    =
+    \tilde \Phi ^{-1} \mathbb Y \tilde \Phi^{-1}
+\end{align*}
+In the path integral, this $\hat \Phi^{\mu,\nu}_{\alpha,\beta}$ term is contracted with $K^{(1),\text{post}}_{\alpha,\beta} = k_1 \delta_{\alpha,\beta}$, which gives
+\begin{align*}
+    B^{\mu,\nu}
+    \equiv
+    K^{(1), \text{post}}_{\alpha,\beta} \hat \Phi^{\mu,\nu}_{\alpha,\beta}
+    =
+    k^{-1}_1 \delta_{\alpha,\beta} [(\tilde C)^{-1}]^{\mu,m} \delta_{\alpha,a} y^m_a y^n_b \delta_{b, \beta} [(\tilde C^{-1})]^{n,\nu}
+    =
+    k_1^{-1} [(\tilde C)^{-1}]^{\mu,m} y^m_{\alpha} y^n_{\alpha}  [(\tilde C)^{-1}]^{\mu,m}
+\end{align*}
+or in matrix notation
+\begin{align*}
+    B = \frac{1}{k_1} \tilde C^{-1} Y Y^{\top} \tilde C^{-1}
+\end{align*}
+It is also convenient to define
+\begin{align*}
+    A = k_0 X X^{\top}
+\end{align*}
+
+\paragraph{Diagonalising Space}
+
+The exponent in the path integral features a kernel of the form
+\begin{align*}
+    ( \mathbb X^{\mu,\nu}_{i,j} + \sigma^2 \delta^{\mu,\nu} \delta_{i,j} )^{-1}
+    =
+    ( A^{\mu,\nu} K_{i,j} + \sigma^2 \delta^{\mu,\nu} \delta_{i,j})^{-1}
+\end{align*}
+We can diagonalise this in space by choosing a basis for $K$; in this case, we will use the Fourier basis (tantamount to assuming translation invariance and periodic boundaries in the $i,j$ index). We denote by $F_{i,q}$ the discrete Fourier transform matrix with plane waves of frequency $q$ in the columns, such that $K = F \Lambda F^{*}$. We can therefore write the kernel as
+\begin{align*}
+    A^{\mu,\nu} \underbrace{ F_{i,q} \lambda_{q} F^*_{j,q} }_{K_{ij}} + \sigma_2 \delta^{\mu,\nu} \underbrace{ F_{i,q} F^*_{j,q} }_{\delta_{i,j}}
+    =
+    F_{i,q} ( \lambda_{q} A^{\mu,\nu} + \sigma^2 \delta^{\mu,\nu}) F_{j,q}
+\end{align*}
+We therefore define the kernel that is block-diagonal in Fourier space
+\begin{align*}
+    \tilde A^{\mu,\nu}_{q} = \lambda_q A^{\mu,\nu} + \sigma^2 \delta^{\mu,\nu}
+\end{align*}
+where $\lambda_q$ are the eigenvalues of $K$. This allows us to complete the inverse
+\begin{align*}
+    (F_{i,q} \tilde A^{\mu,\nu}_{q} F^*_{j,q})^{-1}
+    =
+    F_{i,q} [(\tilde A_{q})^{-1}]^{\mu,\nu} F^*_{j,q}
+\end{align*}
+Similarly, we can diagonalise
+\begin{align*}
+    \hat \Phi^{\mu,\nu}_{\alpha,\beta} K^{(1), \text{post}}_{\alpha,\beta} K^{(1), \text{pre}}_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
+    =
+    B^{\mu,\nu} K_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
+    =
+    F_{i,q} ( \lambda_q B^{\mu,\nu} - g^2 \delta^{\mu,\nu} ) F^*_{j,q}
+\end{align*}
+by defining
+\begin{align*}
+    \tilde B^{\mu,\nu}_q = \lambda_q B^{\mu,\nu} - g^2 \delta^{\mu,\nu}
+\end{align*}
+Because the activation function is linear, $h \equiv \phi$ and we write
+\begin{align*}
+  \mathcal W[\Phi, \hat \Phi]
+  &= 
+  \int \mathcal{D} \phi \exp \Bigg \{
+    - \frac12 \phi^{\mu}_i 
+         F_{i,q}
+         \Big(
+            \underbrace{ 
+                [\tilde A_q^{-1}]^{\mu,\nu}
+                - \tilde B^{\mu,\nu}_q
+            }_{\Sigma^{-1}_q}
+        \Big)
+        F^*_{j,q}
+    \phi^{\nu}_j 
+  \Bigg \}
+\end{align*}
+Without Jacobian penalty ($|F|=1$), we make the change of variables $\phi^{\mu}_i = F_{i,q} \tilde \phi^{\mu}_q \Leftrightarrow \tilde \phi^{\mu}_q = F^{*}_{i,q} \phi^{\mu}_i$
+\begin{align*}
+  \mathcal W[\Phi, \hat \Phi]
+  &= 
+  \int \mathcal{D} \tilde \phi \exp \Bigg \{
+    - \frac12 \tilde \phi^{\mu}_q 
+         [\Sigma^{-1}_q]^{\mu,\nu}
+    \tilde \phi^{\nu *}_q 
+  \Bigg \}
+\end{align*}
+We have here obtained the frequency-dependent data-interaction matrix $\Sigma_q$. For each $q$, this matrix can in principle have a different eigenbasis--these are the directions in data-space that define our functional cell types: the eigendirections of a low-frequency data interaction matrix describe response profiles common to all cells; the directions associated with an intermediate frequency describe functional variations between, say, areas, or equivalently describe course functional variation; and the directions associated with high frequency modes describe functional cells. So the task then is to diagonlise these $\Sigma_q$ and ask how these directions vary with $q$.
+
+\paragraph{Diagonalising Function}
+
+The goal now is to diagonalise
+\begin{align*}
+    \Sigma_q = \left( \tilde A_q^{-1} - \tilde B_q \right)^{-1} 
+    &&
+    \text{with}
+    &&
+    \tilde A_q = \lambda_q k_0 X X^{\top} + \sigma^2 I_P 
+    &&
+    \text{and}
+    &&
+    \tilde B_q = \frac{\lambda_q}{k_1} \tilde C^{-1} Y Y^{\top} \tilde C^{-1} - g^2 I_P
+\end{align*}
+Consider firstly the $C$ kernel lurking inside the $B$ term:
+\begin{align*}
+    C^{\mu,\nu}
+    =
+    \sum_{i,j} K_{i,j} \left \langle \phi^{\mu}_i \phi^{\nu}_j \right \rangle
+    = 
+    \sum_{i,j,q,q'} K_{i,j} F_{i,q} \left \langle \tilde \phi^{\mu}_q \tilde \phi^{\nu}_{q'} \right \rangle F_{j, q'}
+    =
+    \sum_{i,j,q,q'} K_{i,j} F_{i,q} \delta_{q,-q'} \Sigma^{\mu,\nu}_q F_{j, q'}
+    = 
+    \sum_q \lambda_q \Sigma^{\mu,\nu}_q
+\end{align*}
+where the $\sum_q \lambda_q$ appeared from
+\begin{align*}
+    \sum_{i,j,q'} K_{ij} F_{i,q} \delta_{q,-q'} F_{j,q'} 
+    =
+    \sum_{i,j} K_{i,j} F_{i,q} F^*_{j,q}
+    =
+    \sum_{i,j,q'} F_{i,q'} \lambda_{q'} F^*_{j,q'} F_{i,q} F^*_{j,q}
+    =
+    \sum_{q'} \delta_{q,q'} \lambda_{q'}
+    =
+    \lambda_q
+\end{align*}
+That $C$, and therefore $B$, is defined in terms of $\Sigma$, exposes the fundamental difficulty that if we are to diagonalise any one $\Sigma_q$, we have to make it consistent with those of all the $q$s.
+We therefore make the ansatz
+\begin{align*}
+    \Sigma_q = U D_q U^{\top} \quad \forall q
+\end{align*}
+which is to say that all spatial frequencies express function using the same basis, $U$; the extent to which functional variation manifests on different spatial scales is captured by $D_q$.
+To make progress, we will also assume that this basis $U$ diagonalises the data kernels $XX^{\top}$ and $Y Y^{\top}$:
+\begin{align*}
+    X = U S_X V_X^{\top}
+    \implies
+    XX^{\top} = U S_X^2 U^{\top}
+    &&
+    Y = U S_Y V_Y^{\top}
+    \implies
+    YY^{\top} = U S_Y^2 U^{\top}
+\end{align*}
+Now we can diagonalise $\tilde A$:
+\begin{align*}
+    \tilde A_q 
+    = 
+    U \Big( \lambda_q k_0 S_X^2 + \sigma^2 I_P  \Big) U^{\top}
+    \equiv
+    U D_{A,q} U^{\top}
+\end{align*}
+Under the ansatz, we can also diagonalise $\tilde C$ and $\tilde B$:
+\begin{align*}
+    \tilde C 
+    = 
+    \lambda_q \Sigma_q + \frac{1}{k_1 \kappa} I_P 
+    = 
+    U \Big( \lambda_q D_q + \frac{1}{k_1 \kappa} I_P \Big) U^{\top} 
+    \equiv 
+    U D_{C} U^{\top}
+\end{align*}
+and consequently
+\begin{align*}
+    \tilde B_q 
+    = 
+    U \Big( \frac{\lambda_q}{k_1} D_{C}^{-2} S_Y^2 - g^2 I_P \Big) U^{\top}
+    \equiv 
+    U D_{B,q} U^{\top}
+\end{align*}
+Thus we have diagonalised the problem
+\begin{align*}
+    \Sigma_q
+    =
+    U D_q U^{\top} 
+    = 
+    U \Big(D_{A,q}^{-1} - D_{B,q} \Big)^{-1} U^{\top} 
+\end{align*}
+\begin{align*}
+    D_{A,q} = \lambda_q k_0 S_X^2 + \sigma^2 I_P,
+    &&
+    D_{B,q} = \frac{\lambda_q}{k_1} D_C^{-2} S_Y^2 - g^2 I_P,
+    &&
+    D_C = \sum_q \lambda_q D_q + \frac{1}{k_1 \kappa} I_P
+\end{align*}
+Let us denote by $d_q$ an element on the diagonal of $D_q$; by $a_q$ and $b_q$ elements on the diagonals of $D_{A,q}$ and $D_{B,q}$, respectively; and by $c$ an element on the diagonal of $D_C$. We define
+\begin{align*}
+    \hat s_X^2 = k_0 S_X^2
+    &&
+    \hat s_Y^2 = \frac{s_Y^2}{k_1}
+    &&
+    \hat \sigma^2_q = \frac{\hat \sigma^2}{\lambda_q}
+    &&
+    \delta = \frac{1}{k_1 \kappa}
+\end{align*}
+\begin{align*}
+    d_q^{-1}
+    =
+    a_q^{-1} - b_q
+    =
+    \frac{1}{\lambda_q \hat s_X^2 + \sigma^2} - \frac{\lambda_q \hat s_Y^2}{c} + g^2
+    =
+    \frac{\lambda_q}{h_q} - \frac{\lambda_q \hat S_Y^2}{c}
+\end{align*}
+where we have introduced
+\begin{align*}
+    h_q 
+    =
+    \frac{\lambda_q \hat s_X^2 + \sigma^2 }{\lambda_q^{-1} + g^2 (\lambda_q \hat s_X^2 + \hat \sigma^2_q)}
+\end{align*}
+this gives
+\begin{align*}
+    d_q = \left(\frac{\lambda_q}{h_q} - \frac{\lambda_q \hat s_Y^2}{c} \right)^{-1}
+    =
+    \frac{c h_q / \lambda_q}{c - \hat s_Y^2 h_q}
+\end{align*}
+and therefore
+\begin{align*}
+    c 
+    = 
+    \sum_q \lambda_q d_q  + \delta
+    =
+    c \sum_q \frac{h_q}{c - \hat s_Y^2 h_q} + \delta 
+\end{align*}
+which leaves the final implicit solution
+\begin{align}
+    1 - \frac{\delta}{c} = \sum_q \frac{h_q}{c - \hat s_Y^2 h_q}
+    \label{eq:linear-soln}
+\end{align}
+
+\subsubsection{Interpreting \eqref{eq:linear-soln}}
+
+\paragraph{Latent Student-Teacher Task}
+
+\end{document}
