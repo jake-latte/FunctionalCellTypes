@@ -1,4 +1,8 @@
+\documentclass[../main.tex]{subfiles}
+\begin{document}
+
 \section{Some Comments on Neuroscience}
+\label{sec:comments}
 
 \paragraph{Interpreting the Conjugate}
 
@@ -211,4 +215,6 @@ Low-rank networks are of course all the rage in theoretical and computational ne
   &&
   k(x_i, x_j, x_k, x_l) = K(x_i, x_k) K(x_j, x_l) 
 \end{align*}
-The weight matrix sampled from this prior will have rank at most $r$. But now we have an anatomical interpretation: neurons in layer $l$ tend to form dendrites at locations $\mu_a$, and neurons in layer $l-1$ tend to send their axons to these locations, meaning the activity along each mode (the typical low-rank network perspective) obtains the intepretation as activity around location $\mu_a$. 
+The weight matrix sampled from this prior will have rank at most $r$. But now we have an anatomical interpretation: neurons in layer $l$ tend to form dendrites at locations $\mu_a$, and neurons in layer $l-1$ tend to send their axons to these locations, meaning the activity along each mode (the typical low-rank network perspective) obtains the intepretation as activity around location $\mu_a$.
+
+\end{document}
