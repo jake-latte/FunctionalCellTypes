@@ -19,11 +19,16 @@ Sections (each `section_*` computes and returns the numbers, `report_*` prints t
 Run from the git root:  uv run python latex/notes/scripts/check_linear_soln_limits.py
 """
 
+import math
 from pathlib import Path
 
 import numpy as np
 
 SEED = 0
+N_IMAGE_SIGMAS = (
+    8  # dropped images of the wrapped Gaussian lie beyond this many ell (fct/spatial.py)
+)
+PSD_ELLS = [4.0, 8.0, 12.0]  # length scales at which the wrapped and truncated spectra are compared
 # PNG rather than PDF: the repository ignores *.pdf, and the note must build from a fresh clone.
 FIGURE = Path(__file__).resolve().parents[1] / "figures" / "linear_solution_limits_profiles.png"
 
@@ -75,22 +80,45 @@ def ring_distance(n_sites):
     return np.minimum(r, n_sites - r)
 
 
+def wrapped_gaussian(n_sites, ell):
+    """Row 0 of the wrapped (image-summed) Gaussian on the ring, normalised to K_ii = 1:
+    K(r) = sum_k exp(-(r + kN)^2 / 2 ell^2) / sum_k exp(-(kN)^2 / 2 ell^2), the kernel of
+    fct/spatial.py. It is positive definite at every ell (its spectrum is a sampled Gaussian
+    plus positive aliases), unlike the Gaussian of the minimum-image distance."""
+    n_images = math.ceil(N_IMAGE_SIGMAS * ell / n_sites) + 1
+    shifts = n_sites * np.arange(-n_images, n_images + 1)
+    r = np.arange(n_sites)
+    row = np.exp(-((r[:, None] + shifts) ** 2) / (2 * ell**2)).sum(axis=1)
+    return row / row[0]
+
+
+def truncated_gaussian(n_sites, ell):
+    """Row 0 of the Gaussian of the minimum-image ring distance, K_ii = 1. It drops the
+    images of `wrapped_gaussian`, a tail of size exp(-N^2 / 8 ell^2) at the antipode, and
+    is not positive definite once ell is comparable to N / 8 (ring_check quotes this)."""
+    return np.exp(-(ring_distance(n_sites) ** 2) / (2 * ell**2))
+
+
 def ring_kernel(n_sites, ell):
-    """Translation-invariant Gaussian kernel on a periodic ring, K_ii = 1 (no image sum:
-    for ell << N the images are negligible, which the eigenvalue check below confirms)."""
-    row = np.exp(-(ring_distance(n_sites) ** 2) / (2 * ell**2))
+    """The N x N circulant kernel of `wrapped_gaussian`."""
+    row = wrapped_gaussian(n_sites, ell)
     return np.array([np.roll(row, i) for i in range(n_sites)])
 
 
 def ring_spectrum(n_sites, ell):
     """Eigenvalues lam_q of ring_kernel, q = 0, 1, ..., N-1 in DFT order (lam_q = lam_{-q})."""
-    return np.fft.fft(ring_kernel(n_sites, ell)[0]).real
+    return np.fft.fft(wrapped_gaussian(n_sites, ell)).real
+
+
+def pi_of(lam, sx2, sig2, g2):
+    """Prior-shrunk variance pi_q = alpha_q / (1 + g2 alpha_q), alpha_q = lam_q sX2 + sig2."""
+    alpha = lam * sx2 + sig2
+    return alpha / (1 + g2 * alpha)
 
 
 def h_of(lam, sx2, sig2, g2):
-    """h_q = lam_q alpha_q / (1 + g2 alpha_q), alpha_q = lam_q sX2 + sig2 (eq:hq of the note)."""
-    alpha = lam * sx2 + sig2
-    return lam * alpha / (1 + g2 * alpha)
+    """h_q = lam_q pi_q = lam_q alpha_q / (1 + g2 alpha_q) (eq:hq of the note)."""
+    return lam * pi_of(lam, sx2, sig2, g2)
 
 
 def bisect(f, lo, hi, n=200):
@@ -121,7 +149,9 @@ def spectrum_d(lam, sx2, sy2, sig2, g2, delta):
     """(c, d_q): the self-consistent c and the per-frequency variance of one data mode."""
     c = solve_c(lam, sx2, sy2, sig2, g2, delta)
     h = h_of(lam, sx2, sig2, g2)
-    return c, c**2 * h / lam / (c**2 - sy2 * h)
+    # d_q = pi_q * amplification (eq:factor), not h_q / lam_q: lam_q is 0 to round-off in
+    # the tail of the wrapped Gaussian and the quotient would be 0/0 there.
+    return c, pi_of(lam, sx2, sig2, g2) * c**2 / (c**2 - sy2 * h)
 
 
 def tau_of(lam, sx2, sy2, sig2, g2, delta):
@@ -282,6 +312,10 @@ def ring_check(lam):
     """B4: the Gaussian ring spectrum against the continuum formula and its moments."""
     q = np.fft.fftfreq(N) * N
     approx = np.sqrt(2 * np.pi) * ELL * np.exp(-2 * np.pi**2 * ELL**2 * (q / N) ** 2)
+    min_eig = [
+        (ell, ring_spectrum(N, ell).min(), np.fft.fft(truncated_gaussian(N, ell)).real.min())
+        for ell in PSD_ELLS
+    ]
     return {
         "lam_0": lam[0],
         "sqrt_2pi_ell": np.sqrt(2 * np.pi) * ELL,
@@ -289,6 +323,7 @@ def ring_check(lam):
         "mean_lam": lam.mean(),
         "mean_lam2": (lam**2).mean(),
         "sqrt_pi_ell": np.sqrt(np.pi) * ELL,
+        "min_eig": min_eig,  # (ell, min lam_q wrapped, min lam_q truncated)
     }
 
 
@@ -388,6 +423,11 @@ def report_b(res):
         f"    (1/N) sum lam_q = {r['mean_lam']:.6f} (= K_ii = 1);  "
         f"(1/N) sum lam_q^2 = {r['mean_lam2']:.6f}, sqrt(pi) ell = {r['sqrt_pi_ell']:.6f}"
     )
+    for ell, wrapped, truncated in r["min_eig"]:
+        print(
+            f"    min_q lam_q at ell = {ell:4.1f}: wrapped Gaussian {wrapped:9.2e}, "
+            f"minimum-image Gaussian {truncated:9.2e}"
+        )
     s = res["sigma0"]
     print(
         f"  sigma -> 0: null mode (s_X = s_Y = 0) at sig2 = {LIMIT_EPS:.0e}: "
