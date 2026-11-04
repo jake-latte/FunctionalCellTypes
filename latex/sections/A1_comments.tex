@@ -51,7 +51,8 @@ Though we could expand the $\phi$ directly, the intuition comes by making a diff
       \int \mathcal D h \mathcal D \hat \phi
         \exp \left \{ - \mathcal H - \mathcal U \right \}
 \end{align*}
-where we use $A$ and $B$ for generality: in the standard case, $A_{a, b} \equiv \Phi^{\mu,\nu}$ for $a \in 1, \dots, P$, and similarly $B_{a,b} = i \hat \Phi^{\mu,\nu}$. In the spatial case, $a$ and $b$ enumerate data-position pairs $(\mu,i)$: $A_{a,b} \equiv \Phi^{\mu,\nu}_{i,j}$ and $B_{a,b} = i K_{\alpha,i,\beta,j} \hat \Phi^{\mu,\nu}_{\alpha,\beta}$ for $a=(\mu,i)$ and $b=(\nu,j)$.
+where we use $A$ and $B$ for generality: in the standard case, $A_{a, b} \equiv \Phi^{\mu,\nu}$ for $a \in 1, \dots, P$, and similarly $B_{a,b} = i \hat \Phi^{\mu,\nu}$. In the spatial case, $a$ and $b$ enumerate data-position pairs $(\mu,i)$: $A_{a,b} \equiv \Phi^{\mu,\nu}_{i,j}$ and $B_{a,b} = i K_{\alpha,i,\beta,j} \hat \Phi^{\mu,\nu}_{\alpha,\beta} \fix{- G_{i,j} \delta^{\mu,\nu}}$ for $a=(\mu,i)$ and $b=(\nu,j)$.
+\fixnote{The rate penalty $G$ of \eqref{eq:single-site} was dropped from $B$. It only shifts $B$, so nothing below changes once $B$ is read as including it; the same reading applies to the tilt in $\psi$ below.}
 
 By $\mathcal H$ we denote the Gaussian part of the theory that we can solve. Assuming $\mathcal U$ is small, we can reformulate its terms as corrections to the Gaussian theory:
 \begin{align*}
@@ -91,20 +92,22 @@ It's not clear that this $\hat \phi$ would correspond to a physical quantity. Bu
 \begin{align*}
   \int \mathcal D h_{\star} \mathcal D \hat \phi
     \exp \left \{
-      - \frac12 h_{\star}^T [A_{\star\star} - A_{\star}^T A^{-1} A_{\star}]^{-1} h_{\star}
-      - \frac12 \hat \phi^T (B^{-1} - \sigma_{(1)}^2 A) \hat \phi
-      + \sigma_{(1)} \hat \phi^T A (A^{-1})_{\star} h_{\star}
+      \fix{- \frac12 h_{\star}^T A_{\star\star}^{-1} h_{\star}}
+      \fix{- \frac12 \hat \phi^T \big(B^{-1} - \sigma_{(1)}^2 [A - A_{\star} A_{\star\star}^{-1} A_{\star}^T] \big) \hat \phi}
+      \fix{- \sigma_{(1)} \hat \phi^T A_{\star} A_{\star\star}^{-1} h_{\star}}
     \right \}
 \end{align*}
-which says that if we want to estimate the response of the network to test data, we use the same field as from training time (and project it with $A (A^{-1})_{\star}$). A biological intuition then might be had with respect to meta-learning and sleep (see below).
+\fixnote{The exponent as written mixed the covariance of $h_{\star}$ conditioned on the training $h$ with the marginal precision of $\hat \phi$, and does not follow from integrating out the training pre-activations. Integrating the training $h$ out of the joint Gaussian over $(h, h_{\star}, \hat \phi)$, with joint covariance blocks $A, A_{\star}, A_{\star\star}$, gives the corrected form (checked numerically). The reading is unchanged except that the projection is $A_{\star} A_{\star\star}^{-1}$: the field couples to the regression of the training pre-activations on the test ones.}
+which says that if we want to estimate the response of the network to test data, we use the same field as from training time (and project it with $\fix{A_{\star} A_{\star\star}^{-1}}$). A biological intuition then might be had with respect to meta-learning and sleep (see below).
 
 \paragraph{Evolution and Meta-Learning}
 
 By introducing the spatial kernels $K^{(l)}$, we now have on our hands something that might actually be more useful than just predicting the behaviour of a neural network. In particular, we can reformulate the saddle point equations as an effective feedforward network. To improve the clarity of the analogy with \eqref{eq:ff-network}, I will denote by round things--$\medbullet$ or $\medcirc$--the data pairs $(\mu,\nu)$, and by pointy things--$\blacksquare, \square, \blacktriangle$ or $\triangle$--the spatial pairs $(i,j)$. In this way we can re-write the stationary conditions as
 \begin{align}
-  \Phi^{(l)\medbullet}_{\blacksquare} = \sum_{\square} K_{\blacksquare, \square}^{(l)} \psi^{\medbullet}_{\square}( \Phi^{(l-1)} )
+  \Phi^{(l)\medbullet}_{\blacksquare} = \fix{\frac1N} \sum_{\square} K_{\blacksquare, \square}^{(l)} \psi^{\medbullet}_{\square}( \Phi^{(l-1)} )
   \label{eq:forward-pass}
 \end{align}
+\fixnote{\eqref{eq:kernel-def} carries a $1/N$ for $l \geq 1$, which was dropped here. It propagates as one factor $1/N$ per layer into the adjoint recursion and the gradients below (restored there too); it rescales the gradients layer by layer but does not affect Section~\ref{sec:rg}.}
 where $K^{(l)}_{\blacksquare, \square} \equiv K^{(l)}_{i,a,j,b}$ and the activation function $\psi$ is now vector-valued, rather than the familiar point-wise object. Somewhat awkwardly, it is now a function of $\hat \Phi^{(l)}$ and $K^{(l)}$.
 \begin{align*}
   \psi^{\medbullet}_{\blacksquare}(\Phi^{(l)}) 
@@ -135,6 +138,7 @@ then we can formulate the recursion as
 \begin{align*}
   g^{(l)\star}_{\blacksquare}
   =
+  \fix{\frac1N}
   J^{(l+1)\medbullet,\star}_{\square, \blacksquare}
   K^{(l+1)}_{\square, \blacktriangle} 
   g^{(l+1)\medbullet}_{\blacktriangle}
@@ -147,13 +151,17 @@ then we can formulate the recursion as
     \left. (\Phi^{(L)} + \kappa^{-1} I)^{-1} \right|^{\mu,\nu}_{\beta, b} 
     y^{\nu}_b
 \end{align*}
+\fixnote{The $1/N$ of \eqref{eq:forward-pass} enters the recursion through $\partial \Phi^{(l+1)} / \partial \psi^{(l+1)} = \frac1N K^{(l+1)}$.}
 with the gradients
 \begin{align*}
   \frac{\partial \mathcal H}{\partial K^{(l)}_{\blacksquare, \square}}
   =
+  \fix{\frac1N \Big(}
   g^{(l)\star}_{\blacksquare} \psi^{(l)\star}_{\square} 
   + g^{(l)\star}_{\blacktriangle} K^{(l)}_{\blacktriangle, \triangle} Q^{(l)\star}_{\triangle, \blacksquare, \square}
+  \fix{\Big)}
 \end{align*}
+\fixnote{The $1/N$ of \eqref{eq:forward-pass}, restored in the recursion and the gradient.}
 where the first term is the usual rank-one weight update, and the latter is the high-rank term coming from the dependence of $\psi$ on the kernel $K$ of the corresponding layer. We could project these gradients into the PSD cone and update $K$ directly, or continue the recursion to the parameters $\vartheta$. Additionally, because $\psi$ is an expectation over a distribution, we can formulate its gradients, using the score trick, as contracted cumulants:
 \begin{align*}
   J^{(l)\medbullet,\medcirc}_{\blacksquare, \square}
