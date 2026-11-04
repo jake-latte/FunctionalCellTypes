@@ -61,7 +61,9 @@ PREDICTIONS = {
     "P1 prior-shaped (weak target, no rate penalty)": (4.0, 1.0, 1.0, 0.01, 0.0, 0.25),
     "P2 rate-penalty whitening": (4.0, 1.0, 1.0, 0.01, 0.1, 0.25),
     "P3 target condensation": (4.0, 1.0, 1.0, 0.01, 0.0, 10.0),
-    "P4 white null modes": (4.0, 1.0, 1.0, 0.25, 1.0, 0.25),
+    # P4: sig2 = g2 = 1 puts the floor sigma_0^2 = 1/2 a factor 2 below the bare sig2, so a
+    # factor-1.5 tolerance on the measured floor can tell the two apart.
+    "P4 white null modes": (4.0, 1.0, 1.0, 1.0, 1.0, 0.25),
     "P5 noise-dominated": (4.0, 0.001, 1.0, 1.0, 0.0, 0.25),
 }
 P3_BETA_SWEEP = [0.25, 1.0, 2.0, 5.0, 10.0]
