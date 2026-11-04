@@ -181,15 +181,15 @@ def main() -> None:
 
     # (i) lambda_q = lambda(q)/a at the reciprocal-lattice points, up to aliasing
     q, lam = lattice_spectrum(ring_kernel(64, a, ell), a)
-    print(f"max |lambda_q - lambda(q)/a| / lambda_0  (N = 64): {np.max(np.abs(lam - continuum_spectrum(q, ell) / a)) / lam.max():.2e}"
-          f"   (aliasing floor e^(-l^2 Lambda^2/2) = {aliasing_floor(a, ell):.2e})")
+    print(f"max |lambda_q - lambda(q)/a| / lambda_0 (N = 64) : {np.max(np.abs(lam - continuum_spectrum(q, ell) / a)) / lam.max():.2e}")
+    print(f"aliasing floor e^(-l^2 Lambda^2 / 2)             : {aliasing_floor(a, ell):.2e}")
 
     # (ii) closed-form moments: (1/N) sum lambda_q = K(0) = 1, (1/N) sum lambda_q^2 = sum_j K_0j^2 -> sqrt(pi) l / a
     one = lambda lam_: np.ones_like(lam_)
     ident = lambda lam_: lam_
+    print(f"\n{'moment':>22} {'continuum':>16} {'closed form':>16} {'ring N=256':>16}")
     for label, f, exact in (("(1/N) sum lambda_q", one, 1.0), ("(1/N) sum lambda_q^2", ident, np.sqrt(np.pi) * ell / a)):
-        print(f"{label:>22}: continuum {continuum_mode_average(a, ell, f):.12f}, closed form {exact:.12f}, "
-              f"ring N=256 {ring_mode_average(256, a, ell, f):.12f}")
+        print(f"{label:>22} {continuum_mode_average(a, ell, f):>16.12f} {exact:>16.12f} {ring_mode_average(256, a, ell, f):>16.12f}")
 
     # (iii) the eq:linear-soln summand, d = 1 ring
     p1 = SolutionParams(**PARAMS_1D)
@@ -205,17 +205,19 @@ def main() -> None:
 
     # (v) the penalty M = K^{-1} carries a^{2d}; without a nugget it is cutoff-dominated
     x = np.arange(3) * a
+    fmt = lambda v: "  ".join(f"{x_:>13.8g}" for x_ in v)
     for nugget in (0.0, NUGGET):
         M = np.linalg.inv(ring_kernel(128, a, ell, nugget))
         pred = continuum_inverse_kernel(x, a, ell, nugget)
-        print(f"\nK + {nugget} I, ring N = 128, (K^-1)_0j, j = 0..2 : {M[0, :3]}")
-        print(f"a^2 int_BZ dq/2pi e^(iqx_j)/lambda(q)            : {pred}")
-        print(f"max relative difference                          : {np.max(np.abs(M[0, :3] - pred) / np.abs(pred)):.2e}")
+        print(f"\nK + {nugget} I, ring N = 128, j = 0, 1, 2")
+        print(f"  lattice (K^-1)_0j                      : {fmt(M[0, :3])}")
+        print(f"  a^2 int_BZ dq/2pi e^(iqx_j)/lambda(q)  : {fmt(pred)}")
+        print(f"  max relative difference                : {np.max(np.abs(M[0, :3] - pred) / np.abs(pred)):.2e}")
 
     floor = 10 * aliasing_floor(a, ell)
     if errors_1d[-1] > floor or errors_2d[-1] > floor:
         raise AssertionError(f"dictionary check failed: final errors {errors_1d[-1]:.2e} (d=1), {errors_2d[-1]:.2e} (d=2)")
-    print(f"\ndictionary factors confirmed (final relative errors below the aliasing floor {floor:.1e} in d = 1 and d = 2)")
+    print(f"\ndictionary factors confirmed: final rel. errors < {floor:.1e} (10 x aliasing floor) in d = 1, 2")
 
 
 if __name__ == "__main__":

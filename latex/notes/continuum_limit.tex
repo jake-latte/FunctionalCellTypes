@@ -1,0 +1,401 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage{booktabs,array}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+\newcommand{\D}{\mathcal D}
+\newcommand{\W}{\mathcal W}
+\newcommand{\F}{\mathcal F}
+\newcommand{\Sact}{\mathcal S}
+\newcommand{\R}{\mathbb R}
+\newcommand{\Z}{\mathbb Z}
+\newcommand{\dd}{\mathrm d}
+\newcommand{\Lam}{\Lambda}
+\newcommand{\At}{\tilde A}
+\newcommand{\Bt}{\tilde B}
+\newcommand{\Ct}{\tilde C}
+\newcommand{\sX}{\hat s_X}
+\newcommand{\sY}{\hat s_Y}
+\newcommand{\ball}[1]{\int_{|q|<\Lam}\frac{\dd^d q}{(2\pi)^d}\,#1}
+\newcommand{\avg}[1]{\big\langle #1 \big\rangle_{\Lam}}
+\newtheorem{remark}{Remark}
+\title{The continuum limit of the spatial mean-field theory\\at fixed lattice spacing, with a UV cutoff}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Sections~1 and~2 of the notes are written for $N$ neurons on a lattice with a translation-invariant prior $K$ diagonalised by the discrete Fourier transform. This note translates that analysis into a field theory under the convention that, as $N\to\infty$, the lattice spacing $a$ stays fixed and the volume $L^d = N a^d$ grows, so that momentum sums become integrals over a ball of radius $\Lam\propto 1/a$ with the usual density of states. Section~\ref{sec:dictionary} gives the dictionary with every factor of $a$, $L$, $N$ and $2\pi$ explicit, including the one subtle entry: the penalty $M = K^{-1}$ carries $a^{2d}$ relative to the continuum inverse kernel and, for a squared-exponential prior, is a cutoff-dominated object with no continuum limit. Section~\ref{sec:functional} writes the single-site weight as a functional integral and shows that $\F = -\frac1N\log\W$ is a free energy per site, $a^d$ times the free energy per unit volume. Section~\ref{sec:linear} translates the corrected one-hidden-layer solution (\texttt{eq:linear-soln} with the $1/N$ of \texttt{rg\_kernel\_normalisation.tex} and the $c^2$ and $h_q$ of \texttt{rg\_diagonal\_reduction.tex}) into $q$-integrals and derives when the solution depends on the cutoff: never for the squared-exponential kernel, never for the power law in $d=1$, and logarithmically for the power law in $d=2$ when $\sigma^2>0$. The input noise $\sigma^2$ regularises the precision of the modes outside the kernel's support, but it is a white-noise source that transmits a divergent $K(0)$ to the hidden kernel, not a UV regulator; the only UV regulator is $\Lam$. Finite-size corrections at fixed $a$ are $O(e^{-L/\xi})$, with $\xi$ the longest correlation length of the integrand. Section~\ref{sec:rg} sets up the momentum-shell RG for the nonlinear theory of Appendix~A1 and gives the tree-level dimensions. Section~\ref{sec:checks} quotes a numerical check of the dictionary on a ring and a torus.
+\end{abstract}
+
+\section{The dictionary}
+\label{sec:dictionary}
+
+\paragraph{Lattice.}
+The $N$ neurons of a layer sit on the periodic cubic lattice $\Z_n^d$, $n = N^{1/d}$, at positions $\mathbf x_i = a\,i$, $i\in\Z_n^d$, inside the box $[0,L)^d$ with $L = n a = N^{1/d} a$. The density of neurons is $\rho = a^{-d} = N/L^d$. The reciprocal lattice is $q\in\frac{2\pi}{L}\Z_n^d$ with components in the Brillouin zone $(-\pi/a,\pi/a]$. Section~2 uses the unitary DFT $F_{i,q} = N^{-1/2}e^{iq\cdot\mathbf x_i}$, $F F^* = I$, and writes $K = F\Lambda F^*$, i.e.
+\begin{equation}
+  K_{i,j} = \frac1N\sum_q \lambda_q\, e^{iq\cdot(\mathbf x_i-\mathbf x_j)},
+  \qquad
+  \lambda_q = \sum_j K_{0,j}\,e^{-iq\cdot\mathbf x_j}.
+  \label{eq:lattice-spectrum}
+\end{equation}
+Translation invariance means $K_{i,j} = K(\mathbf x_i - \mathbf x_j)$ for a function $K$ on $\R^d$, which is what we take to the continuum. The lattice eigenvalue $\lambda_q$ is $O(1)$ in $N$ (it is a sum over the $O(\rho\ell^d)$ neighbours within the range $\ell$ of $K$), which is why the corrected hidden kernel $C = \frac1N\sum_q\lambda_q\Sigma_q$ of Section~2 is a mode \emph{average}.
+
+\paragraph{Continuum transform and the cutoff.}
+We use the transform pair $f(q) = \int\dd^dx\, f(\mathbf x)e^{-iq\cdot\mathbf x}$ and $f(\mathbf x) = \int\frac{\dd^dq}{(2\pi)^d}f(q)e^{iq\cdot\mathbf x}$, and define the continuum spectrum of the prior by
+\begin{equation}
+  \lambda(q) = \int\dd^dx\,K(\mathbf x)\,e^{-iq\cdot\mathbf x},
+  \qquad
+  K(\mathbf x-\mathbf x') = \int\frac{\dd^dq}{(2\pi)^d}\,\lambda(q)\,e^{iq\cdot(\mathbf x-\mathbf x')},
+  \label{eq:cont-spectrum}
+\end{equation}
+so that $K(0) = \int\frac{\dd^dq}{(2\pi)^d}\lambda(q)$ is the prior variance of a single weight. Replacing the sum in \eqref{eq:lattice-spectrum} by the Riemann integral $\sum_j\to\rho\int\dd^dx$ gives $\lambda_q = \rho\,\lambda(q)$. The exact relation is Poisson's summation formula,
+\begin{equation}
+  \lambda_q = \rho\sum_{n\in\Z^d}\lambda\!\left(q + \tfrac{2\pi}{a}n\right),
+  \label{eq:aliasing}
+\end{equation}
+so the dictionary entry $\lambda_q = \rho\lambda(q)$ holds up to the spectral weight of the continuum kernel outside the Brillouin zone (aliasing). For the squared-exponential kernel this weight is $e^{-\ell^2\Lam^2/2}$ relative to $\lambda(0)$; it is the floor on which the numerical check of Section~\ref{sec:checks} settles, and it is negligible exactly when the lattice resolves the kernel, $\ell\gg a$.
+
+The zone is a cube of volume $(2\pi/a)^d$ containing $N$ modes. Following the standard field-theory convention we replace it by the ball $|q|<\Lam$ with the same number of modes,
+\begin{equation}
+  L^d\ball{1} = N
+  \iff
+  V_d\Lam^d = \left(\frac{2\pi}{a}\right)^d
+  \iff
+  \Lam = \frac{2\pi}{a}\,V_d^{-1/d},
+  \qquad
+  V_d = \frac{\pi^{d/2}}{\Gamma(d/2+1)},
+  \label{eq:cutoff}
+\end{equation}
+i.e.\ $\Lam = \pi/a$ in $d=1$ (where the ball \emph{is} the zone), $\Lam = 2\sqrt\pi/a \approx 3.54/a$ in $d=2$ and $\Lam = (6\pi^2)^{1/3}/a \approx 3.90/a$ in $d=3$. The shape of the cutoff region is a UV detail that matters only for cutoff-dominated quantities; for everything that has a $\Lam\to\infty$ limit (Section~\ref{sec:linear}) it does not. The numerical check uses the cube, because that is what a lattice gives.
+
+\paragraph{Mode sums.}
+The reciprocal lattice has spacing $2\pi/L$ per dimension, so a sum over modes is an integral with the density of states $(L/2\pi)^d$, and the mode average of Section~2 is the \emph{normalised} average over the ball:
+\begin{equation}
+  \sum_q \;\to\; L^d\ball{},
+  \qquad
+  \frac1N\sum_q g(\lambda_q) \;\to\; a^d\ball{g\big(\rho\lambda(q)\big)}
+  \equiv \avg{g(\rho\lambda)} ,
+  \label{eq:mode-average}
+\end{equation}
+where $\avg{\cdot} = (V_d\Lam^d)^{-1}\int_{|q|<\Lam}\dd^dq\,(\cdot)$ is the uniform average over the ball, by \eqref{eq:cutoff}.
+The first identity to check is $g = \mathrm{id}$: $\frac1N\sum_q\lambda_q = \frac1N\operatorname{tr}K = K_{0,0}$ on the lattice and $a^d\int\frac{\dd^dq}{(2\pi)^d}\rho\lambda(q) = K(0)$ in the continuum, consistent with \eqref{eq:cont-spectrum}. Whenever the integrand is linear in $\lambda_q$ the factor $\rho$ cancels against $a^d$, and the mode average becomes the unnormalised integral $\int\frac{\dd^dq}{(2\pi)^d}\lambda(q)\,(\cdots)$; this is the form in which the $\Lam$-dependence of Section~\ref{sec:linear} is read off.
+
+\paragraph{Fields and quadratic forms.}
+The rate $\phi^{\mu}_i$ of neuron $i$ on pattern $\mu$ becomes the value of a field at its position, $\phi^{\mu}_i\to\phi^{\mu}(\mathbf x_i)$. Sums over sites are integrals weighted by the density, and the Kronecker delta is a Dirac delta divided by it:
+\begin{equation}
+  \sum_i\to\rho\int\dd^dx,
+  \qquad
+  \delta_{i,j}\to\rho^{-1}\delta^d(\mathbf x-\mathbf x'),
+  \qquad
+  \sum_{i,j}\phi^{\mu}_iK_{i,j}\phi^{\nu}_j \to \rho^2\iint\phi^{\mu}(\mathbf x)K(\mathbf x-\mathbf x')\phi^{\nu}(\mathbf x').
+\end{equation}
+The Fourier mode of Section~2, $\tilde\phi^{\mu}_q = \sum_iF^*_{i,q}\phi^{\mu}_i = N^{-1/2}\sum_ie^{-iq\cdot\mathbf x_i}\phi^{\mu}_i$, becomes $N^{-1/2}\rho\,\phi^{\mu}(q) = \sqrt{\rho/L^d}\;\phi^{\mu}(q)$, and Parseval's identity $\sum_q\lambda_q|\tilde\phi_q|^2 = \rho^2\int\frac{\dd^dq}{(2\pi)^d}\lambda(q)|\phi(q)|^2$ confirms the previous line.
+
+\paragraph{The penalty $M = K^{-1}$.}
+On the lattice $\sum_jK_{i,j}M_{j,k} = \delta_{i,k}$. Translating both sides gives $\rho\int\dd^dx'\,K(\mathbf x-\mathbf x')M(\mathbf x'-\mathbf x'') = \rho^{-1}\delta^d(\mathbf x-\mathbf x'')$, so that
+\begin{equation}
+  M(\mathbf x-\mathbf x') = \rho^{-2}\,K^{-1}_{\mathrm c}(\mathbf x-\mathbf x') = a^{2d}\ball{\frac{e^{iq\cdot(\mathbf x-\mathbf x')}}{\lambda(q)}},
+  \label{eq:inverse}
+\end{equation}
+where $K^{-1}_{\mathrm c}$ is the continuum inverse kernel, $\int\dd^dx'\,K(\mathbf x-\mathbf x')K^{-1}_{\mathrm c}(\mathbf x'-\mathbf x'') = \delta^d(\mathbf x-\mathbf x'')$. The $a^{2d}$ is forced by the measure: the two sums in $\sum_{i,j}h_iM_{i,j}h_j$ supply $\rho^2$, which cancels it, so an inverse-kernel quadratic form carries no density factor at all, $\sum_{i,j}h_iM_{i,j}h_j\to\iint h\,K^{-1}_{\mathrm c}\,h = \int\frac{\dd^dq}{(2\pi)^d}|h(q)|^2/\lambda(q)$. In momentum space this is just $\mu_q = 1/\lambda_q = 1/(\rho\lambda(q))$, as it must be. Two things deserve emphasis. First, the inverse in \eqref{eq:inverse} is taken \emph{with} the cutoff: $1/\lambda(q)$ is integrated over $|q|<\Lam$ only. Second, for the squared-exponential kernel $1/\lambda(q)\propto e^{+\ell^2q^2/2}$, so the integral is dominated by the modes at the cutoff, $M(0)\sim e^{\ell^2\Lam^2/2}$: the penalty is a cutoff-dominated object with no continuum limit, and even the aliasing \eqref{eq:aliasing}, which is invisible in $K$, changes $M$ at $O(1)$ (Section~\ref{sec:checks} finds a $21\%$ discrepancy for $\ell = 2a$). This is harmless: $M$ enters the theory only through the prior average, after which everything is expressed through $K$. For a prior whose spectrum is bounded below (a nugget $K+\epsilon I$, or a power law) the rule \eqref{eq:inverse} is verified to $10^{-7}$.
+
+\paragraph{Table.}
+Table~\ref{tab:dictionary} collects the entries. The determinant line follows from $\log\det K = \sum_q\log\lambda_q$ and \eqref{eq:mode-average}; the Jacobian of $\phi_i\to\tilde\phi_q$ is $|\det F| = 1$, and that of $\tilde\phi_q\to\phi(q)$ is a field-independent constant that cancels between $\int\D h$ and the normalisation $\det(2\pi\Phi)^{-1/2}$ of \texttt{eq:single-site}.
+\begin{table}[t]
+\centering
+\begin{tabular}{>{$}l<{$} >{$}l<{$} l}
+\toprule
+\text{discrete} & \text{continuum} & \text{comment}\\
+\midrule
+i\in\Z_n^d & \mathbf x = a\,i\in[0,L)^d & $L = N^{1/d}a$\\
+N & \rho L^d & $\rho = a^{-d}$ neurons per unit volume\\
+\phi^{\mu}_i & \phi^{\mu}(\mathbf x) & value of the field at the neuron\\
+\sum_i & \rho\int\dd^dx & \\
+\delta_{i,j} & \rho^{-1}\delta^d(\mathbf x-\mathbf x') & \\
+K_{i,j} & K(\mathbf x-\mathbf x') & no factor; $K(0) = K_{i,i}$\\
+F_{i,q} = N^{-1/2}e^{iq\cdot\mathbf x_i} & e^{iq\cdot\mathbf x}/\sqrt{\rho L^d} & unitary DFT\\
+\tilde\phi^{\mu}_q = \sum_iF^*_{i,q}\phi^{\mu}_i & \sqrt{\rho/L^d}\;\phi^{\mu}(q) & $\phi(q) = \int\dd^dx\,e^{-iq\cdot\mathbf x}\phi(\mathbf x)$\\
+\lambda_q & \rho\,\lambda(q) & up to aliasing \eqref{eq:aliasing}; $\lambda(q) = \int\dd^dx\,K e^{-iq\cdot\mathbf x}$\\
+q\in\tfrac{2\pi}{L}\Z_n^d,\ |q_\alpha|\le\pi/a & |q|<\Lam & $\Lam = (2\pi/a)V_d^{-1/d}$, eq.~\eqref{eq:cutoff}\\
+\sum_q & L^d\int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d} & density of states $(L/2\pi)^d$\\
+\frac1N\sum_q & a^d\int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d} = \avg{\cdot} & normalised to $1$\\
+K_{i,j} = \sum_qF_{i,q}\lambda_qF^*_{j,q} & \int\frac{\dd^dq}{(2\pi)^d}\lambda(q)e^{iq\cdot(\mathbf x-\mathbf x')} & \\
+M_{i,j} = (K^{-1})_{i,j} & a^{2d}\int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d}\frac{e^{iq\cdot(\mathbf x-\mathbf x')}}{\lambda(q)} & cutoff inverse, eq.~\eqref{eq:inverse}\\
+\sum_{i,j}\phi_iK_{i,j}\phi_j & \rho^2\int\frac{\dd^dq}{(2\pi)^d}\lambda(q)|\phi(q)|^2 & \\
+\sum_{i,j}h_iM_{i,j}h_j & \int\frac{\dd^dq}{(2\pi)^d}|h(q)|^2/\lambda(q) & no density factor\\
+\frac1N\sum_q\lambda_q\,g(\lambda_q) & \int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d}\lambda(q)\,g(\rho\lambda(q)) & $\rho$ cancels when linear in $\lambda_q$\\
+\log\det K = \sum_q\log\lambda_q & L^d\int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d}\log\big(\rho\lambda(q)\big) & extensive\\
+\bottomrule
+\end{tabular}
+\caption{Discrete-to-continuum dictionary at fixed spacing $a$ and growing volume $L^d$. Spatial indices are subscripts, data indices superscripts, as in the notes.}
+\label{tab:dictionary}
+\end{table}
+
+\section{The single-site functional}
+\label{sec:functional}
+
+Section~1, with the corrections of \path{setup_site_factorisation.tex} and \path{setup_conjugate_rotation.tex}, defines the single-site weight of a layer as the integral over all $NP$ preactivations of the layer,
+\begin{equation}
+  \W[\Phi,\hat\Phi] = \det(2\pi\Phi)^{-1/2}\int\D h\,\exp\Big\{-\tfrac12h^{\mu}_i(\Phi^{-1})^{\mu,\nu}_{i,j}h^{\nu}_j + \tfrac12\phi^{\mu}_i\big(\hat\Phi^{\mu,\nu}_{\alpha,\beta}K_{\alpha,i,\beta,j} - G_{i,j}\delta^{\mu,\nu}\big)\phi^{\nu}_j\Big\},
+  \label{eq:W-lattice}
+\end{equation}
+and defines the free-energy density by $\W\asymp e^{-N\F[\Phi,\hat\Phi]}$.
+In the one-hidden-layer setting of Section~2 the input kernel is $\Phi^{\mu,\nu}_{i,j} = A^{\mu,\nu}K_{i,j} + \sigma^2\delta^{\mu,\nu}\delta_{i,j}$ with $A = \frac{k_0}{m}XX^{\top}$, and the tilt is $B^{\mu,\nu}K_{i,j} - g^2\delta^{\mu,\nu}\delta_{i,j}$ with $B = \frac1{k_1}\Ct^{-1}YY^{\top}\Ct^{-1}$. By Table~\ref{tab:dictionary}, with $\mathcal A(\mathbf x-\mathbf x') = A\,K(\mathbf x-\mathbf x') + \rho^{-1}\sigma^2\delta^d(\mathbf x-\mathbf x')$ and its continuum inverse $\mathcal A^{-1}$,
+\begin{equation}
+\begin{aligned}
+  \W = \mathcal N\int\D\phi\,\exp\Big\{&-\tfrac12\iint\dd^dx\,\dd^dx'\;h^{\mu}(\mathbf x)\,[\mathcal A^{-1}]^{\mu,\nu}(\mathbf x-\mathbf x')\,h^{\nu}(\mathbf x')\\
+  &+ \tfrac{\rho^2}{2}\iint\dd^dx\,\dd^dx'\;\phi^{\mu}(\mathbf x)\Big[B^{\mu,\nu}K(\mathbf x-\mathbf x') - \tfrac{g^2}{\rho}\delta^{\mu,\nu}\delta^d(\mathbf x-\mathbf x')\Big]\phi^{\nu}(\mathbf x')\Big\},
+\end{aligned}
+  \label{eq:W-cont}
+\end{equation}
+where $\mathcal N$ is the translated $\det(2\pi\Phi)^{-1/2}$. The structure is that of Table~\ref{tab:dictionary}: the inverse-kernel term carries no density factor, the direct-kernel tilt carries $\rho^2$, and the two site-diagonal terms, the input noise and the rate penalty, carry one power of $\rho$ less than the kernel they accompany ($\sigma^2/\rho$ next to $AK$, $g^2/\rho$ next to $BK$). This is the quantitative form of the statement that a kernel term sums over the $\rho\ell^d$ neighbours of a neuron while a diagonal term does not.
+
+\paragraph{Mode form, extensive and intensive quantities.}
+Everything is computable in modes. With $\At_q = \lambda_qA + \sigma^2I_P$, $\Bt_q = \lambda_qB - g^2I_P$ and $\Sigma_q = (\At_q^{-1}-\Bt_q)^{-1}$ as in Section~2 (linear activation), the Gaussian integral and the normalisation give $\W = \prod_q\det(2\pi\Sigma_q)^{1/2}\det(2\pi\At_q)^{-1/2}$, i.e.
+\begin{equation}
+\begin{aligned}
+  -\log\W &= \frac12\sum_q\log\det\big(I_P - \At_q\Bt_q\big),\\
+  \F &= \frac{1}{2N}\sum_q\log\det\big(I_P - \At_q\Bt_q\big)
+  \;\to\;
+  \frac{a^d}{2}\ball{\log\det\big(I_P - \At(q)\Bt(q)\big)},
+\end{aligned}
+  \label{eq:F-cont}
+\end{equation}
+with $\At(q) = \rho\lambda(q)A + \sigma^2I_P$ and $\Bt(q) = \rho\lambda(q)B - g^2I_P$. Hence
+\begin{equation}
+  \log\W = -N\F = -L^d f,
+  \qquad
+  f \equiv \rho\,\F = \frac12\ball{\log\det\Big(I_P-\At(q)\Bt(q)\Big)} .
+  \label{eq:f-per-volume}
+\end{equation}
+$\F$ as defined in the notes is the free energy \emph{per neuron}; $f = \F/a^d$ is the free energy \emph{per unit volume}, and $\log\W$, $N\F$ and the whole action $N\Sact$ of Section~1 are extensive, $\propto L^d$. Intensive are the per-mode objects $\At(q)$, $\Bt(q)$, $\Sigma(q)$, $D(q)$, the data-space kernels $A$, $B$, $C$, $\Ct$, $D_C$ and their diagonal elements $\sX^2,\sY^2,c,\delta$, the tilt $\hat\Phi$ and the output kernel $\Phi^{(L)}_{\alpha,\beta} = k_1\delta_{\alpha,\beta}C$. The saddle point is controlled by $N = \rho L^d$, so in the PI's convention ``large $N$'' means ``large volume at fixed density''.
+
+\paragraph{On the remark that the average ``has no reason to be $O(1)$''.}
+The site-average form of $\F$ in the original Section~1 was replaced, in the proofreading pass, by the statement that $\log\W = O(N)$ so that $\F = O(1)$, and that the genuine concern is the number of order parameters. The continuum form sharpens both points. $\F = a^d f$ is $O(1)$ per neuron because $f$ is the integral of a bounded function over a ball of finite radius $\Lam$; this is guaranteed on any lattice. What is \emph{not} $O(1)$ is $f$ itself as $a\to0$: like the free-energy density of any lattice field theory it is dominated by the modes near the cutoff, $f = O(\Lam^d)$, and depends on the shape of the cutoff region. That is harmless, because the saddle-point equations are derivatives of $\F$ with respect to $\Phi$ and $\hat\Phi$, which are $\lambda(q)$-weighted mode averages in which $\rho$ cancels (last-but-one line of Table~\ref{tab:dictionary}), e.g.\ $C = \int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d}\lambda(q)\Sigma(q)$. The modes near the cutoff enter observables only through $\lambda(q)\Sigma(q)$, and whether they matter is the question of Section~\ref{sec:linear}. As for the order-parameter count, translation invariance of the saddle point reduces the hidden kernels $\Phi^{(l)\mu,\nu}_{i,j}$ to functions $\Phi^{(l)\mu,\nu}(q)$ of one momentum: $NP^2$ numbers instead of $N^2P^2$, still one per mode against the single factor $N$ in the exponent. The caveat of \texttt{setup\_site\_factorisation.tex} is therefore unchanged by the continuum limit; what the limit makes explicit is that the natural large parameter is the volume, and that per unit volume the order parameter is a function of a continuous variable.
+
+\section{The one-hidden-layer linear solution in the continuum}
+\label{sec:linear}
+
+\subsection{Translation of the chain}
+We start from the corrected equations of Section~2: the hidden kernel with its $1/N$, $C = \frac1N\sum_q\lambda_q\Sigma_q$ and $D_C = \frac1N\sum_q\lambda_qD_q + \delta I_P$ (derived in \path{rg_kernel_normalisation.tex}), and the scalar reduction with $c^2$ in the tilt and the corrected $h_q$ (derived in \path{rg_diagonal_reduction.tex}),
+\begin{equation}
+  1-\frac{\delta}{c} = \frac cN\sum_q\frac{h_q}{c^2-\sY^2h_q},
+  \qquad
+  h_q = \frac{\lambda_q(\lambda_q\sX^2+\sigma^2)}{1+g^2(\lambda_q\sX^2+\sigma^2)},
+  \qquad
+  \sX^2 = \frac{k_0s_X^2}{m},\ \sY^2 = \frac{s_Y^2}{k_1},\ \delta = \frac1{k_1\kappa}.
+  \label{eq:linear-soln-lattice}
+\end{equation}
+Table~\ref{tab:dictionary} turns the chain into
+\begin{align}
+  \At(q) &= \rho\lambda(q)A + \sigma^2I_P, &
+  \Bt(q) &= \rho\lambda(q)B - g^2I_P, &
+  \Sigma(q) &= \big(\At(q)^{-1}-\Bt(q)\big)^{-1},\\
+  C &= \ball{\lambda(q)\,\Sigma(q)}, &
+  \Ct &= C+\delta I_P, &
+  D_C &= \ball{\lambda(q)\,D(q)} + \delta I_P ,
+  \label{eq:C-cont}
+\end{align}
+and, per data mode, $d(q) = \big(\lambda_q/h(q) - \lambda_q\sY^2/c^2\big)^{-1}$ with $\lambda_q = \rho\lambda(q)$ and
+\begin{equation}
+  h(q) = \rho\lambda(q)\,H(q),
+  \qquad
+  H(q) \equiv \frac{h_q}{\lambda_q} = \frac{\rho\lambda(q)\sX^2+\sigma^2}{1+g^2\big(\rho\lambda(q)\sX^2+\sigma^2\big)} .
+  \label{eq:H}
+\end{equation}
+$H(q)$ is the prior-only variance of mode $q$ (the solution $d_q = h_q/\lambda_q$ at $\sY = 0$, the input-driven variance shrunk by the rate penalty); it is bounded, $H\le1/g^2$, and tends to the pure-noise value $\sigma^2/(1+g^2\sigma^2)$ wherever $\rho\lambda(q)\sX^2\ll\sigma^2$. The implicit solution becomes, in the two equivalent forms of \eqref{eq:mode-average},
+\begin{equation}
+  \boxed{\;
+  1-\frac{\delta}{c} = c\,\avg{\frac{h}{c^2-\sY^2h}}
+  = c\ball{\frac{\lambda(q)\,H(q)}{c^2-\sY^2\,\rho\lambda(q)H(q)}}
+  \;}
+  \label{eq:linear-soln-cont}
+\end{equation}
+to be solved on the branch $c>\sY\sqrt{\max_qh(q)} = \sY\sqrt{h(0)}$ (both spectra below peak at $q=0$, and $h$ is increasing in $\lambda$). The second form, with the $\rho$ cancelled against $a^d$, is the one to read the cutoff dependence from.
+
+\paragraph{Spot check.}
+At $\sigma\to0$, $g\to0$ one has $H = \rho\lambda\sX^2$, and replacing the integral in \eqref{eq:linear-soln-cont} by the Riemann sum $\int\frac{\dd^dq}{(2\pi)^d}\to L^{-d}\sum_q$ with $\rho\lambda(q)\to\lambda_q$ gives
+\begin{equation}
+  c\,\rho\,\sX^2\ball{\frac{\lambda(q)^2}{c^2-\sY^2\sX^2\rho^2\lambda(q)^2}}
+  \;\to\;
+  \frac{c\,\sX^2}{\rho L^d}\sum_q\frac{\lambda_q^2}{c^2-\sY^2\sX^2\lambda_q^2}
+  = \frac cN\sum_q\frac{h_q}{c^2-\sY^2h_q},
+\end{equation}
+with $h_q = \lambda_q^2\sX^2$, which is \eqref{eq:linear-soln-lattice} at $\sigma = g = 0$. The same substitution at general $\sigma, g$ returns \eqref{eq:linear-soln-lattice} exactly.
+
+\subsection{UV sensitivity}
+\label{sec:uv}
+In the PI's convention $\Lam$ is physical and fixed by the spacing. The question ``does the solution depend on $\Lam$ as $\Lam\to\infty$'' asks whether the modes near the cutoff, i.e.\ the lattice details, influence the answer; if the integrals in \eqref{eq:C-cont}--\eqref{eq:linear-soln-cont} converge as $\Lam\to\infty$ the continuum theory is UV-finite and the lattice is a faithful discretisation, otherwise the result is cutoff-dominated and a continuum description would need a counterterm. The answer is read off the large-$q$ tail of the integrand of \eqref{eq:linear-soln-cont}, where $\lambda(q)\to0$. Expanding $H$ in $\rho\lambda\sX^2$,
+\begin{equation}
+  \frac{\lambda H}{c^2-\sY^2\rho\lambda H}
+  = \frac{\sigma^2}{(1+g^2\sigma^2)\,c^2}\;\lambda(q)
+  + \frac{\rho\,\sX^2}{(1+g^2\sigma^2)^2c^2}\;\lambda(q)^2
+  + O\big(\lambda^3\big)\qquad(\sigma^2>0),
+  \label{eq:tail}
+\end{equation}
+and at $\sigma^2 = 0$ the first term is absent and the second becomes $\rho\sX^2\lambda(q)^2/c^2$. So the cutoff dependence of the right-hand side of \eqref{eq:linear-soln-cont} is that of the two integrals
+\begin{equation}
+  I_1(\Lam) = \ball{\lambda(q)} = K_{\Lam}(0),
+  \qquad
+  I_2(\Lam) = \ball{\lambda(q)^2} = \int\dd^dx\,K_{\Lam}(\mathbf x)^2,
+  \label{eq:I12}
+\end{equation}
+the prior variance of a weight and the squared $L^2$-norm of the prior kernel, both with the cutoff. (On the lattice these are $\frac1N\sum_q\lambda_q = K_{0,0}$ and $\frac1N\sum_q\lambda_q^2 = \sum_jK_{0,j}^2$, both finite; the check of Section~\ref{sec:checks} reproduces them.) The solution is UV-insensitive if and only if $I_1(\infty)<\infty$ when $\sigma^2>0$, and if and only if $I_2(\infty)<\infty$ when $\sigma^2 = 0$; by the implicit-function theorem the root $c$ then has a $\Lam\to\infty$ limit, approached at the rate of the tail of $I_1$ (resp.\ $I_2$).
+
+\paragraph{Squared-exponential kernel.}
+$K(\mathbf x) = e^{-|\mathbf x|^2/2\ell^2}$, $\lambda(q) = (2\pi)^{d/2}\ell^d e^{-\ell^2q^2/2}$. Then $I_1(\infty) = 1$ and $I_2(\infty) = (\pi\ell^2)^{d/2}$ in every $d$, with tails
+\begin{equation}
+  1 - I_1(\Lam) = \begin{cases}\operatorname{erfc}(\ell\Lam/\sqrt2) & d=1\\ e^{-\ell^2\Lam^2/2} & d=2\end{cases}
+  \sim e^{-\ell^2\Lam^2/2},
+  \qquad
+  I_2(\infty)-I_2(\Lam)\sim e^{-\ell^2\Lam^2} .
+\end{equation}
+The solution is insensitive to the cutoff in $d=1$ and $d=2$ (and any $d$), for any $\sigma^2$ and $g^2$, up to corrections $e^{-\ell^2\Lam^2/2} = e^{-\pi^2\ell^2/2a^2}$ in $d=1$. The only requirement is that the lattice resolves the kernel, $\ell\Lam\gg1$; when $\ell\lesssim a$ the prior is effectively $K\approx I$ and there is no continuum to speak of.
+
+\paragraph{Power-law kernel.}
+$\lambda(q) = \gamma/(q^2+m^2)$, the massive free-field propagator with correlation length $1/m$. In $d=1$, $K(x) = \frac{\gamma}{2m}e^{-m|x|}$ and
+\begin{equation}
+  I_1(\Lam) = \frac{\gamma}{\pi m}\arctan\frac{\Lam}{m} = \frac{\gamma}{2m} - \frac{\gamma}{\pi\Lam} + O\!\left(\frac{\gamma m^2}{\Lam^3}\right),
+  \qquad
+  I_2(\Lam) = \frac{\gamma^2}{4m^3} - \frac{\gamma^2}{3\pi\Lam^3} + \dots\qquad(d=1):
+\end{equation}
+UV-insensitive, with power-law corrections $O(m/\Lam)$ for $\sigma^2>0$ and $O((m/\Lam)^3)$ for $\sigma^2 = 0$. In $d=2$, $K(\mathbf x) = \frac{\gamma}{2\pi}\mathrm K_0(m|\mathbf x|)$ diverges logarithmically at the origin, and
+\begin{equation}
+  I_1(\Lam) = \frac{\gamma}{4\pi}\log\Big(1+\frac{\Lam^2}{m^2}\Big)\to\infty,
+  \qquad
+  I_2(\Lam) = \frac{\gamma^2}{4\pi}\Big(\frac1{m^2}-\frac1{\Lam^2+m^2}\Big)\to\frac{\gamma^2}{4\pi m^2}\qquad(d=2).
+\end{equation}
+So in $d=2$ the solution is \emph{UV-sensitive when $\sigma^2>0$} and UV-insensitive, with corrections $O(m^2/\Lam^2)$, when $\sigma^2 = 0$. In the sensitive case, inserting \eqref{eq:tail} into \eqref{eq:linear-soln-cont} and multiplying by $c$,
+\begin{equation}
+  c = \delta + \frac{\sigma^2}{1+g^2\sigma^2}\,\frac{\gamma}{4\pi}\log\frac{\Lam^2}{m^2} + O(1)
+  \qquad(d=2,\ \sigma^2>0,\ \Lam\to\infty):
+  \label{eq:c-log}
+\end{equation}
+the hidden-layer kernel grows without bound, and since the learning term of the tilt is $\lambda_q\sY^2/c^2$, the representation reverts to the (noise-dominated) prior as $\Lam\to\infty$, the same mechanism by which the missing $1/N$ killed learning in \texttt{rg\_kernel\_normalisation.tex}. The general criterion is that $\lambda(q)$ must decay faster than $q^{-d}$ when $\sigma^2>0$ (finite $K(0)$) and faster than $q^{-d/2}$ when $\sigma^2 = 0$; the power law satisfies the first for $d<2$ only and the second for $d<4$.
+
+\paragraph{The role of $\sigma^2$.}
+Section~1 introduced $\sigma^2$ ``to ensure positive-definiteness'' and takes $\sigma\to0^+$. The continuum form shows what it regularises and what it does not. It regularises the \emph{measure}: for modes with $\rho\lambda(q)A$ singular, whether because $\lambda(q)\approx0$ outside the kernel's support or because the data direction is outside the span of $X$, the prior precision $\At(q)^{-1}$ would be infinite and those modes frozen; with $\sigma^2>0$ their precision is $1/\sigma^2$ and they are white noise of variance $\sigma^2$ per site ($\sigma^2/\rho$ per unit volume). It does \emph{not} regularise the UV; it does the opposite. White noise has a flat spectrum up to $\Lam$, so it populates every mode, and the readout prior weights those modes by $\lambda(q)$: the noise-driven part of the hidden kernel is $\frac{\sigma^2}{1+g^2\sigma^2}K_{\Lam}(0)$, which converts the tail of the integrand from $\lambda^2$ to $\lambda$ and the convergence condition from $I_2<\infty$ to the stronger $I_1<\infty$. The rate penalty $g^2$ caps $H\le1/g^2$ and the pure-noise value at $\sigma^2/(1+g^2\sigma^2)$, but it does not change which integral has to converge. The only UV regulator in the theory is $\Lam$, i.e.\ the lattice spacing; and the $\sigma\to0^+$ limit of Section~1 is, in the continuum, the UV-safe one.
+
+\subsection{The thermodynamic limit and finite-size corrections}
+\label{sec:finite-size}
+At fixed $a$ the limit $L\to\infty$ replaces the mode average by the integral \eqref{eq:mode-average}; the limit exists because the integrand is bounded on the finite ball. The finite-size correction is given exactly by Poisson summation on the periodic zone: for any $g$,
+\begin{equation}
+  \frac1N\sum_q g(q) = a^d\sum_{n\in\Z^d}\hat g(nL),
+  \qquad
+  \hat g(\mathbf x) = \int_{\mathrm{BZ}}\frac{\dd^dq}{(2\pi)^d}\,g(q)\,e^{iq\cdot\mathbf x},
+  \label{eq:poisson}
+\end{equation}
+whose $n=0$ term is the continuum value and whose $n\neq0$ terms are the periodic images. $\hat g$ is the real-space version of the integrand (for the summand of \eqref{eq:linear-soln-cont} it is a correlation function), and it decays as $e^{-|\mathbf x|/\xi}$ with $1/\xi$ the distance from the real axis of the nearest singularity of $g$ in the complex $q$-plane. Three scales compete:
+\begin{itemize}
+  \item the kernel's own range, $\ell$ for the squared exponential (poles of $g\circ\lambda$ at $\operatorname{Im}q = O(1/\ell)$) and $1/m$ for the power law (branch points of $\lambda$ at $q = \pm im$);
+  \item the learning-induced length $\xi_*$: near the physical branch's pole, $c^2-\sY^2h(q)\approx\frac{\sY^2|h''(0)|}{2}\big(\xi_*^{-2}+q^2\big)$ with $\xi_*^{-2} = 2(c^2-\sY^2h(0))/(\sY^2|h''(0)|)$, so the summand has poles at $q = \pm i/\xi_*$;
+  \item the box itself, $L$.
+\end{itemize}
+Hence $c(L) = c(\infty) + O(e^{-L/\xi})$ with $\xi = \max(\xi_*,\ \ell\text{ or }1/m)$, and the corrections become algebraic only when $\xi_*\gtrsim L$, i.e.\ at the threshold. The check of Section~\ref{sec:checks} shows this: the relative error of the mode average falls by three orders of magnitude between $L = 8\ell$ and $L = 16\ell$ (i.e.\ $\xi\approx1.1\ell$ for those parameters) and then meets the aliasing floor.
+
+\begin{remark}[The threshold in the thermodynamic limit]
+On the finite lattice the physical root always exists above the pole, because the $q=0$ term $\frac1N h_0/(c^2-\sY^2h_0)$ diverges there (\texttt{rg\_diagonal\_reduction.tex}). In the continuum the same term is the integral $\int\frac{\dd^dq}{(2\pi)^d}(\xi_*^{-2}+q^2)^{-1}$, which diverges as $\xi_*\to\infty$ in $d\le2$ (as $\xi_*$ in $d=1$, as $\log\xi_*$ in $d=2$) but stays finite in $d\ge3$. Since the right-hand side of \eqref{eq:linear-soln-cont} must equal $1-\delta/c<1$, in $d=1,2$ the correlation length $\xi_*$ stays finite for all parameter values: the gap of the $q=0$ mode never closes at $L=\infty$, though $\xi_*$ grows exponentially with the target strength in $d=2$. In $d\ge3$ the integral at $\xi_* = \infty$ is finite, and for targets strong enough that $1-\delta/c_*$ exceeds it at $c_* = \sY\sqrt{h(0)}$, the $q=0$ mode condenses: $c$ sticks at $c_*$, $c^2-\sY^2h(0) = O(1/N)$, and $d_0 = O(N)$, a layer-wide common response carried by a single mode, in close analogy with Bose--Einstein condensation. This is a consequence of the corrected equation, not an input; it belongs in the limiting-cases note and is only flagged here.
+\end{remark}
+
+\section{Towards the RG}
+\label{sec:rg}
+
+\subsection{The field theory}
+Appendix~A1 rewrites the single-site weight of a nonlinear layer by inserting an auxiliary field for the rates, Taylor-expanding $\phi(h) = \sum_{k\ge1}\frac{\sigma_{(k)}}{k!}h^k$ and integrating the rate out, which leaves a Gaussian part $\mathcal H$ and a sum of local vertices $\mathcal U$ (with the sign correction of the proofreading pass):
+\begin{equation}
+  \W = \int\D h\,\D\hat\phi\;e^{-\mathcal H-\mathcal U},
+  \qquad
+  \mathcal H = \tfrac12 h\At^{-1}h + \tfrac12\hat\phi\Bt^{-1}\hat\phi + \sigma_{(1)}\hat\phi\cdot h,
+  \qquad
+  \mathcal U = \sum_i\sum_{\mu}\sum_{k\ge2}\frac{\sigma_{(k)}}{k!}\,\hat\phi^{\mu}_i\,(h^{\mu}_i)^k ,
+  \label{eq:A1-lattice}
+\end{equation}
+where $\At = \Phi$ is the input kernel (with the $\sigma^2$ of the first layer) and $\Bt = \hat\Phi K^{(l)}-G$ the tilt including the rate penalty; in the translation-invariant setting $\At_{i,j} = AK_{i,j}+\sigma^2\delta_{i,j}$ and $\Bt_{i,j} = BK_{i,j}-g^2\delta_{i,j}$ as before. The vertices are local in space and diagonal in the data index, because the nonlinearity acts pointwise in both; the Gaussian part is non-local in space (through $K$) and couples data indices (through $A$ and $B$). For modes with $\Bt_q\prec0$ (large $q$, where $-g^2$ dominates) the auxiliary field runs along the imaginary axis, which changes the convergence argument but not the propagators.
+
+Applying Table~\ref{tab:dictionary} to \eqref{eq:A1-lattice}, with $\mathcal A(q) = \lambda(q)A+\sigma^2/\rho$ and $\mathcal B(q) = \lambda(q)B - g^2/\rho$ the continuum kernels, every local term acquires a factor $\rho$; rescaling $\hat\phi\to\hat\phi/\rho$ moves all of them into the $\hat\phi$ propagator and gives the action in the form in which the RG is set up:
+\begin{equation}
+  \Sact[h,\hat\phi] = \frac12\int\frac{\dd^dq}{(2\pi)^d}\Big[h^{*}(q)\,\mathcal A(q)^{-1}h(q) + \hat\phi^{*}(q)\,\big(\rho^2\mathcal B(q)\big)^{-1}\hat\phi(q)\Big]
+  + \int\dd^dx\Big[\sigma_{(1)}\hat\phi\cdot h + \sum_{k\ge2}\frac{\sigma_{(k)}}{k!}\hat\phi^{\mu}(h^{\mu})^k\Big],
+  \label{eq:S-cont}
+\end{equation}
+with $\rho^2\mathcal B(q) = \rho\lambda_qB - \rho g^2$ the tilt in lattice units. The free propagators follow by inverting the $2P\times2P$ quadratic form per mode:
+\begin{equation}
+\begin{aligned}
+  \langle h\,h^{*}\rangle_0 &= \mathcal G(q) = \big(\mathcal A(q)^{-1} - \sigma_{(1)}^2\rho^2\mathcal B(q)\big)^{-1}, &
+  \langle\hat\phi\,h^{*}\rangle_0 &= -\sigma_{(1)}\,\rho^2\mathcal B(q)\,\mathcal G(q),\\
+  \langle\hat\phi\,\hat\phi^{*}\rangle_0 &= \big(\rho^{-2}\mathcal B(q)^{-1} - \sigma_{(1)}^2\mathcal A(q)\big)^{-1},
+\end{aligned}
+\end{equation}
+and $\rho\,\mathcal G(q) = \Sigma_q$ at $\sigma_{(1)} = 1$, so the hidden kernel is $C = \rho\int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d}\lambda(q)\mathcal G(q)$, consistent with \eqref{eq:C-cont}.
+
+\subsection{The momentum-shell step}
+With $\Lam$ in place, one RG step consists of (i) splitting each field into slow and fast parts, $h = h_< + h_>$ with $h_>$ supported on the shell $\Lam/b<|q|<\Lam$, and likewise $\hat\phi$; (ii) integrating the fast fields with the Gaussian propagators above, which generates corrections to $\mathcal A^{-1}$, $\mathcal B^{-1}$ and $\sigma_{(1)}$ (self-energies) and to all the vertices $\sigma_{(k)}$, plus new local vertices $\hat\phi^{\,j}h^k$ that are absent at tree level; (iii) rescaling $q\to bq$, $\mathbf x\to\mathbf x/b$, $h\to b^{-\Delta_h}h$, $\hat\phi\to b^{-\Delta_{\hat\phi}}\hat\phi$ to restore the cutoff. Two features distinguish this from a textbook $\phi^4$ set-up. First, the ``kinetic'' operators are $\mathcal A(q)^{-1}$ and $\mathcal B(q)^{-1}$, both given by the prior spectrum $\lambda(q)$, not by $q^2$; the Gaussian fixed point exists only if $\lambda(q)$ has a scale-free regime. Second, the tilt $B$ is not a free coupling but is fixed by the saddle point, $B = \frac1{k_1}\Ct^{-1}YY^{\top}\Ct^{-1}$ with $\Ct$ itself a mode integral of the propagator; the RG flow of the single-site theory must be iterated to self-consistency with the kernel equations, as in a self-consistent screening approximation.
+
+\subsection{Engineering dimensions and the Gaussian fixed point}
+Consider the power-law prior $\lambda(q) = \gamma/(q^2+m^2)$, for which $\mathcal A(q)^{-1}\to(q^2+m^2)A^{-1}/\gamma$ when $\sigma^2 = 0$: the prior part of the $h$ theory is a free massive field with data-space metric $A^{-1}/\gamma$, $\frac1{2\gamma}\int\dd^dx\,[\nabla h\cdot A^{-1}\nabla h + m^2hA^{-1}h]$, and no density factor. The scale-free point is $m = 0$, $\sigma^2 = 0$, $g^2 = 0$, $\sigma_{(1)} = 0$, $\sigma_{(k\ge2)} = 0$, with
+\begin{equation}
+  \Sact_* = \frac1{2\gamma}\int\frac{\dd^dq}{(2\pi)^d}\,q^2\Big[h^{*}A^{-1}h + \hat\phi^{*}(\rho^2B)^{-1}\hat\phi\Big]:
+  \qquad
+  \Delta_h = \Delta_{\hat\phi} = \frac{d-2}{2} .
+\end{equation}
+This is the \emph{prior} fixed point: $h$ is the untrained preactivation field with covariance $\lambda(q)A$, and $\hat\phi$ is a decoupled free field. Learning enters through $\sigma_{(1)}$ (which couples $\hat\phi$ to $h$ and thereby turns the tilt on) and the nonlinearity through $\sigma_{(k\ge2)}$. The tree-level dimension of a coupling is $d$ minus the dimensions of the fields in its operator:
+\begin{itemize}
+  \item $[m^2] = 2$: relevant (the prior mass).
+  \item $[\sigma_{(1)}] = 2$: relevant. Written in terms of $h$ alone, the tilt is non-local, $\propto|h(q)|^2/q^2$ with coefficient $\sigma_{(1)}^2\rho^2\gamma B$, and has dimension $4$.
+  \item $[\sigma_{(1)}^2\rho g^2] = 2$: relevant (the rate penalty is a mass for $h$).
+  \item $[\sigma^2/\rho] = -2$: irrelevant. Expanding $\mathcal A^{-1} = (q^2+m^2)A^{-1}/\gamma - (\sigma^2/\rho)(q^2+m^2)^2A^{-2}/\gamma^2 + \dots$, the noise is a $q^4$ term.
+  \item $[\sigma_{(k)}] = d - \frac{(k+1)(d-2)}{2}$: relevant for $d<d_c(k) = \frac{2(k+1)}{k-1}$, i.e.\ $d_c(2) = 6$, $d_c(3) = 4$, $d_c(5) = 3$, $d_c(\infty) = 2$.
+\end{itemize}
+For a general scale-free prior $\lambda(q) = \gamma q^{-2\zeta}$ replace $2\to2\zeta$ throughout ($\Delta = (d-2\zeta)/2$, $[\sigma_{(k)}] = d-(k+1)(d-2\zeta)/2$). Three conclusions for the dimensions of interest. (a) In $d=2$ the fields are dimensionless and every vertex $\sigma_{(k)}$ has dimension $2$; in $d=1$, $\Delta = -\frac12$ and $[\sigma_{(k)}] = (k+3)/2$: all nonlinear couplings are relevant at tree level in $d\le2$, so the perturbative RG around the Gaussian fixed point is uncontrolled in the dimensions of the notes and the theory is IR-dominated; it must be studied at finite correlation length, where the masses $m^2$, $\rho g^2$ and the distance to the threshold $\xi_*^{-2}$ of Section~\ref{sec:finite-size} stop the flow, and the loop expansion is an expansion in $\sigma_{(k)}\xi^{[\sigma_{(k)}]}$. (b) The tilt is relevant and destabilising: the massless $h$ precision $q^2/(\gamma A) - \sigma_{(1)}^2\rho^2\gamma B/q^2$ turns negative at small $q$, and the masses are what keep it positive; the stability condition is exactly the pole condition $c^2>\sY^2h(0)$ of Section~2, and the flow of the tilt toward the IR is cut off at $1/\xi_*$. (c) The input noise is an irrelevant, higher-derivative term, in agreement with Section~\ref{sec:uv}: it does not affect the long-wavelength physics, but, being a $q^4$ correction with a \emph{negative} coefficient in the precision, it turns the field into white noise above the crossover $q_\sigma^2\sim\rho\gamma/\sigma^2$ and makes the non-universal UV integrals of Section~\ref{sec:uv} larger, not smaller. The squared-exponential prior has no scale-free regime: for $q\ll1/\ell$, $\lambda(q)^{-1} = \lambda(0)^{-1}(1+\ell^2q^2/2+\ell^4q^4/8+\dots)$ is a massive free field with $m^2 = 2/\ell^2$, stiffness $\ell^2/2\lambda(0)$ and irrelevant $q^4$ corrections, while for $1/\ell\ll|q|<\Lam$ the field is frozen ($\sigma^2 = 0$) or white noise ($\sigma^2>0$) and contributes only the UV constants of Section~\ref{sec:uv}. The non-trivial flow for that prior therefore runs from $1/\ell$ to $1/\xi_*$, and there is no critical point unless the tilt closes the gap, which in $d\le2$ it cannot (Remark above).
+
+\section{Checks}
+\label{sec:checks}
+\path{latex/notes/scripts/continuum_limit_check.py} (run from the repository root with \texttt{uv run python} \path{latex/notes/scripts/continuum_limit_check.py}; about two seconds; tested by \path{tests/test_continuum_limit_check.py}) takes the squared-exponential kernel $K_{i,j} = e^{-r_{i,j}^2/2\ell^2}$ with $\ell = 1$ on a ring with spacing $a = 0.5$ ($\Lam = \pi/a = 6.283$, $\ell\Lam = 2\pi$), computes $\lambda_q$ by the DFT of the first row, and compares $\frac1N\sum_q\lambda_qf(\lambda_q)$ with $a\int_{-\Lam}^{\Lam}\frac{\dd q}{2\pi}\frac{\lambda(q)}{a}f\big(\frac{\lambda(q)}{a}\big)$, $\lambda(q) = \sqrt{2\pi}\,\ell\,e^{-\ell^2q^2/2}$, evaluated by $2000$-node Gauss--Legendre quadrature, for increasing $N$ at fixed $a$. The spacing is deliberately not $1$, so that a missing factor of $a$ would show. The weight $f$ is the summand of \eqref{eq:linear-soln-cont}, $\lambda f(\lambda) = h/(c^2-\sY^2h)$ with $\sX^2 = 0.7$, $\sY^2 = 0.25$, $\sigma^2 = 0.2$, $g^2 = 0.3$ and $c = 2$ (above the pole, which the script checks). The same is done on an $n\times n$ torus with $c = 6$ and the square zone. The output is:
+{\footnotesize
+\begin{verbatim}
+spacing a = 0.5, kernel width l = 1.0, cutoff Lambda = pi/a = 6.2832
+max |lambda_q - lambda(q)/a| / lambda_0 (N = 64) : 2.68e-09
+aliasing floor e^(-l^2 Lambda^2 / 2)             : 2.68e-09
+
+                moment        continuum      closed form       ring N=256
+    (1/N) sum lambda_q   0.999999999668   1.000000000000   1.000000000000
+  (1/N) sum lambda_q^2   3.544907701811   3.544907701811   3.544907701811
+
+d = 1, (1/N) sum_q h_q / (c^2 - sY^2 h_q): continuum value 0.619768682079
+      N     L/l            lattice   rel. error
+      4     2.0     0.458914667654     2.60e-01
+      8     4.0     0.632534589930     2.06e-02
+     16     8.0     0.621725481683     3.16e-03
+     32    16.0     0.619769920650     2.00e-06
+     64    32.0     0.619768682095     2.61e-11
+    128    64.0     0.619768682094     2.54e-11
+    256   128.0     0.619768682094     2.54e-11
+
+d = 2, (1/N) sum_q h_q / (c^2 - sY^2 h_q): continuum value 0.085379218842
+      N     L/l            lattice   rel. error
+      4     2.0     0.065842598163     2.29e-01
+      8     4.0     0.087263747749     2.21e-02
+     16     8.0     0.085437482278     6.82e-04
+     32    16.0     0.085379223795     5.80e-08
+     64    32.0     0.085379218846     4.08e-11
+
+K + 0.0 I, ring N = 128, j = 0, 1, 2
+  lattice (K^-1)_0j                      :     1533881.4     -1520138.8      1480296.8
+  a^2 int_BZ dq/2pi e^(iqx_j)/lambda(q)  :     1940686.8     -1926565.9      1885592.8
+  max relative difference                : 2.15e-01
+
+K + 0.1 I, ring N = 128, j = 0, 1, 2
+  lattice (K^-1)_0j                      :     5.6924854     -2.9155963    -0.45089427
+  a^2 int_BZ dq/2pi e^(iqx_j)/lambda(q)  :     5.6924854     -2.9155964    -0.45089424
+  max relative difference                : 7.19e-08
+
+dictionary factors confirmed: final rel. errors < 2.7e-08 (10 x aliasing floor) in d = 1, 2
+\end{verbatim}
+}
+Reading: (i) $\lambda_q = \lambda(q)/a$ holds to the aliasing floor $e^{-\ell^2\Lam^2/2} = 2.7\times10^{-9}$, eq.~\eqref{eq:aliasing}. (ii) The two closed-form moments confirm the factors of $a$ and $2\pi$: $\frac1N\sum_q\lambda_q = K_{0,0} = 1$ (the continuum value $\operatorname{erf}(\ell\Lam/\sqrt2) = 1-3.3\times10^{-10}$ differs by the aliased tail), and $\frac1N\sum_q\lambda_q^2 = \sum_jK_{0,j}^2 = \sqrt\pi\,\ell/a = 3.5449$, which is $\rho I_2$ of \eqref{eq:I12}. (iii) For the \texttt{eq:linear-soln} summand the ring value converges to the continuum integral exponentially in $L$: by three decades between $L = 8\ell$ and $16\ell$ ($\xi\approx1.1\ell$), to $2\times10^{-6}$ at $L = 16\ell$ and to the aliasing floor at $L = 32\ell$; the torus does the same with the $d=2$ factors $a^2$ and $(2\pi)^2$. (iv) The inverse carries $a^{2d}$: with the nugget $K+0.1I$ the lattice $(K^{-1})_{0,j}$ matches $a^2\int_{\mathrm{BZ}}\frac{\dd q}{2\pi}e^{iqx_j}/\lambda(q)$ to $7\times10^{-8}$; for the pure kernel the two differ by $21\%$ and are of size $10^6\approx e^{\ell^2\Lam^2/2}/(\ldots)$, the cutoff-dominated object of Section~\ref{sec:dictionary}. The script fails loudly if the final errors exceed ten times the aliasing floor.
+
+\end{document}
