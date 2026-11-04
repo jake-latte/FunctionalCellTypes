@@ -85,20 +85,20 @@ Suppose you observe the kernels $\Phi^{(l-1)}$ and $\Phi^{(l)}$ and you wanted a
 
 It's not clear that this $\hat \phi$ would correspond to a physical quantity. But consider that, because the conjugate vanishes for untrained (i.e. test-time) patterns, then the single site for those pre-activations has the Gaussian part
 \begin{align*}
-  \int \mathcal D h_{\star} \mathcal D \hat \phi 
+  \int \mathcal D h^{\star} \mathcal D \hat \phi
     \exp \left \{
-      - \frac12 h_{\star}^T [A_{\star\star} - A_{\star}^T A^{-1} A_{\star}]^{-1} h_{\star} 
+      - \frac12 (h^{\star})^T [A^{\star\star} - (A^{\star})^T A^{-1} A^{\star}]^{-1} h^{\star}
       - \frac12 \hat \phi^T (B^{-1} - \sigma_{(1)}^2 A) \hat \phi
-      + \sigma_{(1)} \hat \phi^T A (A^{-1})_{\star} h_{\star}
+      + \sigma_{(1)} \hat \phi^T A (A^{-1})^{\star} h^{\star}
     \right \}
 \end{align*}
-which says that if we want to estimate the response of the network to test data, we use the same field as from training time (and project it with $A (A^{-1})_{\star}$). A biological intuition then might be had with respect to meta-learning and sleep (see below).
+which says that if we want to estimate the response of the network to test data, we use the same field as from training time (and project it with $A (A^{-1})^{\star}$). A biological intuition then might be had with respect to meta-learning and sleep (see below).
 
 \paragraph{Evolution and Meta-Learning}
 
 By introducing the spatial kernels $K^{(l)}$, we now have on our hands something that might actually be more useful than just predicting the behaviour of a neural network. In particular, we can reformulate the saddle point equations as an effective feedforward network. To improve the clarity of the analogy with \eqref{eq:ff-network}, I will denote by round things--$\medbullet$ or $\medcirc$--the data pairs $(\mu,\nu)$, and by pointy things--$\blacksquare, \square, \blacktriangle$ or $\triangle$--the spatial pairs $(i,j)$. In this way we can re-write the stationary conditions as
 \begin{align}
-  \Phi^{(l), \medbullet}_{\blacksquare} = \sum_{\square} K_{\blacksquare, \square}^{(l)} \psi^{\medbullet}_{\square}( \Phi^{(l-1)} )
+  \Phi^{(l)\medbullet}_{\blacksquare} = \sum_{\square} K_{\blacksquare, \square}^{(l)} \psi^{\medbullet}_{\square}( \Phi^{(l-1)} )
   \label{eq:forward-pass}
 \end{align}
 where $K^{(l)}_{\blacksquare, \square} \equiv K^{(l)}_{i,a,j,b}$ and the activation function $\psi$ is now vector-valued, rather than the familiar point-wise object. Somewhat awkwardly, it is now a function of $\hat \Phi^{(l)}$ and $K^{(l)}$.
@@ -119,25 +119,25 @@ It is not hard to imagine then a scheme in which we learn the spatial priors $K$
 \end{align*}
 to the parameters $\vartheta^{(l)}$. The population-dependent activation function $\psi$ has the effect of turning the diagonal Jacobian that usually appears in the backprop recursion into a dense Jacobian; additionally, because $\psi$ itself is a function of the kernel weights at that layer, there is an additional term in the final step. Defining the adjoint
 \begin{align*}
-  g^{(l), \star}_{\blacksquare} = \frac{\partial \mathcal H}{\partial \Phi^{(l),\star}_{\blacksquare} }
+  g^{(l)\star}_{\blacksquare} = \frac{\partial \mathcal H}{\partial \Phi^{(l)\star}_{\blacksquare} }
 \end{align*}
 and the jacobians
 \begin{align*}
-  J^{(l), \medbullet, \medcirc}_{\blacksquare, \square} = \frac{\partial \psi^{(l), \medbullet}_{\blacksquare}}{\partial \Phi^{(l-1), \medcirc}_{\square}}
+  J^{(l)\medbullet,\medcirc}_{\blacksquare, \square} = \frac{\partial \psi^{(l)\medbullet}_{\blacksquare}}{\partial \Phi^{(l-1)\medcirc}_{\square}}
 &&
-  Q^{(l), \medbullet}_{\blacksquare, \square, \blacktriangle} = \frac{\partial \psi^{(l), \medbullet}_{\blacksquare}}{\partial K^{(l)}_{\square, \blacktriangle}}
+  Q^{(l)\medbullet}_{\blacksquare, \square, \blacktriangle} = \frac{\partial \psi^{(l)\medbullet}_{\blacksquare}}{\partial K^{(l)}_{\square, \blacktriangle}}
 \end{align*}
 then we can formulate the recursion as
 \begin{align*}
-  g^{(l), \star}_{\blacksquare}
+  g^{(l)\star}_{\blacksquare}
   =
-  J^{(l+1), \medbullet, \star}_{\square, \blacksquare}
+  J^{(l+1)\medbullet,\star}_{\square, \blacksquare}
   K^{(l+1)}_{\square, \blacktriangle} 
-  g^{(l+1), \medbullet}_{\blacktriangle}
+  g^{(l+1)\medbullet}_{\blacktriangle}
   &&
-  g^{(L), \star}_{\blacksquare} 
+  g^{(L)\star}_{\blacksquare} 
   \equiv
-  g^{(L), \star, \mu}_{\alpha, \beta} 
+  g^{(L)\star,\mu}_{\alpha, \beta} 
   =
   (f^{\star}_{\alpha} - y^{\star}_{\alpha}) 
     \left. (\Phi^{(L)} + \kappa^{-1} I)^{-1} \right|^{\mu,\nu}_{\beta, b} 
@@ -147,14 +147,14 @@ with the gradients
 \begin{align*}
   \frac{\partial \mathcal H}{\partial K^{(l)}_{\blacksquare, \square}}
   =
-  g^{(l), \star}_{\blacksquare} \psi^{(l), \star}_{\square} 
-  + g^{(l), \star}_{\blacktriangle} K^{(l)}_{\blacktriangle, \triangle} Q^{(l), \star}_{\triangle, \blacksquare, \square}
+  g^{(l)\star}_{\blacksquare} \psi^{(l)\star}_{\square} 
+  + g^{(l)\star}_{\blacktriangle} K^{(l)}_{\blacktriangle, \triangle} Q^{(l)\star}_{\triangle, \blacksquare, \square}
 \end{align*}
 where the first term is the usual rank-one weight update, and the latter is the high-rank term coming from the dependence of $\psi$ on the kernel $K$ of the corresponding layer. We could project these gradients into the PSD cone and update $K$ directly, or continue the recursion to the parameters $\vartheta$. Additionally, because $\psi$ is an expectation over a distribution, we can formulate its gradients, using the score trick, as contracted cumulants:
 \begin{align*}
-  J^{(l), \medbullet, \medcirc}_{\blacksquare, \square}
+  J^{(l)\medbullet,\medcirc}_{\blacksquare, \square}
   \equiv
-  \frac{\partial \psi^{(l), \mu, \nu}_{\alpha, \beta}}{\partial \Phi^{(l-1), m,n}_{a,b}}
+  \frac{\partial \psi^{(l)\mu,\nu}_{\alpha, \beta}}{\partial \Phi^{(l-1)m,n}_{a,b}}
   = \frac12 
     \left. (\Phi^{(l-1)})^{-1} \right|^{m, i_1}_{a, j_1}
     \left(
@@ -173,11 +173,11 @@ where the first term is the usual rank-one weight update, and the latter is the 
 \end{align*}
 and
 \begin{align*}
-  Q^{(l), \medbullet}_{\blacksquare, \square, \blacktriangle}
+  Q^{(l)\medbullet}_{\blacksquare, \square, \blacktriangle}
   \equiv
-  \frac{\partial \psi^{(l), \mu, \nu}_{\alpha, \beta}}{\partial K^{(l)}_{i,a,j,b}}
+  \frac{\partial \psi^{(l)\mu,\nu}_{\alpha, \beta}}{\partial K^{(l)}_{i,a,j,b}}
   = \frac12 
-    \hat \Phi^{(l), k_1, k_2}_{i,j}
+    \hat \Phi^{(l)k_1,k_2}_{i,j}
     \left(
       \langle 
         \phi^{\mu}_{\alpha} \phi^{\nu}_{\beta} \phi^{k_1}_{a} \phi^{k_2}_{b}
