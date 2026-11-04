@@ -41,11 +41,13 @@ and studying the simplest possible case, where we have only one hidden layer. Re
     \qquad
         \Phi^{\mu,\nu}_{\alpha, \beta} =
             K^{(1),\text{post}}_{\alpha,\beta}
+            \major{\frac1N}
             \left\langle
                 \phi^{\mu}_i K^{(1),\text{pre}}_{i,j} \phi^{\nu}_j
             \right\rangle
-        = k_1 \delta_{\alpha,\beta} \underbrace{ \left \langle \phi^{\mu}_i K_{i,j} \phi^{\nu}_j \right \rangle }_{C^{\mu,\nu}}
+        = k_1 \delta_{\alpha,\beta} \underbrace{ \major{\frac1N} \left \langle \phi^{\mu}_i K_{i,j} \phi^{\nu}_j \right \rangle }_{C^{\mu,\nu}}
 \end{align*}
+\majornote{rg\_kernel\_normalisation.tex}
 \fixnote{\eqref{eq:kernel-def} carries a $1/m$ for $l=0$, which was dropped from $\mathbb X$. It only rescales $k_0$, so nothing qualitative changes; it is restored here and below ($A = \frac{k_0}{m} X X^\top$, $\hat s_X^2 = k_0 s_X^2 / m$).}
 $C$ here \typo{measures} the aggregate correlation in the hidden layer, and is the natural analogue of the more \typo{familiar} non-spatial kernels.
 For convenience we define the regularised kernel
@@ -171,14 +173,15 @@ Consider firstly the $C$ kernel lurking inside the $B$ term:
 \begin{align*}
     C^{\mu,\nu}
     =
-    \sum_{i,j} K_{i,j} \left \langle \phi^{\mu}_i \phi^{\nu}_j \right \rangle
-    = 
-    \sum_{i,j,q,q'} K_{i,j} F_{i,q} \left \langle \tilde \phi^{\mu}_q \tilde \phi^{\nu}_{q'} \right \rangle F_{j, q'}
+    \major{\frac1N} \sum_{i,j} K_{i,j} \left \langle \phi^{\mu}_i \phi^{\nu}_j \right \rangle
     =
-    \sum_{i,j,q,q'} K_{i,j} F_{i,q} \delta_{q,-q'} \Sigma^{\mu,\nu}_q F_{j, q'}
-    = 
-    \sum_q \lambda_q \Sigma^{\mu,\nu}_q
+    \major{\frac1N} \sum_{i,j,q,q'} K_{i,j} F_{i,q} \left \langle \tilde \phi^{\mu}_q \tilde \phi^{\nu}_{q'} \right \rangle F_{j, q'}
+    =
+    \major{\frac1N} \sum_{i,j,q,q'} K_{i,j} F_{i,q} \delta_{q,-q'} \Sigma^{\mu,\nu}_q F_{j, q'}
+    =
+    \major{\frac1N} \sum_q \lambda_q \Sigma^{\mu,\nu}_q
 \end{align*}
+\majornote{rg\_kernel\_normalisation.tex}
 where the $\sum_q \lambda_q$ appeared from
 \begin{align*}
     \sum_{i,j,q'} K_{i,j} F_{i,q} \delta_{q,-q'} F_{j,q'} 
@@ -220,14 +223,15 @@ Now we can diagonalise $\tilde A$:
 \fixnote{The $1/m$ of $\mathbb X$, restored as above.}
 Under the ansatz, we can also diagonalise $\tilde C$ and $\tilde B$:
 \begin{align*}
-    \tilde C 
-    = 
-    \lambda_q \Sigma_q + \frac{1}{k_1 \kappa} I_P 
-    = 
-    U \Big( \lambda_q D_q + \frac{1}{k_1 \kappa} I_P \Big) U^{\top} 
-    \equiv 
+    \tilde C
+    =
+    \major{\frac1N} \typo{\sum_q} \lambda_q \Sigma_q + \frac{1}{k_1 \kappa} I_P
+    =
+    U \Big( \major{\frac1N} \typo{\sum_q} \lambda_q D_q + \frac{1}{k_1 \kappa} I_P \Big) U^{\top}
+    \equiv
     U D_{C} U^{\top}
 \end{align*}
+\majornote{rg\_kernel\_normalisation.tex}
 and consequently
 \begin{align*}
     \tilde B_q 
@@ -249,9 +253,10 @@ Thus we have diagonalised the problem
     &&
     D_{B,q} = \frac{\lambda_q}{k_1} D_C^{-2} S_Y^2 - g^2 I_P,
     &&
-    D_C = \sum_q \lambda_q D_q + \frac{1}{k_1 \kappa} I_P
+    D_C = \major{\frac1N} \sum_q \lambda_q D_q + \frac{1}{k_1 \kappa} I_P
 \end{align*}
 \fixnote{The $1/m$ of $\mathbb X$ in $D_{A,q}$, restored as above.}
+\majornote{rg\_kernel\_normalisation.tex}
 Let us denote by $d_q$ an element on the diagonal of $D_q$; by $a_q$ and $b_q$ elements on the diagonals of $D_{A,q}$ and $D_{B,q}$, respectively; and by $c$ an element on the diagonal of $D_C$. We define
 \begin{align*}
     \hat s_X^2 = \fix{\frac{k_0 s_X^2}{m}}

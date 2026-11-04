@@ -1,0 +1,109 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+\newcommand{\R}{\mathbb R}
+\newcommand{\E}{\mathbb E}
+\title{The missing $1/N$ in the hidden-layer kernel $C$\\(Section 2, linear one-hidden-layer case)}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\section{Problem}
+In Section~2 the hidden-layer kernel of the one-hidden-layer linear network is written
+\begin{equation}
+  \Phi^{\mu,\nu}_{\alpha,\beta} = k_1 \delta_{\alpha,\beta}\, C^{\mu,\nu},
+  \qquad
+  C^{\mu,\nu} = \big\langle \phi^\mu_i K_{i,j} \phi^\nu_j \big\rangle
+  \quad\text{(sum over } i,j = 1,\dots,N\text{)},
+  \label{eq:C-as-written}
+\end{equation}
+and consequently $C = \sum_q \lambda_q \Sigma_q$ and $D_C = \sum_q \lambda_q D_q + \delta I_P$.
+The definition of the kernels in Section~1 (equation \texttt{eq:kernel-def}) is
+\begin{equation}
+  \Phi^{(l)\mu,\nu}_{i,j} = \frac1N \sum_{a,b=1}^N \phi^{(l)\mu}_a K^{(l)}_{i,a,j,b}\, \phi^{(l)\nu}_b ,
+\end{equation}
+so the correct hidden-layer kernel carries a factor $1/N$:
+\begin{equation}
+  C^{\mu,\nu} = \frac1N \sum_{i,j} K_{i,j} \big\langle \phi^\mu_i \phi^\nu_j \big\rangle
+  = \frac1N \sum_q \lambda_q \Sigma^{\mu,\nu}_q ,
+  \qquad
+  D_C = \frac1N \sum_q \lambda_q D_q + \delta I_P ,
+  \qquad \delta = \frac{1}{k_1\kappa}.
+  \label{eq:C-correct}
+\end{equation}
+
+\section{Derivation from first principles}
+The $1/N$ is not a convention that can be chosen freely; it follows from the network.
+The readout is $f^\mu_\alpha = N^{-1}\sum_j W^{(1)}_{\alpha,j}\phi^\mu_j$ (mean-field scaling, $\sigma^{(L)} = N$), with Gaussian prior
+$\E[W_{\alpha,i} W_{\beta,j}] = K^{(1)}_{\alpha,i,\beta,j} = k_1 \delta_{\alpha,\beta} K_{i,j}$.
+Integrating out $W^{(1)}$ against the source $\frac{i}{N}\hat f^\mu_\alpha \phi^\mu_i$ gives
+\begin{equation}
+  \exp\Big(-\frac{1}{2N^2}\,\hat f^\mu_\alpha \phi^\mu_i K^{(1)}_{\alpha,i,\beta,j}\phi^\nu_j \hat f^\nu_\beta\Big)
+  = \exp\Big(-\frac{1}{2N}\,\hat f^\mu_\alpha \Phi^{\mu,\nu}_{\alpha,\beta}\hat f^\nu_\beta\Big),
+  \qquad
+  \Phi = \frac1N\, \phi K^{(1)} \phi ,
+\end{equation}
+and it is precisely this $\Phi$ (with its $1/N$) that appears in the output term
+$-\frac N2\, y\,(\Phi + \kappa^{-1}I)^{-1} y$ of the action after integrating out $\hat f$ and $f$.
+The constraint is imposed by
+$\int \mathcal D\hat\Phi\, \exp\{-\tfrac{iN}{2}\hat\Phi\,[\Phi - \tfrac1N \phi K^{(1)}\phi]\}$, so the stationarity condition in $\hat\Phi$ is
+\begin{equation}
+  \Phi^{\mu,\nu}_{\alpha,\beta} = \frac1N \big\langle \phi^\mu_i K^{(1)}_{\alpha,i,\beta,j}\phi^\nu_j\big\rangle
+  = k_1\delta_{\alpha,\beta}\,\frac1N \sum_{i,j}K_{i,j}\langle\phi^\mu_i\phi^\nu_j\rangle .
+\end{equation}
+The $N$ in the constraint and the $1/N$ in the kernel cancel in the \emph{single-site} tilt
+($\frac{i}{2}\phi\,\hat\Phi K^{(1)}\phi$), which is why the tilt $B K$ in Section~2 is correctly written without an $N$;
+but they do \emph{not} cancel in the self-consistency for $C$.
+In the Fourier basis, with $\langle \phi^\mu_i\phi^\nu_j\rangle = \sum_q F_{i,q}\Sigma_q^{\mu,\nu}F^*_{j,q}$ and $F$ unitary,
+$\sum_{i,j}K_{i,j}\langle\phi_i\phi_j\rangle = \operatorname{tr}(K F\Sigma F^\dagger) = \sum_q\lambda_q\Sigma_q$, which gives \eqref{eq:C-correct}.
+
+The factor cannot be absorbed into $k_1$ alone. Write $C' = \sum_q\lambda_q\Sigma_q = NC$ for the uncorrected kernel. Then
+$\tilde C' = C' + \frac{1}{k_1\kappa} = N\big(C + \frac{1}{Nk_1\kappa}\big)$ and
+$B' = \frac{1}{k_1}\tilde C'^{-1}YY^\top\tilde C'^{-1} = \frac{1}{N^2k_1}\big(C+\frac{1}{Nk_1\kappa}\big)^{-1}YY^\top\big(C+\frac{1}{Nk_1\kappa}\big)^{-1}$.
+This is the correct system only after the two substitutions $k_1 \to Nk_1$ \emph{and} $YY^\top \to YY^\top/N$.
+So the uncorrected equations describe a network whose readout prior is $N$ times larger and whose targets are $\sqrt N$ times smaller than the ones actually specified.
+It cannot be absorbed into $K$ either, because the same $K$ appears in the input kernel $\mathbb X$ through $K^{(0),\text{post}} = K$.
+
+\section{Consequences}
+\paragraph{Large-$N$ scaling.}
+The eigenvalues $\lambda_q$ of a translation-invariant kernel of fixed range are $O(1)$, and there are $N$ of them.
+\begin{itemize}
+  \item With the $1/N$, $C$ is the spectral \emph{average} $\frac1N\sum_q \lambda_q \Sigma_q$, which is $O(1)$ and has a continuum limit
+  $\frac1N\sum_q \to \int_{\mathrm{BZ}} \frac{\mathrm d^d q}{(2\pi)^d}$ (lattice units) as $N\to\infty$ at fixed lattice spacing.
+  The diagonal element $c$ of $D_C$ is $O(1)$ and the target tilt $b_q \propto \lambda_q \hat s_Y^2 / c^2$ stays finite: the hidden layer learns.
+  \item Without it, $c = \sum_q \lambda_q d_q + \delta = O(N)$. Then $b_q \to 0$ as $N\to\infty$, $d_q \to a_q$ (the prior covariance), and the self-consistency degenerates to $c \simeq \sum_q \lambda_q a_q$: the representation reverts to the prior and all feature learning disappears in the thermodynamic limit, unless $\hat s_Y^2$ is made to grow with $N$.
+\end{itemize}
+So the missing factor changes the qualitative large-$N$ behaviour of \texttt{eq:linear-soln}, not only a constant.
+
+\paragraph{The implicit solution.}
+Combining \eqref{eq:C-correct} with the corrected diagonal element of $D_{B,q}$ (it is $\lambda_q\hat s_Y^2/c^2$, not $\lambda_q\hat s_Y^2/c$; see the companion note \texttt{rg\_diagonal\_reduction.tex}), one has per data mode
+\begin{equation}
+  d_q = \frac{c^2 h_q/\lambda_q}{c^2 - \hat s_Y^2 h_q},
+  \qquad
+  c = \frac1N\sum_q \lambda_q d_q + \delta ,
+\end{equation}
+and hence the corrected form of \texttt{eq:linear-soln},
+\begin{equation}
+  1 - \frac{\delta}{c} = \frac{c}{N}\sum_q \frac{h_q}{c^2 - \hat s_Y^2 h_q},
+  \qquad
+  h_q = \frac{\lambda_q(\lambda_q\hat s_X^2 + \sigma^2)}{1 + g^2(\lambda_q \hat s_X^2 + \sigma^2)},
+  \qquad
+  \hat s_X^2 = \frac{k_0 s_X^2}{m},\ \hat s_Y^2 = \frac{s_Y^2}{k_1}.
+  \label{eq:linear-soln-corrected}
+\end{equation}
+In the continuum limit the right-hand side becomes $c\int_{\mathrm{BZ}}\frac{\mathrm d^dq}{(2\pi)^d}\,\frac{h(q)}{c^2-\hat s_Y^2 h(q)}$.
+
+\paragraph{Check.}
+For a ring of $N=12$ sites with a Gaussian circulant $K$, $P=4$, commuting data kernels
+($X = ZW_X^\top$, $Y=ZW_Y^\top$) and generic $k_0,k_1,\sigma^2,g^2,\delta$, iterating the full $NP\times NP$ fixed point
+$C \mapsto \frac1N\sum_{i,j}K_{i,j}\langle\phi_i\phi_j\rangle$ and diagonalising $C+\delta I$ reproduces the roots of
+\eqref{eq:linear-soln-corrected} to machine precision; the equation as originally written in Section~2 gives roots a factor of $4$ to $5$ too large at the same parameters.
+
+\section{Recommended fix}
+Insert the $1/N$ in the definitions of $\Phi$ and $C$, in $C = \frac1N\sum_q\lambda_q\Sigma_q$, in $\tilde C$, in $D_C$ and in the self-consistency for $c$ (all marked in red in Section~2), and use \eqref{eq:linear-soln-corrected}.
+Any analysis built on \texttt{eq:linear-soln}, in particular the limiting-case analysis and the continuum-limit translation, should start from \eqref{eq:linear-soln-corrected}, where $\frac1N\sum_q$ is the natural spectral average.
+\end{document}
