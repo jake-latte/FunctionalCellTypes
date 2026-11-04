@@ -334,7 +334,7 @@ def report_instance(inst, p):
     angles = np.degrees(np.arccos(np.clip(np.abs(inst.U.T @ V_Y).max(axis=1), 0, 1)))
     print(f"relative commutator |[A, YY^T]| at eps=1   : {relative_commutator(inst.A, YY):.3f}")
     print(
-        f"angle (deg) of each eigenvector of A to the nearest eigenvector of YY^T at eps=1: {np.round(angles, 1)}"
+        f"angle (deg) of eigenvectors of A to nearest eigenvector of YY^T, eps=1: {np.round(angles, 1)}"
     )
 
 
