@@ -243,6 +243,15 @@ def section_b():
         c = solve_c(lam, k * sX2 / M_IN, sY2 / k, 0.0, 0.0, 1 / (k * KAPPA))
         tau = (sY2 / k) * h_of(lam, k * sX2 / M_IN, 0.0, 0.0).max() / c**2
         print(f"    k = {k:6.2f}: c = {c:9.4f}, tau = {tau:.4f}")
+    # B5: sigma = g = 0 reduces to 1 - Delta/x = Theta (x/N) sum ell_q^2/(x^2 - ell_q^2), x = c/c*,
+    # ell_q = lam_q/lam_0, Theta = lam_0 sX/sY, Delta = delta/c*, c* = lam_0 sX sY; tau = 1/x^2.
+    sx2, sy2, delta = 3.0, 0.5, 2.0
+    c_star, ell = lam[0] * np.sqrt(sx2 * sy2), lam / lam[0]
+    theta, Delta = lam[0] * np.sqrt(sx2 / sy2), delta / c_star
+    x = bisect(lambda x: 1 - Delta / x - theta * np.mean(x * ell**2 / (x**2 - ell**2)), 1 + 1e-13, 1e9)
+    c_full = solve_c(lam, sx2, sy2, 0.0, 0.0, delta)
+    print(f"  reduced form (sigma = g = 0): Theta = {theta:.4f}, Delta = {Delta:.4f}: c* x = {c_star * x:.10f}, full solve c = {c_full:.10f}, "
+          f"tau = 1/x^2 = {1 / x**2:.6f} vs {sy2 * h_of(lam, sx2, 0, 0).max() / c_full**2:.6f}")
 
 
 # ============================================================ C: latent task
@@ -296,9 +305,13 @@ def section_d():
     lam_big = ring_spectrum(BIG_N, ELL)
     nu = np.fft.fftfreq(BIG_N)
     h_big = h_of(lam_big, BASE["sx2"], BASE["sig2"], BASE["g2"])
-    h_curv = 2 * (h_big[0] - h_big[1]) * BIG_N**2            # |h''(0)| in nu units
+    h_curv = 2 * (h_big[0] - h_big[1]) * BIG_N**2            # |h''(0)| in nu units, from the grid
+    alpha0 = lam_big[0] * BASE["sx2"] + BASE["sig2"]
+    dh_dlam = alpha0 / (1 + BASE["g2"] * alpha0) + lam_big[0] * BASE["sx2"] / (1 + BASE["g2"] * alpha0) ** 2
+    h_curv_closed = 4 * np.pi**2 * ELL**2 * lam_big[0] * dh_dlam  # |h''(0)| = 4 pi^2 ell^2 lam_0 h'(lam_0)
     a_inf = 2 * np.pi**2 * h_big[0] ** 3 / h_curv
-    print(f"  continuum N = {BIG_N}: a_inf = {a_inf:.3f}, predicted sY nu_c = {2 * np.pi * h_big[0] ** 1.5 / h_curv:.4f}")
+    print(f"  continuum N = {BIG_N}: |h''(0)| = {h_curv:.2f} (closed form {h_curv_closed:.2f}), a_inf = {a_inf:.3f}, "
+          f"predicted sY nu_c = {2 * np.pi * h_big[0] ** 1.5 / h_curv:.4f}")
     for sy in SY_CONTINUUM:
         c = solve_c(lam_big, BASE["sx2"], sy**2, BASE["sig2"], BASE["g2"], BASE["delta"])
         amp = c**2 / (c**2 - sy**2 * h_big)
@@ -331,7 +344,27 @@ def section_e():
             share0 = d[0] / d.sum()
             print(f"    mode {mode}: hat sX2 = {a:8.2f}, hat sY2 = {b:8.2f}, rho = lam_0 sX2/sig2 = {lam[0] * a / sig2:9.1f}, "
                   f"gamma = g2 lam_0 sX2 = {g2 * lam[0] * a:8.2f}, tau = {tau:.3f}, half-power |q| = {half:2.0f}, "
-                  f"q=0 share = {share0:.3f}, d_0/sigma_0^2 = {d[0] / floor:9.2f}")
+                  f"q=0 share = {share0:.3f}, d_0/sigma_0^2 = {d[0] / floor:9.2f}, R(1)/R(0) = {autocorr_lag1(d):.3f}")
+    # P3 sweep: the q = 0 share of the mean direction rises with beta while the contrast modes stay put.
+    ell, k0, k1, sig2, g2, beta = PREDICTIONS["P3 target condensation"]
+    lam = ring_spectrum(PRED_N, ell)
+    print(f"  P3 beta sweep at sig2 = {sig2}, g2 = {g2}: q = 0 share (mode 1, mode 2)")
+    for beta_sweep in (0.25, 1.0, 2.0, 5.0, 10.0):
+        sx2, sy2, delta = latent_modes(PRED_P, PRED_K, PRED_A, PRED_M, k0, k1, PRED_NOUT, beta_sweep)
+        shares = [spectrum_d(lam, a, b, sig2, g2, delta)[1] for a, b in zip(sx2[:2], sy2[:2])]
+        print(f"    beta = {beta_sweep:5.2f}: " + ", ".join(f"{d[0] / d.sum():.3f}" for d in shares))
+    # P8: common prior scale k0 = k1 = k at the P3 temperature: the q = 0 share of mode 1 is non-monotone in k.
+    print(f"  P8 common k sweep at sig2 = {sig2}, g2 = {g2}, beta = {beta}: q = 0 share (mode 1, mode 2)")
+    for k in (0.01, 0.1, 1.0, 10.0, 100.0):
+        sx2, sy2, delta = latent_modes(PRED_P, PRED_K, PRED_A, PRED_M, k, k, PRED_NOUT, beta)
+        shares = [spectrum_d(lam, a, b, sig2, g2, delta)[1] for a, b in zip(sx2[:2], sy2[:2])]
+        print(f"    k = {k:6.2f}: " + ", ".join(f"{d[0] / d.sum():.3f}" for d in shares))
+
+
+def autocorr_lag1(d):
+    """R(1)/R(0) of the tuning map whose power spectrum is d_q (DFT order)."""
+    R = np.fft.ifft(d).real
+    return R[1] / R[0]
 
 
 # ============================================================ F: figure
