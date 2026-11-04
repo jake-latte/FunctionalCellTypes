@@ -56,3 +56,20 @@
 \newcommand{\eqdef}{\eqqcolon}
 \newcommand{\st}{\text{ s.t. }}
 \newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+% --- Editing marks ----------------------------------------------------------
+% Three colours mark proofreading corrections, by severity:
+%   green  (\typo)              trivial typo; the coloured text is the correction.
+%   orange (\fix, \fixnote)     a real but non-load-bearing mistake; \fix marks the
+%                               corrected text and a nearby \fixnote explains it.
+%   red    (\major, \majornote) a load-bearing or conceptual mistake; \majornote
+%                               points to the file under latex/notes/ discussing it.
+% \textcolor works in both text and math mode, so all five do too.
+\colorlet{typocolor}{green!50!black}
+\colorlet{fixcolor}{orange!90!black}
+\colorlet{majorcolor}{red!80!black}
+\newcommand{\typo}[1]{\textcolor{typocolor}{#1}}        % trivial typo, corrected text
+\newcommand{\fix}[1]{\textcolor{fixcolor}{#1}}          % non-trivial, non-load-bearing correction
+\newcommand{\fixnote}[1]{\textcolor{fixcolor}{\textit{[#1]}}}   % orange comment placed near a \fix
+\newcommand{\major}[1]{\textcolor{majorcolor}{#1}}      % load-bearing / conceptual correction
+\newcommand{\majornote}[1]{\textcolor{majorcolor}{\textit{[See note: #1]}}} % pointer to a file in latex/notes

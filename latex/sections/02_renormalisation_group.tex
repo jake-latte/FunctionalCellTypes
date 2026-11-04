@@ -18,11 +18,11 @@ Eventually we will use the Renormalisation Group to attempt to handle this thing
 \subsection{Linear Activation, One Hidden Layer}
 We begin by making some simplifying assumptions for the spatial kernels:
 \begin{align*}
-    K^{(0), \text{post}} = K^{(1), \text{pre}} \equiv K, 
+    K^{(0),\text{post}} = K^{(1),\text{pre}} \equiv K, 
     &&
-    K^{(0), \text{pre}} = k_0 I,
+    K^{(0),\text{pre}} = k_0 I,
     &&
-    K^{(1), \text{post}} = k_1 I,
+    K^{(1),\text{post}} = k_1 I,
     &&
     G = g^2 I
 \end{align*}
@@ -31,16 +31,16 @@ and studying the simplest possible case, where we have only one hidden layer. Re
     & \mathbb X \equiv \Phi^{(0)},
     \qquad
         \mathbb X^{\mu,\nu}_{i,j} = 
-            K^{(0), \text{post}}_{i,j} 
-            x^{\mu}_a K^{(0), \text{pre}}_{a,b} x^{\nu}_b
+            K^{(0),\text{post}}_{i,j} 
+            x^{\mu}_a K^{(0),\text{pre}}_{a,b} x^{\nu}_b
         = k_0 x^{\mu}_a x^{\nu}_a K_{i,j}
     \\
     & \Phi \equiv \Phi^{(1)},
     \qquad
         \Phi^{\mu,\nu}_{\alpha, \beta} =
-            K^{(1), \text{post}}_{\alpha,\beta}
+            K^{(1),\text{post}}_{\alpha,\beta}
             \left\langle
-                \phi^{\mu}_i K^{(1), \text{pre}}_{i,j} \phi^{\nu}_j
+                \phi^{\mu}_i K^{(1),\text{pre}}_{i,j} \phi^{\nu}_j
             \right\rangle
         = k_1 \delta_{\alpha,\beta} \underbrace{ \left \langle \phi^{\mu}_i K_{i,j} \phi^{\nu}_j \right \rangle }_{C^{\mu,\nu}}
 \end{align*}
@@ -68,7 +68,7 @@ In the path integral, this $\hat \Phi^{\mu,\nu}_{\alpha,\beta}$ term is contract
 \begin{align*}
     B^{\mu,\nu}
     \equiv
-    K^{(1), \text{post}}_{\alpha,\beta} \hat \Phi^{\mu,\nu}_{\alpha,\beta}
+    K^{(1),\text{post}}_{\alpha,\beta} \hat \Phi^{\mu,\nu}_{\alpha,\beta}
     =
     k^{-1}_1 \delta_{\alpha,\beta} [(\tilde C)^{-1}]^{\mu,m} \delta_{\alpha,a} y^m_a y^n_b \delta_{b, \beta} [(\tilde C^{-1})]^{n,\nu}
     =
@@ -93,7 +93,7 @@ The exponent in the path integral features a kernel of the form
 \end{align*}
 We can diagonalise this in space by choosing a basis for $K$; in this case, we will use the Fourier basis (tantamount to assuming translation invariance and periodic boundaries in the $i,j$ index). We denote by $F_{i,q}$ the discrete Fourier transform matrix with plane waves of frequency $q$ in the columns, such that $K = F \Lambda F^{*}$. We can therefore write the kernel as
 \begin{align*}
-    A^{\mu,\nu} \underbrace{ F_{i,q} \lambda_{q} F^*_{j,q} }_{K_{ij}} + \sigma_2 \delta^{\mu,\nu} \underbrace{ F_{i,q} F^*_{j,q} }_{\delta_{i,j}}
+    A^{\mu,\nu} \underbrace{ F_{i,q} \lambda_{q} F^*_{j,q} }_{K_{i,j}} + \sigma_2 \delta^{\mu,\nu} \underbrace{ F_{i,q} F^*_{j,q} }_{\delta_{i,j}}
     =
     F_{i,q} ( \lambda_{q} A^{\mu,\nu} + \sigma^2 \delta^{\mu,\nu}) F_{j,q}
 \end{align*}
@@ -109,7 +109,7 @@ where $\lambda_q$ are the eigenvalues of $K$. This allows us to complete the inv
 \end{align*}
 Similarly, we can diagonalise
 \begin{align*}
-    \hat \Phi^{\mu,\nu}_{\alpha,\beta} K^{(1), \text{post}}_{\alpha,\beta} K^{(1), \text{pre}}_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
+    \hat \Phi^{\mu,\nu}_{\alpha,\beta} K^{(1),\text{post}}_{\alpha,\beta} K^{(1),\text{pre}}_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
     =
     B^{\mu,\nu} K_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
     =
@@ -176,7 +176,7 @@ Consider firstly the $C$ kernel lurking inside the $B$ term:
 \end{align*}
 where the $\sum_q \lambda_q$ appeared from
 \begin{align*}
-    \sum_{i,j,q'} K_{ij} F_{i,q} \delta_{q,-q'} F_{j,q'} 
+    \sum_{i,j,q'} K_{i,j} F_{i,q} \delta_{q,-q'} F_{j,q'} 
     =
     \sum_{i,j} K_{i,j} F_{i,q} F^*_{j,q}
     =

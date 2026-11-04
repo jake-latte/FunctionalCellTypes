@@ -6,16 +6,16 @@
 
 \subsection{Network}
 
-We study a feedforward network with $L$ hidden layers whose preactivations are denoted by $\{ h^l_{\mu,i} \}$, and whose outputs are denoted by $\{ f^{\mu}_\alpha \}$. To each neuron with index $i$ we associate a position in space given by $\mathbf{x}_i \in \mathbb{R}^d$. We will say more about the nature of this embedding later. Similarly, to each input index $a \in 1, \dots, m$ and output index $\alpha \in 1, \dots, n$, we associate a location in space, $\mathbf{x}_a$ and $\mathbf{x}_{\alpha}$, respectively.
+We study a feedforward network with $L$ hidden layers whose preactivations are denoted by $\{ h^{(l)\mu}_{i} \}$, and whose outputs are denoted by $\{ f^{\mu}_\alpha \}$. To each neuron with index $i$ we associate a position in space given by $\mathbf{x}_i \in \mathbb{R}^d$. We will say more about the nature of this embedding later. Similarly, to each input index $a \in 1, \dots, m$ and output index $\alpha \in 1, \dots, n$, we associate a location in space, $\mathbf{x}_a$ and $\mathbf{x}_{\alpha}$, respectively.
 \begin{align}
-  h^{(1)}_{\mu,i} =
-    \frac{1}{\sqrt{m}} \sum_{d=1}^{m} W^{(0)}_{ia} x^{\mu}_a + \eta^{\mu}_i, \hfill
+  h^{(1)\mu}_{i} =
+    \frac{1}{\sqrt{m}} \sum_{d=1}^{m} W^{(0)}_{i,a} x^{\mu}_a + \eta^{\mu}_i, \hfill
   &&
-  h^{(l+1)}_{\mu,i} = 
-    \frac{1}{\sqrt{N}} \sum_{i=1}^N W^{(l)}_{ij} \phi(h^{(l)}_{\mu,j}), \hfill 
+  h^{(l+1)\mu}_{i} = 
+    \frac{1}{\sqrt{N}} \sum_{i=1}^N W^{(l)}_{i,j} \phi(h^{(l)\mu}_{j}), \hfill 
   &&
   f^{\mu}_{\alpha} =
-    \frac{1}{N} \sum_{i=1}^{N} W^L_{dj} \phi(h^{(L)}_{\mu,j})
+    \frac{1}{N} \sum_{i=1}^{N} W^{(L)}_{d,j} \phi(h^{(L)\mu}_{j})
   \label{eq:ff-network}
 \end{align}
 where $\eta$ is Gaussian noise, $\eta \sim \mathcal{N}(0, \sigma^2)$ (which we introduce to ensure positive-definiteness later on). We assume the network has trained to convergence under SGLD:
@@ -29,7 +29,7 @@ where $\eta$ is Gaussian noise, $\eta \sim \mathcal{N}(0, \sigma^2)$ (which we i
   \\
   \partial_s \Theta(s) &=
     -\nabla \mathcal{L}(\Theta(s))  + \sqrt{\frac{2}{\beta}} \eta(s),
-  \quad \langle \eta_i(s) \eta_j(s') \rangle = \delta(s - s') \delta_{ij}
+  \quad \langle \eta_i(s) \eta_j(s') \rangle = \delta(s - s') \delta_{i,j}
 \end{align*}
 Such that we have the equilibrium distribution over parameters given by
 \begin{align}
@@ -38,7 +38,7 @@ Such that we have the equilibrium distribution over parameters given by
 The $\mathcal{P}$ terms are regularisers which enact the spatial embedding:
 \begin{align}
   \mathcal{P}_{\text{weight}} &=
-    \frac12 \sum_{l=0}^{L} \sum_{i,j=1}^\text{Post(l)} \sum_{a,b=1}^{\text{Pre}(l)} W^{(l)}_{i,a} M^{(l)}_{(i,a),(j,b)} W^l_{j,b} \label{eq:prior-weights}
+    \frac12 \sum_{l=0}^{L} \sum_{i,j=1}^\text{Post(l)} \sum_{a,b=1}^{\text{Pre}(l)} W^{(l)}_{i,a} M^{(l)}_{i,a,j,b} W^{(l)}_{j,b} \label{eq:prior-weights}
 \end{align}
 with 
 \begin{align*}
@@ -53,11 +53,11 @@ with
   \end{cases}
 \end{align*}
 
-$K \equiv M^{-1}$ encodes the prior spatial covariance in synapse strengths: a synapse is defined by its pre-synaptic neuron (at location $\mathbf{x}_a$) and its post-synaptic location (at location $\mathbf{x}_i$) and has correlation with other synapses located by the tuple $(j,b)$; $\mathbb{E}[W_{i,a} W_{j,b}] = K_{(i,a),(j,b)}$. We recover the standard case of $L_2$ regularisation when $K = M = I$, which simply says that our prior is that all synapses are uncorrelated. We can achieve spatial interactions within layers, but not across, by choosing a more general factorisation $K^{(l)}_{(i,a),(j,b)} = K^{(l),\text{post}}_{i,j} K^{(l),\text{pre}}_{a,b}$.
+$K \equiv M^{-1}$ encodes the prior spatial covariance in synapse strengths: a synapse is defined by its pre-synaptic neuron (at location $\mathbf{x}_a$) and its post-synaptic location (at location $\mathbf{x}_i$) and has correlation with other synapses located by the tuple $(j,b)$; $\mathbb{E}[W_{i,a} W_{j,b}] = K_{i,a,j,b}$. We recover the standard case of $L_2$ regularisation when $K = M = I$, which simply says that our prior is that all synapses are uncorrelated. We can achieve spatial interactions within layers, but not across, by choosing a more general factorisation $K^{(l)}_{i,a,j,b} = K^{(l),\text{post}}_{i,j} K^{(l),\text{pre}}_{a,b}$.
 Similarly, though we could choose a more general term for the firing rate regularisation, we will stick with the one that allows only within-layer interactions:
 \begin{align*}
   \mathcal{P}_{\text{rates}} = 
-    \frac12 \sum_{l=1}^{L} \sum_{\mu=1}^P \sum_{i,j=1}^N \phi^{(l)}_{\mu,i} G^{(l)}_{i,j} \phi^{(l)}_{\mu,j}
+    \frac12 \sum_{l=1}^{L} \sum_{\mu=1}^P \sum_{i,j=1}^N \phi^{(l)\mu}_{i} G^{(l)}_{i,j} \phi^{(l)\mu}_{j}
 \end{align*}
 
 \subsection{Partition Function}
@@ -67,27 +67,27 @@ We then turn our focus to the partition function of \eqref{eq:theta-distr}:
   \mathcal Z &=
     \int \mathcal{D} \Theta \mathcal{D} \xi \mathcal{D} \hat \xi
     \exp \Bigg \{
-      -i \hat \xi^l_{\mu,i} \left[
-        \xi^l_{\mu,i} - \frac{1}{\sigma_l} W^{l-1}_{i,a} \varphi^{l-1}_{\mu,a} 
+      -i \hat \xi^{(l)\mu}_{i} \left[
+        \xi^{(l)\mu}_{i} - \frac{1}{\sigma^{(l)}} W^{(l-1)}_{i,a} \varphi^{(l-1)\mu}_{a} 
       \right]
       - \frac{\beta N}{2 P n} ( f^{\mu}_{\alpha} - y^{\mu}_{\alpha})^2
-      - \mathcal{P}_{\text{weights}}(\Theta)
+      - \mathcal{P}_{\text{weight}}(\Theta)
       - \mathcal{P}_{\text{rates}}(\Phi)
     \Bigg \} 
 \end{align*}
 where for brevity we have introduced
 \begin{align*}
-  \xi^l_{\mu,i} = \begin{cases}
-    h^l_{\mu,i} & l \in 1, \dots, L \\
+  \xi^{(l)\mu}_{i} = \begin{cases}
+    h^{(l)\mu}_{i} & l \in 1, \dots, L \\
     f^{\mu}_i   & l = L+1
   \end{cases}
 &&
-  \varphi^l_{\mu,i} = \begin{cases}
+  \varphi^{(l)\mu}_{i} = \begin{cases}
     x^{\mu}_i         & l =0 \\
-    \phi(h^l_{\mu,i}) & l \in 1, \dots, L
+    \phi(h^{(l)\mu}_{i}) & l \in 1, \dots, L
   \end{cases}
 && 
-  \sigma_l = \begin{cases}
+  \sigma^{(l)} = \begin{cases}
     \sqrt{m} & l = 0 \\
     N        & l = L \\
     \sqrt{N} & \text{otherwise}
@@ -97,14 +97,14 @@ where for brevity we have introduced
 We begin with the integral over $\Theta$, in effect averaging over the prior \eqref{eq:prior-weights}.
 \begin{align*}
   & \int \mathcal D \Theta \exp \left(
-    -\frac12 W^l_{i,a} M^l_{i,a,j,b} W^l_{j,b}
-    + W^l_{i,a} \left[
-      \frac{i}{\sigma_l} \hat \xi^{l+1}_{\mu,i} \varphi^{l}_{\mu,a}
+    -\frac12 W^{(l)}_{i,a} M^{(l)}_{i,a,j,b} W^{(l)}_{j,b}
+    + W^{(l)}_{i,a} \left[
+      \frac{i}{\sigma^{(l)}} \hat \xi^{(l+1)\mu}_{i} \varphi^{(l)\mu}_{a}
     \right]
   \right) 
   \propto 
   \exp \left(
-    -\frac1{\sigma_l^2} \hat \xi^{l+1}_{\mu,i} \varphi^l_{\mu,a} K^l_{i,a,j,b} \varphi^l_{\nu,b} \hat \xi^{l+1}_{\nu,j}
+    -\frac1{(\sigma^{(l)})^2} \hat \xi^{(l+1)\mu}_{i} \varphi^{(l)\mu}_{a} K^{(l)}_{i,a,j,b} \varphi^{(l)\nu}_{b} \hat \xi^{(l+1)\nu}_{j}
   \right)
 \end{align*}
 
@@ -114,7 +114,7 @@ We introduce the kernels
     = \frac1m \sum_{a,b=1}^m x^{\mu}_a K^{(0)}_{i,a,j,b} x^{\nu}_b
   && \text{and} &&
   \Phi^{(l)\mu,\nu}_{i,j} =
-    \frac1N \sum_{a,b=1}^N \phi^{(l)}_{\mu,a} K^{(l)}_{i,a,j,b} \phi^{(l)}_{\nu,b},
+    \frac1N \sum_{a,b=1}^N \phi^{(l)\mu}_{a} K^{(l)}_{i,a,j,b} \phi^{(l)\nu}_{b},
     \quad \forall \ 1 \leq l \leq L
   \label{eq:kernel-def}
 \end{align}
@@ -123,12 +123,12 @@ which leaves us with the factor
 \begin{align*}
   \exp \left( 
     -\frac12 \sum_{l=1}^{L}
-      \hat h^{(l)}_{\mu,i} \Phi^{(l-1) \mu,\nu}_{i,j} \hat h^{(l)}_{\nu,j}
+      \hat h^{(l)\mu}_{i} \Phi^{(l-1)\mu,\nu}_{i,j} \hat h^{(l)\nu}_{j}
     - \frac{1}{2N} 
-      \hat f^{\mu}_{\alpha} \Phi^{(L) \mu,\nu}_{\alpha,\beta} \hat f^{\nu}_{\beta}
+      \hat f^{\mu}_{\alpha} \Phi^{(L)\mu,\nu}_{\alpha,\beta} \hat f^{\nu}_{\beta}
   \right)
 \end{align*}
-Note that, unlike the $\Phi^{(l)}$ kernels we are familiar with, \eqref{eq:kernel-def} introduces two additional degrees of freedom above the usual $\mu,\nu$; these are the $i,j$ indices, which take on values in $1, \dots, \text{Post}(l)$. Let's take a second to examine how this changes the semantics of the $\Phi^{(l)}$ kernels. Suppose we choose a factorisation of $K$ as discussed above, $K_{i,a,j,b} = K^{(\text{post})}_{i,j} K^{(\text{pre})}_{a,b}$, and additionally, choose it to be diagonalisable in the basis $V$,  $K^{\text{pre}} = V \Lambda^{(\text{pre})} V^{*}$. If we now project our firing rates into this basis, $\tilde \phi_{\mu} = V^* \phi_{\mu}$, we have
+Note that, unlike the $\Phi^{(l)}$ kernels we are familiar with, \eqref{eq:kernel-def} introduces two additional degrees of freedom above the usual $\mu,\nu$; these are the $i,j$ indices, which take on values in $1, \dots, \text{Post}(l)$. Let's take a second to examine how this changes the semantics of the $\Phi^{(l)}$ kernels. Suppose we choose a factorisation of $K$ as discussed above, $K_{i,a,j,b} = K^{(\text{post})}_{i,j} K^{(\text{pre})}_{a,b}$, and additionally, choose it to be diagonalisable in the basis $V$,  $K^{(\text{pre})} = V \Lambda^{(\text{pre})} V^{*}$. If we now project our firing rates into this basis, $\tilde \phi^{\mu} = V^* \phi^{\mu}$, we have
 \begin{align}
   \Phi^{\mu,\nu}_{i,j} = 
   K^{(\text{post})}_{i,j} 
@@ -148,7 +148,7 @@ To enforce these constraints, we multpily $\mathcal Z$ by unity:
   1 
   = \int \mathcal D \Phi \int \mathcal D \hat \Phi \exp \left(
     -i \frac{N}{2} \hat \Phi^{(l)\mu,\nu}_{i,j} \left[
-      \Phi^{(l)\mu,\nu}_{i,j} - \frac1N \sum_{a,b=1}^N \phi^{(l)}_{\mu,a} K^{(l)}_{i,a,j,b} \phi^{(l)}_{\nu,b}
+      \Phi^{(l)\mu,\nu}_{i,j} - \frac1N \sum_{a,b=1}^N \phi^{(l)\mu}_{a} K^{(l)}_{i,a,j,b} \phi^{(l)\nu}_{b}
     \right]
   \right) 
 \end{align*}
@@ -161,14 +161,14 @@ Returning to the path integral, we now integrate out $\hat f$
   \right)
   \propto 
   \exp \left(
-    -\frac{N}{2} f^{\mu}_{\alpha} [\Phi_{(L)}^{-1}]^{\mu,\nu}_{\alpha,\beta} f^{\nu}_{\beta}
+    -\frac{N}{2} f^{\mu}_{\alpha} \big([\Phi^{(L)}]^{-1}\big)^{\mu,\nu}_{\alpha,\beta} f^{\nu}_{\beta}
   \right)
 \end{align*}
 and subsequently $f$. For this we open up the quadaratic exponent $||F-Y||^2_2$ and define $\kappa = \frac{\beta}{Pn}$:
 \begin{align*}
   & \int \mathcal{D} f \exp \left(
     -\frac{N}{2} f^{\mu}_{\alpha} \left[
-      [\Phi_{(L)}^{-1}]^{\mu,\nu}_{\alpha,\beta} 
+      \big([\Phi^{(L)}]^{-1}\big)^{\mu,\nu}_{\alpha,\beta} 
       + \kappa \delta^{\mu,\nu} \delta_{\alpha,\beta}
     \right]
     f^{\nu}_{\beta}
@@ -179,7 +179,7 @@ and subsequently $f$. For this we open up the quadaratic exponent $||F-Y||^2_2$ 
   \exp \left(
     \frac{N \kappa^2}{2} y^{\mu}_{\alpha} \left[
       (
-        \Phi_{(L)}^{-1} 
+        [\Phi^{(L)}]^{-1} 
         + \kappa I
       )^{-1}
       - \frac{1}{\kappa} I
@@ -189,7 +189,7 @@ and subsequently $f$. For this we open up the quadaratic exponent $||F-Y||^2_2$ 
   =
   \exp \left(
     -\frac{N}{2} y^{\mu}_{\alpha} \left[
-      (\Phi_{(L)}
+      (\Phi^{(L)}
       + \kappa^{-1} I)^{-1}
     \right]^{\mu,\nu}_{\alpha,\beta} 
     y^{\nu}_{\beta}
@@ -210,9 +210,9 @@ The remaining partition function is then
     & \qquad \qquad
     \int \mathcal{D} h \mathcal{D} \hat h
     \exp \Bigg \{
-      - i \hat h^{(l)}_{\mu,i} h^{(l)}_{\mu,i} 
-      - \frac12 \hat h^{(l)}_{\mu,i} \Phi^{(l-1)\mu,\nu}_{i,j} \hat h^{(l)}_{\nu,j}
-      - \frac12 \phi^{(l)}_{\mu,i} \left( i \hat \Phi^{(l)\mu,\nu}_{\alpha,\beta} K^{(l)}_{\alpha,i,\beta,j} + G^{(l)}_{i,j} \delta^{\mu,\nu}  \right) \phi^{(l)}_{\nu,j}
+      - i \hat h^{(l)\mu}_{i} h^{(l)\mu}_{i} 
+      - \frac12 \hat h^{(l)\mu}_{i} \Phi^{(l-1)\mu,\nu}_{i,j} \hat h^{(l)\nu}_{j}
+      - \frac12 \phi^{(l)\mu}_{i} \left( i \hat \Phi^{(l)\mu,\nu}_{\alpha,\beta} K^{(l)}_{\alpha,i,\beta,j} + G^{(l)}_{i,j} \delta^{\mu,\nu}  \right) \phi^{(l)\nu}_{j}
     \Bigg \}
 \end{align*}
 
@@ -220,9 +220,9 @@ The remaining partition function is then
 
 Until now I have suppressed the $\eta$ that were introduced \eqref{eq:ff-network}. However, we can here take an expectation over them to get
 \begin{align}
-  \int \mathcal D \eta \exp \left(-\frac{1}{2\sigma^2} \eta^{\mu}_i [\delta^{\mu,\nu} \delta_{i,j}] \eta^{\nu}_i + i \eta^{\mu}_i \hat h^{(1), \mu}_i \right)
+  \int \mathcal D \eta \exp \left(-\frac{1}{2\sigma^2} \eta^{\mu}_i [\delta^{\mu,\nu} \delta_{i,j}] \eta^{\nu}_i + i \eta^{\mu}_i \hat h^{(1)\mu}_i \right)
   \propto
-  \exp \left(-\frac{\sigma^2}{2} [\hat h^{(1), \mu}_i]^2 \right)
+  \exp \left(-\frac{\sigma^2}{2} [\hat h^{(1)\mu}_i]^2 \right)
   \label{eq:single-site-reg}
 \end{align}
 This term will regularise the input covariance to the first hidden layer. In general, I will have my cake and eat it by generally considering the limit $\sigma \rightarrow 0^+$ and everything is nicely invertible, and so suppress it in the notation for the single-site below.
@@ -256,7 +256,7 @@ such that we can write
       -N \left[
       \frac12 y^{\mu}_{\alpha} \left[ (\Phi^{(L)} + \kappa^{-1} I )^{-1} \right]^{\mu,\nu}_{\alpha,\beta} y^{\nu}_{\beta}
       + \frac{i}{2} \hat \Phi^{(l)\mu,\nu}_{i,j} \Phi^{(l)\mu,\nu}_{i,j}
-      + \sum_{l=1}^L \mathcal F[\Phi^{l-1}, \hat \Phi^l]
+      + \sum_{l=1}^L \mathcal F[\Phi^{(l-1)}, \hat \Phi^{(l)}]
      \right]
     \Bigg \}
 \end{align*}
@@ -305,7 +305,7 @@ where have defined $\langle \cdot \rangle_{k}^{(l)}$ as the expectation over the
 \begin{align}
   \frac{\partial \mathcal S}{\partial \Phi^{(l)}} = 0
   \implies \hat \Phi^{(l)\mu,\nu}_{i,j} 
-  = \frac1N \sum_{k=1}^N \langle \hat h^{\mu}_i \hat h^{\nu}_j \rangle_{k, (l+1)}
+  = \frac1N \sum_{k=1}^N \langle \hat h^{\mu}_i \hat h^{\nu}_j \rangle_{k}^{(l+1)}
   = \frac1N \sum_{k=1}^N \left \langle
     \left. \frac{\partial h}{\partial \eta} \right|^{\mu}_i 
     \left. \frac{\partial h}{\partial \eta} \right|^{\nu}_j 
@@ -314,7 +314,7 @@ where have defined $\langle \cdot \rangle_{k}^{(l)}$ as the expectation over the
 \end{align}
 where $\eta$ is the input current to neuron $h$. Alternatively, using the form \eqref{eq:single-site} with $\hat h$ integrated out, we obtain
 \begin{align}
-  \hat \Phi^{(l)} = \Phi_{(l)}^{-1} \left( \frac1N \sum_{k=1}^N \langle h \otimes h \rangle_{k}^{(l+1)} \right) \Phi_{(l)}^{-1}
+  \hat \Phi^{(l)} = [\Phi^{(l)}]^{-1} \left( \frac1N \sum_{k=1}^N \langle h \otimes h \rangle_{k}^{(l+1)} \right) [\Phi^{(l)}]^{-1}
   \label{eq:backward-pass}
 \end{align}
 For $l=L$, $\Phi^{(L)}$ does not appear in any single site, only the tilting from the readout, giving us
@@ -336,16 +336,16 @@ The last element of the standard mean-field treatment is to find the distributio
 with moments
 \begin{align*}
   \mu^{\star}_{\alpha} & = 
-    \Phi^{(L) \star, \mu}_{\alpha, a} 
+    \Phi^{(L)\star,\mu}_{\alpha,a} 
     \left. (\Phi^{(L)} + \kappa^{-1} I) \right|^{\mu,\nu}_{a,b} 
     y^{\nu}_b
   \\ 
   \text{ and }
   \Sigma^{\star}_{\alpha,\beta} & =
-    \Phi^{(L), \star, \star}_{\alpha, \beta} 
-    - \Phi^{(L), \star, \mu}_{\alpha, a}
+    \Phi^{(L)\star,\star}_{\alpha,\beta} 
+    - \Phi^{(L)\star,\mu}_{\alpha,a}
     \left. (\Phi^{(L)} + \kappa^{-1} I) \right|^{\mu,\nu}_{a,b} 
-    \Phi^{(L), \nu, \star}_{a, \beta}
+    \Phi^{(L)\nu,\star}_{a,\beta}
 \end{align*}
 as $N \rightarrow \infty$, this concentrates at $\mathbf{\bar f}^{\star}$
 
