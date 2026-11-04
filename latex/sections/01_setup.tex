@@ -268,23 +268,26 @@ In general, we can construct the free energy density as follows:
 \begin{align*}
   \mathcal W[\Phi, \hat \Phi]
   &= 
+  \major{\int \mathcal{D} h}
   \prod_{i=1}^N
   \underbrace{
-    \int \mathcal{D} h \exp \Big \{
+    \major{\exp} \Big \{
       - \sum_{j=1}^N \frac12 h^{\mu}_i (\Phi^{-1})^{\mu,\nu}_{i,j} h^{\nu}_j 
-      - \frac12 \phi^{\mu}_i \left( i \hat \Phi^{\mu,\nu}_{\alpha,\beta} K_{\alpha,i,\beta,j} + G_{i,j} \delta^{\mu,\nu}  \right) \phi^{\nu}_j
+      \fix{{} + \frac12 \phi^{\mu}_i \left( i \hat \Phi^{\mu,\nu}_{\alpha,\beta} K_{\alpha,i,\beta,j} - G_{i,j} \delta^{\mu,\nu}  \right) \phi^{\nu}_j}
     \Big \}
-  }_{\mathcal W_i[\Phi, \hat \Phi]}
+  }_{\major{w_i[h]}}
 \end{align*}
-and we can see that $\mathcal F$ takes the form of an average over space.
+\fixnote{Same sign slip on the $i \hat \Phi K$ term as in the remaining partition function above; corrected to match \eqref{eq:single-site}.}
+\major{The integrand factorises over space, but the integral does not: each $w_i[h]$ depends on the preactivations $h_j$ of every site $j$ coupled to $i$ through $\Phi^{-1}$ or $K$, so $\mathcal W$ is not a product of single-neuron integrals and $\mathcal F$ is not an average of single-neuron free energies.}
 \begin{align*}
   -\mathcal F[\Phi, \hat \Phi] 
   =
   \frac1N \log \mathcal W[\Phi, \hat \Phi] 
   =
-  \frac1N \sum_{i=1}^N \log \mathcal W_i[\Phi, \hat \Phi]
+  \major{\frac1N \log \int \mathcal D h \prod_{i=1}^N w_i[h]}
 \end{align*}
-This is for now a conceptual \typo{aid}, rather than a genuine result: $\mathcal W_i$ still includes an extensive sum in its exponent, and so we have no reason to believe the spatial average is actually $O(1)$. More work will be required to find a convergent density.
+\major{A genuine average appears only after a change of basis that decouples the sites, e.g.\ over Fourier modes for a translation-invariant linear layer (Section~\ref{sec:rg}).}\majornote{\detokenize{setup_site_factorisation.tex}}
+This is for now a conceptual \typo{aid}, rather than a genuine result: $\major{w_i}$ still includes an extensive sum in its exponent, and so we have no reason to believe \major{$\mathcal F$} is actually $O(1)$. More work will be required to find a convergent density.
 
 \subsection{Saddle-Point}
 
@@ -296,15 +299,15 @@ As $N \rightarrow \infty$, we can approximate $\mathcal Z$ by the saddle-point m
       \left. (\Phi^{(L)} + \kappa^{-1} I )^{-1} \right|^{\mu,\nu}_{\alpha,\beta} y
     ^{\nu}_{\beta}
     + \frac{1}{2} \hat \Phi^{(l)\mu,\nu}_{i,j} \Phi^{(l)\mu,\nu}_{i,j}
-    - \frac1N \sum_{k=1}^N \log \mathcal W_k[\Phi^{(l-1)}, \hat \Phi^{(l)}] 
+    \major{{} - \frac1N \sum_{l=1}^L \log \mathcal W[\Phi^{(l-1)}, \hat \Phi^{(l)}]}
 \end{align*}
 we obtain the self-consistency relation
 \begin{align*}
   \frac{\partial \mathcal S}{\partial \hat \Phi^{(l)}} = 0
   \implies \Phi^{(l)\mu,\nu}_{i,j}
-    = \frac1N \sum_{k=1}^N \left \langle \phi^{\mu}_a K^{(l)}_{i,a,j,b} \phi^{\nu}_b \right \rangle_{k}^{(l)}
+    = \major{\frac1N \sum_{a,b=1}^N K^{(l)}_{i,a,j,b} \left \langle \phi^{\mu}_a \phi^{\nu}_b \right \rangle^{(l)}}
 \end{align*}
-where \typo{we} have defined $\langle \cdot \rangle_{k}^{(l)}$ as the expectation over the \typo{neuron} response distribution \eqref{eq:single-site} for layer $l$ (i.e. with input drive $\Phi^{(l-1)}$ and tilting $\hat \Phi^{(l)}$), conditioned on spatial position $k$. For the tilting we obtain for $l \in 1, \dots, L-1$.
+where \typo{we} have defined $\major{\langle \cdot \rangle^{(l)}}$ as the expectation over the \typo{neuron} response distribution \eqref{eq:single-site} for layer $l$ (i.e. with input drive $\Phi^{(l-1)}$ and tilting $\hat \Phi^{(l)}$), \major{taken jointly over all neurons of the layer, which are coupled}.\majornote{\detokenize{setup_site_factorisation.tex}} For the tilting we obtain for $l \in 1, \dots, L-1$.
 \begin{align}
   \frac{\partial \mathcal S}{\partial \Phi^{(l)}} = 0
   \implies \hat \Phi^{(l)\mu,\nu}_{i,j} 
