@@ -87,7 +87,7 @@ It is also convenient to define
 \begin{align*}
     A = \fix{\frac{k_0}{m}} X X^{\top}
 \end{align*}
-\fixnote{The $1/m$ of $\mathbb X$, restored as above.}
+\fixnote{$1/m$ of $\mathbb X$; see the note at its definition.}
 
 \paragraph{Diagonalising Space}
 
@@ -168,7 +168,7 @@ The goal now is to diagonalise
     &&
     \tilde B_q = \frac{\lambda_q}{k_1} \tilde C^{-1} Y Y^{\top} \tilde C^{-1} - g^2 I_P
 \end{align*}
-\fixnote{The $1/m$ of $\mathbb X$, restored as above.}
+\fixnote{$1/m$ of $\mathbb X$; see the note at its definition.}
 Consider firstly the $C$ kernel lurking inside the $B$ term:
 \begin{align*}
     C^{\mu,\nu}
@@ -201,7 +201,7 @@ We therefore make the ansatz
     \Sigma_q = U D_q U^{\top} \quad \forall q
 \end{align*}
 which is to say that all spatial frequencies express function using the same basis, $U$; the extent to which functional variation manifests on different spatial scales is captured by $D_q$.
-To make progress, we will also assume that this basis $U$ diagonalises the data kernels $XX^{\top}$ and $Y Y^{\top}$\fix{, which is possible only if $[XX^{\top}, YY^{\top}] = 0$ (as for $X = Z W_X^{\top}$, $Y = Z W_Y^{\top}$ with orthonormal columns in $W_X, W_Y$, where $XX^{\top} = YY^{\top} = ZZ^{\top}$); here $U \in \R^{P \times P}$ is orthogonal, $S_X \in \R^{P \times m}$ and $S_Y \in \R^{P \times n}$ are rectangular-diagonal, and $S_X^2 \equiv S_X S_X^{\top}$, $S_Y^2 \equiv S_Y S_Y^{\top}$}:
+To make progress, we will also assume that this basis $U$ diagonalises the data kernels $XX^{\top}$ and $Y Y^{\top}$\fix{, which is possible only if $[XX^{\top}, YY^{\top}] = 0$}:
 \begin{align*}
     X = U S_X V_X^{\top}
     \implies
@@ -211,7 +211,7 @@ To make progress, we will also assume that this basis $U$ diagonalises the data 
     \implies
     YY^{\top} = U S_Y^2 U^{\top}
 \end{align*}
-\fixnote{The ansatz was stated without the condition it needs: a common $U$ exists only when $XX^{\top}$ and $YY^{\top}$ commute, and $S_X$ is $P \times m$, not square. Under that condition the ansatz is self-consistent: if every $\Sigma_q$ is diagonal in $U$, then so are $C$, $\tilde C$, $\tilde B_q$ and hence the updated $\Sigma_q$, so the fixed-point map preserves it (and it is exact if the fixed point is unique). For generic data it is an approximation.}
+\fixnote{The ansatz was stated without the condition it needs. The condition holds, for example, for $X = Z W_X^{\top}$, $Y = Z W_Y^{\top}$ with orthonormal columns in $W_X, W_Y$, where $XX^{\top} = YY^{\top} = ZZ^{\top}$. Here $U \in \R^{P \times P}$ is orthogonal, $S_X \in \R^{P \times m}$ and $S_Y \in \R^{P \times n}$ are rectangular-diagonal (not square), and $S_X^2 \equiv S_X S_X^{\top}$, $S_Y^2 \equiv S_Y S_Y^{\top}$. Under the condition the ansatz is self-consistent: if every $\Sigma_q$ is diagonal in $U$, then so are $C$, $\tilde C$, $\tilde B_q$ and hence the updated $\Sigma_q$, so any fixed point reached by iterating from a $U$-diagonal start stays $U$-diagonal; the numerical check in rg\_kernel\_normalisation.tex confirms that the off-diagonal part of $U^{\top} \tilde C U$ is at machine precision. For generic data it is an approximation.}
 Now we can diagonalise $\tilde A$:
 \begin{align*}
     \tilde A_q 
@@ -220,7 +220,7 @@ Now we can diagonalise $\tilde A$:
     \equiv
     U D_{A,q} U^{\top}
 \end{align*}
-\fixnote{The $1/m$ of $\mathbb X$, restored as above.}
+\fixnote{$1/m$ of $\mathbb X$; see the note at its definition.}
 Under the ansatz, we can also diagonalise $\tilde C$ and $\tilde B$:
 \begin{align*}
     \tilde C
@@ -255,7 +255,7 @@ Thus we have diagonalised the problem
     &&
     D_C = \major{\frac1N} \sum_q \lambda_q D_q + \frac{1}{k_1 \kappa} I_P
 \end{align*}
-\fixnote{The $1/m$ of $\mathbb X$ in $D_{A,q}$, restored as above.}
+\fixnote{$1/m$ of $\mathbb X$; see the note at its definition.}
 \majornote{rg\_kernel\_normalisation.tex}
 Let us denote by $d_q$ an element on the diagonal of $D_q$; by $a_q$ and $b_q$ elements on the diagonals of $D_{A,q}$ and $D_{B,q}$, respectively; and by $c$ an element on the diagonal of $D_C$. We define
 \begin{align*}
@@ -307,5 +307,7 @@ which leaves the final implicit solution
     \label{eq:linear-soln}
 \end{align}
 \majornote{rg\_diagonal\_reduction.tex}
+\fix{The physical solution is the unique root with $c > \hat s_Y \sqrt{\max_q h_q}$, the branch on which every $d_q > 0$.}
+\fixnote{The branch was not stated. The right-hand side has a pole at $c^2 = \hat s_Y^2 \max_q h_q$, and beyond it the residual $1 - \delta/c - \frac{c}{N}\sum_q h_q/(c^2 - \hat s_Y^2 h_q)$ is strictly increasing, from $-\infty$ to $1$, so the root there is unique. Other roots, and the fixed point that naive damped iteration of the full matrix map reaches when started from the prior ($B = 0$), have a Gaussian precision that is not positive definite; solvers must start from large $C$ or enforce the constraint (see rg\_diagonal\_reduction.tex).}
 
 \end{document}
