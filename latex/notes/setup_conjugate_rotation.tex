@@ -1,0 +1,163 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+\newcommand{\D}{\mathcal D}
+\newcommand{\W}{\mathcal W}
+\newcommand{\Sact}{\mathcal S}
+\newcommand{\Phit}{\tilde\Phi}
+\title{Section 1 note: the $i$ convention of the conjugate kernel $\hat\Phi$}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Section~1 of the notes uses two incompatible conventions for the conjugate
+kernel $\hat\Phi$: the partition function and the single-site distribution are
+written with the Martin--Siggia--Rose factor $i\hat\Phi$, while the action
+$\Sact$, the readout saddle $\hat\Phi^{(L)}$ and all of Section~2 use a real
+$\hat\Phi$ with no $i$. Mixed as written, the saddle-point equations are complex
+and the forward self-consistency $\Phi = \frac1N\langle\phi K\phi\rangle$ cannot
+hold. The two are reconciled by one explicit contour rotation
+$\hat\Phi\to -i\hat\Phi$, which this note justifies; after it, every equation
+from $\Sact$ onwards, and Section~2, is consistent. Two sign slips on the
+$i\hat\Phi K$ term are also recorded.
+\end{abstract}
+
+\section{Where the problem appears}
+
+Throughout, summation over repeated indices (layer, data and spatial) is
+implied, $\Phit^{(L)} \equiv \Phi^{(L)} + \kappa^{-1} I$, and
+$\mathbb Y^{\mu,\nu}_{\alpha,\beta} = y^\mu_\alpha y^\nu_\beta$.
+The kernel constraint is inserted as
+\begin{equation}
+  1 = \int \D\Phi\,\D\hat\Phi\,
+  \exp\Big(-\tfrac{iN}{2}\,\hat\Phi^{(l)\mu,\nu}_{i,j}
+  \Big[\Phi^{(l)\mu,\nu}_{i,j} - \tfrac1N\phi^{(l)\mu}_a K^{(l)}_{i,a,j,b}\phi^{(l)\nu}_b\Big]\Big).
+  \label{eq:unity}
+\end{equation}
+Collecting the $\phi$-dependent part with the rate penalty
+$-\frac12\phi G\phi$ gives, for the neurons of layer $l$ (which are pre-synaptic
+to $W^{(l)}$, hence the \emph{second} and \emph{fourth} slots of
+$K^{(l)}_{\text{post},\text{pre},\text{post},\text{pre}}$),
+\begin{equation}
+  +\tfrac12\,\phi^{(l)\mu}_i\Big(i\hat\Phi^{(l)\mu,\nu}_{\alpha,\beta}K^{(l)}_{\alpha,i,\beta,j}
+  - G^{(l)}_{i,j}\delta^{\mu,\nu}\Big)\phi^{(l)\nu}_j ,
+  \label{eq:tilt-msr}
+\end{equation}
+and the remaining $\Phi$-dependent part of the exponent is
+$-N\big[\frac12 y\,\Phit^{(L)-1}y + \frac i2 \hat\Phi^{(l)}\!\cdot\Phi^{(l)}\big]$.
+(The index order $K_{\alpha,i,\beta,j}$ is correct: it is (post, pre, post, pre),
+as in the kernel definition $K_{i,a,j,b}$.)
+
+Section~1 then contains:
+\begin{enumerate}
+  \item the remaining partition function and the product form of $\W$, written
+    with $-\frac12\phi(i\hat\Phi K + G)\phi$: the sign of the $i\hat\Phi K$ term is
+    wrong (these are marked orange in the section, as the single-site equation
+    between them has the correct form \eqref{eq:tilt-msr});
+  \item the single-site distribution, with the correct MSR form
+    \eqref{eq:tilt-msr};
+  \item the action
+    $\Sact = \frac12 y\,\Phit^{(L)-1}y + \frac12\hat\Phi\cdot\Phi - \frac1N\log\W$,
+    in which the $i$ of $\frac i2\hat\Phi\cdot\Phi$ has been dropped;
+  \item the readout saddle $\hat\Phi^{(L)} = \Phit^{(L)-1}\mathbb Y\,\Phit^{(L)-1}$
+    (real).
+\end{enumerate}
+Section~2 then writes the single site as
+$+\frac12\phi(\hat\Phi K - G)\phi$, with real $\hat\Phi$, and uses item~4.
+
+\section{Why the mixture is wrong}
+
+\paragraph{The MSR convention on its own is consistent.}
+With $\Sact_{\text{MSR}} = \frac12 y\,\Phit^{(L)-1}y + \frac i2\hat\Phi\cdot\Phi
+- \frac1N\sum_l\log\W[\Phi^{(l-1)},\hat\Phi^{(l)}]$ and $\W$ containing
+\eqref{eq:tilt-msr},
+\begin{align}
+  \frac{\partial\Sact_{\text{MSR}}}{\partial\hat\Phi^{(l)\mu,\nu}_{i,j}}
+  &= \frac i2\Phi^{(l)\mu,\nu}_{i,j}
+   - \frac1N\cdot\frac i2 K^{(l)}_{i,a,j,b}\langle\phi^\mu_a\phi^\nu_b\rangle^{(l)} = 0
+  &&\Longrightarrow&
+  \Phi^{(l)\mu,\nu}_{i,j} &= \frac1N K^{(l)}_{i,a,j,b}\langle\phi^\mu_a\phi^\nu_b\rangle^{(l)},
+  \label{eq:forward}\\
+  \frac{\partial\Sact_{\text{MSR}}}{\partial\Phi^{(L)}}
+  &= -\frac12\Phit^{(L)-1}\mathbb Y\,\Phit^{(L)-1} + \frac i2\hat\Phi^{(L)} = 0
+  &&\Longrightarrow&
+  i\hat\Phi^{(L)} &= \Phit^{(L)-1}\mathbb Y\,\Phit^{(L)-1},
+  \label{eq:readout-msr}
+\end{align}
+using $\partial_{\Phi}\,y^\top(\Phi+c)^{-1}y = -(\Phi+c)^{-1}yy^\top(\Phi+c)^{-1}$.
+So in this convention $\hat\Phi$ is \emph{purely imaginary} at the saddle, and the
+combination that enters the single site, $i\hat\Phi$, is real and positive
+semi-definite.
+
+\paragraph{Mixing the conventions breaks both equations.}
+If $\Sact$ carries the real $\frac12\hat\Phi\cdot\Phi$ (item~3) while $\W$
+carries $i\hat\Phi$ (item~2), the first stationarity condition becomes
+\begin{equation}
+  \frac12\Phi^{(l)} - \frac{i}{2N}K^{(l)}\langle\phi\phi\rangle^{(l)} = 0
+  \quad\Longrightarrow\quad
+  \Phi^{(l)} = \frac iN K^{(l)}\langle\phi\phi\rangle^{(l)},
+\end{equation}
+a purely imaginary covariance, which contradicts the kernel definition. Conversely,
+inserting the real $\hat\Phi^{(L)}$ of item~4 into the single site of item~2
+produces the tilt $\frac i2\phi\,\Phit^{-1}\mathbb Y\Phit^{-1}K\phi$: the
+single-site measure is then complex, and the precision of Section~2 would read
+$\Sigma_q^{-1} = \tilde A_q^{-1} - i\lambda_q B + g^2$, giving a complex
+\texttt{eq:linear-soln}. The sign slips of item~1 are a separate error of the
+same kind: kept, they turn \eqref{eq:forward} into $\Phi = -\frac1N K\langle\phi\phi\rangle$.
+
+\section{The fix: rotate the contour once, explicitly}
+
+Since the saddle lies on the imaginary $\hat\Phi$ axis, substitute
+$\hat\Phi = -i\hat\Phi'$ (equivalently, deform the $\hat\Phi$ contour to pass
+through the saddle; this is the standard step in kernel saddle-point treatments
+of Bayesian networks). The deformation presumes that $\W$ stays convergent
+along the rotated contour, i.e.\ that $\Phi^{-1}$ dominates the now real tilt;
+this is the same condition as normalisability of the single site in Section~2,
+$\Sigma_q \succ 0$. Term by term,
+\begin{align}
+  -\tfrac{iN}{2}\hat\Phi\cdot\Phi &\;\to\; -\tfrac N2\hat\Phi'\cdot\Phi, &
+  \tfrac i2\phi\,\hat\Phi K\phi &\;\to\; +\tfrac12\phi\,\hat\Phi' K\phi .
+\end{align}
+Dropping the prime, the consistent real set is
+\begin{align}
+  \Sact &= \frac12 y\,\Phit^{(L)-1}y + \frac12\hat\Phi^{(l)}\!\cdot\Phi^{(l)}
+          - \frac1N\sum_{l=1}^L\log\W[\Phi^{(l-1)},\hat\Phi^{(l)}],\\
+  \W[\Phi,\hat\Phi] &= \det(2\pi\Phi)^{-1/2}\!\int\!\D h\,
+     \exp\Big\{-\tfrac12 h\Phi^{-1}h
+     + \tfrac12\phi^\mu_i\big(\hat\Phi^{\mu,\nu}_{\alpha,\beta}K_{\alpha,i,\beta,j}
+     - G_{i,j}\delta^{\mu,\nu}\big)\phi^\nu_j\Big\},\\
+  \Phi^{(l)} &= \tfrac1N K^{(l)}\langle\phi\phi\rangle^{(l)},\qquad
+  \hat\Phi^{(L)} = \Phit^{(L)-1}\mathbb Y\,\Phit^{(L)-1}.
+\end{align}
+(The determinant prefactor and the hidden-layer conjugate equation are the
+subject of the companion note \texttt{setup\_backward\_pass.tex}.)
+These are exactly the $\Sact$ and $\hat\Phi^{(L)}$ already written in Section~1,
+and the single site already used by Section~2.
+
+\section{Consequences and recommended edits}
+
+\begin{itemize}
+  \item \textbf{Section 1.} State the rotation once, at the start of the
+    saddle-point subsection (done, in red). Equations before that point are in
+    the MSR convention and correct once the two orange sign slips are fixed;
+    equations after it are in the rotated convention. Every $\hat\Phi$ written
+    after the rotation, including those quoted in Section~2 and in the
+    appendix, is the rotated (real) one.
+  \item \textbf{Section 2 / \texttt{eq:linear-soln}.} Unchanged: Section~2
+    already uses the rotated convention. What changes is that the dropped $i$
+    is now justified rather than silent.
+  \item \textbf{Appendix A1.} A1 writes $B = iK\hat\Phi$, which is the MSR
+    convention; under the rotation this is $B = K\hat\Phi$. A1 should say which
+    convention it uses. A1 also writes the tilt as
+    $\phi_a K^{(l+1)}_{a,\alpha,b,\beta}\hat\Phi_{\alpha,\beta}\phi_b$, with the
+    pre-synaptic index first; for consistency with the kernel definition it
+    should be $K^{(l+1)}_{\alpha,a,\beta,b}$ (only the order matters if $K$ is
+    not symmetric under swapping pre and post slots).
+\end{itemize}
+
+\end{document}
