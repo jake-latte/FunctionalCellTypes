@@ -51,8 +51,17 @@
 % ----------------------------------------------------------------------------
 \printbibliography
 
-% Appendices (uncomment and add files under sections/ as needed):
-% \appendix
-% \subfile{sections/A_derivations}
+% ----------------------------------------------------------------------------
+%  Appendices
+% ----------------------------------------------------------------------------
+% \appendix resets the section counter, so the \setcounter{section}{-1} above
+% does not carry over. Appendices are numbered A1, A2, ... (not A, B, ...);
+% their equations and theorems follow as A1.1, A1.2, ... through
+% \numberwithin in the preamble, and cleveref calls them "Appendix A1".
+% To add the next appendix: create sections/A2_<name>.tex following
+% A1_comments.tex, and add \subfile{sections/A2_<name>} below.
+\appendix
+\renewcommand{\thesection}{A\arabic{section}}
+\subfile{sections/A1_comments}
 
 \end{document}
