@@ -11,8 +11,8 @@ We study a feedforward network with $L$ hidden layers whose preactivations are d
   h^{(1)\mu}_{i} =
     \frac{1}{\sqrt{m}} \sum_{\typo{a}=1}^{m} W^{(0)}_{i,a} x^{\mu}_a + \eta^{\mu}_i, \hfill
   &&
-  h^{(l+1)\mu}_{i} =
-    \frac{1}{\sqrt{N}} \sum_{\typo{j}=1}^N W^{(l)}_{i,j} \phi(h^{(l)\mu}_{j}), \hfill
+  h^{(l+1)\mu}_{i} = 
+    \frac{1}{\sqrt{N}} \sum_{\typo{j}=1}^N W^{(l)}_{i,j} \phi(h^{(l)\mu}_{j}), \hfill 
   &&
   f^{\mu}_{\alpha} =
     \frac{1}{N} \sum_{\typo{j}=1}^{N} W^{(L)}_{\typo{\alpha},j} \phi(h^{(L)\mu}_{j})
@@ -25,7 +25,7 @@ where $\eta$ is Gaussian noise, $\eta \sim \mathcal{N}(0, \sigma^2)$ (which we i
     \sum_{\mu=1}^{P} \sum_{\alpha=1}^{n} 
       (f^{\mu}_{\alpha} - y^{\mu}_{\alpha})^2 
     + \frac{1}{\beta}  \mathcal{P}_{\text{weight}}(\Theta)
-    + \frac{1}{\beta}  \mathcal{P}_{\text{rates}}(\Phi)
+    + \frac{1}{\beta}  \mathcal{P}_{\text{rates}}(\typo{\phi})
   \\
   \partial_s \Theta(s) &=
     -\nabla \mathcal{L}(\Theta(s))  + \sqrt{\frac{2}{\beta}} \eta(s),
@@ -72,7 +72,7 @@ We then turn our focus to the partition function of \eqref{eq:theta-distr}:
       \right]
       - \frac{\beta N}{2 P n} ( f^{\mu}_{\alpha} - y^{\mu}_{\alpha})^2
       - \mathcal{P}_{\text{weight}}(\Theta)
-      - \mathcal{P}_{\text{rates}}(\Phi)
+      - \mathcal{P}_{\text{rates}}(\typo{\phi})
     \Bigg \} 
 \end{align*}
 where for brevity we have introduced
@@ -93,7 +93,7 @@ where for brevity we have introduced
     \sqrt{N} & \text{otherwise}
   \end{cases}
 \end{align*}
-\fixnote{The constraint carried $1/\sigma^{(l)}$ next to $W^{(l-1)}$, but $\sigma$ is indexed by the weight layer (the cases above give $\sigma^{(0)} = \sqrt m$ for $W^{(0)}$ and $\sigma^{(L)} = N$ for the readout), so as written the first layer would be normalised by $\sqrt N$ and the readout by $\sqrt N$. The weight integral below already uses the matching pair $W^{(l)}/\sigma^{(l)}$, so nothing downstream changes; the constraint now reads $W^{(l-1)}/\sigma^{(l-1)}$.}
+\fixnote{The constraint carried $1/\sigma^{(l)}$ next to $W^{(l-1)}$, but $\sigma$ is indexed by the weight layer (the cases above give $\sigma^{(0)} = \sqrt m$ for $W^{(0)}$ and $\sigma^{(L)} = N$ for the readout), so as written the first-layer constraint ($W^{(0)}$) would be normalised by $\sigma^{(1)} = \sqrt N$ (or $N$ if $L = 1$) instead of $\sqrt m$, the layer-$L$ constraint ($W^{(L-1)}$) by $\sigma^{(L)} = N$ instead of $\sqrt N$, and the readout ($W^{(L)}$) by $\sigma^{(L+1)} = \sqrt N$ instead of $N$; the intermediate layers were unaffected. The weight integral below already uses the matching pair $W^{(l)}/\sigma^{(l)}$, so nothing downstream changes; the constraint now reads $W^{(l-1)}/\sigma^{(l-1)}$.}
 
 We begin with the integral over $\Theta$, in effect averaging over the prior \eqref{eq:prior-weights}.
 \begin{align*}
@@ -232,7 +232,7 @@ This term will regularise the input covariance to the first hidden layer. In gen
 
 \subsection{Single-Site}
 
-We can now introduce the independent (conditioned on the kernels $\Phi$ and $\hat \Phi$) sites for each layer. Note that although these single-sites should in general carry the layer-specific $K$ and $G$ that is germane, I will drop this index:
+We can now introduce the \major{single-layer distributions, which are independent across layers} (conditioned on the kernels $\Phi$ and $\hat \Phi$)\major{; within a layer the neurons stay coupled through $\Phi^{-1}$ and $K$, so each ``single site'' is a whole layer}.\majornote{\detokenize{setup_site_factorisation.tex}} Note that although these single-sites should in general carry the layer-specific $K$ and $G$ that is germane, I will drop this index:
 \begin{align}
   \mathcal W[\Phi, \hat \Phi] &= 
   \int \mathcal{D} h \mathcal{D} \hat h
@@ -288,7 +288,7 @@ In general, we can construct the free energy density as follows:
   \major{\frac1N \log \int \mathcal D h \prod_{i=1}^N w_i[h]}
 \end{align*}
 \major{A genuine average appears only after a change of basis that decouples the sites, e.g.\ over Fourier modes for a translation-invariant linear layer (Section~\ref{sec:rg}).}\majornote{\detokenize{setup_site_factorisation.tex}}
-This is for now a conceptual \typo{aid}, rather than a genuine result: $\major{w_i}$ still includes an extensive sum in its exponent, and so we have no reason to believe \major{$\mathcal F$} is actually $O(1)$. More work will be required to find a convergent density.
+\major{The $NP$-dimensional integral gives $\log \mathcal W = O(N)$, so $\mathcal F = O(1)$ is not the concern. The concern is the saddle point itself: the hidden kernels $\Phi^{(l)}_{i,j}$ are $N^2 P^2$ order parameters against a single large factor $N$, and their entries concentrate only if, for fixed $(i,j)$, $K^{(l)}_{i,a,j,b}$ couples $O(N)$ pre-synaptic neurons (true for the factorised $K^{\text{post}} K^{\text{pre}}$, not for kernels local jointly in the post- and pre-synaptic positions).}\majornote{\detokenize{setup_site_factorisation.tex}} More work will be required to find a convergent density.
 
 \subsection{Saddle-Point}
 
@@ -308,7 +308,7 @@ we obtain the self-consistency relation
   \implies \Phi^{(l)\mu,\nu}_{i,j}
     = \major{\frac1N \sum_{a,b=1}^N K^{(l)}_{i,a,j,b} \left \langle \phi^{\mu}_a \phi^{\nu}_b \right \rangle^{(l)}}
 \end{align*}
-where \typo{we} have defined $\major{\langle \cdot \rangle^{(l)}}$ as the expectation over the \typo{neuron} response distribution \eqref{eq:single-site} for layer $l$ (i.e. with input drive $\Phi^{(l-1)}$ and tilting $\hat \Phi^{(l)}$), \major{taken jointly over all neurons of the layer, which are coupled}.\majornote{\detokenize{setup_site_factorisation.tex}} For the tilting we obtain for $l \in 1, \dots, L-1$.
+where \typo{we} have defined $\major{\langle \cdot \rangle^{(l)}}$ as the expectation over the \typo{neuron} response distribution \eqref{eq:single-site}\major{ (with $\hat \Phi$ the rotated conjugate, so the $i$ is absent)} for layer $l$ (i.e. with input drive $\Phi^{(l-1)}$ and tilting $\hat \Phi^{(l)}$), \major{taken jointly over all neurons of the layer, which are coupled}.\majornote{\detokenize{setup_site_factorisation.tex}} For the tilting we obtain for $l \in 1, \dots, L-1$.
 \begin{align}
   \frac{\partial \mathcal S}{\partial \Phi^{(l)}} = 0
   \implies \hat \Phi^{(l)\mu,\nu}_{i,j} 
@@ -325,7 +325,6 @@ where \major{$V(h) = \frac12 \phi(h)^{\top} (\hat \Phi^{(l+1)} K^{(l+1)} - G^{(l
   \hat \Phi^{(l)} = \major{\frac1N \left( [\Phi^{(l)}]^{-1} \langle h \otimes h \rangle^{(l+1)} [\Phi^{(l)}]^{-1} - [\Phi^{(l)}]^{-1} \right)}
   \label{eq:backward-pass}
 \end{align}
-\majornote{\detokenize{setup_backward_pass.tex}} \majornote{\detokenize{setup_site_factorisation.tex}}
 For $l=L$, $\Phi^{(L)}$ does not appear in any single site, only the tilting from the readout, giving us
 \begin{align*}
   \hat \Phi^{(L)} = 
@@ -356,7 +355,7 @@ with moments
     \left. \fix{(\Phi^{(L)} + \kappa^{-1} I)^{-1}} \right|^{\mu,\nu}_{\fix{\alpha',\beta'}}
     \Phi^{(L)\nu,\star}_{\fix{\beta'},\beta}
 \end{align*}
-\fixnote{The regularised kernel must be inverted, as in any GP posterior: with prior $f \sim \mathcal N(0, \Phi^{(L)}/N)$ and likelihood variance $1/(N\kappa)$ the mean is $\Phi^{(L)\star\mu}[(\Phi^{(L)}/N + I/(N\kappa))^{-1}]^{\mu\nu} y^\nu/N$, which is the expression above. The summed indices live in output space, so they are now output indices $\alpha',\beta'$ (they were the input labels $a,b$, and the last factor carried $a$ where the contraction needs the second index). Nothing in the saddle-point equations depends on this side result.}
+\fixnote{The regularised kernel must be inverted, as in any GP posterior: with prior $f \sim \mathcal N(0, \Phi^{(L)}/N)$ and likelihood variance $1/(N\kappa)$ the mean is $\Phi^{(L)\star,\mu} [(\Phi^{(L)}/N + I/(N\kappa))^{-1}]^{\mu,\nu} y^{\nu}/N$, which is the expression above. The summed indices live in output space, so they are now output indices $\alpha',\beta'$ (they were the input labels $a,b$, and the last factor carried $a$ where the contraction needs the second index). Nothing in the saddle-point equations depends on this side result.}
 as $N \rightarrow \infty$, this concentrates at $\mathbf{\bar f}^{\star}$
 
 \end{document}
