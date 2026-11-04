@@ -242,12 +242,13 @@ We can now introduce the independent (conditioned on the kernels $\Phi$ and $\ha
       + \frac12 \phi^{\mu}_i \left( i \hat \Phi^{\mu,\nu}_{\alpha,\beta} K_{\alpha,i,\beta,j} - G_{i,j} \delta^{\mu,\nu}  \right) \phi^{\nu}_j
     \Bigg \} \\
   &= 
+  \major{\det(2 \pi \Phi)^{-\frac12}}
   \int \mathcal{D} h \exp \Bigg \{
     - \frac12 h^{\mu}_i (\Phi^{-1})^{\mu,\nu}_{i,j} h^{\nu}_j 
     + \frac12 \phi^{\mu}_i \left( i \hat \Phi^{\mu,\nu}_{\alpha,\beta} K_{\alpha,i,\beta,j} - G_{i,j} \delta^{\mu,\nu}  \right) \phi^{\nu}_j
   \Bigg \} \label{eq:single-site}
 \end{align}
-where in going from the first to the second line we have completed the gaussian integral over $\hat h$ (which is convergent in the first layer with the inclusion of \eqref{eq:single-site-reg}). Our goal will be to find the free energy density of these single-site distributions
+where in going from the first to the second line we have completed the gaussian integral over $\hat h$\major{, whose normalisation $\det(2\pi\Phi)^{-1/2}$ depends on $\Phi$ and must be kept, since $\Phi$ is varied at the saddle point}\majornote{\detokenize{setup_backward_pass.tex}} (which is convergent in the first layer with the inclusion of \eqref{eq:single-site-reg}). Our goal will be to find the free energy density of these single-site distributions
 \begin{align*}
   \mathcal W[\Phi, \hat \Phi] \asymp e^{-N \mathcal F[\Phi, \hat \Phi]}
 \end{align*}
@@ -268,7 +269,7 @@ In general, we can construct the free energy density as follows:
 \begin{align*}
   \mathcal W[\Phi, \hat \Phi]
   &= 
-  \major{\int \mathcal{D} h}
+  \major{\det(2 \pi \Phi)^{-\frac12} \int \mathcal{D} h}
   \prod_{i=1}^N
   \underbrace{
     \major{\exp} \Big \{
@@ -311,18 +312,20 @@ where \typo{we} have defined $\major{\langle \cdot \rangle^{(l)}}$ as the expect
 \begin{align}
   \frac{\partial \mathcal S}{\partial \Phi^{(l)}} = 0
   \implies \hat \Phi^{(l)\mu,\nu}_{i,j} 
-  = \frac1N \sum_{k=1}^N \langle \hat h^{\mu}_i \hat h^{\nu}_j \rangle_{k}^{(l+1)}
-  = \frac1N \sum_{k=1}^N \left \langle
-    \left. \frac{\partial h}{\partial \eta} \right|^{\mu}_i 
-    \left. \frac{\partial h}{\partial \eta} \right|^{\nu}_j 
-  \right \rangle_{k}^{(l+1)}
+  = \major{-\frac1N \langle \hat h^{\mu}_i \hat h^{\nu}_j \rangle^{(l+1)}}
+  = \major{\frac1N \left \langle
+    \frac{\partial V}{\partial h^{\mu}_i}
+    \frac{\partial V}{\partial h^{\nu}_j}
+    + \frac{\partial^2 V}{\partial h^{\mu}_i \partial h^{\nu}_j}
+  \right \rangle^{(l+1)}}
   \label{eq:saddle-phi-hat}
 \end{align}
-where $\eta$ is the input current to neuron $h$. Alternatively, using the form \eqref{eq:single-site} with $\hat h$ integrated out, we obtain
+where \major{$V(h) = \frac12 \phi(h)^{\top} (\hat \Phi^{(l+1)} K^{(l+1)} - G^{(l+1)}) \phi(h)$ is the tilt acting on layer $l+1$, so $\partial V / \partial h$ is the force the downstream constraint exerts on a preactivation (the analogue of a back-propagated error) and the second term is its mean curvature; the second equality is Gaussian integration by parts. The conjugate vanishes when layer $l+1$ is untilted.}\majornote{\detokenize{setup_backward_pass.tex}} Alternatively, using the form \eqref{eq:single-site} with $\hat h$ integrated out, we obtain
 \begin{align}
-  \hat \Phi^{(l)} = [\Phi^{(l)}]^{-1} \left( \frac1N \sum_{k=1}^N \langle h \otimes h \rangle_{k}^{(l+1)} \right) [\Phi^{(l)}]^{-1}
+  \hat \Phi^{(l)} = \major{\frac1N \left( [\Phi^{(l)}]^{-1} \langle h \otimes h \rangle^{(l+1)} [\Phi^{(l)}]^{-1} - [\Phi^{(l)}]^{-1} \right)}
   \label{eq:backward-pass}
 \end{align}
+\majornote{\detokenize{setup_backward_pass.tex}} \majornote{\detokenize{setup_site_factorisation.tex}}
 For $l=L$, $\Phi^{(L)}$ does not appear in any single site, only the tilting from the readout, giving us
 \begin{align*}
   \hat \Phi^{(L)} = 

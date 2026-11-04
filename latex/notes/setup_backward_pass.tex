@@ -1,0 +1,176 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+\newcommand{\D}{\mathcal D}
+\newcommand{\W}{\mathcal W}
+\newcommand{\Sact}{\mathcal S}
+\newcommand{\E}{\mathbb E}
+\title{Section 1 note: the conjugate (backward) saddle-point equation}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+For the hidden layers, Section~1 gives the conjugate saddle point
+(\texttt{eq:saddle-phi-hat}) as
+$\hat\Phi^{(l)} = \frac1N\langle\hat h\hat h\rangle
+= \frac1N\langle\partial_\eta h\,\partial_\eta h\rangle$
+and, equivalently, $\hat\Phi^{(l)} = \Phi^{-1}\langle hh\rangle\Phi^{-1}$
+(\texttt{eq:backward-pass}). Both are wrong. Integrating out $\hat h$ leaves a
+$\Phi$-dependent normalisation $\det(2\pi\Phi)^{-1/2}$ that was dropped; keeping
+it adds $-\Phi^{-1}$ to the backward pass. The response correlator enters with a
+minus sign, and the ``derivative'' interpretation needs a curvature term. The
+correct equation is
+\begin{align*}
+  \hat\Phi^{(l)} &= -\frac1N\langle\hat h\hat h\rangle^{(l+1)}
+  = \frac1N\Big(\Phi^{-1}\langle h h^\top\rangle^{(l+1)}\Phi^{-1} - \Phi^{-1}\Big)\\
+  &= \frac1N\big\langle\nabla V\,\nabla V^\top + \nabla\nabla^\top V\big\rangle^{(l+1)},
+\end{align*}
+with $V$ the tilt acting on layer $l+1$. As written, the backward pass gives a
+nonzero conjugate even when no signal arrives from downstream. The one-hidden-layer
+result \texttt{eq:linear-soln} does not use this equation and is unaffected;
+deep networks and the effective-network picture of Appendix~A1 are affected.
+\end{abstract}
+
+\section{Setting}
+
+Use the rotated (real) convention of \texttt{setup\_conjugate\_rotation.tex}
+and the joint layer average of \texttt{setup\_site\_factorisation.tex}. For
+$1\le l\le L-1$, $\Phi\equiv\Phi^{(l)}$ enters the action only through the
+$\frac12\hat\Phi^{(l)}\cdot\Phi^{(l)}$ term and through the single site of layer
+$l+1$, for which it is the prior covariance:
+\begin{align}
+  \Sact &\ni \tfrac12\hat\Phi^{(l)}\cdot\Phi - \tfrac1N\log\W[\Phi,\hat\Phi^{(l+1)}],\\
+  \W[\Phi,\hat\Phi^{(l+1)}]
+  &= \int\D h\,\D\hat h\,\exp\Big\{-i\hat h\cdot h - \tfrac12\hat h\Phi\hat h + V(h)\Big\},
+  \label{eq:W-msr}\\
+  V(h) &= \tfrac12\phi(h)^\top\big(\hat\Phi^{(l+1)}K^{(l+1)} - G^{(l+1)}\big)\phi(h),
+\end{align}
+where $h$ collects all $NP$ preactivations of layer $l+1$ and the contraction of
+$\hat\Phi^{(l+1)}K^{(l+1)}$ is over the post-synaptic slots, as in the single site.
+
+\section{The dropped normalisation}
+
+The $\hat h$ integral in \eqref{eq:W-msr} is Gaussian:
+\begin{equation}
+  \int\D\hat h\,e^{-i\hat h\cdot h - \frac12\hat h\Phi\hat h}
+  = \det(2\pi\Phi)^{-1/2}\,e^{-\frac12 h\Phi^{-1}h}
+  \quad(\text{with }\D\hat h = \textstyle\prod d\hat h/2\pi),
+\end{equation}
+so
+\begin{equation}
+  \W = \det(2\pi\Phi)^{-1/2}\int\D h\,e^{-\frac12h\Phi^{-1}h + V(h)}.
+  \label{eq:W-h}
+\end{equation}
+Section~1 writes the second line of \texttt{eq:single-site} without the
+prefactor. The prefactor is irrelevant for averages \emph{at fixed} $\Phi$ (so
+the forward equation for $\Phi^{(l)}$ is unaffected), but $\Phi$ is now a
+variable of the action and the prefactor contributes
+$-\frac12\log\det\Phi$ to $\log\W$. It is $O(N)$, the same order as the rest of
+$\log\W$, so it cannot be dropped at the saddle point.
+
+\section{Derivation of the correct equation}
+
+\paragraph{From the $h$ form.} Differentiating \eqref{eq:W-h} (treating
+$\Phi$ as symmetric; the same convention on both sides),
+\begin{equation}
+  \frac{\partial\log\W}{\partial\Phi}
+  = -\tfrac12\Phi^{-1} + \tfrac12\Phi^{-1}\langle hh^\top\rangle\Phi^{-1}.
+\end{equation}
+Then $0 = \partial\Sact/\partial\Phi^{(l)} = \frac12\hat\Phi^{(l)} - \frac1N\partial_\Phi\log\W$ gives
+\begin{equation}
+  \boxed{\;\hat\Phi^{(l)} = \frac1N\Big([\Phi^{(l)}]^{-1}\langle hh^\top\rangle^{(l+1)}[\Phi^{(l)}]^{-1} - [\Phi^{(l)}]^{-1}\Big).\;}
+  \label{eq:bp}
+\end{equation}
+The $-\Phi^{-1}$ comes entirely from the prefactor. Section~1's form,
+$\Phi^{-1}\langle hh\rangle\Phi^{-1}$, lacks it and also lacks the overall $1/N$
+(it had $\frac1N\sum_k\langle\cdot\rangle_k$ instead; see the factorisation note).
+
+\paragraph{From the $\hat h$ form.} Differentiating \eqref{eq:W-msr} directly,
+$\partial_\Phi\log\W = -\frac12\langle\hat h\hat h^\top\rangle$, hence
+\begin{equation}
+  \hat\Phi^{(l)} = -\frac1N\langle\hat h\hat h^\top\rangle^{(l+1)},
+  \qquad
+  -\langle\hat h\hat h^\top\rangle = \Phi^{-1}\langle hh^\top\rangle\Phi^{-1} - \Phi^{-1}.
+  \label{eq:hh}
+\end{equation}
+Section~1 has $+\frac1N\langle\hat h\hat h\rangle$. The sign matters: the MSR
+response correlator $\langle\hat h\hat h\rangle$ vanishes for an untilted
+Gaussian and is negative semi-definite whenever the tilt broadens $h$, while the
+readout conjugate $\hat\Phi^{(L)} = \tilde\Phi^{-1}\mathbb Y\tilde\Phi^{-1}$ is
+positive semi-definite; only the minus sign makes the hidden and readout
+conjugates the same kind of object. (In the unrotated MSR convention the
+equation reads $i\hat\Phi^{(l)} = -\frac1N\langle\hat h\hat h\rangle$, so the
+section's form is wrong in either convention.)
+
+\paragraph{The ``derivative'' interpretation.}
+Section~1 identifies $\langle\hat h\hat h\rangle$ with
+$\langle\partial_\eta h\,\partial_\eta h\rangle$, $\eta$ the input current. For an
+additive current $\partial_\eta h = 1$, so this cannot be meant literally. The
+precise statement is Gaussian integration by parts for the tilted measure
+$p(h)\propto\mathcal N(h;0,\Phi)\,e^{V(h)}$: from
+$\E_p[h\,f(h)] = \Phi\,\E_p[\nabla f + f\,\nabla V]$ applied to $f = h^\top$ and then to
+$f = \nabla V^\top$,
+\begin{equation}
+  \E_p[hh^\top] = \Phi + \Phi\,\E_p\big[\nabla V\nabla V^\top + \nabla\nabla^\top V\big]\Phi,
+\end{equation}
+and so, combining with \eqref{eq:bp},
+\begin{equation}
+  \hat\Phi^{(l)\mu\nu}_{ij} = \frac1N\Big\langle
+    \frac{\partial V}{\partial h^\mu_i}\frac{\partial V}{\partial h^\nu_j}
+    + \frac{\partial^2V}{\partial h^\mu_i\,\partial h^\nu_j}\Big\rangle^{(l+1)} .
+  \label{eq:stein}
+\end{equation}
+$\partial V/\partial h$ is the force that the downstream constraint (the tilt from
+layer $l+2$, or from the readout) exerts on a preactivation of layer $l+1$: the
+analogue of a back-propagated error, which is presumably what was meant. The
+second term, the mean curvature of the tilt, has no counterpart in the
+section's formula and is not small in general: for
+$V = \frac12 b\,h^2$ (linear $\phi$, one scalar site, $\Phi = 1$) the first term
+gives $b^2/(1-b)$ and the second $b$, summing to the exact $b/(1-b)$.
+
+\paragraph{Numerical check.} For two coupled sites with
+$\Phi = \begin{psmallmatrix}1&0.4\\0.4&0.8\end{psmallmatrix}$, $\phi=\tanh$ and
+$V = \frac12\phi^\top B\phi$ with
+$B = \begin{psmallmatrix}0.6&-0.2\\-0.2&0.3\end{psmallmatrix}$, grid quadrature gives
+$\partial_\Phi\log\W$ (by finite differences of \eqref{eq:W-h}) equal to
+$\frac12(\Phi^{-1}\langle hh^\top\rangle\Phi^{-1}-\Phi^{-1})$ to $3\times10^{-11}$,
+and the latter equal to the right-hand side of \eqref{eq:stein} to $5\times10^{-13}$.
+Without the determinant, the finite difference misses the $-\frac12\Phi^{-1}$ term.
+
+\section{Consequences}
+
+\begin{itemize}
+  \item \textbf{Untilted limit.} If layer $l+1$ receives no signal from downstream
+    ($V\equiv0$), then $\langle hh^\top\rangle = \Phi$ and \eqref{eq:bp} gives
+    $\hat\Phi^{(l)} = 0$, as it must. The section's formula gives
+    $\hat\Phi^{(l)} = \Phi^{-1}$: a spurious tilt, of order one, that would
+    propagate down every layer of a deep network.
+  \item \textbf{Deep networks.} The hidden-layer saddle point
+    ($L\ge2$) changes. Any numerical solver of the forward/backward
+    equations must use \eqref{eq:bp}.
+  \item \textbf{Section~2 / \texttt{eq:linear-soln}.} Not affected: with one
+    hidden layer the only conjugate is $\hat\Phi^{(1)}=\hat\Phi^{(L)}$, fixed by the
+    readout, and the forward equation uses normalised averages, which do not see
+    the prefactor.
+  \item \textbf{Appendix A1.} The ``backward pass'' of the effective network
+    cites \texttt{eq:backward-pass}, and two interpretive remarks (that $\hat\Phi$
+    is the correlation of derivatives with respect to inputs, and that $B$
+    encodes the covariance of preactivations with respect to their inputs) cite
+    \texttt{eq:saddle-phi-hat}. Both should be read with \eqref{eq:bp} and
+    \eqref{eq:stein}: the conjugate is the mean outer product of downstream
+    forces plus their mean curvature.
+\end{itemize}
+
+\section{Recommended fix}
+
+In Section~1 (done, in red): restore $\det(2\pi\Phi)^{-1/2}$ in the second line of
+\texttt{eq:single-site} (and in the product form of $\W$); replace
+\texttt{eq:saddle-phi-hat} by \eqref{eq:hh}--\eqref{eq:stein}; replace
+\texttt{eq:backward-pass} by \eqref{eq:bp}.
+
+\end{document}
