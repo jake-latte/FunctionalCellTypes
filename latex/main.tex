@@ -11,8 +11,9 @@
 %    references.bib  bibliography (biblatex + biber)
 %    figures/        graphics (\includegraphics{name} resolves here)
 %
-%  To add / rename / reorder a section: edit the list under "Sections" below
-%  and create the file in sections/ following the existing ones.
+%  To add / rename / reorder a section or an appendix: edit the list under
+%  "Sections" or "Appendices" below and create the file in sections/
+%  following the existing ones.
 % =============================================================================
 \documentclass[11pt,a4paper]{article}
 
@@ -56,8 +57,9 @@
 % ----------------------------------------------------------------------------
 % \appendix resets the section counter, so the \setcounter{section}{-1} above
 % does not carry over. Appendices are numbered A1, A2, ... (not A, B, ...);
-% their equations and theorems follow as A1.1, A1.2, ... through
-% \numberwithin in the preamble, and cleveref calls them "Appendix A1".
+% their equations follow as A1.1, A1.2, ... through \numberwithin in the
+% preamble, theorems through thmtools' numberwithin=section, and cleveref
+% calls them "Appendix A1".
 % To add the next appendix: create sections/A2_<name>.tex following
 % A1_comments.tex, and add \subfile{sections/A2_<name>} below.
 \appendix
