@@ -172,6 +172,16 @@ def half_power_q(d, floor):
     return q[(d - floor) >= 0.5 * (d[0] - floor)].max()
 
 
+def half_crossing(x, profile):
+    """The x at which `profile` (sampled on increasing x, decreasing from profile[0]) falls
+    to half its peak, linearly interpolated between the two grid points that bracket it;
+    the grid value alone is quantised to the spacing of x."""
+    level = 0.5 * profile[0]
+    i = np.flatnonzero(profile < level)[0]  # first grid point below half power
+    weight = (profile[i - 1] - level) / (profile[i - 1] - profile[i])
+    return x[i - 1] + weight * (x[i] - x[i - 1])
+
+
 # ============================================================ A: ansatz-free fixed point
 def orthonormal_columns(rng, rows, cols):
     """A rows x cols matrix with orthonormal columns (Q of a Gaussian matrix)."""
@@ -564,7 +574,7 @@ def continuum_check():
     half-width nu_c = sqrt(a / b), b = sY2 |h''(0)| / 2,
     so sY nu_c -> 2 pi h_max^{3/2} / |h''(0)|."""
     lam_big = ring_spectrum(BIG_N, ELL)
-    nu = np.fft.fftfreq(BIG_N)
+    nu, half = np.fft.fftfreq(BIG_N), BIG_N // 2  # nu[:half] are the non-negative frequencies
     h_big = h_of(lam_big, BASE["sx2"], BASE["sig2"], BASE["g2"])
     h_curv = 2 * (h_big[0] - h_big[1]) * BIG_N**2  # |h''(0)| in nu units, from the grid
     alpha0 = lam_big[0] * BASE["sx2"] + BASE["sig2"]
@@ -574,13 +584,14 @@ def continuum_check():
     for sy in SY_CONTINUUM:
         c = solve_c(lam_big, BASE["sx2"], sy**2, BASE["sig2"], BASE["g2"], BASE["delta"])
         amp = c**2 / (c**2 - sy**2 * h_big)
-        nu_c = np.abs(nu)[(amp - 1) >= 0.5 * (amp[0] - 1)].max()
+        gap = c**2 - sy**2 * h_big[0]
         rows.append(
             {
                 "sy": sy,
                 "tau": sy**2 * h_big[0] / c**2,
-                "gap": c**2 - sy**2 * h_big[0],
-                "nu_c": nu_c,
+                "gap": gap,
+                "nu_c": half_crossing(nu[:half], (amp - 1)[:half]),
+                "nu_c_lorentz": np.sqrt(gap / (sy**2 * h_curv / 2)),  # sqrt(a / b) from the gap
             }
         )
     return {
@@ -629,8 +640,9 @@ def report_d(res):
     for r in c["rows"]:
         print(
             f"    sY = {r['sy']:4.0f}: tau = {r['tau']:.4f}, gap a = {r['gap']:7.3f}, "
-            f"nu_c = {r['nu_c']:.5f} (N nu_c = {BIG_N * r['nu_c']:.0f}), "
-            f"sY nu_c = {r['sy'] * r['nu_c']:.4f}"
+            f"nu_c = {r['nu_c']:.5f} (N nu_c = {BIG_N * r['nu_c']:.1f}), "
+            f"sY nu_c = {r['sy'] * r['nu_c']:.4f} (interpolated half-power crossing), "
+            f"sY sqrt(a/b) = {r['sy'] * r['nu_c_lorentz']:.4f}"
         )
 
 
