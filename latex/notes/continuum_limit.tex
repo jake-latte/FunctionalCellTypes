@@ -57,7 +57,7 @@ so that $K(0) = \int\frac{\dd^dq}{(2\pi)^d}\lambda(q)$ is the prior variance of 
   \lambda_q = \rho\sum_{n\in\Z^d}\lambda\!\left(q + \tfrac{2\pi}{a}n\right),
   \label{eq:aliasing}
 \end{equation}
-so the dictionary entry $\lambda_q = \rho\lambda(q)$ holds up to the spectral weight of the continuum kernel outside the Brillouin zone (aliasing). For the squared-exponential kernel this weight is $e^{-\ell^2\Lam^2/2}$ relative to $\lambda(0)$; it is the floor on which the numerical check of Section~\ref{sec:checks} settles, and it is negligible exactly when the lattice resolves the kernel, $\ell\gg a$.
+so the dictionary entry $\lambda_q = \rho\lambda(q)$ holds up to the spectral weight of the continuum kernel outside the Brillouin zone (aliasing). For the squared-exponential kernel the relative error of $\lambda_q$ is largest at the zone edge $q = \pi/a$, where the nearest alias is $\lambda(q)$ itself: $e^{-\ell^2\Lam^2/2}$ relative to $\lambda(0)$. The \emph{total} weight outside the zone is smaller, $\operatorname{erfc}(\ell\Lam/\sqrt2)$ of $K(0)$ in $d=1$ and $1-\operatorname{erf}^2(\ell\pi/\sqrt2a)$ on the square zone in $d=2$, and it is this weight, multiplied by the slope $F'(0)$ of the function being mode-averaged, that sets the floor on which the numerical check of Section~\ref{sec:checks} settles (the aliases only matter where $\lambda(q)$ is already tiny). Both are negligible exactly when the lattice resolves the kernel, $\ell\gg a$. The formula applies only to spectra whose alias sum converges: for a power law $\lambda(q)\propto q^{-2}$ in $d\ge2$ the sum over $n$ diverges, i.e.\ no lattice prior has that continuum spectrum (Section~\ref{sec:uv}).
 
 The zone is a cube of volume $(2\pi/a)^d$ containing $N$ modes. Following the standard field-theory convention we replace it by the ball $|q|<\Lam$ with the same number of modes,
 \begin{equation}
@@ -233,11 +233,11 @@ In the PI's convention $\Lam$ is physical and fixed by the spacing. The question
 \begin{equation}
   \frac{\lambda H}{c^2-\sY^2\rho\lambda H}
   = \frac{\sigma^2}{(1+g^2\sigma^2)\,c^2}\;\lambda(q)
-  + \rho\left[\frac{\sX^2}{(1+g^2\sigma^2)^2c^2} + \frac{\sY^2\sigma^4}{(1+g^2\sigma^2)^2c^4}\right]\lambda(q)^2
+  + \frac{\rho\,(\sX^2c^2 + \sY^2\sigma^4)}{(1+g^2\sigma^2)^2c^4}\;\lambda(q)^2
   + O\big(\lambda^3\big)\qquad(\sigma^2>0),
   \label{eq:tail}
 \end{equation}
-where the second bracketed term is the first term of the geometric series in $\sY^2\rho\lambda H/c^2$ (the script checks both coefficients against the numerical derivatives of the summand); at $\sigma^2 = 0$ the first term is absent and the second becomes $\rho\sX^2\lambda(q)^2/c^2$. So the cutoff dependence of the right-hand side of \eqref{eq:linear-soln-cont} is that of the two integrals
+where the $\sY^2\sigma^4$ part of the second coefficient is the first term of the geometric series in $\sY^2\rho\lambda H/c^2$ (the script checks both coefficients against the numerical derivatives of the summand); at $\sigma^2 = 0$ the first term is absent and the second becomes $\rho\sX^2\lambda(q)^2/c^2$. So the cutoff dependence of the right-hand side of \eqref{eq:linear-soln-cont} is that of the two integrals
 \begin{equation}
   I_1(\Lam) = \ball{\lambda(q)} = K_{\Lam}(0),
   \qquad
@@ -295,7 +295,7 @@ whose $n=0$ term is the continuum value and whose $n\neq0$ terms are the periodi
   \item the learning-induced length $\xi_*$: near the physical branch's pole, $c^2-\sY^2h(q)\approx\frac{\sY^2|h''(0)|}{2}\big(\xi_*^{-2}+q^2\big)$ with $\xi_*^{-2} = 2(c^2-\sY^2h(0))/(\sY^2|h''(0)|)$, so the summand has poles at $q = \pm i/\xi_*$;
   \item the box itself, $L$.
 \end{itemize}
-Hence $c(L) = c(\infty) + O(e^{-L/\xi})$ with $\xi = \max(\xi_*,\ \ell\text{ or }1/m)$, and the corrections become algebraic only when $\xi_*\gtrsim L$, i.e.\ at the threshold. The check of Section~\ref{sec:checks} shows this: the relative error of the mode average falls by three orders of magnitude between $L = 8\ell$ and $L = 16\ell$ (i.e.\ $\xi\approx1.1\ell$ for those parameters) and then meets the aliasing floor.
+Hence $c(L) = c(\infty) + O(e^{-L/\xi})$ with $\xi = \max(\xi_*,\ \ell\text{ or }1/m)$, and the corrections become algebraic only when $\xi_*\gtrsim L$, i.e.\ at the threshold. The check of Section~\ref{sec:checks} shows this: the relative error of the mode average falls by three orders of magnitude between $L = 8\ell$ and $L = 16\ell$, i.e.\ $\xi = 1.09\ell$, which is the learning-induced length for those parameters (the exact pole of the summand sits at $\operatorname{Im}q = 0.92/\ell$, $\xi_* = 1.08\ell$, slightly beyond the kernel's own $\ell$), and then meets the aliasing floor.
 
 \begin{remark}[The threshold in the thermodynamic limit]
 On the finite lattice the physical root always exists above the pole, because the $q=0$ term $\frac1N h_0/(c^2-\sY^2h_0)$ diverges there (\texttt{rg\_diagonal\_reduction.tex}). In the continuum the same term is the integral $\int\frac{\dd^dq}{(2\pi)^d}(\xi_*^{-2}+q^2)^{-1}$, which diverges as $\xi_*\to\infty$ in $d\le2$ (as $\xi_*$ in $d=1$, as $\log\xi_*$ in $d=2$) but stays finite in $d\ge3$. Since the right-hand side of \eqref{eq:linear-soln-cont} must equal $1-\delta/c<1$, in $d=1,2$ the correlation length $\xi_*$ stays finite for all parameter values: the gap of the $q=0$ mode never closes at $L=\infty$, though $\xi_*$ grows exponentially with the target strength in $d=2$. In $d\ge3$ the integral at $\xi_* = \infty$ is finite, and for targets strong enough that $1-\delta/c_*$ exceeds it at $c_* = \sY\sqrt{h(0)}$, the $q=0$ mode condenses: $c$ sticks at $c_*$, $c^2-\sY^2h(0) = O(1/N)$, and $d_0 = O(N)$, a layer-wide common response carried by a single mode, in close analogy with Bose--Einstein condensation. This is a consequence of the corrected equation, not an input; it belongs in the limiting-cases note and is only flagged here.
@@ -354,34 +354,38 @@ For a general scale-free prior $\lambda(q) = \gamma q^{-2\zeta}$ replace $2\to2\
 
 \section{Checks}
 \label{sec:checks}
-\path{latex/notes/scripts/continuum_limit_check.py} (run from the repository root with \texttt{uv run python} \path{latex/notes/scripts/continuum_limit_check.py}; about two seconds; tested by \path{tests/test_continuum_limit_check.py}) takes the squared-exponential kernel $K_{i,j} = e^{-r_{i,j}^2/2\ell^2}$ with $\ell = 1$ on a ring with spacing $a = 0.5$ ($\Lam = \pi/a = 6.283$, $\ell\Lam = 2\pi$), computes $\lambda_q$ by the DFT of the first row, and compares $\frac1N\sum_q\lambda_qf(\lambda_q)$ with $a\int_{-\Lam}^{\Lam}\frac{\dd q}{2\pi}\frac{\lambda(q)}{a}f\big(\frac{\lambda(q)}{a}\big)$, $\lambda(q) = \sqrt{2\pi}\,\ell\,e^{-\ell^2q^2/2}$, evaluated by $2000$-node Gauss--Legendre quadrature, for increasing $N$ at fixed $a$. The spacing is deliberately not $1$, so that a missing factor of $a$ would show. The weight $f$ is the summand of \eqref{eq:linear-soln-cont}, $\lambda f(\lambda) = h/(c^2-\sY^2h)$ with $\sX^2 = 0.7$, $\sY^2 = 0.25$, $\sigma^2 = 0.2$, $g^2 = 0.3$ and $c = 2$ (above the pole, which the script checks). The same is done on an $n\times n$ torus with $c = 6$ and the square zone. The output is:
+\path{latex/notes/scripts/continuum_limit_check.py} (run from the repository root with \texttt{uv run python} \path{latex/notes/scripts/continuum_limit_check.py}; about two seconds; tested by \path{tests/test_continuum_limit_check.py}) takes the squared-exponential kernel $K_{i,j} = e^{-r_{i,j}^2/2\ell^2}$ with $\ell = 1$ on a ring with spacing $a = 0.5$ ($\Lam = \pi/a = 6.283$, $\ell\Lam = 2\pi$), computes $\lambda_q$ by the DFT of the first row, and compares $\frac1N\sum_q\lambda_qf(\lambda_q)$ with $a\int_{-\Lam}^{\Lam}\frac{\dd q}{2\pi}\frac{\lambda(q)}{a}f\big(\frac{\lambda(q)}{a}\big)$, $\lambda(q) = \sqrt{2\pi}\,\ell\,e^{-\ell^2q^2/2}$, evaluated by $2000$-node Gauss--Legendre quadrature, for increasing $N$ at fixed $a$. The spacing is deliberately not $1$, so that a missing factor of $a$ would show. The weight $f$ is the summand of \eqref{eq:linear-soln-cont}, $\lambda f(\lambda) = h/(c^2-\sY^2h)$ with $\sX^2 = 0.7$, $\sY^2 = 0.25$, $\sigma^2 = 0.2$, $g^2 = 0.3$ and $c = 2$ (above the pole $c_* = \sY\sqrt{h(\lambda_0)}$ with $\lambda_0 = \lambda(0)/a^d$, which the script checks at construction). The same is done on an $n\times n$ torus with $c = 6$ and the square zone. The script also prints the correlation length read off the convergence against the one set by the learning-induced pole, the derived aliasing floors, and, for the UV-sensitive case of Section~\ref{sec:uv}, the root of \eqref{eq:linear-soln-cont} for the $d=2$ power law $\gamma/(q^2+m^2)$ cut at $\Lam$ ($\rho = 1$, $\gamma = 1$, $m = 1/2$, $\delta = 0.5$ as in \path{rg_diagonal_reduction.tex}, the other scalars as above). The output is:
 {\footnotesize
 \begin{verbatim}
 spacing a = 0.5, kernel width l = 1.0, cutoff Lambda = pi/a = 6.2832
 max |lambda_q - lambda(q)/a| / lambda_0 (N = 64) : 2.68e-09
-aliasing floor e^(-l^2 Lambda^2 / 2)             : 2.68e-09
+zone-edge aliasing error e^(-l^2 Lambda^2 / 2)   : 2.68e-09
+spectral weight outside the zone, d = 1, 2       : 3.32e-10, 6.63e-10
 
                 moment        continuum      closed form       ring N=256
     (1/N) sum lambda_q   0.999999999668   1.000000000000   1.000000000000
   (1/N) sum lambda_q^2   3.544907701811   3.544907701811   3.544907701811
 
 d = 1, (1/N) sum_q h_q / (c^2 - sY^2 h_q): continuum value 0.619768682079
-      N     L/l            lattice   rel. error
-      4     2.0     0.458914667654     2.60e-01
-      8     4.0     0.632534589930     2.06e-02
-     16     8.0     0.621725481683     3.16e-03
-     32    16.0     0.619769920650     2.00e-06
-     64    32.0     0.619768682095     2.61e-11
-    128    64.0     0.619768682094     2.54e-11
-    256   128.0     0.619768682094     2.54e-11
+      N     L/l   rel. error
+      4     2.0     2.60e-01
+      8     4.0     2.06e-02
+     16     8.0     3.16e-03
+     32    16.0     2.00e-06
+     64    32.0     2.61e-11
+    128    64.0     2.54e-11
+    256   128.0     2.54e-11
+xi/l from the L = 8l -> 16l drop: 1.086; from the learning pole at Im q = 0.923/l: 1.084
+derived aliasing floor F'(0) x erfc(l Lambda/sqrt2) / value = 2.525e-11
 
 d = 2, (1/N) sum_q h_q / (c^2 - sY^2 h_q): continuum value 0.085379218842
-      N     L/l            lattice   rel. error
-      4     2.0     0.065842598163     2.29e-01
-      8     4.0     0.087263747749     2.21e-02
-     16     8.0     0.085437482278     6.82e-04
-     32    16.0     0.085379223795     5.80e-08
-     64    32.0     0.085379218846     4.08e-11
+      N     L/l   rel. error
+     16     2.0     2.29e-01
+     64     4.0     2.21e-02
+    256     8.0     6.82e-04
+   1024    16.0     5.80e-08
+   4096    32.0     4.08e-11
+derived aliasing floor F'(0) x (1 - erf^2(l Lambda/sqrt2)) / value = 4.072e-11
 
 K + 0.0 I, ring N = 128, j = 0, 1, 2
   lattice (K^-1)_0j                      :     1533881.4     -1520138.8      1480296.8
@@ -393,9 +397,19 @@ K + 0.1 I, ring N = 128, j = 0, 1, 2
   a^2 int_BZ dq/2pi e^(iqx_j)/lambda(q)  :     5.6924854     -2.9155964    -0.45089424
   max relative difference                : 7.19e-08
 
-dictionary factors confirmed: final rel. errors < 2.7e-08 (10 x aliasing floor) in d = 1, 2
+d = 2 power law gamma/(q^2 + m^2), gamma = 1.0, m = 0.5, delta = 0.5: c_* = 1.2566
+asymptotic slope dc/dlog(Lambda^2/m^2) = H(0) gamma/4pi = 0.01501
+ Lambda/m        c   c - c_*     slope  int lam H  learning   xi_* m
+    2e+01   1.2573    0.0008       nan     0.2355    0.5218    35.06
+    2e+02   1.2583    0.0017   0.00021     0.3051    0.4532    23.28
+    2e+03   1.2604    0.0039   0.00046     0.3743    0.3861    15.59
+    2e+04   1.2650    0.0085   0.00100     0.4434    0.3216    10.55
+    2e+05   1.2744    0.0178   0.00202     0.5126    0.2618     7.31
+    2e+06   1.2913    0.0347   0.00368     0.5817    0.2096     5.27
+
+dictionary factors confirmed: final rel. errors within 2 x the derived floors in d = 1, 2
 \end{verbatim}
 }
-Reading: (i) $\lambda_q = \lambda(q)/a$ holds to the aliasing floor $e^{-\ell^2\Lam^2/2} = 2.7\times10^{-9}$, eq.~\eqref{eq:aliasing}. (ii) The two closed-form moments confirm the factors of $a$ and $2\pi$: $\frac1N\sum_q\lambda_q = K_{0,0} = 1$ (the continuum value $\operatorname{erf}(\ell\Lam/\sqrt2) = 1-3.3\times10^{-10}$ differs by the aliased tail), and $\frac1N\sum_q\lambda_q^2 = \sum_jK_{0,j}^2 = \sqrt\pi\,\ell/a = 3.5449$, which is $\rho I_2$ of \eqref{eq:I12}. (iii) For the \texttt{eq:linear-soln} summand the ring value converges to the continuum integral exponentially in $L$: by three decades between $L = 8\ell$ and $16\ell$ ($\xi\approx1.1\ell$), to $2\times10^{-6}$ at $L = 16\ell$ and to the aliasing floor at $L = 32\ell$; the torus does the same with the $d=2$ factors $a^2$ and $(2\pi)^2$. (iv) The inverse carries $a^{2d}$: with the nugget $K+0.1I$ the lattice $(K^{-1})_{0,j}$ matches $a^2\int_{\mathrm{BZ}}\frac{\dd q}{2\pi}e^{iqx_j}/\lambda(q)$ to $7\times10^{-8}$; for the pure kernel the two differ by $21\%$ and are of size $10^6\approx e^{\ell^2\Lam^2/2}/(\ldots)$, the cutoff-dominated object of Section~\ref{sec:dictionary}. The script fails loudly if the final errors exceed ten times the aliasing floor.
+Reading: (i) $\lambda_q = \lambda(q)/a$ holds to $2.7\times10^{-9}$, which is the zone-edge value $e^{-\ell^2\Lam^2/2}$ of the alias in eq.~\eqref{eq:aliasing}; the total weight outside the zone, $\operatorname{erfc}(\ell\Lam/\sqrt2) = 3.3\times10^{-10}$ in $d=1$ and $1-\operatorname{erf}^2 = 6.6\times10^{-10}$ in $d=2$, is what the mode averages below are sensitive to. (ii) The two closed-form moments confirm the factors of $a$ and $2\pi$: $\frac1N\sum_q\lambda_q = K_{0,0} = 1$ (the continuum value $\operatorname{erf}(\ell\Lam/\sqrt2) = 1-3.3\times10^{-10}$ differs by exactly that weight), and $\frac1N\sum_q\lambda_q^2 = \sum_jK_{0,j}^2 = \sqrt\pi\,\ell/a = 3.5449$, which is $\rho I_2$ of \eqref{eq:I12}. (iii) For the \texttt{eq:linear-soln} summand the ring value converges to the continuum integral exponentially in $L$: by three decades between $L = 8\ell$ and $16\ell$, i.e.\ $\xi = 1.09\ell$, to $2\times10^{-6}$ at $L = 16\ell$. The length is the learning-induced one of Section~\ref{sec:finite-size}: the denominator $c^2-\sY^2h(q)$ vanishes on the imaginary axis where $\lambda(i\varkappa)/a = \lambda_0e^{\ell^2\varkappa^2/2}$ reaches the root of $\sY^2h(\lambda) = c^2$, at $\varkappa = 0.92/\ell$, so $\xi_* = 1.08\ell$ (the small-gap formula of Section~\ref{sec:finite-size} gives $0.94\ell$ here, where the gap $c^2-\sY^2h(0) = 1.8$ is not small against $c^2 = 4$). At $L = 32\ell$ the error reaches the floor and stays there: the derived value $F'(0)\operatorname{erfc}(\ell\Lam/\sqrt2)/\text{value} = 0.0472\times3.32\times10^{-10}/0.6198 = 2.525\times10^{-11}$, with $F'(0) = \sigma^2/((1+g^2\sigma^2)c^2)$ the first coefficient of \eqref{eq:tail}, against the measured $2.54\times10^{-11}$. The torus does the same with the $d=2$ factors $a^2$ and $(2\pi)^2$, and its floor $F'(0)(1-\operatorname{erf}^2)/\text{value} = 0.00524\times6.63\times10^{-10}/0.08538 = 4.07\times10^{-11}$ is met to $0.2\%$. (iv) The inverse carries $a^{2d}$: with the nugget $K+0.1I$ the lattice $(K^{-1})_{0,j}$ matches $a^2\int_{\mathrm{BZ}}\frac{\dd q}{2\pi}e^{iqx_j}/\lambda(q)$ to $7\times10^{-8}$; for the pure kernel the two differ by $21\%$ and are of size $1.9\times10^6\approx2a^2e^{\ell^2\Lam^2/2}/\big((2\pi)^{3/2}\ell^3\Lam\big)$, the endpoint (Laplace) estimate of $a^2\int_{-\Lam}^{\Lam}\frac{\dd q}{2\pi}e^{\ell^2q^2/2}/(\sqrt{2\pi}\ell)$: the cutoff-dominated object of Section~\ref{sec:dictionary}. (v) For the $d=2$ power law the root stays pinned just above the pole, $c-c_* = 0.0017$ at $\Lam/m = 2\times10^2$ and $0.035$ at $2\times10^6$, with a slope $\dd c/\dd\log(\Lam^2/m^2)$ of $0.0002$ to $0.0037$ against the asymptotic coefficient $0.0150$ of \eqref{eq:c-log}; what grows with the cutoff is the noise-driven prior term $\int\lambda H$, and what shrinks is the learning term $c-\delta-\int\lambda H$ ($0.45\to0.21$) and the correlation length $\xi_*$ ($23/m\to5/m$), as discussed in Section~\ref{sec:uv}. The script fails loudly if the final errors of (iii) exceed twice the derived floors.
 
 \end{document}

@@ -485,7 +485,7 @@ def main() -> None:
         )
     print(
         f"\ndictionary factors confirmed: final rel. errors within {FLOOR_MARGIN:.0f} x the derived"
-        f" aliasing floor in d = 1, 2"
+        f" floors in d = 1, 2"
     )
 
 
