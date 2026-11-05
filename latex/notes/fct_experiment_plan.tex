@@ -314,7 +314,8 @@ Prediction 6 needs $K = 3$; its smoke is the full preset with \code{--set n\_epo
 \emph{Needs} D1, D3, D4, the measurement (W1--W7 of Section~\ref{sec:order}); D2 for $\sigma^2 = 0.01$ (else see the $\sigma = 0$ variant).
 \begin{verbatim}
 uv run python -m fct exp init ROOT/p1 --preset linear_ring \
-    --axis 'train.beta=[0.25]' --set lr=0.005 --set rate_lambda=0.0 --set input_noise_var=0.01
+    --axis 'train.beta=[0.25]' --set lr=0.005 --set rate_lambda=0.0 \
+    --set input_noise_var=0.01
 uv run python -m fct exp run ROOT/p1
 \end{verbatim}
 (one setting, named by the preset's one-value axis; the \code{--axis} repeats the preset's value and may be omitted). Values: $N = 64$, $P = 256$, $m = n = 8$, $K = 3$, $a = 1$, $\ell = 4$, $k_0 = k_1 = 1$, $\sigma^2 = 0.01$, $g = 0$, $\beta = 0.25$ ($\delta = 8192$), $2\times10^5$ steps, record every 50, burn-in $10^4$, $B = 4$.
