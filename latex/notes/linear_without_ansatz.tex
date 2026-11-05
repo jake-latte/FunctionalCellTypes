@@ -163,47 +163,56 @@ Remarks. (i) Neither $g^2 > 0$ nor $\delta > 0$ is needed; $\sigma^2 > 0$ is nee
 
 \subsection{The rank-deficient latent task}
 \label{sec:rank}
-Take the latent task of Section~1: $X = ZW_X^\top$, $Y = ZW_Y^\top$ with $Z \in \R^{P\times K}$, $K < P$, so that
+Take the latent task introduced in the fixnote of Section~2 (at the statement of the ansatz) and used numerically in \path{rg_diagonal_reduction.tex}: $X = ZW_X^\top$, $Y = ZW_Y^\top$ with latent coordinates $Z \in \R^{P\times L}$, $L < P$ ($L$ rather than $K$, which is the kernel), $W_X \in \R^{m\times L}$, $W_Y \in \R^{n\times L}$, so that
 \begin{equation}
-  XX^\top = Z G_X Z^\top,\quad YY^\top = Z G_Y Z^\top,\qquad G_X = W_X^\top W_X,\ G_Y = W_Y^\top W_Y \in \R^{K\times K},
+  XX^\top = Z G_X Z^\top,\quad YY^\top = Z G_Y Z^\top,\qquad G_X = W_X^\top W_X,\ G_Y = W_Y^\top W_Y \in \R^{L\times L},
 \end{equation}
-share the column space $\Z = \operatorname{col}(Z)$. Let $\Pi$ be the orthogonal projector onto $\Z$ and $\Pi_\perp = I - \Pi$.
+share the column space $\Z = \operatorname{col}(Z)$. Let $\Pi$ be the orthogonal projector onto $\Z$, $\Pi_\perp = I - \Pi$, and let $Q_\Z \in \R^{P\times L}$ be an orthonormal basis of $\Z$, so that $Z = Q_\Z W$ with $W = Q_\Z^\top Z \in \R^{L\times L}$ invertible (not orthogonal) and $W^\top W = Z^\top Z$.
 
 \begin{lemma}
-The fixed point has the block form $\Ct = \Pi\Ct\Pi + c_0\Pi_\perp$ with
+Let $Z$ have full column rank $L < P$, and let $\sigma^2 > 0$, $g^2 \ge 0$, $\delta \ge 0$, $\lambda_q \ge 0$ with some $\lambda_q > 0$ (the hypotheses of Proposition~\ref{prop:unique}). Then the fixed point has the block form $\Ct = \Pi\Ct\Pi + c_0\Pi_\perp$ with
 \begin{equation}
   c_0 = \delta + \frac{\sigma^2}{1 + g^2\sigma^2}\cdot\frac1N\sum_q\lambda_q
       = \delta + \frac{\sigma^2}{1 + g^2\sigma^2}\,K_{i,i},
   \label{eq:c0}
 \end{equation}
-the prior value of a mode with $\hat s_X = \hat s_Y = 0$ (\texttt{rg\_diagonal\_reduction.tex}), and $\Pi\Ct\Pi$ solves the $K\times K$ problem \eqref{eq:master} with $A \to \frac{k_0}{m} Z_\perp^\top ZG_XZ^\top Z_\perp$, $YY^\top \to Z_\perp^\top ZG_YZ^\top Z_\perp$, for any orthonormal basis $Z_\perp$ of $\Z$.
+the prior value of a mode with $\hat s_X = \hat s_Y = 0$ (\texttt{rg\_diagonal\_reduction.tex}), and $Q_\Z^\top\Ct Q_\Z$ solves the $L\times L$ problem \eqref{eq:master} with the restricted Gram matrices
+\begin{equation}
+  A \to \frac{k_0}{m}\, W G_X W^\top, \qquad YY^\top \to W G_Y W^\top .
+  \label{eq:restricted-gram}
+\end{equation}
 \end{lemma}
 \begin{proof}
-If $\Ct$ has the block form, so does $\Ct^{-1}$, and $\Ct^{-1}Z$ lies in $\Z$; hence $B = \frac1{k_1}\Ct^{-1}ZG_YZ^\top\Ct^{-1}$ is supported on $\Z$ and vanishes on $\Z^\perp$. $M_q$ is block diagonal with the scalar $(\sigma^{-2} + g^2)$ on $\Z^\perp$. So $\Sigma_q = (M_q - \lambda_q B)^{-1}$ is block diagonal with $\sigma^2/(1+g^2\sigma^2)$ on $\Z^\perp$, and $\mathcal F(\Ct)$ has the block form with the stated $c_0$. The block-form matrices are an invariant family of $\mathcal F$, and by Proposition~\ref{prop:unique} the fixed point is unique, so it lies in the family. On $\Z$ the restriction of \eqref{eq:master} is the $K\times K$ problem stated.
+If $\Ct$ has the block form, so does $\Ct^{-1}$, and $\Ct^{-1}Z$ lies in $\Z$; hence $B = \frac1{k_1}\Ct^{-1}ZG_YZ^\top\Ct^{-1}$ is supported on $\Z$ and vanishes on $\Z^\perp$. $M_q$ is block diagonal with the scalar $(\sigma^{-2} + g^2)$ on $\Z^\perp$. So $\Sigma_q = (M_q - \lambda_q B)^{-1}$ is block diagonal with $\sigma^2/(1+g^2\sigma^2)$ on $\Z^\perp$, and $\mathcal F(\Ct)$ has the block form with the stated $c_0$. The block-form matrices are an invariant family of $\mathcal F$, and by Proposition~\ref{prop:unique} the fixed point is unique, so it lies in the family. On $\Z$ the restriction of \eqref{eq:master} is the $L\times L$ problem stated, since $Q_\Z^\top Z G Z^\top Q_\Z = W G W^\top$.
 \end{proof}
 
-Consequences. The $P - K$ directions orthogonal to the latent column space carry exactly the prior at every frequency: no learning, no rotation, and they do not interact with $\Z$. Everything of interest lives in the $K$-dimensional latent space, where the problem is again \eqref{eq:master} with the $K\times K$ Gram matrices $G_X$, $G_Y$ (in the basis $Z_\perp$ of $\Z$, after absorbing $Z^\top Z_\perp$). A shared column space therefore does \emph{not} rescue the ansatz: the ansatz is exact in $\Z$ iff $[G_X, G_Y] = 0$ (Proposition~\ref{prop:iff} applied in $\Z$), which holds when $W_X$ and $W_Y$ both have orthonormal columns ($G_X = G_Y = I_K$, the case singled out in the proofreading note) and fails for generic $W_X, W_Y$. What the shared column space does buy is dimension: the ansatz-free problem is $K\times K$, with $K(K-1)/2$ rotation angles instead of $P(P-1)/2$.
+Consequences. The $P - L$ directions orthogonal to the latent column space carry exactly the prior at every frequency: no learning, no rotation, and they do not interact with $\Z$. Everything of interest lives in the $L$-dimensional latent space, where the problem is again \eqref{eq:master} with the $L\times L$ Gram matrices \eqref{eq:restricted-gram}. A shared column space therefore does \emph{not} rescue the ansatz. By Proposition~\ref{prop:iff} applied in $\Z$ (generic $\sigma^2$), the ansatz is exact in $\Z$ iff the restricted Gram matrices commute,
+\begin{equation}
+  [W G_X W^\top, W G_Y W^\top] = 0 \iff G_X\,(Z^\top Z)\,G_Y = G_Y\,(Z^\top Z)\,G_X,
+  \label{eq:restricted-commute}
+\end{equation}
+a condition on $G_X$, $G_Y$ \emph{and} the latent Gram matrix $Z^\top Z$. It reduces to $[G_X, G_Y] = 0$ only when $Z^\top Z \propto I_L$ (orthogonal latent coordinates), and it holds for every $Z$ when $G_X \propto G_Y$, in particular when $W_X$ and $W_Y$ both have orthonormal columns ($G_X = G_Y = I_L$, the case singled out in the fixnote of Section~2 and used, with $W_Y$ scaled by $0.6$, in the numerical check of \path{rg_diagonal_reduction.tex}). The latent coordinates of that check, $Z_{\mu,k} \sim \mathcal U[0,1]$ i.i.d., are far from orthogonal ($\mathbb E[Z^\top Z] = P(\tfrac1{12} I_L + \tfrac14 \mathbf 1\mathbf 1^\top)$): there the commutation comes from $G_X \propto G_Y$, not from $Z$. Conversely, $[G_X, G_Y] = 0$ with a non-orthogonal $Z$ does not make the ansatz exact. The second rank-deficient instance of Section~\ref{sec:numerical} ($P = 5$, $L = 2$, $Z^\top Z$ with unit diagonal and off-diagonal $0.15$, $G_X = I_2$, $G_Y = \diag(1, 0.3)$) has $[G_X, G_Y] = 0$ and restricted Gram matrices with relative commutator $0.098$; its fixed point keeps the block structure to $10^{-16}$ and its latent-space eigenbasis rotates by up to $31.5^\circ$ across $q$. What the shared column space does buy is dimension: the ansatz-free problem is $L\times L$, with $L(L-1)/2$ rotation angles instead of $P(P-1)/2$.
 
 \paragraph{Two latents.}
-For $K = 2$, choose the basis of $\Z$ that diagonalises the input part, $\frac{k_0}{m}Z_\perp^\top XX^\top Z_\perp = \diag(\hat x_1, \hat x_2)$, and write the tilt in that basis as $B = \begin{psmallmatrix} b_{11} & b_{12}\\ b_{12} & b_{22}\end{psmallmatrix}$, $m_{q,i} = (\lambda_q\hat x_i + \sigma^2)^{-1} + g^2$. Then
+For $L = 2$, choose the orthonormal basis $Q_\Z$ of $\Z$ that diagonalises the input part, $\frac{k_0}{m}Q_\Z^\top XX^\top Q_\Z = \diag(\hat x_1, \hat x_2)$, and write the tilt in that basis as $B = \begin{psmallmatrix} b_{1,1} & b_{1,2}\\ b_{1,2} & b_{2,2}\end{psmallmatrix}$, $m_{q,i} = (\lambda_q\hat x_i + \sigma^2)^{-1} + g^2$. Then
 \begin{equation}
-  \Sigma_q^{-1} = \begin{pmatrix} m_{q,1} - \lambda_q b_{11} & -\lambda_q b_{12} \\ -\lambda_q b_{12} & m_{q,2} - \lambda_q b_{22}\end{pmatrix},
+  \Sigma_q^{-1} = \begin{pmatrix} m_{q,1} - \lambda_q b_{1,1} & -\lambda_q b_{1,2} \\ -\lambda_q b_{1,2} & m_{q,2} - \lambda_q b_{2,2}\end{pmatrix},
   \qquad
-  \Sigma_q = \frac1{\Delta_q}\begin{pmatrix} m_{q,2} - \lambda_q b_{22} & \lambda_q b_{12} \\ \lambda_q b_{12} & m_{q,1} - \lambda_q b_{11}\end{pmatrix},
+  \Sigma_q = \frac1{\Delta_q}\begin{pmatrix} m_{q,2} - \lambda_q b_{2,2} & \lambda_q b_{1,2} \\ \lambda_q b_{1,2} & m_{q,1} - \lambda_q b_{1,1}\end{pmatrix},
 \end{equation}
-with $\Delta_q = (m_{q,1}-\lambda_q b_{11})(m_{q,2}-\lambda_q b_{22}) - \lambda_q^2 b_{12}^2 > 0$. The functional basis at frequency $q$ is rotated from the input basis by the angle $\theta_q$ with
+with $\Delta_q = (m_{q,1}-\lambda_q b_{1,1})(m_{q,2}-\lambda_q b_{2,2}) - \lambda_q^2 b_{1,2}^2 > 0$. The functional basis at frequency $q$ is rotated from the input basis by the angle $\theta_q$ with
 \begin{equation}
-  \tan 2\theta_q = \frac{2 b_{12}}{\,b_{11} - b_{22} + \dfrac{\hat x_1 - \hat x_2}{(\lambda_q\hat x_1 + \sigma^2)(\lambda_q\hat x_2 + \sigma^2)}\,},
+  \tan 2\theta_q = \frac{2 b_{1,2}}{\,b_{1,1} - b_{2,2} + \dfrac{\hat x_1 - \hat x_2}{(\lambda_q\hat x_1 + \sigma^2)(\lambda_q\hat x_2 + \sigma^2)}\,},
   \label{eq:two-latent-angle}
 \end{equation}
-and the three unknowns $(c_{11}, c_{22}, c_{12})$ of $\Ct$ satisfy
+and the three unknowns $(c_{1,1}, c_{2,2}, c_{1,2})$ of $\Ct$ satisfy
 \begin{equation}
-  c_{11} = \delta + \frac1N\sum_q\frac{\lambda_q(m_{q,2}-\lambda_q b_{22})}{\Delta_q},\quad
-  c_{22} = \delta + \frac1N\sum_q\frac{\lambda_q(m_{q,1}-\lambda_q b_{11})}{\Delta_q},\quad
-  c_{12} = \frac1N\sum_q\frac{\lambda_q^2 b_{12}}{\Delta_q},
+  c_{1,1} = \delta + \frac1N\sum_q\frac{\lambda_q(m_{q,2}-\lambda_q b_{2,2})}{\Delta_q},\quad
+  c_{2,2} = \delta + \frac1N\sum_q\frac{\lambda_q(m_{q,1}-\lambda_q b_{1,1})}{\Delta_q},\quad
+  c_{1,2} = \frac1N\sum_q\frac{\lambda_q^2 b_{1,2}}{\Delta_q},
   \label{eq:two-latent-system}
 \end{equation}
-with $B = \frac1{k_1}\Ct^{-1}G_Y'\Ct^{-1}$, $G_Y' = Z_\perp^\top YY^\top Z_\perp$, explicit for $2\times2$ matrices. Equation \eqref{eq:two-latent-angle} already exhibits the whole mechanism. The denominator is monotone in $\lambda_q$: the input term $(\hat x_1 - \hat x_2)/\big[(\lambda_q\hat x_1+\sigma^2)(\lambda_q\hat x_2+\sigma^2)\big]$ equals $(\hat x_1-\hat x_2)/\sigma^4$ at the finest scale ($\lambda_q\to0$) and vanishes at the coarsest ($\lambda_q\to\infty$), where only the target anisotropy $b_{11}-b_{22}$ remains. If input and target anisotropy have the same sign the angle grows monotonically from fine to coarse scales and stays below $45^\circ$. If they have opposite signs the denominator changes sign at some $\lambda^\star$, $\theta_q$ passes through $45^\circ$ there, and the leading functional mode \emph{changes identity} between fine and coarse scales: an avoided crossing of the two eigenvalues of $\Sigma_q$ as a function of $q$. Rotation requires $b_{12} \ne 0$, which at a fixed point happens iff $[G_X,G_Y]\neq0$ (Proposition~\ref{prop:iff}); the ansatz is the statement $b_{12}=0$.
+with $B = \frac1{k_1}\Ct^{-1}G_Y'\Ct^{-1}$, $G_Y' = Q_\Z^\top YY^\top Q_\Z = W G_Y W^\top$, explicit for $2\times2$ matrices. Equation \eqref{eq:two-latent-angle} already exhibits the whole mechanism. The denominator is monotone in $\lambda_q$: the input term $(\hat x_1 - \hat x_2)/\big[(\lambda_q\hat x_1+\sigma^2)(\lambda_q\hat x_2+\sigma^2)\big]$ equals $(\hat x_1-\hat x_2)/\sigma^4$ at the finest scale ($\lambda_q\to0$) and vanishes at the coarsest ($\lambda_q\to\infty$), where only the target anisotropy $b_{1,1}-b_{2,2}$ remains. If input and target anisotropy have the same sign the angle grows monotonically from fine to coarse scales and stays below $45^\circ$. If they have opposite signs the denominator changes sign at some $\lambda^\star$, $\theta_q$ passes through $45^\circ$ there, and the leading functional mode \emph{changes identity} between fine and coarse scales: an avoided crossing of the two eigenvalues of $\Sigma_q$ as a function of $q$. Rotation requires $b_{1,2} \ne 0$, which at a fixed point happens iff the restricted Gram matrices \eqref{eq:restricted-gram} fail to commute (Proposition~\ref{prop:iff} in $\Z$, generic $\sigma^2$); the ansatz is the statement $b_{1,2}=0$. In the $P = 6$ demonstration of Section~\ref{sec:numerical} the leading pair of modes is of the opposite-sign kind: the denominator of \eqref{eq:theta}, the first-order form of \eqref{eq:two-latent-angle}, would vanish for it at $\lambda^\star = 5.65$, just beyond $\lambda_{\max} = 3.54$, so the avoided crossing is nearly, but not quite, realised within the kernel's spectrum.
 
 \section{Perturbative treatment}
 \label{sec:perturbative}
