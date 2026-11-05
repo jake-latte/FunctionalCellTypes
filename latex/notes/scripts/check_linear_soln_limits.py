@@ -70,6 +70,7 @@ P3_BETA_SWEEP = [0.25, 1.0, 2.0, 5.0, 10.0]
 P7_ELL_SWEEP = [2.0, 4.0, 8.0]
 P8_K_SWEEP = [0.01, 0.1, 1.0, 10.0, 100.0]
 RATIO_Q_MAX = 12  # d_q(mode 1) / d_q(mode 2) is printed for |q| = 0, ..., RATIO_Q_MAX
+FIGURE_Q_MAX = 20  # the figure shows |q| <= FIGURE_Q_MAX
 FIGURE_PANELS = [
     "P1 prior-shaped (weak target, no rate penalty)",
     "P2 rate-penalty whitening",
@@ -789,14 +790,16 @@ def plot_profiles(name, ax=None):
     if ax is None:
         _, ax = plt.subplots()
     q = np.fft.fftfreq(PRED_N) * PRED_N
-    keep = q >= 0
+    # Beyond |q| ~ 20 every curve sits on its floor and lam_q is at round-off: nothing is lost.
+    keep = (q >= 0) & (q <= FIGURE_Q_MAX)
     lam, spectra = prediction_spectra(*PREDICTIONS[name])
     for mode, (d, style) in enumerate(zip(spectra, ("-", "--")), start=1):
         label = f"mode {mode} ({'mean' if mode == 1 else 'contrast'})"
         ax.plot(q[keep], d[keep] / d[0], style, label=label)
     ax.plot(q[keep], lam[keep] / lam[0], ":", color="grey", label=r"$\lambda_q/\lambda_0$")
     ax.set_yscale("log")
-    ax.set_ylim(1e-6, 2)  # lam_q reaches round-off (1e-14) beyond |q| ~ 20; nothing is lost
+    ax.set_ylim(1e-6, 2)
+    ax.set_xlim(0, FIGURE_Q_MAX)
     ax.set_xlabel("$|q|$")
     ax.set_title(name.split(" ", 1)[1], fontsize=9)
     return ax
