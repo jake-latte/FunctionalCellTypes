@@ -5,6 +5,7 @@
 \usepackage{lmodern,microtype}
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage{array}
 \usepackage{enumitem}
 \usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue]{hyperref}
 \newcommand{\R}{\mathbb R}
@@ -30,6 +31,15 @@
 \begin{abstract}
 We re-derive the implicit solution \texttt{eq:linear-soln} of Section~2 for a linear network with one spatially embedded hidden layer, and find that it agrees with the proofread (red) form of the notes; the whole analysis below therefore refers to that corrected equation. Per data mode, the hidden-layer variance at spatial frequency $q$ factorises as a prior-shaped, rate-penalty-shrunk variance times a target-driven amplification, $d_q = \pi_q \amp_q$, and $d_q$ is monotone in $\lambda_q$: every data mode is smoothest at $q = 0$, so spatial ``cell types'' can only appear in the \emph{ratios} of the spectra of different data modes. We work out the limits $\sigma \to 0$, $g \to 0$, $k_0 = k_1$, a Gaussian kernel on a ring, and the uniform latent task, and identify three mechanisms that move the spatial scale of one latent relative to another: the input-noise floor (no effect on shape at weak target), rate-penalty whitening (a strong latent is pushed to \emph{finer} scales), and target condensation (a strong latent is pushed to \emph{coarser} scales, up to the system size). In the uniform-$[0,a]$ task the ``strong latent'' is always the mean direction $\sum_k z_k$, whose singular value exceeds the $K-1$ degenerate contrast directions by $3K+1$; individual latents are not identifiable. Eight numerical predictions close the note. Every non-trivial step is checked in \path{latex/notes/scripts/check_linear_soln_limits.py}.
 \end{abstract}
+
+\section*{Summary of conclusions}
+\addcontentsline{toc}{section}{Summary of conclusions}
+\begin{itemize}[nosep]
+  \item The re-derivation reproduces the corrected \texttt{eq:linear-soln}; the ansatz is an exact fixed point of the full map when $[XX^\top, YY^\top] = 0$ (machine precision against an ansatz-free Newton solve), and off by $\sim0.2\%$ for a mildly non-orthonormal teacher.
+  \item $d_q = \pi_q\amp_q$ (prior-shrunk variance times target amplification) is monotone in $\lambda_q$: no data mode peaks at an intermediate spatial frequency; spatial cell types are relative statements between data modes, and at $\sigma = g = 0$, $\delta = 0$ (or weak targets) all data modes of the latent task share one profile.
+  \item $\sigma$ adds a white floor and, at weak target, nothing else; $g$ caps and \emph{whitens} strong modes; $\beta$ (through $\delta$) \emph{condenses} strong modes onto $q = 0$ with correlation length $\propto\hat s_Y$ (no true condensate in $d\le2$ for $N\to\infty$); a common $k_0 = k_1$ is a gain knob with maximal target effect at $k_* = \sqrt{m/(\kappa s_X^2\bar\lambda_2)}$.
+  \item In the uniform-$[0,a]$ task the strong mode is the mean direction ($s_1^2/s_k^2 = 3K+1$); the contrasts are degenerate and individual latents are not identifiable by the linear theory.
+\end{itemize}
 
 \tableofcontents
 
@@ -247,8 +257,10 @@ With $\sigma, g > 0$, $k$ also sets $\rho\propto k$ and $\gamma\propto k$, so a 
 \label{sec:ring}
 Sites $i = 0,\dots,N-1$ at unit spacing. The kernel is the wrapped (image-summed) Gaussian of \path{fct/spatial.py},
 \begin{equation}
-  K_{i,j} = \frac{W(i-j)}{W(0)},\qquad W(r) = \sum_{k\in\mathbb Z}\exp\!\Big(-\frac{(r+kN)^2}{2\ell^2}\Big),\qquad
+\begin{gathered}
+  K_{i,j} = \frac{W(i-j)}{W(0)},\qquad W(r) = \sum_{k\in\mathbb Z}\exp\!\Big(-\frac{(r+kN)^2}{2\ell^2}\Big),\\
   \lambda_q = \sum_{r=0}^{N-1}K(r)e^{-2\pi\mathrm iqr/N} = \frac{\sqrt{2\pi}\,\ell}{W(0)}\sum_{j\in\mathbb Z}\exp\!\Big(-2\pi^2\ell^2\Big(\frac qN + j\Big)^2\Big),
+\end{gathered}
   \label{eq:ring}
 \end{equation}
 the last equality by Poisson summation (the DFT of the periodised Gaussian is the sampled continuous transform plus its aliases). The $j = 0$ term is the continuum formula $\sqrt{2\pi}\,\ell\,e^{-2\pi^2\ell^2q^2/N^2}$; the aliases are positive and at most $e^{-\pi^2\ell^2/2}$ of it (at $|q| = N/2$), and $W(0) = 1 + O(e^{-N^2/2\ell^2})$. Every term is positive, so $\lambda_q > 0$ for every $q$ and every $\ell$: the wrapped kernel is positive definite, as Section~\ref{sec:start} and Lemma~\ref{lem:mono} require. The Gaussian of the minimum-image distance $\min(|i-j|, N-|i-j|)$ differs from it by the dropped images, a tail of size $e^{-N^2/8\ell^2}$ at the antipode $r = N/2$, and that tail is exactly what makes it \emph{not} positive definite once $\ell\gtrsim N/8$: at $N = 64$ its smallest eigenvalue is $-4.3\times10^{-4}$ at $\ell = 8$ and $-6.8\times10^{-2}$ at $\ell = 12$, where the wrapped kernel's is zero to round-off ($-2\times10^{-15}$; script B4). At $\ell = 4$ the two kernels agree to $10^{-14}$.
@@ -321,7 +333,7 @@ Four remarks on what this means for the analysis.
     \label{eq:Delta-latent}
   \end{equation}
   $\rho_k = \lambda_0k_0s_k^2/(m\sigma^2)$ and $\gamma_k = g^2\lambda_0k_0s_k^2/m$ grow $\propto P$: at fixed $\sigma$ and $g$, enough patterns always make the noise floor negligible and saturate the rate penalty; to keep those effects at large $P$ one must scale $\sigma^2\propto P$ and $g^2\propto1/P$.
-  \item \emph{When the ansatz is only approximate.} If $W_X$ or $W_Y$ is not orthonormal (as in \path{fct/tasks.py}, where the entries are i.i.d.\ $\mathcal N(0,1/K)$), $XX^\top = ZG_XZ^\top$ and $YY^\top = ZG_YZ^\top$ with $G_X = W_X^\top W_X$, $G_Y = W_Y^\top W_Y$, and they commute iff $G_X(Z^\top Z)G_Y$ is symmetric, which is not generic. Section~\ref{sec:rederive} quantifies the error for a mild skew ($0.5\%$ on $c$).
+  \item \emph{When the ansatz is only approximate.} If $W_X$ or $W_Y$ is not orthonormal (as in \path{fct/tasks.py}, where the entries are i.i.d.\ $\mathcal N(0,1/K)$), $XX^\top = ZG_XZ^\top$ and $YY^\top = ZG_YZ^\top$ with $G_X = W_X^\top W_X$, $G_Y = W_Y^\top W_Y$, and they commute iff $G_X(Z^\top Z)G_Y$ is symmetric, which is not generic. Section~\ref{sec:rederive} quantifies the error for a mild skew ($0.2\%$ on $c$).
 \end{enumerate}
 
 \section{Functional cell types}
@@ -357,31 +369,40 @@ with $s_1^2 = Pa^2(3K+1)/12$, $s_{k\ge2}^2 = Pa^2/12$, $c_k$ the root of \eqref{
 
 \subsection{The three regimes}
 \label{sec:regimes}
-Each condition is tagged \task{} if it is set by $(Z, W_X, W_Y)$, \prior{} if by $(K, k_0, k_1, g, \sigma, \beta)$, and \mixed{} if by a product of the two.
+Table~\ref{tab:regimes} lists the conditions. Each is tagged \task{} if it is set by $(Z, W_X, W_Y)$, \prior{} if by $(K, k_0, k_1, g, \sigma, \beta)$, and \mixed{} if by a product of the two.
 
-\paragraph{(a) All latents share the same spatial profile.}
-\begin{enumerate}[nosep,label=(a\arabic*)]
-  \item $g = 0$ and $\tau_k\ll1$ for all $k$: $d_q^{(k)} = \lambda_q\hat s_{X,k}^2 + \sigma^2$, the same shape $\lambda_q$ above a common floor; $R_k(r)/R_k(0)\to K(r)$ for $r\ge1$ when $\rho_k\gg1$. \prior{} ($g$, $\beta$ small enough, Section~\ref{sec:g0}).
-  \item $\sigma = g = 0$ and $\Delta_k\ll1$ for all $k$ (zero temperature): by \eqref{eq:reduced} every mode has the same $\Theta$ and therefore the same $\tau = \tau(\Theta)$ and the same profile $\lambda_q/(1-\tau\ell_q^2)$, however strong the amplification. \prior{} ($\beta\to\infty$) given \task{} ($XX^\top\propto YY^\top$, which makes $\Theta$ mode-independent).
-  \item Equal singular values: the $K-1$ contrast modes always share a profile because their $s_k$ coincide. \task{} (isotropic latents). This is the only purely task-driven statement in the list, and it is a statement about symmetry.
-\end{enumerate}
+\begin{table}[t]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}>{\raggedright\arraybackslash}p{1.0cm}>{\raggedright\arraybackslash}p{2.0cm}>{\raggedright\arraybackslash}p{6.6cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{1.3cm}@{}}
+    \toprule
+    Regime & & Condition & Driver & Section \\
+    \midrule
+    \multicolumn{5}{@{}l}{\emph{(a) All latents share the same spatial profile}}\\
+    (a1) & weak target, no penalty & $g = 0$, $\tau_k\ll1$ for all $k$: $d_q^{(k)} = \lambda_q\hat s_{X,k}^2 + \sigma^2$, the shape $\lambda_q$ above a common floor; $R_k(r)/R_k(0)\to K(r)$ for $r\ge1$ when $\rho_k\gg1$ & \prior{} ($g$, $\beta$ small) & \ref{sec:g0} \\
+    (a2) & zero temperature & $\sigma = g = 0$, $\Delta_k\ll1$ for all $k$: every mode has the same $\Theta$, hence the same $\tau(\Theta)$ and profile $\lambda_q/(1-\tau\ell_q^2)$, however strong the amplification & \prior{} ($\beta\to\infty$) given \task{} ($XX^\top\propto YY^\top$) & \eqref{eq:reduced} \\
+    (a3) & equal singular values & the $K-1$ contrast modes always share a profile because their $s_k$ coincide; a statement about symmetry & \task{} (isotropic latents) & \ref{sec:latent} \\
+    \addlinespace
+    \multicolumn{5}{@{}l}{\emph{(b) Different latents separate across spatial scales} (both need unequal $s_k$)}\\
+    (b1) & rate-penalty whitening & $\gamma_1\gg1+g^2\sigma^2\gg\gamma_2$, i.e.\ $\hat s_{X,2}^2\ll1/(g^2\lambda_0)\ll\hat s_{X,1}^2$, a window of width $3K+1$ in $g^2$; \emph{the stronger latent occupies finer scales} & \mixed{} ($g^2\lambda_0$ against $k_0s_k^2/m$) & \ref{sec:whiten} \\
+    (b2) & target condensation & $\Delta_1\lesssim1\lesssim\Delta_2$, i.e.\ $\beta_c/(3K+1)\lesssim\beta\lesssim\beta_c = 12n\sqrt m/(\lambda_0\sqrt{k_0k_1}\,a^2)$ ($\beta\in[2.7,27]$ in Section~\ref{sec:predictions}); \emph{the stronger latent occupies coarser scales} & \mixed{} ($\beta$, $k_0k_1$, $\lambda_0$ against $a^2(3K+1)$, $n$, $m$) & \ref{sec:ring} \\
+    \addlinespace
+    \multicolumn{5}{@{}l}{\emph{(c) Nothing is spatially structured (white tuning maps)}}\\
+    (c1) & noise-dominated & $\rho_k\ll1$, $\tau_k\ll1$: $d_q^{(k)} = \sigma_0^2(1+O(\rho_k))$; realised by $k_0\to0$, $\sigma\to\infty$ or small $P$ & \mixed{} ($k_0$, $\sigma$ against $s_k^2/m$) & Lem.~\ref{lem:floor} \\
+    (c2) & rate-penalty clamp & $g^2\sigma^2\gg1$, $\tau_k\ll1$: $d_q\to1/g^2$ for every $q$, $k$ (at strong target $\amp_q$ still multiplies the clamp) & \prior{} & \ref{sec:whiten} \\
+    (c3) & white prior & $\ell\to0$: $\lambda_q\equiv1$, no $q$-dependence at all & \prior{} & \ref{sec:g0} \\
+    (c4) & null modes & anything outside $\col(Z)$ is white at level $\sigma_0^2$ & \task{} & Lem.~\ref{lem:floor} \\
+    (c5) & full condensation & $\tau_k\to1$ for all $k$ with $\xi_k\gtrsim N$: every cell has the same tuning (uniform maps) & \mixed{} ($\Delta_k\ll1$, $\Theta\bar\ell_2\ll1$) & \ref{sec:ring} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Conditions for the three regimes of functional cell types, with the parameters that drive each. Both (b) mechanisms need unequal $s_k$: in the uniform task only mode 1 differs, by the factor $3K+1$. (a3) is the only purely task-driven statement in the list. Which direction (b) takes is decided by the prior: $g$ pushes a strong mode to fine scales, $\beta$ to coarse ones; the task only decides \emph{which} mode is strong.}
+  \label{tab:regimes}
+\end{table}
 
-\paragraph{(b) Different latents separate across spatial scales.}
-Two opposite mechanisms; both need unequal $s_k$ (\task{}: in the uniform task only mode 1 differs, by the factor $3K+1$) and a prior parameter that breaks the scale invariance of \eqref{eq:reduced}.
-\begin{enumerate}[nosep,label=(b\arabic*)]
-  \item \emph{Rate-penalty whitening} (Section~\ref{sec:whiten}): at weak target, $d_q^{(k)} - \sigma_0^2 = \lambda_q\hat s_{X,k}^2/\big[(1+g^2\sigma^2)(1+g^2\sigma^2 + g^2\lambda_q\hat s_{X,k}^2)\big]$. A mode with $\gamma_k\gg1+g^2\sigma^2$ is flat for $|q|$ below the crossover $\lambda_{q_k^\times} = (1+g^2\sigma^2)/(g^2\hat s_{X,k}^2)$ and follows $\lambda_q$ beyond; a mode with $\gamma_k\ll1$ follows $\lambda_q$ throughout. Separation when $\gamma_1\gg1\gg\gamma_2$, i.e.\ $\hat s_{X,2}^2\ll1/(g^2\lambda_0)\ll\hat s_{X,1}^2$, a window of width $3K+1$ in $g^2$. \emph{The stronger latent occupies finer scales.} \mixed{} ($g^2\lambda_0$ against $k_0s_k^2/m$).
-  \item \emph{Target condensation} (Section~\ref{sec:ring}): $\tau_k$ decreases with $\Delta_k\propto1/s_k^2$, so the mode with the largest $s_k$ is amplified first and its correlation length grows $\propto\hat s_{Y,k}$ while the others stay at $\ell$. Separation when $\Delta_1\lesssim1\lesssim\Delta_2$, i.e.\ by \eqref{eq:Delta-latent} $\beta$ between $\beta_c/(3K+1)$ and $\beta_c = 12n\sqrt m/(\lambda_0\sqrt{k_0k_1}\,a^2)$ ($\beta_c = 27$ in the setting of Section~\ref{sec:predictions}, so $\beta\in[2.7, 27]$). \emph{The stronger latent occupies coarser scales.} \mixed{} ($\beta$, $k_0k_1$, $\lambda_0$ against $a^2(3K+1)$, $n$, $m$).
-\end{enumerate}
-Which direction wins is decided by the prior: $g$ pushes a strong mode to fine scales, $\beta$ to coarse ones; the task only decides \emph{which} mode is strong.
+\paragraph{Mechanism (b1), whitening.} At weak target, $d_q^{(k)} - \sigma_0^2 = \lambda_q\hat s_{X,k}^2/\big[(1+g^2\sigma^2)(1+g^2\sigma^2 + g^2\lambda_q\hat s_{X,k}^2)\big]$. A mode with $\gamma_k\gg1+g^2\sigma^2$ is flat for $|q|$ below the crossover $\lambda_{q_k^\times} = (1+g^2\sigma^2)/(g^2\hat s_{X,k}^2)$ and follows $\lambda_q$ beyond; a mode with $\gamma_k\ll1$ follows $\lambda_q$ throughout (details in Section~\ref{sec:whiten}).
 
-\paragraph{(c) Nothing is spatially structured (white tuning maps).}
-\begin{enumerate}[nosep,label=(c\arabic*)]
-  \item Noise-dominated: $\rho_k\ll1$ and $\tau_k\ll1$ give $d_q^{(k)} = \sigma_0^2(1 + O(\rho_k))$. \mixed{} ($k_0$, $\sigma$ against $s_k^2/m$); realised by $k_0\to0$, $\sigma\to\infty$ or $P$ small.
-  \item Rate-penalty clamp: $g^2\sigma^2\gg1$ and $\tau_k\ll1$ give $d_q\to1/g^2$ for every $q$ and $k$ (at strong target $\amp_q$ still multiplies the clamp). \prior{}.
-  \item White prior: $\ell\to0$ makes $\lambda_q\equiv1$ and removes all $q$-dependence. \prior{}.
-  \item Null modes: anything outside $\col(Z)$ is white at level $\sigma_0^2$ (Lemma~\ref{lem:floor}). \task{}.
-  \item The opposite trivial extreme is full condensation, $\tau_k\to1$ for all $k$ with $\xi_k\gtrsim N$: every cell has the same tuning (uniform maps). \mixed{} ($\Delta_k\ll1$ and $\Theta\bar\ell_2\ll1$).
-\end{enumerate}
+\paragraph{Mechanism (b2), condensation.} $\tau_k$ decreases with $\Delta_k\propto1/s_k^2$, so the mode with the largest $s_k$ is amplified first and its correlation length grows $\propto\hat s_{Y,k}$ while the others stay at $\ell$ (Section~\ref{sec:ring}); the window in $\beta$ follows from \eqref{eq:Delta-latent}.
 
 \subsection{Rate-penalty whitening in detail}
 \label{sec:whiten}
@@ -443,7 +464,7 @@ Common setting unless stated: linear activation, one hidden layer on a ring of $
   \item \textbf{A common prior scale is non-monotone (Section~\ref{sec:k}).}\\
   \emph{Setting:} 3 ($\sigma^2 = 0.01$, $g = 0$, $\beta = 10$) with $k_0 = k_1 = k\in\{0.01, 0.1, 1, 10, 100\}$.\\
   \emph{Measure:} the $q = 0$ share of both modes at each $k$.\\
-  \emph{Predict:} mode-1 share $0.152, 0.166, 0.343, 0.166, 0.157$ (peak at $k = 1$); mode 2: $0.118, 0.152, 0.164, 0.165, 0.157$.\\
+  \emph{Predict:} mode-1 share 0.152, 0.166, 0.343, 0.166, 0.157 (peak at $k = 1$); mode 2: 0.118, 0.152, 0.164, 0.165, 0.157.\\
   \emph{Falsified if} the mode-1 share is monotone in $k$ or its peak value is below $0.25$.
 \end{enumerate}
 
@@ -456,15 +477,7 @@ The numbers above assume the notes' model as stated. Four conventions differ in 
   \item \emph{Rate penalty.} The notes' loss carries $\frac1\beta\mathcal P_{\mathrm{rates}} = \frac1{2\beta}\sum_{l,\mu,i,j}\phi^{(l)\mu}_iG^{(l)}_{i,j}\phi^{(l)\mu}_j$ with $G^{(l)} = g^2I$, i.e.\ $\frac{g^2}{2\beta}\sum\phi^2$; \path{fct/train.py} adds $\texttt{rate\_lambda}\sum_{l,\mu,i}\phi(h^{(l)\mu}_i)^2$ to a loss whose data term $\frac N2\,\mathrm{mse}$ equals the notes' $\frac N{2Pn}\sum(f-y)^2$, and samples $e^{-\beta L}$. The two agree with $\texttt{rate\_lambda} = g^2/(2\beta)$ (the \texttt{rate\_tilt} $= 2\beta\,\texttt{rate\_lambda}$ of \path{docs/design.md} is $g^2$), with \texttt{train.beta} the notes' $\beta$.
 \end{enumerate}
 
-\section{Summary of conclusions}
-\begin{itemize}[nosep]
-  \item The re-derivation reproduces the corrected \texttt{eq:linear-soln}; the ansatz is an exact fixed point of the full map when $[XX^\top, YY^\top] = 0$ (machine precision against an ansatz-free Newton solve), and off by $\sim0.5\%$ for a mildly non-orthonormal teacher.
-  \item $d_q = \pi_q\amp_q$ (prior-shrunk variance times target amplification) is monotone in $\lambda_q$: no data mode peaks at an intermediate spatial frequency; spatial cell types are relative statements between data modes, and at $\sigma = g = 0$, $\delta = 0$ (or weak targets) all data modes of the latent task share one profile.
-  \item $\sigma$ adds a white floor and, at weak target, nothing else; $g$ caps and \emph{whitens} strong modes; $\beta$ (through $\delta$) \emph{condenses} strong modes onto $q = 0$ with correlation length $\propto\hat s_Y$ (no true condensate in $d\le2$ for $N\to\infty$); a common $k_0 = k_1$ is a gain knob with maximal target effect at $k_* = \sqrt{m/(\kappa s_X^2\bar\lambda_2)}$.
-  \item In the uniform-$[0,a]$ task the strong mode is the mean direction ($s_1^2/s_k^2 = 3K+1$); the contrasts are degenerate and individual latents are not identifiable by the linear theory.
-\end{itemize}
-
 \appendix
 \section{Reproducing the numbers}
-From the repository root, \texttt{uv run python} \path{latex/notes/scripts/check_linear_soln_limits.py} (about 20\,s) prints sections A--E quoted above and writes \path{latex/notes/figures/linear_solution_limits_profiles.png}. All parameters are module constants at the top of the script; the random seed is $0$.
+From the repository root, \texttt{uv run python} \path{latex/notes/scripts/check_linear_soln_limits.py} (a few seconds) prints sections A--E quoted above and writes \path{latex/notes/figures/linear_solution_limits_profiles.png}. All parameters are module constants at the top of the script; the random seed is $0$.
 \end{document}
