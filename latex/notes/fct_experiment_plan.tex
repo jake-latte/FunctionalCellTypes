@@ -1,0 +1,411 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=22mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage[htt]{hyphenat}
+\emergencystretch=1.5em
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue]{hyperref}
+\newcommand{\R}{\mathbb R}
+\newcommand{\E}{\mathbb E}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\col}{\operatorname{col}}
+\newcommand{\sX}{\hat s_X^2}
+\newcommand{\sY}{\hat s_Y^2}
+\newcommand{\amp}{\mathcal A}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\agree}{\textbf{agree}}
+\newcommand{\differ}{\textbf{differ}}
+\newtheorem{remark}{Remark}
+\title{Mapping the linear-solution predictions onto \texttt{fct}:\\discrepancies, conventions and an experiment plan}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The note \path{linear_solution_limits.tex} ends with eight numerical predictions for a linear one-hidden-layer network on a ring. This note turns them into a plan that a later session can implement without reopening the theory. It compares, convention by convention, what Sections~1--2 of the notes (after the proofreading pass) define with what the \code{fct} library implements, each claim about the code cited by file and line at commit \code{4f74b73}; lists the discrepancies with a concrete code change, the tests that move and the cache impact of each; gives the dictionary from every theory symbol to a \code{Config} field; specifies the measurement (tuning maps, their unitary DFT power, the summary statistics) as functions with inputs, outputs and maths; and writes out every experiment with its \code{fct} invocation, a smoke version that runs on a CPU in seconds, the full version, the predicted numbers and the figure. The four mismatches the limits note already lists (uncentred latents, Gaussian teacher, no activity noise, the rate-penalty coefficient) are confirmed; the forward pass, the loss prefactor, the temperature, the kernel and its spectrum agree exactly (the code's ring kernel equals the script's to the bit). Two further discrepancies matter more than any of those for running the experiments: the eigenvalue floor of the penalty matrix $M = K^{-1}$ changes the prior the network is trained under and makes SGLD on a smooth kernel prohibitively stiff, which a whitened parametrisation of the spatial prior removes; and the activity noise $\eta$ must be sampled jointly with the weights, not redrawn at every step as the limits note suggested, because the two schemes have different stationary laws. The plan closes with an ordered list of eleven work items in the lab's format.
+\end{abstract}
+
+\section*{Summary of conclusions}
+\addcontentsline{toc}{section}{Summary of conclusions}
+\begin{itemize}[nosep]
+  \item \emph{Agreements.} Forward normalisations $1/\sqrt m$, $1/\sqrt N$, $1/N$; the data term $\frac N{2Pn}\sum(f-y)^2$ with \code{train.beta} the notes' $\beta$, hence $\kappa = \beta/(Pn)$; the prior $K^{(l)} = K^{\mathrm{post}}\otimes K^{\mathrm{pre}}$ with $M = K^{-1}$ and $\mathrm{Cov}(W) = K/\lambda_w$; the wrapped Gaussian ring kernel and its Fourier eigenvalues (bit-identical to the script's for \code{box} $= N$, \code{length\_scale} $= \ell$); periodic boundaries; the rate penalty on every hidden layer with $g^2 = 2\beta\,\code{rate\_lambda}$; the identity activation; one hidden layer; and, for $K = I$, the mean-field solver's saddle-point equations (its tilt matrix is $-B$, no factor of $i$ or $N$).
+  \item \emph{Discrepancies, in order of importance for the experiments:} (D1) the penalty parametrisation floors the prior spectrum at \code{min\_rel\_eig}$\,\lambda_0$ and makes SGLD stiff (at $\ell = 4$, $N = 64$ the default floor needs $\mathrm{lr} < 5\times10^{-6}$ at $\beta = 0.25$); (D2) no activity noise $\eta$; (D3) latents on $[-a,a]$ in the committed code (the PI's uncommitted edit makes it $[0,a]$, the notes' convention) with no data-version guard, a Gaussian rather than orthonormal teacher, and a latent-lattice test set built for centred latents; (D4) the mean-field solver knows only the iid prior, so the spatial theory has no implementation in \code{fct}; (D5) naming: \code{net.g} is a gain, the notes' $g$ a rate penalty; $n = m$ is forced; $k_0$, $k_1$ are kernel amplitudes.
+  \item \emph{Measurement.} A new monitor records, every \code{monitor\_int} SGLD steps, the unitary DFT power of the hidden activity projected on the singular vectors of the latent matrix $Z$ and the mean power of the $P - K$ null directions; the analysis averages the power over records after burn-in and reads off $q_{1/2}$, the $q = 0$ share and $R(1)/R(0)$. The theory side is a pure function from a \code{Config} to $d^{(k)}_q$ (a port of the per-mode solver of \path{check_linear_soln_limits.py}).
+  \item \emph{Experiments.} All eight predictions are runnable from one preset (\code{linear\_ring}) with \code{--set} and \code{--axis} overrides; a smoke preset (\code{linear\_ring\_tiny}: $N = 16$, $P = 32$, $4\times10^3$ steps) runs in seconds and its predicted numbers are given. Predictions 1--3, 7, 8 can run before $\eta$ exists with $\sigma^2 = 0$ (numbers given); 4 and 5 cannot.
+  \item \emph{Caveat on one statistic.} The $q = 0$ share of a condensed mode falls like $1/N$ at fixed $\tau$ (0.343 at $N = 64$, 0.172 at 128, 0.086 at 256): prediction 3's numbers hold at $N = 64$ only; the lag-1 autocorrelation ($0.985$) is $N$-independent.
+\end{itemize}
+
+\tableofcontents
+
+\section{What was read, and how to read this note}
+\label{sec:scope}
+Theory: \path{latex/sections/01_setup.tex} and \path{02_renormalisation_group.tex} after the proofreading pass (their red notes in \path{latex/notes/setup_*.tex}, \path{rg_*.tex}), \path{linear_solution_limits.tex} (the predictions), \path{linear_without_ansatz.tex} and \path{continuum_limit.tex}. The corrected implicit solution is
+\begin{equation}
+  1 - \frac\delta c = \frac cN\sum_q\frac{h_q}{c^2 - \sY h_q},\quad
+  h_q = \frac{\lambda_q(\lambda_q\sX + \sigma^2)}{1 + g^2(\lambda_q\sX + \sigma^2)},\quad
+  d_q = \frac{c^2h_q/\lambda_q}{c^2 - \sY h_q},
+  \label{eq:linear-soln}
+\end{equation}
+on the branch $c > \hat s_Y\sqrt{\max_q h_q}$, with $\sX = k_0 s_X^2/m$, $\sY = s_Y^2/k_1$, $\delta = 1/(k_1\kappa)$, $\kappa = \beta/(Pn)$.
+
+Code: the \code{fct} package and \code{tests/} at commit \code{4f74b73} (the branch \code{latex-edit}; \code{git rev-parse HEAD} in the worktree). Every \code{file:line} below refers to that commit. The PI has \emph{uncommitted} edits in the main checkout (read, not modified): \path{fct/tasks.py} draws the linear-teacher latents from $[0, a]$ instead of $[-a, a]$ (\code{z = a * torch.rand(...)} in place of \code{a * (2 * torch.rand(...) - 1)}, and the docstring); \path{fct/presets/phase_transition.json} is being reworked (N = 2048, Adam, $\beta = 1$, zero input/output length scales, axes \code{spatial.lambda\_max} $= [0.001]$, hidden length scale $[0.01, 0.1]$, \code{train.rate\_lambda} $= [0, 10^{-3}]$, \code{B} as a shared field); \path{README.md} follows the preset. This note treats $[0, a]$ as the intended convention (it is the notes' task); the committed code and the mismatch paragraph of the limits note describe $[-a, a]$. The Gaussian teacher $W\sim\mathcal N(0, 1/K)$ is in both versions.
+
+Notation follows the notes: layer superscripts $(l)$, data indices $\mu,\nu$ superscript, spatial indices $i,j,a,b,\alpha,\beta$ subscript; $K$ is the number of latents where the context is the task and the kernel otherwise, as in the limits note. Code identifiers are in \code{typewriter}; a dotted path such as \code{spatial.hidden.kernel.length\_scale} is a \code{Config} field.
+
+\section{Architecture and conventions, side by side}
+\label{sec:side}
+
+\subsection{Forward pass, normalisations and the input noise}
+\label{sec:forward}
+\emph{Notes} (\code{eq:ff-network}): $h^{(1)\mu}_i = m^{-1/2}\sum_a W^{(0)}_{i,a}x^\mu_a + \eta^\mu_i$, $h^{(l+1)\mu}_i = N^{-1/2}\sum_j W^{(l)}_{i,j}\phi(h^{(l)\mu}_j)$, $f^\mu_\alpha = N^{-1}\sum_j W^{(L)}_{\alpha,j}\phi(h^{(L)\mu}_j)$, with $\eta^\mu_i\sim\mathcal N(0,\sigma^2)$ i.i.d.\ over $(\mu, i)$, integrated out in \code{eq:single-site-reg} into the term $-\frac{\sigma^2}2[\hat h^{(1)}]^2$, which is why the first-layer covariance is $\Phi^{(0)} + \sigma^2 I$ (\code{02\_renormalisation\_group.tex}, the single-site density at its top).
+
+\emph{Code} (\path{fct/model.py}, class \code{MLP}): \code{forward} at lines 83--96. Line 88, \code{(1 / math.sqrt(self.D\_in)) * einsum("id, pd -> pi", self.U, x)}, is $h^{(1)} = Ux/\sqrt m$ with $m = $ \code{D\_in}; line 92, \code{(self.g / math.sqrt(self.N)) * einsum("ij, pj -> pi", J, z\_prev)}, is the hidden-to-hidden step with a gain \code{g} in front of $1/\sqrt N$ (unused at $L = 1$: \code{J} is empty, line 47); line 95, \code{(1 / self.N) * einsum("id, pi -> pd", self.V, self.phi(H[-1]))}, is the $1/N$ readout of the post-activations (\code{MODEL\_VERSION = 2}, \path{fct/config.py:35}). The ensemble class repeats the same three factors (lines 160--165). All parameters are standard-normal at initialisation (lines 42--47); the scale factors live in the forward pass, which is the notes' convention of unit-variance weights. \emph{The forward pass is deterministic: there is no $\eta$} (nothing is added to \code{H[0]}; no RNG is read in \code{forward}).
+
+\emph{Verdict:} $1/\sqrt m$, $1/\sqrt N$ (with \code{g = 1}), $1/N$: \agree. Input noise $\eta$: \differ{} (D2, Section~\ref{sec:D2}). Tests pinning the normalisations: \path{tests/test_model.py:46} and \code{:53}.
+
+\subsection{Loss prefactor, temperature, SGLD, and \texorpdfstring{$\kappa$}{kappa}}
+\label{sec:loss}
+\emph{Notes:} $\mathcal L = \frac N{2Pn}\sum_{\mu,\alpha}(f^\mu_\alpha - y^\mu_\alpha)^2 + \frac1\beta\mathcal P_{\mathrm{weight}} + \frac1\beta\mathcal P_{\mathrm{rates}}$, Langevin $\partial_s\Theta = -\nabla\mathcal L + \sqrt{2/\beta}\,\eta(s)$, stationary law $e^{-\beta\mathcal L}$ (\code{eq:theta-distr}); $\kappa = \beta/(Pn)$ is defined where $f$ is integrated out.
+
+\emph{Code:} \path{fct/train.py:57--95}, \code{compute\_loss}: line 85 \code{mse = per\_member(net, (y - z).square(), torch.mean)}, the mean over the $P\times n$ entries; line 93 \code{loss = 0.5 * net.N * mse + prior\_coefficient * weight\_l2 + rate\_lambda * rate\_l2}. So $\frac N2\,\mathrm{mse} = \frac N{2Pn}\sum(f-y)^2$ exactly, with $n = $ \code{D\_out}. \path{fct/sgld.py:53--76}, \code{SGLD.step}: line 60 \code{noise\_scale = math.sqrt(2 * group["lr"] / group["beta"])}, line 64 \code{delta = noise\_scale * self.noise(p) - group["lr"] * p.grad}: the Euler--Maruyama step of the notes' Langevin equation with $\mathrm dt = $ \code{lr} and $\beta = $ \code{train.beta} (\path{fct/config.py:121}). The stationary law is $e^{-\beta L}$ as $\mathrm{lr}\to0$; at finite \code{lr} the variance on a quadratic of curvature $c$ is $1/(\beta c(1 - \mathrm{lr}\,c/2))$ (\path{docs/design.md}, section ``SGLD''; \path{tests/test_sgld.py:45}). The prior coefficient (\path{fct/train.py:45--54}, \code{prior\_coefficient}) is $\lambda_w/(2\beta)$ so that $\beta L$ carries $\frac{\lambda_w}2\,\mathrm{form}$, i.e.\ the notes' $\mathcal P_{\mathrm{weight}} = \frac12 W M W$ with $M = \lambda_w(M^{\mathrm{post}}\otimes M^{\mathrm{pre}})$ (\code{LOSS\_VERSION = 4}, \path{fct/config.py:29}). The rate term is \code{rate\_lambda} $\sum\phi^2$ in $L$, i.e.\ $\beta\,\code{rate\_lambda}\sum\phi^2$ in $\beta L$, against the notes' $\frac{g^2}2\sum\phi^2$: $g^2 = 2\beta\,\code{rate\_lambda}$, which is the solver's \code{rate\_tilt} (\path{fct/meanfield.py:272}).
+
+\emph{Verdict:} \agree{} with \code{train.beta} $=\beta$, \code{train.optimizer = "sgld"}, $\kappa = \beta/(Pn)$ and $\code{rate\_lambda} = g^2/(2\beta)$. The mean-field solver reads the same $\beta$ through \code{resolve\_beta} (\path{fct/meanfield.py:277--282}). Under Adam there is no Gibbs law; every experiment here uses SGLD.
+
+\subsection{The weight prior}
+\label{sec:prior}
+\emph{Notes:} $\mathcal P_{\mathrm{weight}} = \frac12\sum_l W^{(l)}_{i,a}M^{(l)}_{i,a,j,b}W^{(l)}_{j,b}$, $K = M^{-1}$, $\E[W_{i,a}W_{j,b}] = K_{i,a,j,b}$, factorised as $K^{(l)}_{i,a,j,b} = K^{(l),\mathrm{post}}_{i,j}K^{(l),\mathrm{pre}}_{a,b}$; Section~2 sets $K^{(0),\mathrm{post}} = K^{(1),\mathrm{pre}}\equiv K$, $K^{(0),\mathrm{pre}} = k_0I_m$, $K^{(1),\mathrm{post}} = k_1I_n$, $K = F\Lambda F^\dagger$ with the unitary DFT (translation invariance, periodic boundaries), $\lambda_q$ real, $\lambda_q = \lambda_{-q}$; the limits note fixes $K_{i,i} = 1$ (so $\bar\lambda = 1$) and the wrapped Gaussian of \path{fct/spatial.py}.
+
+\emph{Code:} \path{fct/spatial.py}. The prior of layer $l$ is $K^{\mathrm{post}}\otimes K^{\mathrm{pre}}$ per population pair (module docstring lines 1--15; \code{LayerSpace} 319--334; \code{build\_spaces} 354--363, which gives layer $l$ the populations $l$ and $l + 1$ and shares one \code{Population} object between consecutive layers, line 363, so $K^{(0),\mathrm{post}} = K^{(1),\mathrm{pre}}$ holds by construction). The penalty is per factor, $M = K^{-1}$ by \code{penalty\_matrix} (269--297), and the loss uses $\tr(M^{\mathrm{post}}WM^{\mathrm{pre}}W^\top)$ without forming the Kronecker product (\code{weight\_quadratic\_form}, 369--380; \code{parameter\_factors}, 435--447, with the readout \code{V} stored $(N, n)$ so its rows take $M^{\mathrm{pre}}$). Combined with the prior coefficient of Section~\ref{sec:loss}, $\mathrm{Cov}(\mathrm{vec}\,W^{(l)}) = (K^{\mathrm{post}}\otimes K^{\mathrm{pre}})/\lambda_w$ (\path{docs/design.md}, ``Spatial weight prior in training''; \path{tests/test_prior_convention.py:46}). The kernel: \code{periodic\_gaussian\_kernel} (224--231) is the product over axes of \code{wrapped\_gaussian\_profile} (208--221), $K_{i,j} = \code{amplitude}\cdot W(\delta)/W(0)$ with $W(\delta) = \sum_{|k|\le n_{\mathrm{img}}}\exp(-(\delta + k\,\code{box})^2/2\ell^2)$, $n_{\mathrm{img}} = \lceil 8\ell/\code{box}\rceil + 1$ (201--205); the diagonal is \code{amplitude} exactly. A grid embedding puts $n$ units at $\code{box}\cdot k/n$, $k = 0,\dots,n-1$ (\code{\_grid\_positions}, 160--163), on the torus $[0,\code{box})$ (\code{torus\_distance}, 195--198; the reduction at 217). \code{length\_scale = 0} gives \code{amplitude}$\cdot I$ (218--219). Scalars: $k_0$ and $k_1$ are \code{spatial.input.kernel.amplitude} and \code{spatial.output.kernel.amplitude} with \code{length\_scale = 0} on both and \code{weight\_lambda = 1}; the hidden amplitude is $1$ ($K_{i,i} = 1$). \emph{Checked numerically} (Appendix~\ref{app:numbers}): with $N = 64$, \code{box = 64.0}, grid embedding, hidden \code{length\_scale = 4.0}, \code{amplitude = 1.0}, the hidden-population \code{K} of \code{build\_spaces} equals the script's \code{ring\_kernel(64, 4.0)} with \code{max|diff| = 0.0}, as does \code{box = 1.0} with \code{length\_scale = 4/64}; its eigenvalues equal \code{ring\_spectrum(64, 4.0)} to $9\times10^{-15}$, $\lambda_0 = 10.0265$, $\bar\lambda = 1$. So the limits note's $\ell$ in sites is \code{length\_scale} $=\ell$ with \code{box} $= N$ (or $\ell/N$ with \code{box} $= 1$), and the Fourier eigenvalues, the periodicity and $\bar\lambda = 1$ all \agree.
+
+The input/output positions $\mathbf x_a$, $\mathbf x_\alpha$: the notes assign them but with $K^{(0),\mathrm{pre}} = k_0I$, $K^{(1),\mathrm{post}} = k_1I$ nothing depends on them; the code assigns grid positions to the input and output populations too (\code{build\_spaces}, 360 and 362) and with \code{length\_scale = 0} they drop out identically. \agree.
+
+What does \emph{not} agree is the spectrum the network is actually trained under. \code{penalty\_matrix} floors the eigenvalues of $K$ at \code{min\_rel\_eig}$\cdot\lambda_0$ before inverting (lines 285--287), so the sampled prior is $K_{\mathrm{eff}} = M^{-1}$ with $\lambda_q^{\mathrm{eff}} = \max(\lambda_q, f\lambda_0)$, $f = $ \code{spatial.min\_rel\_eig} (default $10^{-6}$, line 118; the presets use $10^{-2}$). The docstring (41--46) and \path{docs/design.md} (``The floor'') say so. This is D1 (Section~\ref{sec:D1}): \differ.
+
+\subsection{The firing-rate regulariser}
+\emph{Notes:} $\mathcal P_{\mathrm{rates}} = \frac12\sum_{l=1}^L\sum_\mu\sum_{i,j}\phi^{(l)\mu}_iG^{(l)}_{i,j}\phi^{(l)\mu}_j$, $G = g^2I$: every hidden layer, not the output.
+
+\emph{Code:} \path{fct/train.py:86}, \code{rate\_l2 = per\_member(net, net.phi(h).square())} with \code{h} the \code{(P, L, N)} stack of hidden pre-activations (\code{MLP.forward} returns \code{torch.stack(H, dim=1)}, line 96, hidden layers only); summed over patterns, neurons and layers (\path{tests/test_train.py:269}). Coefficient: $g^2 = 2\beta\,\code{rate\_lambda}$ (Section~\ref{sec:loss}). \agree{} in layer range and form. Naming: the notes' $g$ is this penalty; the code's \code{net.g} (\path{fct/config.py:93}) is the gain of the hidden-to-hidden weights (Section~\ref{sec:forward}), which must stay $1$. D5.
+
+\subsection{Activation and depth}
+\code{net.phi = "id"} maps to \code{fct.activations.identity} (\path{fct/activations.py:11,21}) with derivative one and tilt class \code{"linear"} (lines 65, 79); \code{net.L = 1} builds \code{U} $(N, m)$ and \code{V} $(N, n)$ and no \code{J} (\path{fct/model.py:46--47}). \agree{} (\path{tests/test_identity_activation.py:38,51}).
+
+\subsection{The task}
+\label{sec:task}
+\emph{Notes} (limits note, Section~4.5): $X = ZW_X^\top$, $Y = ZW_Y^\top$, $Z\in\R^{P\times K}$ with $z^\mu_k$ i.i.d.\ uniform on $[0,a]$, $W_X\in\R^{m\times K}$, $W_Y\in\R^{n\times K}$ with orthonormal columns; then $XX^\top = YY^\top = ZZ^\top$, the ansatz is exact, $s_1^2 = Pa^2(3K+1)/12$ on the mean direction $u_1\propto Z\mathbf 1$ and $s_{k\ge2}^2 = Pa^2/12$ on the contrasts.
+
+\emph{Code} (\path{fct/tasks.py:81--103}, \code{linear\_teacher}): line 90 \code{z = a * (2 * torch.rand((cfg.P, k), ...) - 1)}: $z\sim\mathcal U[-a, a]$ (the PI's uncommitted edit: \code{a * torch.rand(...)}, $\mathcal U[0,a]$); lines 91--92 \code{w\_x}, \code{w\_y} \code{= torch.randn((m, k), ...) / k**0.5}: i.i.d.\ $\mathcal N(0, 1/K)$ entries, not orthonormal columns; \code{m = cfg.D\_in} for both $x$ and $y$ (line 88; \code{output\_dim = lambda cfg: cfg.D\_in}, line 264), so $n = m$ is forced; $K = $ \code{data.n\_latents}, $a = $ \code{data.latent\_range} (\path{fct/config.py:60--61}); \code{factors} hold the columns of $Z$ (line 100) and \code{extras} the maps. The held-out lattice \code{latent\_lattice\_dataset} (353--385) uses \code{values = [-a, 0, a]} (line 374), the three-point lattice of a \emph{centred} range. Tests that pin the current conventions: \path{tests/test_tasks.py:158} (zero mean, variance $4/3$ at $a = 2$), \code{:185} (teacher variance $1/K$), \path{tests/test_latent_lattice.py:26,48}.
+
+\emph{Verdict:} \differ{} on the range (committed code), on the teacher, and on the lattice; $m = n$ is a restriction the predictions satisfy ($m = n = 8$). D3 (Section~\ref{sec:D3}).
+
+\subsection{What the mean-field solver solves}
+\label{sec:solver}
+\emph{Notes:} the action of Section~1 after the contour rotation $\hat\Phi\to-i\hat\Phi$ (red note, \path{setup_conjugate_rotation.tex}): single-site density $\propto\exp\{-\frac12h^\mu_i(\Phi^{-1})^{\mu,\nu}_{i,j}h^\nu_j + \frac12\phi^\mu_i(\hat\Phi^{\mu,\nu}_{\alpha,\beta}K_{\alpha,i,\beta,j} - G_{i,j}\delta^{\mu,\nu})\phi^\nu_j\}$, kernel $\Phi^{(l)} = \frac1N\sum_{a,b}K^{(l)}_{i,a,j,b}\langle\phi_a\phi_b\rangle$, readout saddle $\hat\Phi^{(L)} = (\Phi^{(L)} + \kappa^{-1}I)^{-1}\mathbb Y(\Phi^{(L)} + \kappa^{-1}I)^{-1}$, hidden-layer saddle \code{eq:backward-pass} $\hat\Phi^{(l)} = \frac1N([\Phi^{(l)}]^{-1}\langle h\otimes h\rangle[\Phi^{(l)}]^{-1} - [\Phi^{(l)}]^{-1})$. In Section~2 with $K = I$ and $k_0 = k_1 = k$: per-site prior $\Phi^{(0)} = \frac km XX^\top + \sigma^2I$, tilt $+\frac12\phi B\phi - \frac{g^2}2\phi\phi$ with $B = \frac1k\tilde C^{-1}YY^\top\tilde C^{-1}$, $\tilde C = C + \delta I$, $\delta = Pn/(\beta k)$.
+
+\emph{Code:} \path{fct/meanfield.py}, module docstring lines 5--28 and \path{fct/hmc.py:7--16}: the single-site density of layer $l$ is $p(h)\propto\mathcal N(h; 0, \Sigma)\exp(-\frac12\psi^\top M\psi - \frac12\lambda_r\phi^\top\phi)$ with $\Sigma_0 = \code{prior\_scale}\cdot XX^\top/D_{\mathrm{in}}$ (\code{\_prior\_cov}, 285--287; \code{Phi0 = X @ X.T / D\_in}, line 253), $M = \hat\Phi_{\mathrm{code}}$, and the readout target $M_L = -2c\,A\,YY^\top A$, $A = (\alpha I + \Phi_L)^{-1}$ (\code{\_last\_stein\_target}, 682--684; \code{\_learning\_pieces}, 687--695). The constants follow the network (\code{network\_constants}, 263--274): \code{prior\_scale} $= 1/\lambda_w$, $\alpha = \lambda_wPn/\beta$, \code{rate\_tilt} $= 2\beta\,\code{rate\_lambda}$, $c = \lambda_w/2$. With $k = 1/\lambda_w$: $\Sigma_0 = \frac km XX^\top$ ($\sigma^2 = 0$), $\alpha = Pn/(\beta k) = \delta$, $-\frac12\psi M_L\psi = +\frac12\psi\,\lambda_w(\tilde C^{-1}YY^\top\tilde C^{-1})\psi = +\frac12\psi B\psi$, and $\lambda_r = g^2$. The hidden-layer gradient (\code{\_outer\_gradients}, 945--974, lines 961--973) is $-\frac12\hat\Phi_l + \frac12\,\mathrm{sym}(\langle uh^\top\rangle_{l+1}\Phi_l^{-1})$, the Stein form of \code{eq:backward-pass} with the opposite sign. The kernels are $\Phi_l = \psi\psi^\top/N$ (\code{empirical\_kernels}, 153--161), the notes' $C$ for $K = I$. The analytic reference of \path{tests/test_meanfield.py:77} iterates exactly $\Phi = (\Sigma^{-1} + \hat\Phi)^{-1}$, $\hat\Phi = -2cAYY^\top A$.
+
+\emph{Verdict:} for $K = I$ the solver's saddle-point equations are the notes' with the dictionary $M_{\mathrm{code}} = -B = -K^{(1),\mathrm{post}}_{\alpha,\beta}\hat\Phi^{(1)\mu,\nu}_{\alpha,\beta}$ (the code's tilt is a penalty, the notes' a reward; no factor of $i$ on either side, both being the rotated conjugate; no factor of $N$, the per-site tilt is $\frac12\phi B\phi$ in both). \agree{} on the iid prior. For a spatial prior the solver refuses to run (\code{SpatialPriorUnsupportedError}, \path{fct/meanfield.py:1513--1516}): the spatial theory of Section~2 has no implementation. D4 (Section~\ref{sec:D4}).
+
+\subsection{Summary table}
+\begin{table}[H]
+\centering\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{5.6cm}l@{}}
+\toprule
+Item & Notes & \code{fct} (commit \code{4f74b73}) & \\
+\midrule
+$h^{(1)} = Ux/\sqrt m$ & \code{eq:ff-network} & \path{model.py:88} & agree\\
+$f = V^\top\phi(h)/N$ & \code{eq:ff-network} & \path{model.py:95} & agree\\
+$\eta\sim\mathcal N(0,\sigma^2)$ & \code{eq:ff-network}, \code{eq:single-site-reg} & absent & D2\\
+data term $\frac N{2Pn}\sum(f-y)^2$ & $\mathcal L$ & \path{train.py:85,93} & agree\\
+$\beta$, SGLD, $\kappa = \beta/(Pn)$ & \code{eq:theta-distr} & \path{sgld.py:60,64}; \code{train.beta} & agree\\
+$\mathcal P_{\mathrm{weight}} = \frac12WMW$, $K = M^{-1}$ & \code{eq:prior-weights} & \path{train.py:45--54,104--110}; $\mathrm{Cov} = K/\lambda_w$ & agree\\
+$K^{(l)} = K^{\mathrm{post}}\otimes K^{\mathrm{pre}}$ & Section~1 & \path{spatial.py:319--363} & agree\\
+$k_0$, $k_1$ & Section~2 & input/output \code{amplitude}, $\ell = 0$, $\lambda_w = 1$ & agree (dictionary)\\
+$\lambda_q$, periodic, $K_{i,i} = 1$ & \code{eq:ring} & \path{spatial.py:201--231}; bit-identical & agree\\
+spectrum sampled & $\lambda_q$ & $\max(\lambda_q, f\lambda_0)$, \path{spatial.py:285--287} & D1\\
+$G = g^2I$, layers $1..L$ & $\mathcal P_{\mathrm{rates}}$ & \path{train.py:86}; $g^2 = 2\beta\,$\code{rate\_lambda} & agree; name clash D5\\
+$\phi = \mathrm{id}$, $L = 1$ & Section~2 & \code{net.phi="id"}, \code{net.L=1} & agree\\
+$Z\sim\mathcal U[0,a]$ & limits note & $\mathcal U[-a,a]$ (\path{tasks.py:90}); PI edit $[0,a]$ & D3\\
+$W_X$, $W_Y$ orthonormal & limits note & $\mathcal N(0,1/K)$ (\path{tasks.py:91--92}) & D3\\
+lattice test set & -- & $\{-a,0,a\}^K$ (\path{tasks.py:374}) & D3\\
+saddle point, $K = I$ & \code{eq:backward-pass} & \path{meanfield.py:682--695,961--973}, $M = -B$ & agree\\
+saddle point, spatial & Section~2 & refused (\path{meanfield.py:1513}) & D4\\
+\bottomrule
+\end{tabular}
+\caption{Conventions side by side. ``agree'' means equal under the dictionary of Section~\ref{sec:dictionary}.}
+\end{table}
+
+\section{Discrepancies and how to address them in the code}
+\label{sec:discrepancies}
+Ordered by how much they matter for the experiments. Each entry: where, what the notes say, the change, the tests that move, the cache impact (\code{Config.section\_hash}, \path{fct/config.py:391--426}).
+
+\subsection{D1: the eigenvalue floor of the penalty, and SGLD stiffness}
+\label{sec:D1}
+\emph{Where.} \path{fct/spatial.py:269--297} (\code{penalty\_matrix}), used by \code{\_make\_population} (337--351) for every population; the stability check \path{fct/train.py:113--136}.
+
+\emph{Notes.} The prior spectrum is $\lambda_q$ of \code{eq:ring}, which for $\ell = 4$, $N = 64$ spans $\lambda_q/\lambda_0 = 1$ down to $10^{-34}$ at $|q| = 32$.
+
+\emph{What the code does.} $M = K^{-1}$ needs the inverse, so eigenvalues below $f\lambda_0$ are raised to the floor and the sampled prior has $\lambda_q^{\mathrm{eff}} = \max(\lambda_q, f\lambda_0)$. Measured with \code{build\_spaces} at $N = 64$, $\ell = 4$ (Appendix~\ref{app:numbers}): $f = 10^{-2}$ floors 49 of 64 eigenvalues (every $|q|\ge8$, floor $0.1$), $f = 10^{-4}$ floors 43 ($|q|\ge11$, floor $10^{-3}$), $f = 10^{-6}$ floors 37 ($|q|\ge14$). The effect on prediction 1 (Section~\ref{sec:P1}; computed with $\lambda_q^{\mathrm{eff}}$ in place of $\lambda_q$): at $f = 10^{-2}$ the ratio $\hat d^{(1)}_q/\hat d^{(2)}_q$ stays at $9.7$ for every $|q|\ge8$ instead of falling to $1.35$ by $|q| = 12$, $R(1)/R(0)$ drops from $0.969$ to $0.881$ and the $q = 0$ share from $0.157$ to $0.146$; at $f = 10^{-4}$ the ratio ends at $2.90$ instead of $1.35$ for $|q|\ge11$, the rest within $0.001$; at $f = 10^{-6}$ nothing moves by more than $10^{-3}$. So the floor must be $\le10^{-6}$ for the tails of the predictions to hold, which is the library default. The price is SGLD stiffness: \code{\_check\_sgld\_step\_resolves\_the\_prior} requires $\mathrm{lr}\cdot\frac{\lambda_w}{2\beta}\lambda_{\max}(M^{\mathrm{post}})\lambda_{\max}(M^{\mathrm{pre}}) < 1$ with $\lambda_{\max}(M^{\mathrm{hidden}}) = 1/(f\lambda_0)$ (measured $9.97$, $997$, $9.97\times10^4$ for $f = 10^{-2}, 10^{-4}, 10^{-6}$), so at $\beta = 0.25$ the bound is $\mathrm{lr} < 0.050$, $5\times10^{-4}$, $5\times10^{-6}$. The softest prior mode (variance $\lambda_0k_0$) then relaxes in $\beta\lambda_0k_0/\mathrm{lr}$ steps, i.e.\ at the largest admissible step $5/f$ steps: $50$, $5\times10^3$, $5\times10^5$. With $f = 10^{-6}$ the weak-target experiments would need $\sim10^7$ steps for a few relaxation times, and the stiffest modes would sit at the edge of Euler--Maruyama stability (variance inflated by $1/(1 - \mathrm{lr}\,c/2)$).
+
+\emph{Change: a whitened parametrisation of the spatial prior.} Add \code{spatial.parametrisation: Literal["penalty", "whitened"] = "penalty"} (\path{fct/spatial.py}, \code{SpatialConfig}). Under \code{"whitened"} the trained parameters are $\xi^{(l)}$ with $W^{(l)} = S^{\mathrm{post}}\xi^{(l)}S^{\mathrm{pre}}$, $S = K^{1/2}$ the symmetric PSD square root from \code{torch.linalg.eigh} with eigenvalues clamped at $0$ (no inversion, no floor), and the penalty is $\|\xi^{(l)}\|_F^2$ with the unchanged coefficient $\lambda_w/(2\beta)$, so $\mathrm{Cov}(\mathrm{vec}\,W) = (K^{\mathrm{post}}\otimes K^{\mathrm{pre}})/\lambda_w$ \emph{exactly}, for every spectrum, and the curvature of the prior term is $\lambda_w/\beta$ in every direction: the stability bound becomes $\mathrm{lr}\,\lambda_w/\beta < 2$ and every prior mode relaxes in $\beta/(\lambda_w\,\mathrm{lr})$ steps. Interfaces: \code{Population} gains \code{S} (the square root; \code{M} may stay for readers); \code{parameter\_factors} gains a sibling \code{whitening\_factors(spaces) -> \{name: (S\_rows, S\_cols)\}} in the stored orientation of each parameter (for \code{V}, stored $(N, n)$: rows $S^{\mathrm{pre}}$, columns $S^{\mathrm{post}}$, as for \code{M}); \code{MLP} and \code{EnsembleMLP} accept an optional \code{whitening} mapping of registered buffers and apply $W = S_{\mathrm{rows}}\,\xi\,S_{\mathrm{cols}}$ in \code{forward} before the existing scale factors; a pure \code{effective\_weights(net) -> \{name: W\}} returns the weights a reader should analyse (\code{net.U} is $\xi$ under whitening); \code{make\_weight\_penalty} returns the plain \code{weight\_l2} (of $\xi$) under whitening and skips the SGLD stiffness check. Readers that use \code{net.U}, \code{net.V} as weights must switch to \code{effective\_weights}: \path{fct/spatial_view.py:176} (\code{order\_weights}), \code{:268}, \path{fct/phase_view.py:364} (\code{weight\_kernels}). Cost: two extra $(N,N)\times(N,m)$ products per step; measured $0.4$\,ms per loss-and-gradient for the full-size problem against $2.0$\,ms for the penalty path (Appendix~\ref{app:numbers}).
+
+\emph{Tests.} Existing tests are untouched under the default (\path{tests/test_spatial_prior.py}, \path{tests/test_prior_convention.py}, \path{tests/test_train_pins.py} pin the penalty path bit for bit). New: (i) \code{whitening\_factors} with identity kernels reproduces the plain net bit for bit; (ii) for a whitened net with no data ($P = 0$ or $\beta\to0$ is awkward; instead sample $\xi\sim\mathcal N(0, I/\lambda_w)$ directly) the sample covariance of $\mathrm{vec}\,W$ over $10^4$ draws is $(K^{\mathrm{post}}\otimes K^{\mathrm{pre}})/\lambda_w$ to $5\%$ on a $N = 8$ ring; (iii) \code{effective\_weights} equals $S\xi S$; (iv) the smoke experiment of Section~\ref{sec:smoke} as an end-to-end test.
+
+\emph{Cache.} The field enters the train hash only when set to \code{"whitened"} (the pattern of \code{lambda\_max}, \path{fct/config.py:419--424}), so every existing hash is unchanged; a whitened run has a new hash. Presets unchanged.
+
+\subsection{D2: no activity noise, and how to sample it}
+\label{sec:D2}
+\emph{Where.} \path{fct/model.py:88} (nothing is added to the first layer); predictions 4 and 5 need it, and 1--3, 7 use $\sigma^2 = 0.01$.
+
+\emph{Notes.} $\eta^\mu_i\sim\mathcal N(0,\sigma^2)$ enters \code{eq:ff-network} and is integrated at the level of the partition function together with $\Theta$: $\mathcal Z = \int\mathcal D\Theta\,\mathcal D\eta\,e^{-\beta\mathcal L(\Theta,\eta)}e^{-\eta^2/2\sigma^2}$ (\code{eq:single-site-reg} is that Gaussian integral). The measure over $(\Theta,\eta)$ is therefore a \emph{joint} Gibbs measure at inverse temperature $\beta$ for $\mathcal L$, with $\eta$'s own prior untempered.
+
+\begin{remark}[Fresh draws are the wrong sampler]
+The limits note's closing paragraph proposes to add $\sigma\xi^\mu_i$, $\xi$ fresh per $(\mu,i)$, at every forward pass. SGLD with a fresh $\eta$ at every step has the drift $-\nabla_\Theta\mathcal L(\Theta,\eta_t)$, whose average over $\eta_t$ is $-\nabla_\Theta\E_\eta\mathcal L(\Theta,\eta)$; its stationary law as $\mathrm{lr}\to0$ is $e^{-\beta\E_\eta[\mathcal L(\Theta,\eta)]}$, the annealed loss, in which the data term becomes $(\bar f - y)^2 + \mathrm{Var}_\eta f$ (a constant plus the noise-free loss). The joint measure's marginal is $\int\mathrm d\eta\,e^{-\beta\mathcal L(\Theta,\eta)}e^{-\eta^2/2\sigma^2}$, the marginal likelihood, which is not the same function of $\Theta$ (the two agree only as $\sigma\to0$). More to the point, the theory's hidden-layer statistics $\langle h^{(1)}h^{(1)}\rangle$ are joint over $(\Theta,\eta)$, so $\eta$ must be a sampled variable whose current value enters the tuning map.
+\end{remark}
+
+\emph{Change.} Add \code{net.input\_noise\_var: NonNegFloat = 0.0} ($\sigma^2$). When it is positive, the net holds $\zeta\in\R^{P\times N}$ as a parameter (\code{MLP(..., n\_patterns=P)}; \code{make\_net} gets $P$ from the dataset in \code{train\_from\_config}, \path{fct/train.py:453--459}; the ensemble holds $(B, P, N)$), and \code{forward(x, *, noise=False)} adds $\sigma\zeta$ to \code{H[0]} when \code{noise=True}, raising \code{ValueError} if \code{x.shape[0]} is not $P$. Parametrising $\eta = \sigma\zeta$ with $\zeta\sim\mathcal N(0,I)$ keeps the prior curvature of $\zeta$ at $1/\beta$, like $\xi$ under D1, so one \code{lr} serves both. The loss (\code{compute\_loss}) gains the term $\frac1{2\beta}\|\zeta\|^2$ (coefficient $1/(2\beta)$, $\beta = 1$ under Adam, by the same rule as \code{prior\_coefficient}) and a history key \code{noise\_l2}; SGLD updates $\zeta$ with every other parameter (it iterates \code{net.parameters()}); \code{make\_weight\_penalty} excludes \code{zeta} from the spatial factors (its check at \path{fct/train.py:150--157} would otherwise raise). The training step and the monitor (Section~\ref{sec:measure}) call the net with \code{noise=True} on the training set; every other reader (test sets, examples, \code{net\_kernels}) gets the mean. Checkpoints store $\zeta$ in the state dict.
+
+\emph{Tests.} \code{forward(x, noise=True)} minus \code{forward(x)} is $\sigma\zeta$; with $P = 1$, $N = 1$, $m = 1$ and $\beta\in\{0.25, 4\}$ the stationary variance of $\zeta$ under SGLD with the weights frozen is $1/(1 - \mathrm{lr}/2\beta)$ (the finite-\code{lr} law of \path{tests/test_sgld.py:45}); the smoke experiment's null-mode floor (Section~\ref{sec:P4}).
+
+\emph{Cache.} \code{input\_noise\_var} enters the net hash only when non-zero (the \code{net.B} pattern, \path{fct/config.py:413--414}); \code{MODEL\_VERSION} unchanged. Presets unchanged.
+
+\subsection{D3: the task generator, the lattice test set, and a data version}
+\label{sec:D3}
+\emph{Where.} \path{fct/tasks.py:90} (range), \code{:91--92} (teacher), \code{:374} (lattice); \path{fct/data.py:177} hashes the data section only (\code{section\_hash("data")}): there is no analogue of \code{LOSS\_VERSION}/\code{MODEL\_VERSION} for the generator, so the PI's $[0,a]$ edit, once committed, changes every \code{linear\_teacher} dataset while every cached \code{data/dataset.pt}, \code{train/final.pt} and \code{meanfield/final.pt} keeps a matching hash and is silently reused.
+
+\emph{Notes.} $z\sim\mathcal U[0,a]$; orthonormal $W_X$, $W_Y$ (needed for the ansatz to be exact; with the Gaussian teacher $G_X = W_X^\top W_X\ne I$ and the restricted Gram matrices commute only if $G_X(Z^\top Z)G_Y$ is symmetric, \path{linear_without_ansatz.tex}, eq.~restricted-commute; the error was $0.2\%$ on $c$ for a mild skew). The mean direction is the strong mode ($s_1^2/s_k^2 = 3K+1$), which is what predictions 1--3 and 8 rely on.
+
+\emph{Changes.} (a) Adopt $[0,a]$ (the PI's edit) and add \code{DATA\_VERSION = 2} to \path{fct/config.py}, folded into \code{section\_hash} whenever \code{"data"} is among the sections (as \code{MODEL\_VERSION} is for \code{"net"}, lines 411--414), with a history comment ``1: latents on $[-a,a]$; 2: on $[0,a]$''. (b) Add \code{data.teacher: Literal["gaussian", "orthonormal"] = "gaussian"}; \code{"orthonormal"} takes the \code{Q} factor of the same Gaussian draws (\code{torch.linalg.qr(..., mode="reduced")}, as the position task does at \path{fct/data.py:108--109}), so the random stream and every other field are unchanged. The default keeps existing data; the preset sets \code{"orthonormal"}. (c) The lattice test set: \code{values = [0, a/2, a]} (the three-point lattice of $[0,a]$); its docstring and \path{tests/test_latent_lattice.py:26,40,48} change accordingly. (d) \code{D\_out = D\_in} stays (the predictions use $m = n$); note it in the preset description.
+
+\emph{Tests.} \path{tests/test_tasks.py:158} becomes mean $a/2$, variance $a^2/12$; \code{:185} (variance $1/K$ of the Gaussian teacher) stays for \code{"gaussian"} and a new test checks $W^\top W = I_K$ to $10^{-12}$ for \code{"orthonormal"}; a new test that $XX^\top = YY^\top$ for the orthonormal teacher; a test that a dataset written under \code{DATA\_VERSION = 1} is \code{StaleCacheError} (the pattern of \path{tests/test_train.py:336}).
+
+\emph{Cache.} \code{DATA\_VERSION = 2} invalidates every existing data, train, meanfield and analysis cache of every task (all four include the data section, \path{docs/design.md}, table under ``Cache directory layout''); \code{exp status} lists them stale. That is the intended effect of committing $[0,a]$; without the version the stale caches would be reused. The \code{teacher} field is hashed by value, so the default keeps hashes.
+
+\subsection{D4: no implementation of the spatial saddle point}
+\label{sec:D4}
+\emph{Where.} \path{fct/meanfield.py:1513--1516}; the two pure solvers exist only as scripts, \path{latex/notes/scripts/check_linear_soln_limits.py} (per-mode scalar equation, functions \code{ring\_spectrum}, \code{h\_of}, \code{solve\_c}, \code{spectrum\_d}, \code{latent\_modes}, \code{half\_power\_q}, \code{autocorr\_lag1}, lines 81--193 and 661--701) and \path{latex/notes/scripts/linear_without_ansatz.py} (the $P\times P$ ansatz-free map, eq.~master of that note).
+
+\emph{Change.} A pure module \path{fct/linear_theory.py}: \code{theory\_parameters(cfg: Config, dataset: Dataset) -> TheoryParameters} (the dictionary of Section~\ref{sec:dictionary}: $\lambda_q$ from \code{build\_spaces}' hidden \code{K} by \code{torch.linalg.eigvalsh} and, on a grid ring, by the FFT of its first row; $\sX$, $\sY$ per mode from the SVD of $Z$ built from \code{dataset.factors}; $\delta$, $\sigma^2$, $g^2$ from the config); \code{per\_mode\_spectrum(lam, sx2, sy2, sig2, g2, delta) -> (c, d)} (the port of \code{spectrum\_d}, bisection on the physical branch); \code{predicted\_spectra(cfg, dataset) -> Prediction(lam, U\_Z, s2, d (K, N), null\_floor, c (K,))}; \code{spectrum\_summary(d) -> (q\_half, share0, lag1)}; and \code{ansatz\_free\_kernel(cfg, dataset) -> C\_tilde (P, P)} from the master equation, for the Gaussian-teacher case. Tests: the module reproduces the limits note's quoted numbers for predictions 1--3 ($\tau_1 = 0.00814$, shares $0.157/0.156$, $0.077/0.111$, $0.343/0.164$; the ratio $10.08$ at $q = 0$ of P1 and $53.5$ of P3) from a \code{Config} built as in Section~\ref{sec:experiments}. The mean-field solver itself is not changed; a spatial extension of it is a separate, later item.
+
+\emph{Cache.} None (pure, no artefacts).
+
+\subsection{D5: names and ranges}
+\label{sec:D5}
+(a) \code{net.g} (gain) versus the notes' $g$ (rate penalty): no code change needed for $L = 1$; the preset pins \code{g = 1.0}; the dictionary names \code{rate\_lambda} $= g^2/(2\beta)$. A rename of \code{net.g} to \code{net.gain} would touch every preset and hash (the field is hashed by name) and is not worth it for this plan. (b) $k_0$, $k_1$ are kernel amplitudes with \code{length\_scale = 0} and \code{weight\_lambda = 1}; a common scale $k_0 = k_1 = k$ is \code{weight\_lambda} $= 1/k$ at unit amplitudes (Section~\ref{sec:dictionary}), which is what prediction 8 uses. (c) $\ell$ is in units of \code{box}; the preset sets \code{box} $= N$ so that \code{length\_scale} is in sites. (d) $n = m$ is forced by \code{linear\_teacher}. (e) $K$ latents are \code{data.n\_latents}; the number of features $m$ is \code{data.D\_in} (in \code{ExpConfig}: \code{linear\_teacher.n\_features}, \path{fct/exp.py:153}).
+
+\subsection{Not discrepancies, but protocol}
+\label{sec:protocol}
+(i) \emph{Finite step size.} The stationary variance under SGLD is $1/(\beta c(1 - \mathrm{lr}\,c/2))$ on a quadratic of curvature $c$ (Section~\ref{sec:loss}). With D1 and D2 every prior curvature is $\lambda_w/\beta$ ($\xi$) or $1/\beta$ ($\zeta$), and the data curvatures are far smaller (the stiffest, along the mean direction of $\xi^{(0)}$ at $q = 0$, is of order $\lambda_0k_1a^2(3K+1)/(12Nm)\approx10^{-2}$ at the full size), so $\mathrm{lr} = 0.02\,\beta/\max(1,\lambda_w)$ inflates every prior variance by $\le1\%$ and relaxes every prior mode in $\le50\max(1,\lambda_w)/\lambda_w\cdot$ steps. (ii) \emph{Sampling.} Each record of $|\tilde t_k(q)|^2$ is $d_q$ times an $\mathrm{Exp}(1)$ variate (a complex Gaussian mode); records one relaxation time apart are nearly independent, so $n$ records give a relative standard error $1/\sqrt n$ per $q$, halved by pooling $\pm q$. The full version's $4\times10^3$ records per member and $B = 4$ members give $0.6\%$. (iii) \emph{Finite $N$.} The predictions are evaluated on the $N = 64$ ring exactly (no continuum approximation), and finite-size corrections to the theory are $O(e^{-N/\xi})$ (\path{continuum_limit.tex}, Section~3.3); the mean-field step itself, the self-averaging of $C$ over the posterior, is $O(N^{-1/2})$ and is the reason to confirm prediction 3 at $N = 256$ (Section~\ref{sec:P3}). (iv) \emph{The $q = 0$ share is $N$-specific} (Summary): at fixed $\tau_1 = 0.835$ it is $0.343, 0.172, 0.086, 0.043$ for $N = 64, 128, 256, 512$, while $R(1)/R(0) = 0.985$ and $d_0/d_{N/2} = 1.6\times10^5$ do not move.
+
+\section{Dictionary: theory symbol to \texorpdfstring{\code{Config}}{Config} field}
+\label{sec:dictionary}
+\begin{table}[H]
+\centering\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.1cm}>{\raggedright\arraybackslash}p{2.5cm}>{\raggedright\arraybackslash}p{7.0cm}>{\raggedright\arraybackslash}p{2.9cm}@{}}
+\toprule
+Symbol & Meaning & \code{Config} field (value for the common setting) & Reference\\
+\midrule
+$N$ & hidden units on the ring & \code{net.N} (64) & \path{model.py:46}\\
+$L$ & hidden layers & \code{net.L} (1) & \path{model.py:47}\\
+$\phi$ & activation & \code{net.phi} (\code{"id"}) & \path{activations.py:21}\\
+$m$ & inputs & \code{data.D\_in} (8); \code{ExpConfig.linear\_teacher.n\_features} & \path{tasks.py:88}\\
+$n$ & outputs & $= m$ for \code{linear\_teacher} (8) & \path{tasks.py:264}\\
+$P$ & patterns & \code{data.P} (256) & \path{config.py:49}\\
+$K$ & latents & \code{data.n\_latents} (3) & \path{config.py:60}\\
+$a$ & latent range $[0,a]$ & \code{data.latent\_range} (1.0), after D3 & \path{tasks.py:90}\\
+$W_X$, $W_Y$ orthonormal & teacher & \code{data.teacher = "orthonormal"} (D3) & \\
+$\ell$ (sites) & kernel width & \code{spatial.hidden.kernel.length\_scale} (4.0) with \code{spatial.box} $= N$ & \path{spatial.py:201--221}\\
+$K_{i,i} = 1$ & hidden amplitude & \code{spatial.hidden.kernel.amplitude} (1.0) & \path{spatial.py:221}\\
+$k_0$ & input prior scale & \code{spatial.input.kernel.amplitude} (1.0), \code{length\_scale} 0 & \path{spatial.py:218--219}\\
+$k_1$ & readout prior scale & \code{spatial.output.kernel.amplitude} (1.0), \code{length\_scale} 0 & \\
+$k_0 = k_1 = k$ & common scale & \code{train.weight\_lambda} $= 1/k$ at unit amplitudes & \path{train.py:45--54}\\
+$\lambda_w$ otherwise & & \code{train.weight\_lambda} (1.0) & \\
+periodic grid & embedding & \code{spatial.*.embedding.kind = "grid"}, \code{d = 1} & \path{spatial.py:160}\\
+exact $\lambda_q$ & no floor & \code{spatial.parametrisation = "whitened"} (D1) & \\
+$\beta$ & inverse temperature & \code{train.beta} (per experiment); \code{train.optimizer = "sgld"} & \path{sgld.py:60}\\
+$\kappa$, $\delta$ & $\beta/(Pn)$, $Pn/(\beta k_1)$ & derived & \\
+$g^2$ & rate penalty & \code{train.rate\_lambda} $= g^2/(2\beta)$ & \path{train.py:93}\\
+$\sigma^2$ & activity noise & \code{net.input\_noise\_var} (D2) & \\
+gain & $1/\sqrt N$ only & \code{net.g} (1.0) & \path{model.py:92}\\
+SGLD step & $\mathrm dt$ & \code{train.lr} $= 0.02\beta/\max(1,\lambda_w)$ & Section~\ref{sec:protocol}\\
+steps & & \code{train.n\_epochs}; record every \code{train.monitor\_int} & \path{train.py:427}\\
+replicates & chains & \code{net.B} (4; members share the data) & \path{model.py:103}\\
+\bottomrule
+\end{tabular}
+\caption{The common setting of the limits note (Section~5 there) in \code{Config} fields. Everything not listed keeps the library default; \code{dtype = "float64"}, \code{device} as available.}
+\label{tab:dictionary}
+\end{table}
+
+Derived for the common setting: $\lambda_0 = \sqrt{2\pi}\,\ell = 10.03$, $\bar\lambda = 1$, $\bar\lambda_2 = \sqrt\pi\,\ell = 7.09$; $s_1^2 = 256\cdot10/12 = 213.3$, $s_{2,3}^2 = 21.33$; $\hat s_{X,1}^2 = 26.67$, $\hat s_{X,2}^2 = 2.667$; $\hat s_{Y,k}^2 = s_k^2$ at $k_1 = 1$; $\delta = 2048/\beta$.
+
+\section{Measurement: functions, inputs, outputs, maths}
+\label{sec:measure}
+The theory predicts (limits note, Section~5.1) that the tuning map $t_{i,k} = u_k^\top h_i$, $h_i\in\R^P$ the activity of neuron $i$ over patterns and $u_k$ the $k$-th left singular vector of $Z$, is a stationary Gaussian field on the ring with power spectrum $d^{(k)}_q$ in the unitary DFT, $\langle|\tilde t_k(q)|^2\rangle = d^{(k)}_q$, independent across $k$, and that the $P - K$ null directions have the flat spectrum $\sigma_0^2 = \sigma^2/(1 + g^2\sigma^2)$.
+
+\paragraph{Pure analysis (\code{fct/tuning\_maps.py}, new).}
+\begin{itemize}[nosep]
+  \item \code{latent\_basis(factors: Mapping[str, Tensor]) -> LatentBasis(U (P, K), s2 (K,), Z (P, K))}: $Z$ stacks \code{z0..z\{K-1\}} in name order; thin SVD $Z = USV^\top$ with singular values descending, so column 0 is the mean direction ($u_1$) and columns $1..K-1$ the contrasts; \code{s2} $= S^2$ (the $s_k^2$ the theory needs; from the data, not the formula, so finite-$P$ fluctuations are included). Sign convention: each column is flipped so that $\mathbf 1^\top u_k\ge0$.
+  \item \code{tuning\_maps(h (P, N), U (P, K)) -> (K, N)}: $t = U^\top h$.
+  \item \code{power\_spectrum(t (K, N)) -> (K, N)}: $|\tilde t_k(q)|^2$ with $\tilde t = \code{torch.fft.fft}(t, \code{dim=-1})/\sqrt N$ (unitary; $q$ in FFT order, $0,1,\dots,N/2,\dots,-1$). No mean subtraction across samples.
+  \item \code{null\_power(h (P, N), U (P, K)) -> (N,)}: the mean spectrum of the null directions without forming them, $\big(\|\tilde h(q)\|^2 - \sum_k|\tilde t_k(q)|^2\big)/(P - K)$ with $\tilde h = \code{fft}(h, \code{dim=-1})/\sqrt N$ (Parseval over the orthonormal basis $[U, U_\perp]$ of $\R^P$).
+  \item \code{fold\_q(d (.., N)) -> (.., N/2 + 1)}: average of $q$ and $-q$ (the theory has $d_q = d_{-q}$); $|q| = 0,\dots,N/2$.
+  \item \code{spectrum\_summary(d (N,)) -> Summary(q\_half, share0, lag1, d0, d\_nyq, R)}: $q_{1/2}$ the largest $|q|$ with $d_q - d_{N/2}\ge\frac12(d_0 - d_{N/2})$ (the limits note's definition, with $d_{N/2}$ as the floor); \code{share0} $= d_0/\sum_qd_q$; $R(r) = \frac1N\sum_qd_qe^{2\pi iqr/N}$ (\code{torch.fft.ifft(d).real}); \code{lag1} $= R(1)/R(0)$.
+  \item \code{gaussian\_width(R (N,), ell: float) -> float}: $\sqrt{-\ell^2/(2\ln(R(\ell)/R(0)))}$ (prediction 7).
+  \item \code{contrast\_angle\_statistic(t2 (N,), t3 (N,)) -> float}: $\theta_i = \operatorname{atan2}(t_{i,3}, t_{i,2})$, returns $\langle\cos4\theta_i\rangle$ over $i$ (prediction 6); the caller pools records.
+  \item \code{average\_records(records (R, K+1, N), burn\_in: int) -> (K+1, N)} and \code{record\_sem}: mean over records after \code{burn\_in} and the standard error from the record-to-record variance (which also estimates the sampling error of (ii) in Section~\ref{sec:protocol}).
+\end{itemize}
+All functions are pure, CPU-or-device agnostic, validated loudly (shapes, \code{K < P}, finite inputs).
+
+\paragraph{The monitor (\code{fct/monitor.py}, new function).} \code{make\_spectrum\_monitor(dataset, cfg) -> Monitor}: on each call runs \code{net(dataset.x, noise=True)} under no-grad, takes $h$ of every hidden layer (\code{H[:, l]}, the pre-activations; for \code{"id"} equal to the rates), and returns \code{\{"spectrum": [per layer: (K+1, N) list, rows 0..K-1 the latent modes, row K the null mean], "cos4": [per layer: float]\}}. Wiring: \code{train.monitor\_kind: Literal["mir", "spectrum"] = "mir"}, hashed only when not \code{"mir"} (the existing monitor fields are hashed, \path{fct/config.py:112--116}); \code{run\_setting} (\path{fct/exp.py:875}) picks the monitor by it. For an ensemble the monitor runs per member (\path{fct/train.py:347--355}), so a record has a member axis. The history grows by $(K+1)N\cdot B$ floats per record: $4\times10^3$ records $\times\,4\times64\times4\approx4$\,MB, fine.
+
+\paragraph{Theory side (\code{fct/linear\_theory.py}, D4).} \code{predicted\_spectra(cfg, dataset)} returns $d^{(k)}_q$ in the same FFT order and the null floor, computed with the \emph{measured} $s_k^2$ of \code{latent\_basis} (the limits note's formulas are the $P\to\infty$ values; at $P = 256$ the fluctuations are $O(P^{-1/2})\approx6\%$ on $s_k^2$, which enters $\sX$, $\sY$ linearly). The note's predicted numbers below use the formula values; the implementing session should quote both.
+
+\paragraph{Plotting (\code{fct/draw.py}, new \code{plot\_*} taking an \code{ax}).} \code{plot\_spectrum(d\_measured (K+1, N/2+1), sem, d\_theory, ax)} (log $y$ versus $|q|$, one colour per mode, theory as lines, measurement as points with error bars, the null row dashed); \code{plot\_spectrum\_ratio}; \code{plot\_autocorrelation(R, kernel\_profile, ax)}; \code{plot\_share\_sweep(values, shares (n, 2), theory, ax)}; \code{plot\_angle\_histogram(theta, ax)}. A notebook builder \path{notebooks/build_linear_ring.py} in the style of \path{build_spatial_exp.py} (parameters \code{ROOT}, \code{SETTING}, \code{BURN\_IN}) shows, per setting: loss curves, the spectra against theory, the ratio, the autocorrelation, and prints the summary table against the predicted numbers.
+
+\section{The experiments}
+\label{sec:experiments}
+
+\subsection{Presets and invocation}
+\label{sec:presets}
+Two new presets (JSON files in \path{fct/presets/}, complete \code{ExpConfig}s; \path{docs/design.md} ``Presets''). Fields of \code{ExpConfig} (\path{fct/exp.py:173--232}): the shared network and loss fields reach every setting (\code{\_base\_config}, 478--501), \code{--set} overrides any shared entry by dotted key and \code{--axis} adds an axis over any \code{Config} field (\code{cmd\_exp\_init}, \path{fct/cli.py:384--413}); the fields the experiment owns (\code{EXP\_OWNED\_AXES}, \path{fct/exp.py:106--117}: \code{data.P}, seeds, log/save/monitor intervals) cannot be axes. The new fields of D1--D3 (\code{spatial.parametrisation}, \code{net.input\_noise\_var}, \code{data.teacher}, \code{train.monitor\_kind}) are set in the presets; \code{input\_noise\_var} and \code{monitor\_kind} should be added to the shared fields of \code{ExpConfig} (next to \code{g}, \code{phi}, line 220--227) so that \code{--set input\_noise\_var=1.0} works; until then \code{--axis net.input\_noise\_var=[1.0]} (a one-value axis, as \code{phase\_transition} did with \code{net.B}) is equivalent.
+
+\code{linear\_ring} (full):
+\begin{verbatim}
+N 64, P 256, n_epochs 200000, lr 0.005, log_int 1000, save_int 10000,
+monitor_int 50, monitor_kind "spectrum" (monitor_bins/shuffles unused),
+linear_teacher {n_features 8, n_latents 3, latent_range 1.0, teacher "orthonormal"},
+seeds {data 0, net 0, train 0}, dtype float64, device auto, task linear_teacher,
+L 1, g 1.0, B 4, phi "id", weight_lambda 1.0, rate_lambda 0.0,
+optimizer "sgld", beta 0.25, input_noise_var 0.01,
+spatial {d 1, box 64.0, parametrisation "whitened", min_rel_eig 1e-6,
+         input  {embedding grid, kernel {length_scale 0.0, amplitude 1.0}},
+         hidden {embedding grid, kernel {length_scale 4.0, amplitude 1.0}},
+         output {embedding grid, kernel {length_scale 0.0, amplitude 1.0}}},
+axes {"train.beta": [0.25]}   (one-value axis; experiments replace it)
+\end{verbatim}
+\code{linear\_ring\_tiny} (smoke): the same with \code{N 16, P 32, n\_features 4, n\_latents 2, n\_epochs 4000, lr 0.005, log\_int 100, save\_int 1000, monitor\_int 10, B 1, device cpu}, hidden \code{length\_scale 2.0}. Its predicted numbers are in Section~\ref{sec:smoke}. The description of each preset states the dictionary of Table~\ref{tab:dictionary} and the step rule $\mathrm{lr} = 0.02\beta/\max(1,\lambda_w)$: \emph{every value of $\beta$ must come with the matching \code{lr}}. $\beta$ is always given as the axis \code{--axis 'train.beta=[...]'}: an experiment without axes is rejected (\code{\_validate\_axes}, \path{fct/exp.py:555--556}), \code{axes = None} would mean the modularity axes (\code{axes\_of}, \code{:456}), and an axis wins over the shared field, so \code{--set beta=} would be ignored. A single value is \code{--axis 'train.beta=[10]'}; \code{lr} goes with \code{--set lr=} (one value) or a parallel \code{--axis 'train.lr=[...]'} of which only the diagonal is run.
+
+Burn-in: the first $10^4$ steps (the first 200 records of the full version; 50 records of the smoke) are discarded by the analysis (\code{BURN\_IN}); at $\mathrm{lr} = 0.02\beta$ every prior mode has relaxed $200$ times by then. Run time: $2$\,ms per step at the full size on four CPU threads with the penalty path, $0.4$\,ms whitened (Appendix~\ref{app:numbers}); with $B = 4$ and the monitor, of order $10$--$20$ minutes per setting on a CPU, seconds for the smoke. SLURM: \code{bash jobs/fct\_exp.sh ROOT --submit}.
+
+Seeds: \code{seeds.data = 0} fixes $Z$, $W_X$, $W_Y$ (the predicted $s_k^2$ are then fixed numbers, reported by \code{latent\_basis}); \code{seeds.net = 0} the initial $\xi$, $\zeta$; \code{seeds.train = 0} the SGLD noise. Error bars come from the $B = 4$ members (independent chains on the same data, \path{docs/design.md} ``Ensembles''); a second data seed (\code{--set seeds.data=1}) in a fresh ROOT checks that nothing depends on the particular $Z$.
+
+\subsection{The smoke version}
+\label{sec:smoke}
+Ring $N = 16$, $\ell = 2$ ($\lambda_0 = 5.013$, $\lambda_q/\lambda_0 = 1, 0.735, 0.291, 0.062, 0.0072, \dots$ at $|q| = 0,1,2,3,4$), $P = 32$, $m = n = 4$, $K = 2$, $a = 1$: $s_1^2 = 32\cdot7/12 = 18.67$, $s_2^2 = 2.667$, $\hat s_{X,k}^2 = 4.667, 0.667$, $\delta = 128/\beta$. Predicted (computed as in Appendix~\ref{app:numbers}; $|q| = 0,\dots,8$):
+\begin{itemize}[nosep]
+  \item S1 ($\sigma^2 = 0.01$, $g = 0$, $\beta = 0.25$): $\tau_1 = 0.0078$, $\tau_2 = 1.7\times10^{-4}$; $q_{1/2} = 1$ both; shares $0.314$, $0.310$; $R(1)/R(0) = 0.881$, $0.870$; ratio $7.04$, $7.00$, $6.94$, $6.73$, $5.24$, $1.78$, $1.03$, $1.00$, $1.00$ (the ratio is $\hat s_{X,1}^2/\hat s_{X,2}^2 = 7$ for $K = 2$ and reaches the floor ratio $1$ by $|q| = 6$). Falsified if the shares differ by more than $0.03$ or the ratio over $|q|\le3$ is outside $7\pm1$.
+  \item S2 ($g^2 = 0.5$, else as S1; $\gamma_1 = 11.7$, $\gamma_2 = 1.67$): $q_{1/2} = 2$ both (the ring is too short to separate them), but the shares $0.173$ (mode 1) versus $0.236$ (mode 2) and $R(1)/R(0) = 0.746$ versus $0.814$ show the whitening; ratio $1.47$, $1.62$, $2.35$, $4.30$, $4.89$, $1.77$, $1.03$, $1.00$, $1.00$ with its interior maximum at $|q| = 4$. Falsified if mode 1's share is not below mode 2's by at least $0.03$, or the ratio has no interior maximum above $3$. ($g^2 = 0.1$ gives shares $0.228/0.285$ and a ratio peaking at $6.0$, also usable.)
+  \item S3 ($\beta = 10$, $g = 0$, $\sigma^2 = 0.01$; $\mathrm{lr} = 0.2$): $\tau_1 = 0.73$, $\tau_2 = 0.19$; shares $0.539$ versus $0.338$; $R(1)/R(0) = 0.933$ versus $0.880$; $\hat d_0^{(1)}/\hat d_0^{(2)} = 21.3$. Sweep $\beta = 0.25, 1, 3, 10, 30$ (\code{lr} $= 0.005, 0.02, 0.06, 0.2, 0.6$): mode-1 share $0.314$, $0.328$, $0.409$, $0.539$, $0.580$; mode 2 $0.310$, $0.310$, $0.313$, $0.338$, $0.453$ (at $\beta = 30$ mode 2 condenses too; the window $\Delta_1\lesssim1\lesssim\Delta_2$ is $\beta\in[2.7, 19]$ here).
+  \item S4 ($\sigma^2 = 1$, $g^2 = 1$, $\beta = 0.25$): null directions flat at $\sigma_0^2 = 0.5$; latent modes $\hat d_0/\sigma_0^2 = 1.92$, $1.63$, $R(1)/R(0) = 0.188$, $0.117$.
+  \item S5 ($k_0 = 10^{-3}$, $\sigma^2 = 1$, $g = 0$, $\beta = 0.25$): $\hat d_0/\sigma_0^2 = 1.024$, $1.003$; $R(1)/R(0) = 0.004$, $0.0006$: white.
+  \item S7 ($\ell = 1, 2, 4$): widths read at $r = \ell$: $1.00, 2.00, 4.11$ (mode 1), $0.99, 1.97, 4.01$ (mode 2); $R_1(0) = 4.68, 4.70, 4.77$, $R_2(0) = 0.677$ throughout.
+  \item S8 ($k = 0.01, 0.1, 1, 10, 100$ at $\beta = 10$; \code{weight\_lambda} $= 100, 10, 1, 0.1, 0.01$, \code{lr} $= 0.002, 0.02, 0.2, 0.2, 0.2$): mode-1 share $0.269$, $0.327$, $0.539$, $0.323$, $0.313$ (peak at $k = 1$); mode 2 $0.163$, $0.281$, $0.338$, $0.322$, $0.313$.
+\end{itemize}
+Prediction 6 needs $K = 3$; its smoke is the full preset with \code{--set n\_epochs=4000}.
+
+\subsection{Prediction 1: prior-shaped maps (regime a1)}
+\label{sec:P1}
+\emph{Needs} D1, D3, D4, the measurement (W1--W7 of Section~\ref{sec:order}); D2 for $\sigma^2 = 0.01$ (else see the $\sigma = 0$ variant).
+\begin{verbatim}
+uv run python -m fct exp init ROOT/p1 --preset linear_ring \
+    --axis 'train.beta=[0.25]' --set lr=0.005 --set rate_lambda=0.0 --set input_noise_var=0.01
+uv run python -m fct exp run ROOT/p1
+\end{verbatim}
+(one setting, named by the preset's one-value axis; the \code{--axis} repeats the preset's value and may be omitted). Values: $N = 64$, $P = 256$, $m = n = 8$, $K = 3$, $a = 1$, $\ell = 4$, $k_0 = k_1 = 1$, $\sigma^2 = 0.01$, $g = 0$, $\beta = 0.25$ ($\delta = 8192$), $2\times10^5$ steps, record every 50, burn-in $10^4$, $B = 4$.
+
+\emph{Compute:} \code{average\_records} of the spectrum monitor after burn-in, per member and pooled; \code{fold\_q}; \code{spectrum\_summary} of rows 0 and 1; the ratio row 0 / row 1; $R_k(r)/R_k(0)$ for $r\le6$; \code{predicted\_spectra} for the theory.
+
+\emph{Figure:} three panels: $\hat d^{(1)}_q$, $\hat d^{(2)}_q$ versus $|q|$ (log $y$) with the theory and the null row; the ratio versus $|q|$; $R_k(r)/R_k(0)$ versus $r$ with $e^{-r^2/32}$.
+
+\emph{Predict} (limits note, P1): $\tau_1 = 0.008$, $\tau_2 < 10^{-3}$; $\hat d^{(k)}_q = \lambda_q\hat s_{X,k}^2 + \sigma^2$; $q_{1/2} = 2$ both (or $3$, $\lambda_3/\lambda_0 = 0.4996$); shares $0.157$, $0.156$; $R(1)/R(0) = 0.969$, $0.966$; ratio $10.08$, $10.07$, $10.04$, $10.01$, $10.00$, $9.98$, $9.95$, $9.86$, $9.56$ at $|q| = 0..8$, then $8.54, 5.91, 2.73, 1.35$ at $9..12$. \emph{Falsified if} the normalised spectra differ ($q_{1/2}$ by more than 1, shares by more than $0.03$), the ratio varies by more than $20\%$ over $|q|\le8$, or $R_k(r)/R_k(0)$ deviates from $e^{-r^2/32}$ by more than $0.05$ for $r\le6$.
+
+\emph{Without $\eta$} ($\sigma^2 = 0$): everything above except the tail: the ratio is $10.08$, $10.07$, $10.04$, $10.02$, $10.01$, $10.00$ and exactly $10$ beyond ($d^{(2)}_q$ has no floor to reach first), the null rows are identically zero, and $R(1)/R(0) = 0.969$ for both modes. Falsification thresholds unchanged except that the tail of the ratio must stay within $10\pm1$ for all $|q|$.
+
+\subsection{Prediction 2: rate-penalty whitening (regime b1)}
+\label{sec:P2}
+As P1 with $g^2 = 0.1$: \code{--set rate\_lambda=0.2} ($g^2/(2\beta) = 0.1/0.5$). Compute and draw as P1, overlaying P1's spectra.
+
+\emph{Predict:} $\gamma_1 = 26.7$, $\gamma_2 = 2.7$; $q_{1/2} = 6$ (mode 1) versus $4$; shares $0.077$ versus $0.111$; $R(1)/R(0) = 0.917$ versus $0.944$; ratio $1.32$ at $q = 0$, rising $1.35$, $1.44$, $1.63$, $2.02$, $2.84$, $4.35$, $6.49$ at $|q| = 1..7$ to a peak of $8.2$ at $|q| = 8$--$9$, back to $1.35$ by $|q| = 12$ ($5.84, 2.72, 1.35$ at $10, 11, 12$). \emph{Falsified if} $q^{(1)}_{1/2}\le q^{(2)}_{1/2}$, $\hat d_0^{(1)}/\hat d_0^{(2)} > 3$, or the ratio has no interior maximum above $4$.
+
+\emph{Without $\eta$:} shares $0.077$/$0.112$, $R(1)/R(0) = 0.922$/$0.953$, the ratio rises monotonically $1.32$, $1.35$, $1.44$, $1.63$, $2.02$, $2.84$, $4.38$, $6.59$, $8.55$, $9.56$, $9.89$, $9.98$, $10.0$ (no interior maximum: both modes end on the same $\lambda_q$ tail). Replace the third falsifier by ``the ratio at $|q| = 9$ is below $7$''.
+
+\subsection{Prediction 3: target condensation (regime b2)}
+\label{sec:P3}
+\begin{verbatim}
+uv run python -m fct exp init ROOT/p3 --preset linear_ring \
+    --axis 'train.beta=[0.25,1,2,5,10]' --axis 'train.lr=[0.005,0.02,0.04,0.1,0.2]'
+\end{verbatim}
+This is a $5\times5$ product; run only the diagonal (indices $0, 6, 12, 18, 24$ with \code{--index}; \code{exp list} prints the pairs) or make five ROOTs with \code{--axis 'train.beta=[b]' --set lr=...}. $\sigma^2 = 0.01$, $g = 0$.
+
+\emph{Compute:} shares, $q_{1/2}$, $R(1)/R(0)$, $\hat d_0^{(1)}/\hat d_0^{(2)}$ at $\beta = 10$; the two shares along the sweep. \emph{Figure:} share versus $\beta$ (log $x$) for both modes with the theory; the $\beta = 10$ spectra.
+
+\emph{Predict:} at $\beta = 10$ ($\delta = 204.8$): $\tau_1 = 0.83$, $\tau_2 = 0.11$; shares $0.343$ versus $0.164$; $q_{1/2} = 1$ versus $2$; $R(1)/R(0) = 0.985$ versus $0.967$; $\hat d_0^{(1)}/\hat d_0^{(2)} = 54$. Sweep: mode 1 $0.157$, $0.165$, $0.188$, $0.281$, $0.343$; mode 2 within $0.156$--$0.164$. \emph{Falsified if} mode 1's share is not monotone in $\beta$, mode 2's moves by more than $0.03$, or the ratio at $q = 0$ is below $20$ at $\beta = 10$. \emph{Without $\eta$:} identical to three digits (shares $0.157$, $0.165$, $0.188$, $0.281$, $0.343$ and $0.157$--$0.165$; ratio $53.5$).
+
+\emph{Finite $N$:} the share at $\beta = 10$ is $0.172$ at $N = 128$ and $0.086$ at $N = 256$ (Section~\ref{sec:protocol}); a confirmation run at \code{--set N=256 --set spatial.box=256.0} keeps $\ell = 4$ and $\lambda_0$ and must give $R(1)/R(0) = 0.985$, $\hat d_0^{(1)}/\hat d_0^{(2)} = 54$ and the share $0.086\pm0.01$.
+
+\subsection{Prediction 4: white null modes and the floor level (regime c4)}
+\label{sec:P4}
+\emph{Needs} D2. \code{--set input\_noise\_var=1.0 --set rate\_lambda=2.0 --set lr=0.005} ($\beta = 0.25$, the preset's axis value) ($g^2 = 1 = 2\beta\cdot2.0$). \emph{Compute:} row $K$ (null mean) of the spectrum, its $R(r)/R(0)$; rows 0, 1. \emph{Figure:} the three spectra on one axis with the lines $\sigma_0^2 = 0.5$ and $\sigma^2 = 1$; $R(r)/R(0)$ for $r\le6$. \emph{Predict:} null spectrum flat at $0.5$ with $|R(r)/R(0)| < 0.05$ for $r\ge1$; latent modes $\hat d_0/\sigma_0^2 = 2.0$, $1.9$ and $R(1)/R(0) = 0.18$, $0.14$. \emph{Falsified if} the null $R(1)/R(0)$ exceeds $0.1$ or the null level is off $0.5$ by a factor $1.5$ (which excludes $\sigma^2 = 1$: the floor is $\eta$'s power after the rate penalty, and a fresh-draw implementation of $\eta$ would give $1$ here, which is one way the smoke test tells the two samplers apart).
+
+\subsection{Prediction 5: noise-dominated (regime c1)}
+\label{sec:P5}
+\emph{Needs} D2. \code{--set spatial.input.kernel.amplitude=0.001 --set input\_noise\_var=1.0 --set rate\_lambda=0.0 --set lr=0.005} ($\beta = 0.25$) ($k_0 = 10^{-3}$, $\rho_1 = 0.27$). \emph{Compute:} $\hat d_0/\hat d_{N/2}$ and $R(1)/R(0)$ per mode. \emph{Predict:} $\hat d_0/\sigma_0^2 = 1.27$, $1.03$; $R(1)/R(0) = 0.025$, $0.003$. \emph{Falsified if} any $R_k(1)/R_k(0) > 0.15$ or $\hat d_0^{(1)}/\hat d_{N/2}^{(1)} > 2$.
+
+\subsection{Prediction 6: no individual-latent cell types}
+\label{sec:P6}
+Any of P1--P3 (the monitor's \code{cos4} key). \emph{Compute:} pool $\langle\cos4\theta_i\rangle$ over records after burn-in and members; its standard error from the record-to-record spread. \emph{Figure:} histogram of $\theta$ over neuron-samples, with the uniform density. \emph{Predict:} $0$; \emph{falsified if} $|\langle\cos4\theta\rangle| > 0.1$ with more than $10^3$ neuron-samples ($64\times4\times4\times10^3$ here). The frame must be the orthonormal $(u_2, u_3)$ of \code{latent\_basis}, not the raw latents (the limits note's warning: an oblique frame biases the statistic negative).
+
+\subsection{Prediction 7: correlation length tracks the prior}
+\label{sec:P7}
+\begin{verbatim}
+uv run python -m fct exp init ROOT/p7 --preset linear_ring \
+    --axis 'spatial.hidden.kernel.length_scale=[2.0,4.0,8.0]'
+\end{verbatim}
+(P1's $\beta$, $g$, $\sigma^2$). \emph{Compute:} $R_k(r)/R_k(0)$ for $1\le r\le2\ell$, $R_k(0)$, \code{gaussian\_width}. \emph{Figure:} $R_k(r)/R_k(0)$ versus $r$ for the three $\ell$ with $K(r)$ of \code{wrapped\_gaussian\_profile}; width versus $\ell$. \emph{Predict:} widths $2.00, 4.01, 8.06$ (mode 1), $1.99, 3.99, 7.97$ (mode 2); deviations from $K(r)$ below $7\times10^{-3}$; $R_1(0) = 26.7, 26.8, 27.2$, $R_2(0) = 2.677$. \emph{Falsified if} a width is off $\ell$ by $20\%$ or $R_k(0)$ changes by $15\%$ across $\ell$. \emph{Without $\eta$:} widths $2.00, 4.01, 8.06$ and $2.00, 4.00, 8.00$, $R_1(0) = 26.7, 26.8, 27.2$, $R_2(0) = 2.667$; deviations below $7.1\times10^{-3}$.
+
+\subsection{Prediction 8: a common prior scale is non-monotone}
+\label{sec:P8}
+P3's setting ($\beta = 10$, $g = 0$, $\sigma^2 = 0.01$) with $k = 0.01, 0.1, 1, 10, 100$: \code{weight\_lambda} $= 100, 10, 1, 0.1, 0.01$ and, by the step rule, \code{lr} $= 0.002, 0.02, 0.2, 0.2, 0.2$ (five ROOTs with \code{--axis 'train.beta=[10]' --set weight\_lambda=... --set lr=...}; at $k = 100$ the prior relaxes in $\beta/(\lambda_w\,\mathrm{lr}) = 5\times10^3$ steps, so raise \code{n\_epochs} to $5\times10^5$ there). \emph{Compute:} the two shares at each $k$. \emph{Figure:} share versus $k$ (log $x$), both modes, with the theory. \emph{Predict:} mode 1 $0.152$, $0.166$, $0.343$, $0.166$, $0.157$ (peak at $k = 1$); mode 2 $0.118$, $0.152$, $0.164$, $0.165$, $0.157$. \emph{Falsified if} mode 1's share is monotone in $k$ or its peak is below $0.25$. \emph{Without $\eta$:} mode 1 $0.157$, $0.167$, $0.343$, $0.166$, $0.157$; mode 2 $0.157$, $0.157$, $0.165$, $0.165$, $0.157$ (at $k = 0.01$ the noise floor no longer whitens mode 2).
+
+\section{Order of work}
+\label{sec:order}
+Work items in the lab's format, small enough to delegate one at a time; each closes with tests and a design-doc entry. W1--W7 are prerequisites of every experiment; W4 only of P4, P5 and of the $\sigma^2 = 0.01$ versions.
+
+\begin{enumerate}[leftmargin=2em,itemsep=4pt]
+  \item \textbf{Latents on $[0,a]$ with a data version} (infrastructure, simple). Inputs: the PI's uncommitted \path{fct/tasks.py} edit; \path{fct/config.py}. Outputs: \code{DATA\_VERSION = 2} folded into every hash that includes \code{"data"}; the $[0,a]$ generator; the lattice at $\{0, a/2, a\}$; docstrings; \path{docs/design.md} (cache table, tasks.py). Acceptance: \path{tests/test_tasks.py:158} asserts mean $a/2$ and variance $a^2/12$; a dataset cached under version 1 raises \code{StaleCacheError}; \path{tests/test_latent_lattice.py} passes with the new values; \code{exp status} on a pre-change ROOT reports every setting stale.
+  \item \textbf{Orthonormal teacher} (infrastructure, simple). Inputs: \path{fct/tasks.py}, \path{fct/config.py}. Outputs: \code{data.teacher} with default \code{"gaussian"}; \code{"orthonormal"} from the \code{Q} factor of the same draws. Acceptance: $W^\top W = I$ to $10^{-12}$ and $XX^\top = YY^\top$ for \code{"orthonormal"}; the default is bit-for-bit the old generator (pinned by the existing determinism test, \path{tests/test_tasks.py:41}); hashes of configs without the field unchanged.
+  \item \textbf{Whitened spatial prior} (infrastructure, complex). Inputs: Section~\ref{sec:D1}. Outputs: \code{spatial.parametrisation}; \code{Population.S}; \code{whitening\_factors}; \code{MLP}/\code{EnsembleMLP} with whitening buffers; \code{effective\_weights}; \code{make\_weight\_penalty} and the readers listed in D1 updated. Acceptance: the four tests of D1; every existing test green (the default path untouched, \path{tests/test_train_pins.py} bit for bit); a whitened SGLD run at $\mathrm{lr} = 0.02\beta$ on the smoke ring has every prior mode's sample variance within $5\%$ of $\lambda_q^{\mathrm{post}}\lambda^{\mathrm{pre}}/\lambda_w$ when SGLD is driven by the prior term alone (the test steps \code{SGLD} on the gradient of \code{prior\_coefficient * weight\_l2} only).
+  \item \textbf{Activity noise as sampled variables} (infrastructure, medium). Inputs: Section~\ref{sec:D2}. Outputs: \code{net.input\_noise\_var}; $\zeta$ as a parameter; \code{forward(x, noise=)}; the loss term and history key; checkpointing; hash rule. Acceptance: the tests of D2; a smoke S4 run gives a null-mode level of $0.5\pm0.1$ (not $1$).
+  \item \textbf{The linear theory from a config} (data-science, medium). Inputs: \path{check_linear_soln_limits.py}, \path{linear_without_ansatz.py}, Section~\ref{sec:D4}. Outputs: \path{fct/linear_theory.py}. Acceptance: reproduces the limits note's P1--P3 numbers from a \code{Config} (Section~\ref{sec:D4}); the ansatz-free kernel equals the per-mode roots to $10^{-10}$ for the orthonormal teacher; \code{theory\_parameters} on the preset returns $\lambda_0 = 10.0265$, $\bar\lambda = 1$, $s_1^2$ within $10\%$ of $213.3$.
+  \item \textbf{Tuning-map spectra: analysis and monitor} (infrastructure, medium). Inputs: Section~\ref{sec:measure}. Outputs: \path{fct/tuning_maps.py}; \code{make\_spectrum\_monitor}; \code{train.monitor\_kind}; \code{run\_setting} wiring. Acceptance: on a synthetic $h = \sum_k u_k\otimes t_k$ with $t_k$ a Gaussian field of known spectrum, \code{power\_spectrum} recovers it to the $1/\sqrt n$ sampling error over $n = 10^4$ draws; \code{null\_power} equals the explicit projection on a random orthonormal complement; a monitored 20-step run on the smoke preset writes \code{monitor\_spectrum} of shape (records, layers, $K+1$, $N$); the \code{"mir"} default keeps every hash.
+  \item \textbf{Presets and the end-to-end smoke test} (data-science, medium). Inputs: Section~\ref{sec:presets}, \ref{sec:smoke}. Outputs: \path{fct/presets/linear_ring.json}, \path{linear_ring_tiny.json}; a test that runs \code{linear\_ring\_tiny} (S1) through the CLI on a CPU and compares the pooled spectrum after burn-in with \code{predicted\_spectra}. Acceptance: the S1 shares within $0.03$ of $0.314/0.310$, the ratio over $|q|\le3$ within $7\pm1$, $R(1)/R(0)$ within $0.05$ of $0.881/0.870$; runtime under two minutes; \path{tests/test_presets.py:77} updated for the two new files.
+  \item \textbf{Plots and the results notebook} (data-science, medium). Inputs: Section~\ref{sec:measure}. Outputs: the \code{plot\_*} functions; \path{notebooks/build_linear_ring.py}; a table cell comparing measured and predicted summaries. Acceptance: notebook builds and executes on the smoke ROOT; \code{plot\_*} draw into a given \code{ax}; tests on synthetic inputs.
+  \item \textbf{Run P1, P2, P7} (data-science, simple). Inputs: Sections~\ref{sec:P1}, \ref{sec:P2}, \ref{sec:P7}. Outputs: the ROOTs, executed notebooks in \code{tmp/}, a short results note with the falsification verdicts. Acceptance: every setting \code{done}; the three verdicts stated with the measured numbers and their standard errors.
+  \item \textbf{Run P3 and P8, with the $N = 256$ confirmation} (data-science, simple). As above.
+  \item \textbf{Run P4, P5, P6} (data-science, simple). As above; P6 reads the \code{cos4} key of the P1--P3 runs.
+\end{enumerate}
+
+\appendix
+\section{Reproducing the numbers of this note}
+\label{app:numbers}
+All predicted numbers are from the functions of \path{latex/notes/scripts/check_linear_soln_limits.py} (\code{ring\_spectrum}, \code{latent\_modes}, \code{spectrum\_d}, \code{h\_of}, \code{half\_power\_q}, \code{autocorr\_lag1}, \code{autocorrelation}, \code{wrapped\_gaussian}), called with the parameters stated at each use; the limits note's own numbers are reproduced by the same calls to the digits quoted (checked). The recipe for one parameter set, from the repository root with the script directory on \code{sys.path}:
+\begin{verbatim}
+import numpy as np, check_linear_soln_limits as L
+lam = L.ring_spectrum(N, ell)        # D1 variant: lam = np.maximum(lam, f * lam.max())
+sx2, sy2, delta = L.latent_modes(P, K, a, m, k0, k1, n, beta)
+c, d = L.spectrum_d(lam, sx2[k], sy2[k], sig2, g2, delta)   # k = 0 mean, 1 contrast
+tau = sy2[k] * L.h_of(lam, sx2[k], sig2, g2).max() / c**2
+q_half = L.half_power_q(d); share0 = d[0] / d.sum(); lag1 = L.autocorr_lag1(d)
+R = L.autocorrelation(d)
+width = np.sqrt(-ell**2 / (2 * np.log(R[int(ell)] / R[0])))
+\end{verbatim}
+with $(N, \ell, P, K, a, m, n) = (64, 4, 256, 3, 1, 8, 8)$ for the full size and $(16, 2, 32, 2, 1, 4, 4)$ for the smoke; the ratio is \code{d1 / d2} read at $|q| = 0, 1, \dots$ in FFT order; the $N$-dependence of Section~\ref{sec:protocol} uses $N\in\{64,128,256,512\}$ at $\ell = 4$.
+
+The code facts of Sections~\ref{sec:prior} and~\ref{sec:D1} were checked with \code{fct.spatial.build\_spaces} on a \code{SpatialConfig(d=1, box=64.0, ...)} with grid embeddings, hidden \code{KernelSpec(length\_scale=4.0, amplitude=1.0)}, input and output \code{KernelSpec(length\_scale=0.0, amplitude=1.0)}, \code{m = n = 8}, \code{N = 64}, \code{L = 1}: \code{spaces[0].post.K} equals \code{L.ring\_kernel(64, 4.0)} exactly (and so does \code{box=1.0} with \code{length\_scale=4/64}); \code{torch.linalg.eigvalsh} of it equals \code{np.sort(L.ring\_spectrum(64, 4.0))} to $9\times10^{-15}$; \code{spaces[0].post is spaces[1].pre}; \code{spaces[0].post.report.n\_floored} and \code{torch.linalg.eigvalsh(spaces[0].post.M)[-1]} give the floor counts and $\lambda_{\max}(M)$ quoted in D1 for \code{min\_rel\_eig} $\in\{10^{-2}, 10^{-4}, 10^{-6}\}$. The step cost is the wall time of 200 calls of \code{fct.train.compute\_loss} plus \code{backward} on the \code{make\_dataset} output of the full-size \code{DataConfig} with \code{torch.set\_num\_threads(4)}, float64, CPU; the whitened figure is a hand-rolled $S\xi$ forward with the same shapes.
+\end{document}
