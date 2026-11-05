@@ -25,9 +25,8 @@ from pathlib import Path
 import numpy as np
 
 SEED = 0
-N_IMAGE_SIGMAS = (
-    8  # dropped images of the wrapped Gaussian lie beyond this many ell (fct/spatial.py)
-)
+# Dropped images of the wrapped Gaussian lie beyond this many ell (as in fct/spatial.py).
+N_IMAGE_SIGMAS = 8
 PSD_ELLS = [4.0, 8.0, 12.0]  # length scales at which the wrapped and truncated spectra are compared
 # PNG rather than PDF: the repository ignores *.pdf, and the note must build from a fresh clone.
 FIGURE = Path(__file__).resolve().parents[1] / "figures" / "linear_solution_limits_profiles.png"
