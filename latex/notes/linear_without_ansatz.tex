@@ -3,7 +3,6 @@
 \usepackage{amsmath,amssymb,amsthm,bm,mathtools}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern,microtype}
-\usepackage{booktabs}
 \usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
 \newcommand{\tr}{\operatorname{tr}}
 \newcommand{\diag}{\operatorname{diag}}
@@ -235,7 +234,7 @@ Write $\Ct = \Ct_0 + \epsilon C_1$, $B = B_0 + \epsilon B_1$, $\Sigma_q = \Sigma
 \begin{equation}
 \begin{aligned}
   B_1 &= \Ct_0^{-1}\hat E\,\Ct_0^{-1} - \Ct_0^{-1}C_1\Ct_0^{-1}\hat S_Y^2\Ct_0^{-1} - \Ct_0^{-1}\hat S_Y^2\Ct_0^{-1}C_1\Ct_0^{-1},\\
-  (B_1)_{pr} &= \frac{\hat E_{pr}}{c_pc_r} - (C_1)_{pr}\,\frac{\hat s_{Y,r}^2c_p + \hat s_{Y,p}^2c_r}{c_p^2c_r^2},
+  (B_1)_{p,r} &= \frac{\hat E_{p,r}}{c_pc_r} - (C_1)_{p,r}\,\frac{\hat s_{Y,r}^2c_p + \hat s_{Y,p}^2c_r}{c_p^2c_r^2},
 \end{aligned}
   \label{eq:B1}
 \end{equation}
@@ -243,31 +242,31 @@ with $\hat S_Y^2 = \diag(\hat s_{Y,p}^2)$.
 From $\Sigma_q = (M_q - \lambda_q B)^{-1}$ and $\mathrm d(X^{-1}) = -X^{-1}\,\mathrm dX\,X^{-1}$,
 \begin{equation}
   \Sigma_q^{(1)} = \lambda_q\,\Sigma_q^{(0)} B_1 \Sigma_q^{(0)},\qquad
-  (\Sigma_q^{(1)})_{pr} = \lambda_q\, d_{q,p}\,d_{q,r}\,(B_1)_{pr}.
+  (\Sigma_q^{(1)})_{p,r} = \lambda_q\, d_{q,p}\,d_{q,r}\,(B_1)_{p,r}.
   \label{eq:Sigma1}
 \end{equation}
 From the kernel self-consistency,
 \begin{equation}
-  (C_1)_{pr} = \frac1N\sum_q\lambda_q(\Sigma_q^{(1)})_{pr} = T_{pr}\,(B_1)_{pr},
+  (C_1)_{p,r} = \frac1N\sum_q\lambda_q(\Sigma_q^{(1)})_{p,r} = T_{p,r}\,(B_1)_{p,r},
   \qquad
-  T_{pr} \equiv \frac1N\sum_q \lambda_q^2\, d_{q,p}\, d_{q,r}.
+  T_{p,r} \equiv \frac1N\sum_q \lambda_q^2\, d_{q,p}\, d_{q,r}.
   \label{eq:T}
 \end{equation}
-$T_{pr}$ is the linear response of the kernel to the tilt at the commuting point, the Jacobian $\partial\Ct/\partial B$, which is diagonal in the pair index $(p,r)$ because the zeroth order is. Substituting \eqref{eq:T} into \eqref{eq:B1} and solving the resulting scalar equation for each pair,
+$T_{p,r}$ is the linear response of the kernel to the tilt at the commuting point, the Jacobian $\partial\Ct/\partial B$, which is diagonal in the pair index $(p,r)$ because the zeroth order is. Substituting \eqref{eq:T} into \eqref{eq:B1} and solving the resulting scalar equation for each pair,
 \begin{equation}
   \boxed{\;
-  (B_1)_{pr} = \frac{\hat E_{pr}\,c_pc_r}{c_p^2c_r^2 + T_{pr}\big(\hat s_{Y,r}^2c_p + \hat s_{Y,p}^2c_r\big)},
+  (B_1)_{p,r} = \frac{\hat E_{p,r}\,c_pc_r}{c_p^2c_r^2 + T_{p,r}\big(\hat s_{Y,r}^2c_p + \hat s_{Y,p}^2c_r\big)},
   \qquad
-  (C_1)_{pr} = T_{pr}\,(B_1)_{pr}.\;}
+  (C_1)_{p,r} = T_{p,r}\,(B_1)_{p,r}.\;}
   \label{eq:first-order}
 \end{equation}
-The bare response $\hat E_{pr}/(c_pc_r)$ is screened by the feedback through the kernel, the second term in the denominator.
+The bare response $\hat E_{p,r}/(c_pc_r)$ is screened by the feedback through the kernel, the second term in the denominator.
 
 \paragraph{Correction to $D_q$.}
 The diagonal of \eqref{eq:Sigma1} gives the first-order change of the ansatz weights,
 \begin{equation}
-  \delta d_{q,p} = \epsilon\,\lambda_q d_{q,p}^2\,(B_1)_{pp},\qquad
-  (B_1)_{pp} = \frac{\hat E_{pp}\,c_p}{c_p^3 + 2T_{pp}\hat s_{Y,p}^2},
+  \delta d_{q,p} = \epsilon\,\lambda_q d_{q,p}^2\,(B_1)_{p,p},\qquad
+  (B_1)_{p,p} = \frac{\hat E_{p,p}\,c_p}{c_p^3 + 2T_{p,p}\hat s_{Y,p}^2},
 \end{equation}
 which involves only the diagonal of $E$: to first order, off-diagonal (non-commuting) structure in $YY^\top$ does not change the spectra $D_q$ at all, it only rotates the basis. (The diagonal part of $E$ is the same as a change of $S_Y^2$ and is covered by the ansatz.)
 
@@ -275,21 +274,21 @@ which involves only the diagonal of $E$: to first order, off-diagonal (non-commu
 By first-order eigenvector perturbation theory, the eigenbasis of $\Sigma_q$ is $U_q = U(I + \epsilon\Theta_q) + O(\epsilon^2)$ with $\Theta_q$ antisymmetric,
 \begin{equation}
 \begin{aligned}
-  (\Theta_q)_{rp} &= \frac{(\Sigma_q^{(1)})_{rp}}{d_{q,p} - d_{q,r}}
-  = \frac{\lambda_q (B_1)_{pr}}{d_{q,r}^{-1} - d_{q,p}^{-1}} \\[1ex]
-  &= \boxed{\;\frac{(B_1)_{pr}}{\dfrac{\hat s_{X,p}^2 - \hat s_{X,r}^2}{(\lambda_q\hat s_{X,p}^2 + \sigma^2)(\lambda_q\hat s_{X,r}^2 + \sigma^2)} + \dfrac{\hat s_{Y,p}^2}{c_p^2} - \dfrac{\hat s_{Y,r}^2}{c_r^2}}\;}
+  (\Theta_q)_{r,p} &= \frac{(\Sigma_q^{(1)})_{r,p}}{d_{q,p} - d_{q,r}}
+  = \frac{\lambda_q (B_1)_{p,r}}{d_{q,r}^{-1} - d_{q,p}^{-1}} \\[1ex]
+  &= \boxed{\;\frac{(B_1)_{p,r}}{\dfrac{\hat s_{X,p}^2 - \hat s_{X,r}^2}{(\lambda_q\hat s_{X,p}^2 + \sigma^2)(\lambda_q\hat s_{X,r}^2 + \sigma^2)} + \dfrac{\hat s_{Y,p}^2}{c_p^2} - \dfrac{\hat s_{Y,r}^2}{c_r^2}}\;}
   \qquad (r \ne p),
 \end{aligned}
   \label{eq:theta}
 \end{equation}
-where the last step uses $d_{q,p}^{-1} = (\lambda_q\hat s_{X,p}^2+\sigma^2)^{-1} + g^2 - \lambda_q\hat s_{Y,p}^2/c_p^2$ and the $g^2$ cancels in the difference. Column $p$ of $U_q$ is the cell type $p$ at spatial frequency $q$: $u_{q,p} = u_p + \epsilon\sum_{r\ne p}(\Theta_q)_{rp}u_r$. Equation \eqref{eq:theta} is the first-order form of \eqref{eq:two-latent-angle} for every pair of modes, and it says the following.
+where the last step uses $d_{q,p}^{-1} = (\lambda_q\hat s_{X,p}^2+\sigma^2)^{-1} + g^2 - \lambda_q\hat s_{Y,p}^2/c_p^2$ and the $g^2$ cancels in the difference. Column $p$ of $U_q$ is the cell type $p$ at spatial frequency $q$: $u_{q,p} = u_p + \epsilon\sum_{r\ne p}(\Theta_q)_{r,p}u_r$. Equation \eqref{eq:theta} is the first-order form of \eqref{eq:two-latent-angle} for every pair of modes, and it says the following.
 \begin{itemize}
-  \item The numerator $(B_1)_{pr}$ is $q$-independent; all the scale dependence is in the denominator, through the input term $(\hat s_{X,p}^2 - \hat s_{X,r}^2)/[(\lambda_q\hat s_{X,p}^2+\sigma^2)(\lambda_q\hat s_{X,r}^2+\sigma^2)]$, which is monotone in $\lambda_q$.
-  \item \emph{Fine scales} ($\lambda_q \to 0$): the input term is $(\hat s_{X,p}^2 - \hat s_{X,r}^2)/\sigma^4$, generically large; the rotation $\epsilon(B_1)_{pr}\big/[(\hat s_{X,p}^2 - \hat s_{X,r}^2)/\sigma^4 + b_p - b_r]$ is the first-order rotation of the eigenbasis of $A/\sigma^4 + B$ in \eqref{eq:limits}, and is small when the input spectrum is well separated on the scale of the noise.
+  \item The numerator $(B_1)_{p,r}$ is $q$-independent; all the scale dependence is in the denominator, through the input term $(\hat s_{X,p}^2 - \hat s_{X,r}^2)/[(\lambda_q\hat s_{X,p}^2+\sigma^2)(\lambda_q\hat s_{X,r}^2+\sigma^2)]$, which is monotone in $\lambda_q$.
+  \item \emph{Fine scales} ($\lambda_q \to 0$): the input term is $(\hat s_{X,p}^2 - \hat s_{X,r}^2)/\sigma^4$, generically large; the rotation $\epsilon(B_1)_{p,r}\big/[(\hat s_{X,p}^2 - \hat s_{X,r}^2)/\sigma^4 + b_p - b_r]$ is the first-order rotation of the eigenbasis of $A/\sigma^4 + B$ in \eqref{eq:limits}, and is small when the input spectrum is well separated on the scale of the noise.
   \item \emph{Coarse scales} ($\lambda_q \to \infty$): the input term vanishes as $1/\lambda_q^2$ and the rotation tends to $\epsilon(B_1)_{p,r}/(b_p - b_r)$ with $b_p = \hat s_{Y,p}^2/c_p^2$, the first-order rotation of the eigenbasis of the tilt $B$, set by the target. This limit needs $\lambda_q^2 \gg |\hat s_{X,r}^{-2} - \hat s_{X,p}^{-2}|/|b_p - b_r|$, which the coarsest scale of a lattice generally does not satisfy: in the instance below the input term of the leading pair is still $0.087$ at $\lambda_{\max} = 3.54$ against a target term of $-0.041$, so the coarse-scale basis is the one in which target tilt and input anisotropy compete.
   \item The two limits differ unless $\hat s_{X,p}^2 = \hat s_{X,r}^2$; so for non-commuting data the functional basis is a different basis at every spatial scale, rotating monotonically away from an input-set basis at fine scales towards the target-set basis, which the coarse scales approach only as far as $\lambda_{\max}$ allows. The rate penalty $g^2$ does not enter the rotation except through $c_p$ and $(B_1)_{p,r}$. If the input and target anisotropies of a pair have opposite signs, the denominator vanishes at some $\lambda^\star$ and first-order theory breaks down there: that is the avoided crossing of Section~\ref{sec:rank}, where the pair of cell types swaps identity across scales. In the instance below the leading pair $(1,2)$ is of this kind, with $\lambda^\star = 5.65$ just beyond $\lambda_{\max} = 3.54$: the crossing is nearly realised within the kernel's spectrum.
 \end{itemize}
-For the functional-cell-type question this is the result: the ansatz forbids by construction the one effect, a basis that depends on spatial scale, that would make ``cell types at scale $q$'' a non-trivial notion; the first-order theory predicts that effect to be present whenever $[XX^\top,YY^\top]\ne0$, of size $\epsilon\,|(B_1)_{pr}|$ times a scale-dependent susceptibility that is largest at coarse scales.
+For the functional-cell-type question this is the result: the ansatz forbids by construction the one effect, a basis that depends on spatial scale, that would make ``cell types at scale $q$'' a non-trivial notion; the first-order theory predicts that effect to be present whenever $[XX^\top,YY^\top]\ne0$, of size $\epsilon\,|(B_1)_{p,r}|$ times a scale-dependent susceptibility that is largest at coarse scales.
 
 \section{Numerical route}
 \label{sec:numerical}
@@ -298,13 +297,13 @@ Because the frequency decomposition is exact, one never needs the $NP\times NP$ 
 \begin{equation}
   \Ct \leftarrow \alpha\,\Ct + (1-\alpha)\,\mathcal F(\Ct),
 \end{equation}
-each step costing $N$ inversions of $P\times P$ matrices. Start from a large $\Ct = c_{\mathrm{start}} I$ so that the tilt is small and every $M_q - \lambda_q B \succ 0$ (the iteration must stay in $\dom$; a step that leaves it is halved and retried a few times before the solver raises and asks for a larger start), and stop when the residual $\max_{p,r}|\Ct - \mathcal F(\Ct)|_{p,r}$ is below $10^{-12}$. $\mathcal F$ is decreasing in $\Ct$ (a larger kernel weakens the tilt), so its Jacobian at the fixed point has negative eigenvalues and the undamped map oscillates when a slope exceeds one in magnitude; the required damping is not known in advance, so the solver tightens $\alpha$ (halving $1-\alpha$) whenever a step grows. By Proposition~\ref{prop:unique} any admissible fixed point reached is \emph{the} solution; agreement between two different starts checks that the iteration has converged, not uniqueness, which is the proposition's job. For larger $P$ one would switch to Newton's method on the $P(P+1)/2$ residual $\Ct - \mathcal F(\Ct)$, with the elementwise Jacobian $T_{pr}$ of \eqref{eq:T} as a preconditioner, or minimise $\mathfrak g$ directly.
+each step costing $N$ inversions of $P\times P$ matrices. Start from a large $\Ct = c_{\mathrm{start}} I$ so that the tilt is small and every $M_q - \lambda_q B \succ 0$ (the iteration must stay in $\dom$; a step that leaves it is halved and retried a few times before the solver raises and asks for a larger start), and stop when the residual $\max_{p,r}|\Ct - \mathcal F(\Ct)|_{p,r}$ is below $10^{-12}$. $\mathcal F$ is decreasing in $\Ct$ (a larger kernel weakens the tilt), so its Jacobian at the fixed point has negative eigenvalues and the undamped map oscillates when a slope exceeds one in magnitude; the required damping is not known in advance, so the solver tightens $\alpha$ (halving $1-\alpha$) whenever a step grows. By Proposition~\ref{prop:unique} any admissible fixed point reached is \emph{the} solution; agreement between two different starts checks that the iteration has converged, not uniqueness, which is the proposition's job. For larger $P$ one would switch to Newton's method on the $P(P+1)/2$ residual $\Ct - \mathcal F(\Ct)$, with the elementwise Jacobian $T_{p,r}$ of \eqref{eq:T} as a preconditioner, or minimise $\mathfrak g$ directly.
 
 \paragraph{Checks.}
 (a) In the commuting case ($\epsilon = 0$) the eigenvalues of $\Ct$ must equal the roots of \eqref{eq:linear-soln}. (b) The fixed point of the per-$q$ solver must be a fixed point of the full $NP\times NP$ kernel map $C \mapsto \frac1N\sum_{i,j}K_{i,j}\langle\phi_i\phi_j\rangle$ of \texttt{check\_rg\_linear\_soln.py}, which uses no Fourier decomposition. (c) Two starts must converge to the same point. (d) The first-order formulae \eqref{eq:first-order}, \eqref{eq:theta} must match $(\Ct(\epsilon)-\Ct(0))/\epsilon$ and $(U_q(\epsilon) - U)/\epsilon$ with a residual that halves when $\epsilon$ is halved. (e) The rank-deficient block structure of Section~\ref{sec:rank}.
 
 \paragraph{Instance.}
-Every parameter is set in \path{latex/notes/scripts/linear_without_ansatz.py} (run from the repository root with \path{uv run python latex/notes/scripts/linear_without_ansatz.py}; about two seconds): a ring of $N = 32$ sites with $K_{i,j} = \exp(-r_{i,j}^2/4)$ ($\lambda_q \in [3.7\times10^{-4}, 3.54]$); $P = 6$, $m = 6$; $k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $g^2 = 0.3$, $\delta = 0.5$ as in the companion notes; $XX^\top = U S_X^2U^\top$ with $U$ the $Q$ factor of a $6\times6$ standard normal matrix (\path{numpy.random.default_rng(0)}) and $S_X^2 = \diag(2.0, 1.4, 1.0, 0.7, 0.4, 0.2)$; $YY^\top = U(S_Y^2 + \epsilon E)U^\top$ with $S_Y^2 = \diag(1.0, 0.8, 0.6, 0.4, 0.25, 0.15)$ and $E = RS_Y^2R^\top - S_Y^2$, where $R$ is the product of Givens rotations by $30^\circ$ in the planes $(1,2),(2,3),\dots,(5,6)$. So at $\epsilon = 1$ the eigenbasis of $YY^\top$ is rotated by $30^\circ$--$41^\circ$ from that of $XX^\top$ (two non-commuting Gram matrices), at $\epsilon = 0$ they commute, and for $\epsilon\in[0,1]$ $YY^\top$ is a convex combination of positive matrices. The rank-deficient check uses $K = 3$ latents, $Z$ the $Q$ factor of a $6\times3$ normal matrix and $G_X, G_Y = GG^\top/3$ for $3\times3$ normal $G$ (\path{default_rng(1)}). The tests in \path{tests/test_linear_without_ansatz.py} run the same checks on a smaller instance.
+Every parameter is set in \path{latex/notes/scripts/linear_without_ansatz.py} (run from the repository root with \path{uv run python latex/notes/scripts/linear_without_ansatz.py}; under a second): a ring of $N = 32$ sites with $K_{i,j} = \exp(-r_{i,j}^2/4)$ ($\lambda_q \in [3.7\times10^{-4}, 3.54]$); $P = 6$, $m = 6$; $k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $g^2 = 0.3$, $\delta = 0.5$ as in the companion notes; $XX^\top = U S_X^2U^\top$ with $U$ the $Q$ factor of a $6\times6$ standard normal matrix (\path{numpy.random.default_rng(0)}) and $S_X^2 = \diag(2.0, 1.4, 1.0, 0.7, 0.4, 0.2)$; $YY^\top = U(S_Y^2 + \epsilon E)U^\top$ with $S_Y^2 = \diag(1.0, 0.8, 0.6, 0.4, 0.25, 0.15)$ and $E = RS_Y^2R^\top - S_Y^2$, where $R$ is the product of Givens rotations by $30^\circ$ in the planes $(1,2),(2,3),\dots,(5,6)$. So at $\epsilon = 1$ the eigenbasis of $YY^\top$ is rotated by $30^\circ$--$41^\circ$ from that of $XX^\top$ (two non-commuting Gram matrices), at $\epsilon = 0$ they commute, and for $\epsilon\in[0,1]$ $YY^\top$ is a convex combination of positive matrices. The rank-deficient check uses $K = 3$ latents, $Z$ the $Q$ factor of a $6\times3$ normal matrix and $G_X, G_Y = GG^\top/3$ for $3\times3$ normal $G$ (\path{default_rng(1)}). The tests in \path{tests/test_linear_without_ansatz.py} run the same checks on a smaller instance.
 
 \paragraph{Output.}
 {\scriptsize
@@ -364,7 +363,7 @@ Yes, for the functional-cell-type question specifically, and the reason is Propo
 \paragraph{What it costs.}
 Little, analytically and numerically, at the level of this note.
 \begin{itemize}
-  \item \emph{Analytically}, the scalar equation \eqref{eq:linear-soln} is replaced by the matrix equation \eqref{eq:master}, which has no closed form, but the structural results (unique solution, variational principle, per-$q$ basis as the eigenbasis of $M_q - \lambda_q B$, the two limits, the rank-deficient reduction, the two-latent angle formula, the first-order rotation) are all obtained above with elementary means and hold for any $N$ and in the continuum limit. The limiting-case analysis of the companion note \path{linear_solution_limits.tex} (in preparation) carries over mode by mode at zeroth order, and \eqref{eq:first-order}--\eqref{eq:theta} give the leading correction to each limit; the continuum limit replaces $\frac1N\sum_q$ by $\int\mathrm d^dq/(2\pi)^d$ in $T_{pr}$ and in \eqref{eq:master} and nothing else changes.
+  \item \emph{Analytically}, the scalar equation \eqref{eq:linear-soln} is replaced by the matrix equation \eqref{eq:master}, which has no closed form, but the structural results (unique solution, variational principle, per-$q$ basis as the eigenbasis of $M_q - \lambda_q B$, the two limits, the rank-deficient reduction, the two-latent angle formula, the first-order rotation) are all obtained above with elementary means and hold for any $N$ and in the continuum limit. The limiting-case analysis of the companion note \path{linear_solution_limits.tex} carries over mode by mode at zeroth order, and \eqref{eq:first-order}--\eqref{eq:theta} give the leading correction to each limit; the continuum limit replaces $\frac1N\sum_q$ by $\int\mathrm d^dq/(2\pi)^d$ in $T_{p,r}$ and in \eqref{eq:master} and nothing else changes.
   \item \emph{Numerically}, the problem is $P\times P$ with $N$ inversions per iteration, independent of the ansatz; the demonstration takes $37$ iterations and about a second. The ansatz saves nothing here: the kernel $\Ct$ is $P\times P$ either way.
   \item \emph{What one gives up} is the one-dimensional picture of a single ``spectrum'' $h_q$ per cell type: with rotation, the weight carried by cell type $p$ at scale $q$ is not a scalar $d_{q,p}$ but the $p$-th eigenvalue of $\Sigma_q$ attached to a $q$-dependent eigenvector, and ``the cell type $p$'' must be tracked across $q$ (by overlap, as the script does). Where the ansatz is a good approximation, the first-order theory says how good: the error of the spectra is $O(\epsilon^2)$ (the first-order spectral correction involves only the diagonal of $E$), and the rotation is $O(\epsilon)$ with the coefficient \eqref{eq:theta}.
 \end{itemize}
