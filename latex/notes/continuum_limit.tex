@@ -31,6 +31,17 @@
 Sections~1 and~2 of the notes are written for $N$ neurons on a lattice with a translation-invariant prior $K$ diagonalised by the discrete Fourier transform. This note translates that analysis into a field theory under the convention that, as $N\to\infty$, the lattice spacing $a$ stays fixed and the volume $L^d = N a^d$ grows, so that momentum sums become integrals over a ball of radius $\Lam\propto 1/a$ with the usual density of states. Section~\ref{sec:dictionary} gives the dictionary with every factor of $a$, $L$, $N$ and $2\pi$ explicit, including the one subtle entry: the penalty $M = K^{-1}$ carries $a^{2d}$ relative to the continuum inverse kernel and, for a squared-exponential prior, is a cutoff-dominated object with no continuum limit. Section~\ref{sec:functional} writes the single-site weight as a functional integral and shows that $\F = -\frac1N\log\W$ is a free energy per site, $a^d$ times the free energy per unit volume. Section~\ref{sec:linear} translates the corrected one-hidden-layer solution (\texttt{eq:linear-soln} with the $1/N$ of \texttt{rg\_kernel\_normalisation.tex} and the $c^2$ and $h_q$ of \texttt{rg\_diagonal\_reduction.tex}) into $q$-integrals and derives when the solution depends on the cutoff: never for the squared-exponential kernel, never for the power law in $d=1$, and for the power law in $d=2$ with $\sigma^2>0$, where $c$ grows as $\log(\Lam^2/m^2)$ asymptotically; that asymptote is however reached only at astronomically large $\Lam/m$, and at accessible cutoffs the root stays pinned near the pole of the equation while the cutoff modes act by shrinking the learned correlation length. The input noise $\sigma^2$ regularises the precision of the modes outside the kernel's support, but it is a white-noise source that transmits a divergent $K(0)$ to the hidden kernel, not a UV regulator; the only UV regulator is $\Lam$. Finite-size corrections at fixed $a$ are $O(e^{-L/\xi})$, with $\xi$ the longest correlation length of the integrand. Section~\ref{sec:rg} sets up the momentum-shell RG for the nonlinear theory of Appendix~A1 and gives the tree-level dimensions. Section~\ref{sec:checks} quotes a numerical check of the dictionary on a ring and a torus.
 \end{abstract}
 
+\paragraph{Conclusions.}
+\begin{itemize}
+  \item At fixed spacing the dictionary is $\sum_i\to\rho\int\dd^dx$, $\lambda_q\to\rho\lambda(q)$, $\frac1N\sum_q\to a^d\int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d}$, with $\rho = a^{-d}$ and $\Lam = (2\pi/a)V_d^{-1/d}$; the penalty $M = K^{-1}$ carries $a^{2d}$ and, for the squared-exponential prior, is cutoff-dominated (Table~\ref{tab:dictionary}, Section~\ref{sec:checks}).
+  \item $\F$ is the free energy per neuron and $f = \F/a^d$ the free energy per unit volume; $f = O(\Lam^d)$ is cutoff-dominated, but the saddle-point equations are $\lambda(q)$-weighted mode averages in which $\rho$ cancels (Section~\ref{sec:functional}).
+  \item The corrected \texttt{eq:linear-soln} becomes $1-\delta/c = c\int_{|q|<\Lam}\frac{\dd^dq}{(2\pi)^d}\lambda H/(c^2-\sY^2\rho\lambda H)$; it is UV-finite iff $\int\lambda<\infty$ for $\sigma^2>0$ and iff $\int\lambda^2<\infty$ for $\sigma^2 = 0$. Squared-exponential: finite in every $d$, corrections $e^{-\ell^2\Lam^2/2}$. Power law $\gamma/(q^2+m^2)$: finite in $d=1$; in $d=2$ finite only at $\sigma^2 = 0$ (Table~\ref{tab:uv}).
+  \item In the sensitive case $c\sim H(0)\frac{\gamma}{4\pi}\log(\Lam^2/m^2)$ only asymptotically; at accessible cutoffs the root stays pinned above the pole $c_*$ and the cutoff modes act by shrinking the learning term and the learned correlation length $\xi_*$ (Section~\ref{sec:uv}, Section~\ref{sec:checks}).
+  \item $\sigma^2$ regularises the measure, not the UV: it feeds white noise into every mode up to $\Lam$ and makes the convergence condition stronger. The only UV regulator is $\Lam$.
+  \item Finite-size corrections are $O(e^{-L/\xi})$ with $\xi$ the longest of the kernel range and the learning-induced length $\xi_*$, which the check identifies as the exact pole of the summand ($\xi_* = 1.08\ell$ for the parameters used); the mode average then settles on an aliasing floor $F'(0)\times$(spectral weight outside the zone)$/$value, $2.5\times10^{-11}$ and $4.1\times10^{-11}$ in $d = 1, 2$.
+  \item The tree-level RG around the prior fixed point has $[\sigma_{(k)}] = d-(k+1)(d-2)/2$ with $\Delta_h = \Delta_{\hat\phi} = (d-2)/2$: all vertices relevant in $d\le2$, so the theory must be studied at finite correlation length; the tilt $B$ is held fixed at tree level although the saddle fixes it (Section~\ref{sec:rg}).
+\end{itemize}
+
 \section{The dictionary}
 \label{sec:dictionary}
 
@@ -282,6 +293,28 @@ the hidden-layer kernel grows without bound, and since the learning term of the 
 \paragraph{Regime of the asymptote.}
 Equation~\eqref{eq:c-log} is the $\Lam\to\infty$ asymptote and holds once the logarithm dominates the terms it neglects, $H(0)\frac{\gamma}{4\pi}\log(\Lam^2/m^2)\gg c_*-\delta$ with $c_* = \sY\sqrt{h(0)}$ the pole of \eqref{eq:linear-soln-cont}. Below that the root is governed by the pole, not by the logarithm. When the target is strong enough that $1-\delta/c_*>0$ (the learning regime), the root sits pinned just above $c_*$, where the $q\approx0$ part of the integral diverges as $\log\xi_*$ (Remark in Section~\ref{sec:finite-size}), and the growth of $I_1$ is absorbed almost entirely by a decrease of $\xi_*$ rather than by a rise of $c$. The check of Section~\ref{sec:checks} solves \eqref{eq:linear-soln-cont} for the power law with the scalars used throughout this note, $\sX^2 = 0.7$, $\sY^2 = 0.25$, $\sigma^2 = 0.2$, $g^2 = 0.3$, $\delta = 0.5$ (the value of \path{rg_diagonal_reduction.tex}), $\gamma = 1$, $m = 1/2$: the root is $c-c_* = 0.0017$ at $\Lam/m = 2\times10^2$ and $0.035$ at $2\times10^6$, its slope $\dd c/\dd\log(\Lam^2/m^2)$ grows from $0.0002$ to $0.0037$ against the asymptotic coefficient $H(0)\gamma/4\pi = 0.0150$ (70 to 4 times smaller), and reaches $90\%$ of it only for $\Lam/m\sim10^{13}$. What \emph{is} visible at accessible cutoffs is a redistribution at nearly constant $c$: the noise-driven prior term $\int\lambda H$ grows with the logarithm ($0.31\to0.58$ over the same four decades), so the learning term $c-\delta-\int\lambda H = \sY^2\int(\lambda H)^2/(c^2-\sY^2\lambda H)$, which is what the tilt contributes, shrinks ($0.45\to0.21$), and the learned correlation length falls ($\xi_* = 23/m\to5/m$). The cutoff modes erode learning by shortening its range long before they move $c$. Two further caveats. On a lattice $\log(\Lam^2/m^2) = 2\log(\pi/ma)$ is a few units ($3.7$ for $1/m = 2a$), so ``$\Lam\to\infty$'' is never a large parameter there. And the aliasing formula \eqref{eq:aliasing} cannot be applied to $\gamma/(q^2+m^2)$ in $d\ge2$: the alias sum $\sum_n\lambda(q+2\pi n/a)$ diverges (its terms fall as $|n|^{-2}$), i.e.\ no lattice prior has this continuum spectrum. The $d=2$ power-law analysis is a statement about the continuum spectrum cut sharply at $\Lam$; a lattice prior with the same long-wavelength behaviour (the lattice propagator) has a bounded $\lambda_q$ and finite $K_{0,0}$, and sees the logarithm only as the finite number above.
 
+\paragraph{Summary of the UV sensitivity.}
+Table~\ref{tab:uv} collects the cases. ``Finite'' means that the right-hand side of \eqref{eq:linear-soln-cont}, hence the root $c$, has a $\Lam\to\infty$ limit; the last column is the rate at which that limit is approached, i.e.\ the tail of $I_1$ ($\sigma^2>0$) or $I_2$ ($\sigma^2 = 0$) in \eqref{eq:I12}.
+\begin{table}[t]
+\centering\small
+\begin{tabular}{l c c l l}
+\toprule
+kernel & $d$ & $\sigma^2$ & finite? & correction as $\Lam\to\infty$\\
+\midrule
+squared exponential & 1 & $>0$ & yes & $\operatorname{erfc}(\ell\Lam/\sqrt2)\sim e^{-\ell^2\Lam^2/2}$\\
+squared exponential & 1 & $=0$ & yes & $e^{-\ell^2\Lam^2}$\\
+squared exponential & 2 & $>0$ & yes & $e^{-\ell^2\Lam^2/2}$\\
+squared exponential & 2 & $=0$ & yes & $e^{-\ell^2\Lam^2}$\\
+power law & 1 & $>0$ & yes & $O(m/\Lam)$\\
+power law & 1 & $=0$ & yes & $O((m/\Lam)^3)$\\
+power law & 2 & $>0$ & no & $c\sim H(0)\frac{\gamma}{4\pi}\log(\Lam^2/m^2)$, eq.~\eqref{eq:c-log}\\
+power law & 2 & $=0$ & yes & $O(m^2/\Lam^2)$\\
+\bottomrule
+\end{tabular}
+\caption{UV sensitivity of the one-hidden-layer solution \eqref{eq:linear-soln-cont} for the squared-exponential kernel and the power law $\lambda(q) = \gamma/(q^2+m^2)$. In general the solution is finite iff $\lambda(q)$ decays faster than $q^{-d}$ ($\sigma^2>0$) or $q^{-d/2}$ ($\sigma^2 = 0$). In the one divergent case the logarithm is reached only asymptotically; at accessible cutoffs the root stays pinned near the pole $c_*$ (text).}
+\label{tab:uv}
+\end{table}
+
 \paragraph{The role of $\sigma^2$.}
 Section~1 of the notes introduces $\sigma^2$ ``to ensure positive-definiteness'' and takes $\sigma\to0^+$. The continuum form shows what it regularises and what it does not. It regularises the \emph{measure}: for modes with $\rho\lambda(q)A$ singular, whether because $\lambda(q)\approx0$ outside the kernel's support or because the data direction is outside the span of $X$, the prior precision $\At(q)^{-1}$ would be infinite and those modes frozen; with $\sigma^2>0$ their precision is $1/\sigma^2$ and they are white noise of variance $\sigma^2$ per site ($\sigma^2/\rho$ per unit volume). It does \emph{not} regularise the UV; it does the opposite. White noise has a flat spectrum up to $\Lam$, so it populates every mode, and the readout prior weights those modes by $\lambda(q)$: the noise-driven part of the hidden kernel is $\frac{\sigma^2}{1+g^2\sigma^2}K_{\Lam}(0)$, which converts the tail of the integrand from $\lambda^2$ to $\lambda$ and the convergence condition from $I_2<\infty$ to the stronger $I_1<\infty$. The rate penalty $g^2$ caps $H\le1/g^2$ and the pure-noise value at $\sigma^2/(1+g^2\sigma^2)$, but it does not change which integral has to converge. The only UV regulator in the theory is $\Lam$, i.e.\ the lattice spacing; and the $\sigma\to0^+$ limit of Section~1 of the notes is, in the continuum, the UV-safe one.
 
@@ -323,8 +356,10 @@ where $\At = \Phi$ is the input kernel (with the $\sigma^2$ of the first layer) 
 
 Applying Table~\ref{tab:dictionary} to \eqref{eq:A1-lattice}, with $\mathcal A(q) = \lambda(q)A+\sigma^2/\rho$ and $\mathcal B(q) = \lambda(q)B - g^2/\rho$ the continuum kernels, every local term acquires a factor $\rho$; rescaling $\hat\phi\to\hat\phi/\rho$ moves all of them into the $\hat\phi$ propagator and gives the action in the form in which the RG is set up:
 \begin{equation}
-  \Sact[h,\hat\phi] = \frac12\int\frac{\dd^dq}{(2\pi)^d}\Big[h^{*}(q)\,\mathcal A(q)^{-1}h(q) + \hat\phi^{*}(q)\,\big(\rho^2\mathcal B(q)\big)^{-1}\hat\phi(q)\Big]
-  + \int\dd^dx\Big[\sigma_{(1)}\hat\phi\cdot h + \sum_{k\ge2}\frac{\sigma_{(k)}}{k!}\hat\phi^{\mu}(h^{\mu})^k\Big],
+\begin{aligned}
+  \Sact[h,\hat\phi] = {}&\frac12\int\frac{\dd^dq}{(2\pi)^d}\Big[h^{*}(q)\,\mathcal A(q)^{-1}h(q) + \hat\phi^{*}(q)\,\big(\rho^2\mathcal B(q)\big)^{-1}\hat\phi(q)\Big]\\
+  &+ \int\dd^dx\Big[\sigma_{(1)}\hat\phi\cdot h + \sum_{k\ge2}\frac{\sigma_{(k)}}{k!}\hat\phi^{\mu}(h^{\mu})^k\Big],
+\end{aligned}
   \label{eq:S-cont}
 \end{equation}
 with $\rho^2\mathcal B(q) = \rho\lambda_qB - \rho g^2$ the tilt in lattice units. The free propagators follow by inverting the $2P\times2P$ quadratic form per mode:
