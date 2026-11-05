@@ -28,7 +28,7 @@
 \maketitle
 
 \begin{abstract}
-We re-derive the implicit solution \texttt{eq:linear-soln} of Section~2 for a linear network with one spatially embedded hidden layer, and find that it agrees with the proofread (red) form of the notes; the whole analysis below therefore refers to that corrected equation. Per data mode, the hidden-layer variance at spatial frequency $q$ factorises as a prior-shaped, rate-penalty-shrunk variance times a target-driven amplification, $d_q = \pi_q \amp_q$, and $d_q$ is monotone in $\lambda_q$: every data mode is smoothest at $q = 0$, so spatial ``cell types'' can only appear in the \emph{ratios} of the spectra of different data modes. We work out the limits $\sigma \to 0$, $g \to 0$, $k_0 = k_1$, a Gaussian kernel on a ring, and the uniform latent task, and identify three mechanisms that move the spatial scale of one latent relative to another: the input-noise floor (no effect on shape), rate-penalty whitening (a strong latent is pushed to \emph{finer} scales), and target condensation (a strong latent is pushed to \emph{coarser} scales, up to the system size). In the uniform-$[0,a]$ task the ``strong latent'' is always the mean direction $\sum_k z_k$, whose singular value exceeds the $K-1$ degenerate contrast directions by $3K+1$; individual latents are not identifiable. Eight numerical predictions close the note. Every non-trivial step is checked in \path{latex/notes/scripts/check_linear_soln_limits.py}.
+We re-derive the implicit solution \texttt{eq:linear-soln} of Section~2 for a linear network with one spatially embedded hidden layer, and find that it agrees with the proofread (red) form of the notes; the whole analysis below therefore refers to that corrected equation. Per data mode, the hidden-layer variance at spatial frequency $q$ factorises as a prior-shaped, rate-penalty-shrunk variance times a target-driven amplification, $d_q = \pi_q \amp_q$, and $d_q$ is monotone in $\lambda_q$: every data mode is smoothest at $q = 0$, so spatial ``cell types'' can only appear in the \emph{ratios} of the spectra of different data modes. We work out the limits $\sigma \to 0$, $g \to 0$, $k_0 = k_1$, a Gaussian kernel on a ring, and the uniform latent task, and identify three mechanisms that move the spatial scale of one latent relative to another: the input-noise floor (no effect on shape at weak target), rate-penalty whitening (a strong latent is pushed to \emph{finer} scales), and target condensation (a strong latent is pushed to \emph{coarser} scales, up to the system size). In the uniform-$[0,a]$ task the ``strong latent'' is always the mean direction $\sum_k z_k$, whose singular value exceeds the $K-1$ degenerate contrast directions by $3K+1$; individual latents are not identifiable. Eight numerical predictions close the note. Every non-trivial step is checked in \path{latex/notes/scripts/check_linear_soln_limits.py}.
 \end{abstract}
 
 \tableofcontents
@@ -87,7 +87,7 @@ $\Phi^{(1)} = k_1 I_n\otimes C$, $\hat\Phi^{(1)} = \tilde\Phi^{-1}\mathbb Y\tild
 \end{equation}
 \end{lemma}
 \begin{proof}
-$\tilde\Phi = k_1 I_n\otimes(C + \delta I_P)$, so $\tilde\Phi^{-1} = k_1^{-1}I_n\otimes\tilde C^{-1}$ and, with $\mathbb Y^{\mu,\nu}_{\alpha,\beta} = y^\mu_\alpha y^\nu_\beta$, $\hat\Phi^{\mu,\nu}_{\alpha,\beta} = k_1^{-2}[\tilde C^{-1}]^{\mu,m}y^m_\alpha y^n_\beta[\tilde C^{-1}]^{n,\nu}$. Contracting with $K^{(1),\mathrm{post}}_{\alpha,\beta} = k_1\delta_{\alpha,\beta}$ sums $y^m_\alpha y^n_\alpha$ over $\alpha$ into $(YY^\top)^{m,n}$ and leaves one factor $k_1^{-1}$.
+$\tilde\Phi = k_1 I_n\otimes(C + \delta I_P)$, so $\tilde\Phi^{-1} = k_1^{-1}I_n\otimes\tilde C^{-1}$ and, with $\mathbb Y^{\mu,\nu}_{\alpha,\beta} = y^\mu_\alpha y^\nu_\beta$, $\hat\Phi^{\mu,\nu}_{\alpha,\beta} = k_1^{-2}[\tilde C^{-1}]^{\mu,\mu'}y^{\mu'}_\alpha y^{\nu'}_\beta[\tilde C^{-1}]^{\nu',\nu}$ (summed over the pattern indices $\mu',\nu'$). Contracting with $K^{(1),\mathrm{post}}_{\alpha,\beta} = k_1\delta_{\alpha,\beta}$ sums $y^{\mu'}_\alpha y^{\nu'}_\alpha$ over $\alpha$ into $(YY^\top)^{\mu',\nu'}$ and leaves one factor $k_1^{-1}$.
 \end{proof}
 
 \begin{lemma}[Ansatz reduction]\label{lem:ansatz}
@@ -126,11 +126,11 @@ Substitute \eqref{eq:hq} into \eqref{eq:per-mode}: $d_q^{-1} = \lambda_q/h_q - \
 
 \paragraph{Agreement with the notes.}
 Equation \eqref{eq:linear-soln} is identical to the red (corrected) form of \texttt{eq:linear-soln} in Section~2 and to \path{rg_diagonal_reduction.tex}, including the $1/N$ (Lemma~\ref{lem:C}), the power $c^2$ (Lemma~\ref{lem:ansatz}), the definition of $h_q$ and the branch. It differs from the uncorrected text in exactly the three places those notes list, so no discrepancy section is needed: \emph{every later result refers to \eqref{eq:linear-soln}}.
-The self-consistency statement of Lemma~\ref{lem:ansatz} is also confirmed without the ansatz: for a ring of $N = 12$ sites ($\ell = \sqrt2$), $P = 5$ patterns, $m = n = 6$, $K = 2$ latents, $X = ZW_X^\top$, $Y = ZW_Y^\top$ with orthonormal $W_X, W_Y$, and $k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $g^2 = 0.3$, $\delta = 0.5$, Newton's method on the full $NP\times NP$ map (started from $C = 30I$, steps halved until the precision stays positive definite) converges to a fixed point whose eigenvalues of $\tilde C$, $\{0.68867925\ (\times3),\ 0.75074931,\ 3.85717575\}$, agree with the per-mode roots of \eqref{eq:linear-soln} to a relative $10^{-15}$, with the off-diagonal part of $U^\top\tilde CU$ at $10^{-15}$ (script, section A).
-If $W_Y$ is given non-orthonormal columns ($W_Y \to W_Y\,\mathrm{diag}(1, 0.7)$) the Gram matrices no longer commute, $\max|[XX^\top,YY^\top]| = 0.44$, and the ansatz is only approximate: the off-diagonal part of $U^\top\tilde CU$ is $0.10$ and the per-mode roots (with $\sY$ read from the diagonal of $U^\top YY^\top U$) are off by up to $0.5\%$.
+The self-consistency statement of Lemma~\ref{lem:ansatz} is also confirmed without the ansatz: for a ring of $N = 12$ sites ($\ell = \sqrt2$), $P = 5$ patterns, $m = n = 6$, $K = 2$ latents, $X = ZW_X^\top$, $Y = ZW_Y^\top$ with orthonormal $W_X, W_Y$, and $k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $g^2 = 0.3$, $\delta = 0.5$, Newton's method on the full $NP\times NP$ map (started from $C = 30I$, steps halved until the precision stays positive definite) converges to a fixed point whose eigenvalues of $\tilde C$, $\{0.68867925\ (\times3),\ 0.75074939,\ 3.85726387\}$, agree with the per-mode roots of \eqref{eq:linear-soln} to a relative $10^{-15}$, with the off-diagonal part of $U^\top\tilde CU$ at $10^{-15}$ (script, section A; the kernel is the wrapped Gaussian of Section~\ref{sec:ring}).
+If the same task is kept (same $Z$, $W_X$, $W_Y$: the script reseeds) and $W_Y$ is given non-orthonormal columns, $W_Y \to W_Y\,\mathrm{diag}(1, 0.7)$, the Gram matrices no longer commute, $\max|[XX^\top,YY^\top]| = 0.43$, and the ansatz is only approximate: the off-diagonal part of $U^\top\tilde CU$ is $0.08$ and the per-mode roots (with $\sY$ read from the diagonal of $U^\top YY^\top U$) are off by up to $0.2\%$.
 
 \begin{remark}[Why plain iteration fails for strong targets]
-The scalar map $c\mapsto R(c) = \delta + \frac{c^2}{N}\sum_q h_q/(c^2-\sY h_q)$ has $R'(c) = -\frac{2c\sY}{N}\sum_q h_q^2/(c^2-\sY h_q)^2 \to -\infty$ at the pole. Damped iteration $c \leftarrow \alpha c + (1-\alpha)R(c)$ is stable only if $R' > -(1+\alpha)/(1-\alpha)$, so near the pole (strong target, Section~\ref{sec:condense}) it leaves the physical branch, which is what happens for the parameters above with damping $\alpha = \tfrac12$. Newton with a positivity line search, or iteration on $1/c$, is required.
+The scalar map $c\mapsto R(c) = \delta + \frac{c^2}{N}\sum_q h_q/(c^2-\sY h_q)$ has $R'(c) = -\frac{2c\sY}{N}\sum_q h_q^2/(c^2-\sY h_q)^2 \to -\infty$ at the pole. Damped iteration $c \leftarrow \alpha c + (1-\alpha)R(c)$ is stable only if $R' > -(1+\alpha)/(1-\alpha)$, so near the pole (strong target, Section~\ref{sec:ring}) it leaves the physical branch, which is what happens for the parameters above with damping $\alpha = \tfrac12$. Newton with a positivity line search, or iteration on $1/c$, is required.
 \end{remark}
 
 \subsection{Structure of the per-mode solution}
@@ -157,10 +157,10 @@ $\amp_q \ge 1$ is the \emph{target amplification}; it is largest where $h_q$ is 
 isolates what the target adds to $c$.
 
 \begin{lemma}[Monotonicity]\label{lem:mono}
-On the physical branch, at fixed $c$, $d_q$ is a strictly increasing function of $\lambda_q$. Consequently the spectrum $d_q$ of every data mode is ordered like $\lambda_q$: for a kernel that decreases with distance it is maximal at $q = 0$ and minimal at the Nyquist frequency, and never peaks at an intermediate $q$.
+On the physical branch, at fixed $c$, $d_q$ is a non-decreasing function of $\lambda_q$, and strictly increasing whenever $\sX > 0$ or $\sY > 0$ (a null mode, $\sX = \sY = 0$, is exactly flat, $d_q = \sigma_0^2$, Lemma~\ref{lem:floor}). Consequently, for every mode in the span of the data, the spectrum $d_q$ of every data mode is ordered like $\lambda_q$: for a kernel that decreases with distance it is maximal at $q = 0$ and minimal at the Nyquist frequency, and never peaks at an intermediate $q$.
 \end{lemma}
 \begin{proof}
-$\alpha_q$ increases with $\lambda_q$; $\pi = \alpha/(1+g^2\alpha)$ increases with $\alpha$; $h_q = \lambda_q\pi_q$ increases with $\lambda_q$; $\amp_q$ increases with $h_q$ while $c^2 > \sY h_q$. Checked on $72$ parameter sets (script, section D1).
+$\alpha_q$ increases strictly with $\lambda_q$ when $\sX > 0$ and is constant otherwise; $\pi = \alpha/(1+g^2\alpha)$ increases strictly with $\alpha$; $h_q = \lambda_q\pi_q$ increases strictly with $\lambda_q$ since $\pi_q > 0$; $\amp_q$ increases strictly with $h_q$ while $c^2 > \sY h_q$ when $\sY > 0$ and equals $1$ otherwise. So $d_q = \pi_q\amp_q$ is strictly increasing if either factor is, and flat only when both $\sX$ and $\sY$ vanish. Checked on $72$ parameter sets (script, section D1).
 \end{proof}
 
 \begin{lemma}[High-frequency floor]\label{lem:floor}
@@ -209,7 +209,7 @@ With $\sigma = 0$: $\alpha_q = \lambda_q\sX$,
 \end{gathered}
 \end{equation}
 and the floor $\sigma_0^2 = 0$. Three consequences. (i) Modes with $\lambda_q = 0$ and the null data modes get $d_q = 0$: the hidden activity is confined to the latent subspace $\col(Z)$ and to the support of the prior, the $a\downarrow0$ limit discussed in \path{latent_covariance_variational_principles.tex}. (ii) The limit is regular for every latent mode: at $\sigma^2 = 10^{-8}$ the root and the spectrum differ from their $\sigma = 0$ values by $2\times10^{-9}$ and $10^{-8}$ (script B1). (iii) The high-$q$ tail of every latent mode is $\lambda_q\sX$-shaped rather than flat, so the noise floor is the only thing that puts a lower bound on how fine a spatial scale a weak latent can reach (Section~\ref{sec:fct}).
-\emph{Interpretation:} $\sigma$ is purely a regulariser; it adds a white floor $\sigma_0^2$ to every data mode and otherwise leaves the latent-specific structure unchanged (exactly so when $g = 0$, Section~\ref{sec:g0}).
+\emph{Interpretation:} $\sigma$ is purely a regulariser; at weak target it adds a white floor $\sigma_0^2$ to every data mode and otherwise leaves the latent-specific structure unchanged (exactly so when $g = 0$ and $\tau\ll1$, Section~\ref{sec:g0}). Once the target is not weak, $\sigma^2$ also enters $h_q = \lambda_q(\lambda_q\sX + \sigma^2)$ at $g = 0$, hence $\amp_q$ and $c$, and its effect is no longer a purely additive floor.
 
 \subsection{\texorpdfstring{$g\to0$}{g -> 0}: no firing-rate penalty}
 \label{sec:g0}
@@ -219,7 +219,7 @@ With $g = 0$: $h_q = \lambda_q\alpha_q$, $\pi_q = \alpha_q$, and
   1 - \frac\delta c = \frac cN\sum_q\frac{\lambda_q\alpha_q}{c^2 - \sY\lambda_q\alpha_q},\qquad
   \alpha_q = \lambda_q\sX + \sigma^2 .
 \end{equation}
-\emph{Weak target} ($\tau\ll1$): $d_q = \alpha_q$ exactly, i.e.\ the hidden covariance is the forward (input) kernel $\lambda_q\sX + \sigma^2$, and $c = \delta + \sX\bar\lambda_2 + \sigma^2\bar\lambda$ with $\bar\lambda_2 = \frac1N\sum_q\lambda_q^2$ (checked to $10^{-7}$, script B2). All data modes then have the \emph{same} shape $\lambda_q$ above the common floor $\sigma^2$, whatever their $s_X$.
+\emph{Weak target} ($\tau\ll1$): $d_q = \alpha_q$ exactly, i.e.\ the hidden covariance is the forward (input) kernel $\lambda_q\sX + \sigma^2$, and $c = \delta + \sX\bar\lambda_2 + \sigma^2\bar\lambda$ with $\bar\lambda_2 = \frac1N\sum_q\lambda_q^2$ (checked to $2\times10^{-7}$, script B2). All data modes then have the \emph{same} shape $\lambda_q$ above the common floor $\sigma^2$, whatever their $s_X$.
 \emph{Flat spectrum} ($K = \lambda I$, the $\ell\to0$ limit of Section~\ref{sec:ring}): the sum collapses, $(c-\delta)(c^2 - \sY h) = c^2h$ with $h = \lambda\alpha$, a cubic; at $\delta\to0$ it is the quadratic $c^2/h - c - \sY = 0$,
 \begin{equation}
   c = \tfrac12\Big(h + \sqrt{h^2 + 4\sY h}\Big),
@@ -243,20 +243,21 @@ With $\sigma, g > 0$, $k$ also sets $\rho\propto k$ and $\gamma\propto k$, so a 
 \emph{Interpretation:} $k_0$ multiplies the input drive, $k_1$ divides the target demand and the ridge; with the two tied, target-driven spatial structure is strongest at the intermediate scale where the ridge matches the input drive, and the position of the pole is fixed by the task alone.
 
 \subsection{A Gaussian kernel on a ring}
-\label{sec:ring}\label{sec:condense}
-Sites $i = 0,\dots,N-1$ at unit spacing with ring distance $r_{i,j} = \min(|i-j|, N-|i-j|)$ and
+\label{sec:ring}
+Sites $i = 0,\dots,N-1$ at unit spacing. The kernel is the wrapped (image-summed) Gaussian of \path{fct/spatial.py},
 \begin{equation}
-  K_{i,j} = \exp\!\Big(-\frac{r_{i,j}^2}{2\ell^2}\Big),\qquad
-  \lambda_q = \sum_r K(r)e^{-2\pi\mathrm iqr/N} = \sqrt{2\pi}\,\ell\,\exp\!\Big(-\frac{2\pi^2\ell^2q^2}{N^2}\Big) + O\big(e^{-N^2/8\ell^2}\big).
+  K_{i,j} = \frac{W(i-j)}{W(0)},\qquad W(r) = \sum_{k\in\mathbb Z}\exp\!\Big(-\frac{(r+kN)^2}{2\ell^2}\Big),\qquad
+  \lambda_q = \sum_{r=0}^{N-1}K(r)e^{-2\pi\mathrm iqr/N} = \frac{\sqrt{2\pi}\,\ell}{W(0)}\sum_{j\in\mathbb Z}\exp\!\Big(-2\pi^2\ell^2\Big(\frac qN + j\Big)^2\Big),
   \label{eq:ring}
 \end{equation}
-\emph{Normalisation.} $K_{i,i} = 1$ (unit prior variance per synapse, the \texttt{amplitude = 1} convention of \path{fct/spatial.py}), so $\bar\lambda = \frac1N\sum_q\lambda_q = 1$ for every $\ell$, while $\lambda_0 = \sqrt{2\pi}\ell$ and, by Parseval, $\bar\lambda_2 = \frac1N\sum_q\lambda_q^2 = \sum_rK(r)^2 = \sqrt\pi\,\ell$ (for $1\ll\ell\ll N$). The alternative normalisation $\lambda_0 = 1$ (the \texttt{lambda\_max} option) divides every $\lambda_q$, hence $\Theta$, $c_*$ and $h_q$, by $\sqrt{2\pi}\ell$. $F$ is the unitary DFT with wavenumber $2\pi q/N$; $\lambda_q$ falls to half its peak at $|q| = (N/\pi\ell)\sqrt{\ln2/2}\approx0.19N/\ell$, i.e.\ at wavelength $\approx5\ell$. Checked for $N = 64$, $\ell = 4$: $\lambda_0 = 10.026513 = \sqrt{2\pi}\cdot4$, the formula \eqref{eq:ring} holds to $2\times10^{-14}$, $\bar\lambda = 1.000000$, $\bar\lambda_2 = 7.089815 = \sqrt\pi\cdot4$ (script B4).
+the last equality by Poisson summation (the DFT of the periodised Gaussian is the sampled continuous transform plus its aliases). The $j = 0$ term is the continuum formula $\sqrt{2\pi}\,\ell\,e^{-2\pi^2\ell^2q^2/N^2}$; the aliases are positive and at most $e^{-\pi^2\ell^2/2}$ of it (at $|q| = N/2$), and $W(0) = 1 + O(e^{-N^2/2\ell^2})$. Every term is positive, so $\lambda_q > 0$ for every $q$ and every $\ell$: the wrapped kernel is positive definite, as Section~\ref{sec:start} and Lemma~\ref{lem:mono} require. The Gaussian of the minimum-image distance $\min(|i-j|, N-|i-j|)$ differs from it by the dropped images, a tail of size $e^{-N^2/8\ell^2}$ at the antipode $r = N/2$, and that tail is exactly what makes it \emph{not} positive definite once $\ell\gtrsim N/8$: at $N = 64$ its smallest eigenvalue is $-4.3\times10^{-4}$ at $\ell = 8$ and $-6.8\times10^{-2}$ at $\ell = 12$, where the wrapped kernel's is zero to round-off ($-2\times10^{-15}$; script B4). At $\ell = 4$ the two kernels agree to $10^{-14}$.
+\emph{Normalisation.} $K_{i,i} = 1$ (unit prior variance per synapse, the \texttt{amplitude = 1} convention of \path{fct/spatial.py}), so $\bar\lambda = \frac1N\sum_q\lambda_q = 1$ for every $\ell$, while $\lambda_0 = \sqrt{2\pi}\ell/W(0)\approx\sqrt{2\pi}\ell$ and, by Parseval, $\bar\lambda_2 = \frac1N\sum_q\lambda_q^2 = \sum_rK(r)^2 = \sqrt\pi\,\ell$ (for $1\ll\ell\ll N$). The alternative normalisation $\lambda_0 = 1$ (the \texttt{lambda\_max} option) divides every $\lambda_q$, hence $\Theta$, $c_*$ and $h_q$, by $\sqrt{2\pi}\ell$. $F$ is the unitary DFT with wavenumber $2\pi q/N$; $\lambda_q$ falls to half its peak at $|q| = (N/\pi\ell)\sqrt{\ln2/2}\approx0.19N/\ell$, i.e.\ at wavelength $\approx5\ell$. Checked for $N = 64$, $\ell = 4$: $\lambda_0 = 10.026513 = \sqrt{2\pi}\cdot4$, the $j = 0$ term of \eqref{eq:ring} alone reproduces $\lambda_q$ to $2\times10^{-15}$, $\bar\lambda = 1.000000$, $\bar\lambda_2 = 7.089815 = \sqrt\pi\cdot4$ (script B4).
 
 \paragraph{Weak target, no penalty.} $d_q = \lambda_q\sX + \sigma^2$, so the tuning map of the mode (Section~\ref{sec:measure}) has autocorrelation
 \begin{equation}
   R(r) = \frac1N\sum_q d_qe^{2\pi\mathrm iqr/N} = \sX K(r) + \sigma^2\delta_{r,0}:
 \end{equation}
-a Gaussian of width exactly $\ell$ plus a white spike, with $R(0) = \sX + \sigma^2$ independent of $\ell$, and $c = \delta + \sqrt\pi\ell\,\sX + \sigma^2$ growing linearly with $\ell$.
+the wrapped Gaussian $K(r)$ of width $\ell$ plus a white spike, with $R(0) = \sX + \sigma^2$ independent of $\ell$, and $c = \delta + \sqrt\pi\ell\,\sX + \sigma^2$ growing linearly with $\ell$.
 
 \paragraph{Strong target: Lorentzian amplification and the correlation length.}
 Near $q = 0$, $h(\nu)\approx h_{\max} - \tfrac12|h''(0)|\nu^2$ in $\nu = q/N$, with $|h''(0)| = 4\pi^2\ell^2\lambda_0\,h'(\lambda_0)$ (chain rule through \eqref{eq:ring}; $h'(\lambda) = \mathrm dh/\mathrm d\lambda = \alpha/(1+g^2\alpha) + \lambda\sX/(1+g^2\alpha)^2$). Hence
@@ -277,7 +278,7 @@ Two regimes, depending on whether $\xi$ is smaller or larger than $N$:
     \nu_c\to\frac{2\pi h_{\max}^{3/2}}{\hat s_Y|h''(0)|},\qquad
     \xi\to\frac{\hat s_Y|h''(0)|}{4\pi^2h_{\max}^{3/2}}\propto\hat s_Y .
   \end{equation}
-  There is no condensation in one dimension ($\int\mathrm d\nu/(a+b\nu^2)$ diverges as $a\to0$, so the equation can always be met with $a>0$); the correlation length simply grows linearly with the target strength. (In two dimensions the divergence is logarithmic and the same holds; in three it converges and a true condensation transition occurs at finite $\hat s_Y$.) Checked at $N = 4096$ ($\ell = 4$, $\sX = 1$, $\sigma^2 = 0.1$, $g^2 = 0.2$, $\delta = 0.5$): $|h''(0)| = 28137$ (grid) vs $28137$ (formula), $a_\infty = 26.52$; the measured gap rises $20.3, 22.8, 24.5, 25.4$ towards it for $\hat s_Y = 4, 8, 16, 32$, and $\hat s_Y\nu_c = 0.036, 0.039, 0.039, 0.039$ against the asymptote $0.043$ (script D4; the residual is the slow $O(1/\hat s_Y)$ approach of $a$ to $a_\infty$).
+  There is no condensation in one dimension ($\int\mathrm d\nu/(a+b\nu^2)$ diverges as $a\to0$, so the equation can always be met with $a>0$); the correlation length simply grows linearly with the target strength. (In two dimensions the divergence is logarithmic and the same should hold; in three the integral converges and a true condensation transition at finite $\hat s_Y$ is expected. This is the standard Bose-condensation argument, asserted here and not checked.) Checked at $N = 4096$ ($\ell = 4$, $\sX = 1$, $\sigma^2 = 0.1$, $g^2 = 0.2$, $\delta = 0.5$): $|h''(0)| = 28137$ (grid) vs $28137$ (formula), $a_\infty = 26.52$; the measured gap rises $20.3, 22.8, 24.5, 25.4$ towards it for $\hat s_Y = 4, 8, 16, 32$. The half-power crossing of $\amp_q - 1$, interpolated between grid points (the grid value alone is quantised to $1/N$), gives $\hat s_Y\nu_c = 0.037, 0.040, 0.042, 0.043$ against the asymptote $0.0434$, and the Lorentzian width $\sqrt{a/b}$ computed from the measured gap gives $0.038, 0.040, 0.042, 0.043$: the residual is the factor $\sqrt{a/a_\infty}$, i.e.\ the slow approach of $a$ to $a_\infty$ (script D4).
   \item \emph{Finite $N$ ($\xi\gtrsim N$, i.e.\ $\hat s_Y\gtrsim N\cdot4\pi^2h_{\max}^{3/2}/|h''(0)|$).} The $q = 0$ term of the sum, $\frac{\sY}{N}h_{\max}^2/a$, takes over, giving $a\approx n_0\hat s_Yh_{\max}^{3/2}/N$ ($n_0 = 1$ the multiplicity of the top mode), $d_0\approx N\hat s_Y\sqrt{h_{\max}}/(n_0\lambda_0)$, and the $q = 0$ mode carries the whole of $c-\delta$: a condensate. Checked at $N = 64$: for $\hat s_Y = 1, 10, 100, 1000$ the gap is $14.3, 38.6, 311, 3045$ against the asymptote $3.0, 30.4, 304, 3038$, $d_0 = 11, 295, 3617, 36897$ against $37, 370, 3698, 36979$, and the $q = 0$ share of $c-\delta$ is $0.27, 0.80, 0.98, 0.998$ (script D3).
 \end{itemize}
 \emph{Interpretation:} the cheapest place to put the large hidden variance that a strong target demands is the smoothest spatial mode; the representation of a strongly demanded data mode becomes spatially uniform, with correlation length $\xi\propto\hat s_Y$ until it hits the system size.
@@ -294,11 +295,11 @@ $\E[z_kz_{k'}] = a^2/4 + \delta_{k,k'}a^2/12$ and the law of large numbers. $G\m
 \end{proof}
 
 \begin{proposition}[Singular structure of the task]\label{prop:svd}
-Let $Z = U_ZS\,V_Z^\top$ be the thin SVD ($U_Z\in\R^{P\times K}$, $S = \mathrm{diag}(s_1,\dots,s_K)$). Then $X = U_ZS(W_XV_Z)^\top$ and $Y = U_ZS(W_YV_Z)^\top$ are SVDs, so
+Let $Z = U_ZS\,V_Z^\top$ be the thin SVD ($U_Z\in\R^{P\times K}$, $S = \mathrm{diag}(s_1,\dots,s_K)$). Then $X = U_ZS(W_XV_Z)^\top$ and $Y = U_ZS(W_YV_Z)^\top$ are thin SVDs (orthonormal columns of $W_X$, $W_Y$ require $m, n\ge K$), so, in the notation of Section~\ref{sec:start},
 \begin{equation}
-  U = [U_Z,\ U_\perp],\qquad S_X = S_Y = \begin{pmatrix}S & 0\\ 0 & 0\end{pmatrix},\qquad V_X = W_XV_Z,\quad V_Y = W_YV_Z,
+  U = [U_Z,\ U_\perp],\qquad S_X^2 = S_Y^2 = \begin{pmatrix}S^2 & 0\\ 0 & 0_{P-K}\end{pmatrix},\qquad V_X = W_XV_Z,\quad V_Y = W_YV_Z,
 \end{equation}
-with $U_\perp$ any orthonormal basis of $\col(Z)^\perp$ (the $P-K$ null modes). The ansatz condition holds \emph{exactly}: $XX^\top = YY^\top = ZZ^\top$. For $P\gg K$,
+with $U_\perp$ any orthonormal basis of $\col(Z)^\perp$ (the $P-K$ null modes). The rectangular $S_X\in\R^{P\times m}$ and $S_Y\in\R^{P\times n}$ differ in shape and share only their top-left $K\times K$ block $S$; it is $S_XS_X^\top = S_YS_Y^\top$ that the ansatz needs. The ansatz condition holds \emph{exactly}: $XX^\top = YY^\top = ZZ^\top$. For $P\gg K$,
 \begin{equation}
   s_1^2 = \frac{Pa^2(3K+1)}{12}\,(1 + O(P^{-1/2})),\qquad s_k^2 = \frac{Pa^2}{12}\,(1 + O(P^{-1/2}))\ (k = 2,\dots,K),
 \end{equation}
@@ -368,14 +369,14 @@ Each condition is tagged \task{} if it is set by $(Z, W_X, W_Y)$, \prior{} if by
 Two opposite mechanisms; both need unequal $s_k$ (\task{}: in the uniform task only mode 1 differs, by the factor $3K+1$) and a prior parameter that breaks the scale invariance of \eqref{eq:reduced}.
 \begin{enumerate}[nosep,label=(b\arabic*)]
   \item \emph{Rate-penalty whitening} (Section~\ref{sec:whiten}): at weak target, $d_q^{(k)} - \sigma_0^2 = \lambda_q\hat s_{X,k}^2/\big[(1+g^2\sigma^2)(1+g^2\sigma^2 + g^2\lambda_q\hat s_{X,k}^2)\big]$. A mode with $\gamma_k\gg1+g^2\sigma^2$ is flat for $|q|$ below the crossover $\lambda_{q_k^\times} = (1+g^2\sigma^2)/(g^2\hat s_{X,k}^2)$ and follows $\lambda_q$ beyond; a mode with $\gamma_k\ll1$ follows $\lambda_q$ throughout. Separation when $\gamma_1\gg1\gg\gamma_2$, i.e.\ $\hat s_{X,2}^2\ll1/(g^2\lambda_0)\ll\hat s_{X,1}^2$, a window of width $3K+1$ in $g^2$. \emph{The stronger latent occupies finer scales.} \mixed{} ($g^2\lambda_0$ against $k_0s_k^2/m$).
-  \item \emph{Target condensation} (Section~\ref{sec:condense}): $\tau_k$ decreases with $\Delta_k\propto1/s_k^2$, so the mode with the largest $s_k$ is amplified first and its correlation length grows $\propto\hat s_{Y,k}$ while the others stay at $\ell$. Separation when $\Delta_1\lesssim1\lesssim\Delta_2$, i.e.\ by \eqref{eq:Delta-latent} $\beta$ between $\beta_c/(3K+1)$ and $\beta_c = 12n\sqrt m/(\lambda_0\sqrt{k_0k_1}\,a^2)$ ($\beta_c = 27$ in the setting of Section~\ref{sec:predictions}, so $\beta\in[2.7, 27]$). \emph{The stronger latent occupies coarser scales.} \mixed{} ($\beta$, $k_0k_1$, $\lambda_0$ against $a^2(3K+1)$, $n$, $m$).
+  \item \emph{Target condensation} (Section~\ref{sec:ring}): $\tau_k$ decreases with $\Delta_k\propto1/s_k^2$, so the mode with the largest $s_k$ is amplified first and its correlation length grows $\propto\hat s_{Y,k}$ while the others stay at $\ell$. Separation when $\Delta_1\lesssim1\lesssim\Delta_2$, i.e.\ by \eqref{eq:Delta-latent} $\beta$ between $\beta_c/(3K+1)$ and $\beta_c = 12n\sqrt m/(\lambda_0\sqrt{k_0k_1}\,a^2)$ ($\beta_c = 27$ in the setting of Section~\ref{sec:predictions}, so $\beta\in[2.7, 27]$). \emph{The stronger latent occupies coarser scales.} \mixed{} ($\beta$, $k_0k_1$, $\lambda_0$ against $a^2(3K+1)$, $n$, $m$).
 \end{enumerate}
 Which direction wins is decided by the prior: $g$ pushes a strong mode to fine scales, $\beta$ to coarse ones; the task only decides \emph{which} mode is strong.
 
 \paragraph{(c) Nothing is spatially structured (white tuning maps).}
 \begin{enumerate}[nosep,label=(c\arabic*)]
   \item Noise-dominated: $\rho_k\ll1$ and $\tau_k\ll1$ give $d_q^{(k)} = \sigma_0^2(1 + O(\rho_k))$. \mixed{} ($k_0$, $\sigma$ against $s_k^2/m$); realised by $k_0\to0$, $\sigma\to\infty$ or $P$ small.
-  \item Rate-penalty clamp: $g^2\sigma^2\gg1$ gives $d_q\to1/g^2$ for every $q$ and $k$. \prior{}.
+  \item Rate-penalty clamp: $g^2\sigma^2\gg1$ and $\tau_k\ll1$ give $d_q\to1/g^2$ for every $q$ and $k$ (at strong target $\amp_q$ still multiplies the clamp). \prior{}.
   \item White prior: $\ell\to0$ makes $\lambda_q\equiv1$ and removes all $q$-dependence. \prior{}.
   \item Null modes: anything outside $\col(Z)$ is white at level $\sigma_0^2$ (Lemma~\ref{lem:floor}). \task{}.
   \item The opposite trivial extreme is full condensation, $\tau_k\to1$ for all $k$ with $\xi_k\gtrsim N$: every cell has the same tuning (uniform maps). \mixed{} ($\Delta_k\ll1$ and $\Theta\bar\ell_2\ll1$).
@@ -387,7 +388,7 @@ At weak target $d_q = \pi_q = \alpha_q/(1+g^2\alpha_q) = g^{-2} - g^{-2}/(1+g^2\
 \begin{equation}
   d_q - \sigma_0^2 = \frac{\lambda_q\sX}{(1+g^2\sigma^2)\,(1+g^2\sigma^2 + g^2\lambda_q\sX)} ,
 \end{equation}
-which is $\propto\lambda_q$ when $g^2\lambda_q\sX\ll1+g^2\sigma^2$ and $\propto1$ (saturated) otherwise. A strong input mode fills its cap at the smooth frequencies and the latent-specific variance that distinguishes it from a weak mode sits at $|q|>q^\times$; relative to a weak mode, it is expressed at finer scales. Checked ($N = 64$, $\ell = 4$, $\sigma^2 = 0.01$, $g^2 = 1$, $\delta = 50$): the formula holds to $10^{-9}$, and the half-power frequency moves from $|q| = 3$ at $\gamma = 1$ to $|q| = 7$ at $\gamma = 100$ (script D2).
+which is $\propto\lambda_q$ when $g^2\lambda_q\sX\ll1+g^2\sigma^2$ and $\propto1$ (saturated) otherwise. A strong input mode fills its cap at the smooth frequencies and the latent-specific variance that distinguishes it from a weak mode sits at $|q|>q^\times$; relative to a weak mode, it is expressed at finer scales. Checked ($N = 64$, $\ell = 4$, $\sigma^2 = 0.01$, $g^2 = 1$, $\delta = 50$): the formula holds to $4\times10^{-9}$, and the half-power frequency (defined as in Section~\ref{sec:predictions}, with $d_{N/2}$ as the floor) moves from $|q| = 3$ at $\gamma = 1$ to $|q| = 7$ at $\gamma = 100$ (script D2).
 
 \section{Conditions to test numerically}
 \label{sec:predictions}
@@ -408,7 +409,7 @@ Two conventions must be matched before these numbers apply to \path{fct}: the la
 \begin{itemize}[nosep]
   \item The re-derivation reproduces the corrected \texttt{eq:linear-soln}; the ansatz is an exact fixed point of the full map when $[XX^\top, YY^\top] = 0$ (machine precision against an ansatz-free Newton solve), and off by $\sim0.5\%$ for a mildly non-orthonormal teacher.
   \item $d_q = \pi_q\amp_q$ (prior-shrunk variance times target amplification) is monotone in $\lambda_q$: no data mode peaks at an intermediate spatial frequency; spatial cell types are relative statements between data modes, and at $\sigma = g = 0$, $\delta = 0$ (or weak targets) all data modes of the latent task share one profile.
-  \item $\sigma$ adds a white floor and nothing else; $g$ caps and \emph{whitens} strong modes; $\beta$ (through $\delta$) \emph{condenses} strong modes onto $q = 0$ with correlation length $\propto\hat s_Y$ (no true condensate in $d\le2$ for $N\to\infty$); a common $k_0 = k_1$ is a gain knob with maximal target effect at $k_* = \sqrt{m/(\kappa s_X^2\bar\lambda_2)}$.
+  \item $\sigma$ adds a white floor and, at weak target, nothing else; $g$ caps and \emph{whitens} strong modes; $\beta$ (through $\delta$) \emph{condenses} strong modes onto $q = 0$ with correlation length $\propto\hat s_Y$ (no true condensate in $d\le2$ for $N\to\infty$); a common $k_0 = k_1$ is a gain knob with maximal target effect at $k_* = \sqrt{m/(\kappa s_X^2\bar\lambda_2)}$.
   \item In the uniform-$[0,a]$ task the strong mode is the mean direction ($s_1^2/s_k^2 = 3K+1$); the contrasts are degenerate and individual latents are not identifiable by the linear theory.
 \end{itemize}
 
