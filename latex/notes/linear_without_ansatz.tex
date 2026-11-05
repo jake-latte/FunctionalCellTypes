@@ -1,0 +1,390 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\R}{\mathbb R}
+\newcommand{\Ct}{\tilde C}
+\newcommand{\At}{\tilde A}
+\newcommand{\Bt}{\tilde B}
+\newcommand{\Z}{\mathcal Z}
+\newcommand{\dom}{\mathcal D}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+\title{The linear one-hidden-layer problem without the shared-basis ansatz}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Section~2 closes the linear one-hidden-layer problem with the ansatz $\Sigma_q = U D_q U^\top$ for all $q$, with a single orthogonal $U$ that also diagonalises $XX^\top$ and $YY^\top$. This note asks what can be said without it. The ansatz-free problem is a single $P\times P$ matrix equation for the regularised hidden kernel $\Ct$; it is the stationarity condition of a convex--concave Lagrangian, which gives existence and uniqueness of the fixed point with positive-definite precisions for every $\sigma^2>0$, $g^2\ge0$, $\delta\ge0$; and the per-frequency eigenbasis of $\Sigma_q$ is the eigenbasis of the pencil $M_q - \lambda_q B$, which is the same for all $q$ if and only if $[XX^\top, YY^\top]=0$. So, for generic $\sigma^2$, the ansatz is exact precisely in the commuting case and in no other. A first-order expansion in the non-commuting part of $YY^\top$ gives the rotation of the functional basis with spatial frequency in closed form: it is small at fine scales (small $\lambda_q$), where the input spectrum sets the basis, and largest at coarse scales (large $\lambda_q$), where the target tilt competes with the input anisotropy; the purely target-set basis is the $\lambda_q\to\infty$ limit, which a translation-invariant lattice, whose $\lambda_{\max}$ is the row sum of the kernel, does not generally reach. A \texttt{numpy} solver confirms the structure on a $P=6$, $N=32$ instance and agrees with the first-order formulae to $0.06\%$ (kernel) and $0.5\%$ (rotation) at $\epsilon = 0.02$, with the residual scaling as $\epsilon$.
+\end{abstract}
+
+\section{The problem without the ansatz}
+\label{sec:problem}
+
+\paragraph{Equations.}
+We use the corrected forms of Section~2 (the $1/N$ of \path{rg_kernel_normalisation.tex}, the $1/m$ of $\mathbb X$, and the $\Ct^{-2}$ of \path{rg_diagonal_reduction.tex}). The symbols are those of Sections~1--2: $X \in \R^{P\times m}$ holds the $P$ input patterns ($m$ inputs each) as rows and $Y \in \R^{P\times n}$ the $P$ targets ($n$ outputs); $k_0$ and $k_1$ are the prior variances of the input and readout weights ($K^{(0),\mathrm{pre}} = k_0 I_m$, $K^{(1),\mathrm{post}} = k_1 I_n$); $K \in \R^{N\times N}$ is the spatial kernel shared by the post-synaptic side of the input layer and the pre-synaptic side of the hidden layer ($K^{(0),\mathrm{post}} = K^{(1),\mathrm{pre}} \equiv K$), translation invariant on the $N$ sites, so $K = F\Lambda F^\dagger$ with $F$ the discrete Fourier matrix and eigenvalues $\lambda_q \ge 0$; $\sigma^2$ is the input noise, $g^2$ the rate penalty, and $\kappa = \beta/(Pn)$ with $\beta$ the inverse temperature of the readout loss, so that $\delta = 1/(k_1\kappa)$ is the ridge on the hidden kernel. The frequency index follows the script: $q = 0,\dots,N-1$ with $\lambda_q = \lambda_{N-q}$, so $q = 0$ is the coarsest scale and $q = N/2$ the finest. With
+\begin{equation}
+  A = \frac{k_0}{m} XX^\top, \qquad
+  B = \frac{1}{k_1}\,\Ct^{-1} YY^\top \Ct^{-1},
+\end{equation}
+the per-frequency data-interaction matrices and the hidden kernel are
+\begin{equation}
+  \Sigma_q = \big(\At_q^{-1} - \Bt_q\big)^{-1}, \qquad
+  \At_q = \lambda_q A + \sigma^2 I, \qquad
+  \Bt_q = \lambda_q B - g^2 I, \qquad
+  \Ct = \frac1N\sum_q \lambda_q \Sigma_q + \delta I .
+  \label{eq:fixed-point}
+\end{equation}
+It is convenient to absorb the rate penalty into the input side and write
+\begin{equation}
+  M_q \equiv \At_q^{-1} + g^2 I = (\lambda_q A + \sigma^2 I)^{-1} + g^2 I,
+  \qquad
+  \Sigma_q = (M_q - \lambda_q B)^{-1},
+  \label{eq:Mq}
+\end{equation}
+so that $M_q$ depends on the input only and $B$ on the target and the kernel only. Positivity of $\Sigma_q$ (the Gaussian in $\tilde\phi_q$ must be normalisable) requires $M_q - \lambda_q B \succ 0$ for every $q$.
+For reference, the scalar reduction of Section~2 that the ansatz produces reads, for a mode with input and target weights $\hat s_X^2 = k_0 s_X^2/m$ and $\hat s_Y^2 = s_Y^2/k_1$ ($s_X^2$, $s_Y^2$ the mode's squared singular values of $X$ and $Y$),
+\begin{equation}
+  h_q = \frac{\lambda_q(\lambda_q\hat s_X^2 + \sigma^2)}{1 + g^2(\lambda_q\hat s_X^2 + \sigma^2)},\qquad
+  d_q = \frac{c^2\,h_q/\lambda_q}{c^2 - \hat s_Y^2 h_q},\qquad
+  1 - \frac{\delta}{c} = \frac{c}{N}\sum_q\frac{h_q}{c^2 - \hat s_Y^2 h_q},
+  \label{eq:linear-soln}
+\end{equation}
+where $d_q$ is the mode's eigenvalue of $\Sigma_q$, $c$ its eigenvalue of $\Ct$, and $h_q/\lambda_q = \big[(\lambda_q\hat s_X^2 + \sigma^2)^{-1} + g^2\big]^{-1}$ is its prior covariance after the rate penalty; the physical root is the one with $c > \hat s_Y\sqrt{\max_q h_q}$. This is \texttt{eq:linear-soln} of Section~2 in the corrected form of \path{rg_diagonal_reduction.tex}; it is referred to below as \eqref{eq:linear-soln}.
+
+\paragraph{What the ansatz buys.}
+Under the ansatz $\Sigma_q = U D_q U^\top$ with $XX^\top = U S_X^2 U^\top$ and $YY^\top = U S_Y^2 U^\top$, every matrix in \eqref{eq:fixed-point} belongs to the commutative algebra $\{U D U^\top : D \text{ diagonal}\}$. This algebra is closed under sums, products and inverses, so (i) $\Ct$ is $U$-diagonal, (ii) $\Ct^{-1} YY^\top \Ct^{-1}$ is $U$-diagonal, so $B$ and all $\Bt_q$ are, (iii) $(\At_q^{-1} - \Bt_q)^{-1}$ is $U$-diagonal, and (iv) the kernel map in \eqref{eq:fixed-point} sends $U$-diagonal $\Ct$ to $U$-diagonal $\Ct$. The $P\times P$ matrix problem then falls apart into $P$ independent scalar problems, one per column of $U$, and the frequency sum collapses into the scalar equation \eqref{eq:linear-soln}. The single basis $U$ is fixed by the data before anything is solved: the functional cell types are the columns of $U$ at every spatial scale, and only their weights $D_q$ depend on $q$.
+
+\paragraph{Where it fails.}
+If $[XX^\top, YY^\top] \ne 0$ there is no orthogonal $U$ that diagonalises both, and the algebra is lost at step (ii): even if $\Ct$ were diagonal in the eigenbasis $U$ of $XX^\top$, the product $\Ct^{-1} YY^\top \Ct^{-1}$ is not, so $B$ has off-diagonal elements in $U$, $\Sigma_q = (M_q - \lambda_q B)^{-1}$ mixes the columns of $U$ with a $q$-dependent weight $\lambda_q$, and the updated $\Ct$ is no longer $U$-diagonal. The kernel map does not preserve any fixed commutative family. The statement is sharp:
+
+\begin{proposition}[the ansatz is exact iff the Gram matrices commute]
+\label{prop:iff}
+Let $K$ have at least three distinct eigenvalues, and let $\sigma^2$ be generic in the sense that the rational function $G$ of \eqref{eq:G} below takes distinct values on the distinct eigenvalues of $A$ (for given data this excludes at most finitely many $\sigma^2$). At a fixed point of \eqref{eq:fixed-point} with every $\Sigma_q \succ 0$, the matrices $\{\Sigma_q\}_q$ share a common eigenbasis if and only if $[XX^\top, YY^\top] = 0$. No assumption on the spectrum of $A$ is needed.
+\end{proposition}
+\begin{proof}
+($\Leftarrow$) If $[XX^\top, YY^\top]=0$, the $U$-diagonal matrices form an invariant family of the kernel map, and the fixed point with positive-definite precisions is unique (Proposition~\ref{prop:unique} below), so it lies in that family.
+
+($\Rightarrow$) Suppose all $\Sigma_q^{-1} = M_q - \lambda_q B$ are diagonal in one basis $V$. Write $f_\lambda(A) = (\lambda A + \sigma^2 I)^{-1}$. For three distinct eigenvalues $\lambda_1,\lambda_2,\lambda_3$ of $K$, the combinations
+$f_{\lambda_1}(A) - f_{\lambda_2}(A) - (\lambda_1-\lambda_2)B$ and $f_{\lambda_1}(A) - f_{\lambda_3}(A) - (\lambda_1-\lambda_3)B$ are $V$-diagonal, hence so is
+\begin{equation}
+  G(A) \equiv (\lambda_1-\lambda_3)\big[f_{\lambda_1}(A) - f_{\lambda_2}(A)\big] - (\lambda_1-\lambda_2)\big[f_{\lambda_1}(A) - f_{\lambda_3}(A)\big],
+  \label{eq:G}
+\end{equation}
+which is a rational function of $A$ alone. Since $G$ takes distinct values on the distinct eigenvalues $a_i$ of $A$, every spectral projector of $A$ is a polynomial in $G(A)$ (Lagrange interpolation through the values $G(a_i)$), so $G(A)$ being $V$-diagonal forces $A$ itself to be $V$-diagonal, repeated eigenvalues of $A$ included. The genericity is needed: $a \mapsto G(a)$ is a non-constant rational function (simple poles at $a = -\sigma^2/\lambda_i$ with residues $(\lambda_2-\lambda_3)/\lambda_1$, $-(\lambda_1-\lambda_3)/\lambda_2$, $(\lambda_1-\lambda_2)/\lambda_3$), so $G(a_i) = G(a_j)$ for some pair $a_i \ne a_j$ happens only for finitely many $\sigma^2$, but it can happen. Then every $f_{\lambda_q}(A)$ is $V$-diagonal and so is $B$. Hence $A$, $B$ and all $\Sigma_q$ commute, so $\Ct$ commutes with $A$ and with $B$. From $[\Ct, B] = 0$: $\Ct^{-1} YY^\top \Ct^{-1}\Ct = \Ct\,\Ct^{-1} YY^\top \Ct^{-1}$, i.e.\ $YY^\top \Ct^{-1} = \Ct^{-1} YY^\top$, so $[\Ct, YY^\top]=0$. Finally $[A,B]=0$ with $\Ct$ commuting with both $A$ and $YY^\top$ gives $\Ct^{-1}[YY^\top, A]\Ct^{-1} = [B,A]\,k_1 = 0$, i.e.\ $[XX^\top, YY^\top] = 0$.
+\end{proof}
+
+So for non-commuting data (and generic $\sigma^2$) the functional basis necessarily rotates with $q$; the ansatz does not approximate the rotation, it sets it to zero. How large the rotation is, and in which direction, is the subject of Sections~\ref{sec:structure} and~\ref{sec:perturbative}.
+
+\section{Structure of the general solution}
+\label{sec:structure}
+
+\subsection{One coupling, one matrix equation}
+The only object shared between frequencies in \eqref{eq:fixed-point} is $\Ct$. Given $\Ct$, each $\Sigma_q$ is an explicit matrix function of the data and $\Ct$,
+\begin{equation}
+  \Sigma_q(\Ct) = \Big[(\lambda_q A + \sigma^2 I)^{-1} + g^2 I - \frac{\lambda_q}{k_1}\Ct^{-1} YY^\top \Ct^{-1}\Big]^{-1},
+\end{equation}
+and the whole problem is the single $P\times P$ equation
+\begin{equation}
+  \boxed{\;
+  \Ct = \delta I + \frac1N \sum_q \lambda_q\Big[(\lambda_q A + \sigma^2 I)^{-1} + g^2 I - \frac{\lambda_q}{k_1}\Ct^{-1} YY^\top \Ct^{-1}\Big]^{-1}
+  \equiv \mathcal F(\Ct)\; }
+  \label{eq:master}
+\end{equation}
+for a symmetric $\Ct$. This holds for any $N$, and in the continuum limit $\frac1N\sum_q \to \int_{\mathrm{BZ}}\frac{\mathrm d^dq}{(2\pi)^d}$ with $\lambda_q \to \lambda(q)$: the ansatz-free problem is always $P\times P$, never $NP\times NP$. Its unknowns are the $P(P+1)/2$ entries of $\Ct$ (or $P$ eigenvalues and $P(P-1)/2$ rotation angles). The ansatz reduces this to the $P$ eigenvalues.
+
+\subsection{Symmetries and the per-frequency eigenbasis}
+\begin{itemize}
+  \item \emph{Covariance.} Under $X \to QX$, $Y \to QY$ with $Q$ orthogonal, $\Ct \to Q\Ct Q^\top$ and $\Sigma_q \to Q\Sigma_q Q^\top$. Only the Gram matrices enter, so right-multiplication $X \to X O_X$, $Y \to Y O_Y$ by orthogonal matrices leaves everything invariant. The problem is therefore a function of the pair of spectra of $XX^\top$, $YY^\top$ and of the relative orientation of their eigenbases: $P(P-1)/2$ angles, which the ansatz sets to zero.
+  \item \emph{Symmetry and positivity.} $\mathcal F$ maps symmetric matrices to symmetric matrices, and on the admissible set (all $M_q - \lambda_q B \succ 0$) it maps into $\{\Ct \succ \delta I\}$, because every $\lambda_q\Sigma_q \succeq 0$. Since $B \succeq 0$ always, the admissible set is $\{\Ct : \lambda_q B(\Ct) \prec M_q\ \forall q\}$: the target tilt may not exceed the (rate-penalised) input precision at any frequency. This is the matrix form of the branch condition $c > \hat s_Y\sqrt{\max_q h_q}$.
+  \item \emph{The eigenbasis of $\Sigma_q$.} It is the eigenbasis of the symmetric pencil $M_q - \lambda_q B$. Expanding $M_q$ at small and large $\lambda_q$,
+  \begin{equation}
+    \Sigma_q^{-1} =
+    \begin{cases}
+      \big(\tfrac1{\sigma^2} + g^2\big) I - \lambda_q\Big(\dfrac{A}{\sigma^4} + B\Big) + O(\lambda_q^2), & \lambda_q \to 0,\\[2ex]
+      g^2 I - \lambda_q B + \dfrac{A^{-1}}{\lambda_q} + O(\lambda_q^{-2}), & \lambda_q \to \infty\ (A \succ 0),
+    \end{cases}
+    \label{eq:limits}
+  \end{equation}
+  so at the finest spatial scales the functional basis is the eigenbasis of $A/\sigma^4 + B$ (input Gram over the noise, plus target tilt), and in the formal limit $\lambda_q\to\infty$ it tends to the eigenbasis of the target tilt $B$ alone, the input entering only through $A^{-1}/\lambda_q$, negligible once $\lambda_q^2 \gg \|A^{-1}\|/\|B\|$. On a translation-invariant lattice that limit is generally out of reach: $\lambda_{\max} = \sum_j K_{0,j}$ is the row sum of the kernel, of the order of its width ($3.54$ here, against $\|A^{-1}\|/\|B\| = 128$), so at the coarsest available scale the target term $\lambda_q B$ competes with the input anisotropy rather than dominating it. Between the two ends the basis rotates continuously with $\lambda_q$. Under the ansatz both ends are $U$ and nothing rotates.
+\end{itemize}
+
+\subsection{Algebraic character}
+Equation \eqref{eq:master} is a rational matrix equation: $\mathcal F$ is a sum of $N$ resolvents $(M_q - \lambda_q B)^{-1}$ of a matrix $B$ that is itself quadratic in $\Ct^{-1}$. Clearing denominators gives a polynomial system in the entries of $\Ct$ whose degree grows with the number of distinct $\lambda_q$; in the commuting case this is the polynomial obtained from \eqref{eq:linear-soln} by multiplying out, one per mode. It is \emph{not} of Riccati type in general. The one case where it is: if all $\lambda_q$ equal a single $\lambda$ (a kernel $K = \lambda I$, i.e.\ no spatial structure) and $\delta = 0$, then $M_q \equiv M$ and \eqref{eq:master} reads $\Ct = \lambda(M - \lambda B)^{-1}$, i.e.\ $M - \frac{\lambda}{k_1}\Ct^{-1}YY^\top\Ct^{-1} = \lambda\Ct^{-1}$, and multiplying by $\Ct$ on both sides,
+\begin{equation}
+  \Ct M \Ct - \lambda\,\Ct - \frac{\lambda}{k_1}\,YY^\top = 0,
+  \label{eq:riccati}
+\end{equation}
+exactly the algebraic Riccati equation $CA^{-1}C - sC - B = 0$ of \path{latent_covariance_variational_principles.tex} with $A^{-1}\to M$, $s \to \lambda$, $B \to \lambda YY^\top/k_1$, whose unique positive-definite solution minimises $\tr(M\Ct) + \frac{\lambda}{k_1}\tr(YY^\top\Ct^{-1}) - \lambda\log\det\Ct$. With $\delta > 0$ the same manipulation gives $\Ct M\Ct - \lambda\Ct(\Ct-\delta I)^{-1}\Ct - \frac{\lambda}{k_1}YY^\top = 0$, cubic after clearing the inverse. The spatial problem is a superposition of $N$ such Riccati-like terms with different $M_q$ and different weights $\lambda_q$, coupled through the common $\Ct$; the variational structure survives (next subsection), the closed-form Riccati theory does not.
+
+\subsection{Variational structure, existence and uniqueness}
+\label{sec:variational}
+Introduce the Lagrangian of the pair $(\Ct, B)$, $\Ct \succ 0$ symmetric and $B$ symmetric in the admissible set $\dom = \{B : M_q - \lambda_q B \succ 0\ \forall q\}$:
+\begin{equation}
+  \mathcal L(\Ct, B) = \frac1N\sum_q \log\det\big(M_q - \lambda_q B\big) + \tr\big[B(\Ct - \delta I)\big] + \frac{1}{k_1}\tr\big[YY^\top \Ct^{-1}\big].
+  \label{eq:lagrangian}
+\end{equation}
+Using
+\begin{equation}
+  \frac{\partial}{\partial B}\log\det(M_q - \lambda_q B) = -\lambda_q(M_q-\lambda_q B)^{-1},
+  \qquad
+  \frac{\partial}{\partial\Ct}\tr(YY^\top\Ct^{-1}) = -\Ct^{-1}YY^\top\Ct^{-1},
+\end{equation}
+its stationarity conditions are
+\begin{equation}
+  \frac{\partial\mathcal L}{\partial B} = 0 \iff \Ct = \delta I + \frac1N\sum_q\lambda_q\Sigma_q,
+  \qquad
+  \frac{\partial\mathcal L}{\partial \Ct} = 0 \iff B = \frac1{k_1}\Ct^{-1}YY^\top\Ct^{-1},
+\end{equation}
+the two halves of \eqref{eq:fixed-point}. (Up to normalisation and additive constants, $\mathcal L$ is the mean-field action of Section~2 specialised to the linear one-hidden-layer problem: the $\log\det$ is the single-site Gaussian integral, $\tr(B\Ct)$ the constraint term, and $\tr(YY^\top\Ct^{-1})/k_1$ the output term. Only the stationarity conditions are used below.) Two properties of \eqref{eq:lagrangian} do all the work:
+\begin{itemize}
+  \item $\mathcal L$ is \emph{convex in $\Ct$} on $\Ct \succ 0$: $\tr(B\Ct)$ is linear and $\Ct \mapsto \tr(YY^\top\Ct^{-1})$ is convex because $\Ct\mapsto\Ct^{-1}$ is operator convex and $YY^\top \succeq 0$.
+  \item $\mathcal L$ is \emph{strictly concave in $B$} on $\dom$: $\log\det$ is strictly concave on positive-definite matrices, $B \mapsto M_q - \lambda_q B$ is affine and injective for $\lambda_q > 0$, and $\dom$ is an intersection of convex sets.
+\end{itemize}
+
+\begin{proposition}[existence and uniqueness]
+\label{prop:unique}
+Let $\sigma^2 > 0$, $g^2 \ge 0$, $\delta \ge 0$, $YY^\top \succeq 0$, $\lambda_q \ge 0$ with $\lambda_q > 0$ for at least one $q$. Then \eqref{eq:fixed-point} has exactly one fixed point with $\Sigma_q \succ 0$ for all $q$. It is the saddle point $\min_{\Ct}\max_{B\in\dom}\mathcal L$, and $\Ct$ minimises the convex function $\mathfrak g(\Ct) = \max_{B\in\dom}\mathcal L(\Ct,B)$ on $\{\Ct \succ \delta I\}$.
+\end{proposition}
+\begin{proof}
+\emph{Uniqueness.} A stationary point of a convex--concave function is a saddle point, and two saddle points $(\Ct_1,B_1)$, $(\Ct_2,B_2)$ have the exchange property that $(\Ct_1,B_2)$ is also a saddle point; so $B_1$ and $B_2$ both maximise the strictly concave $\mathcal L(\Ct_1,\cdot)$, hence $B_1 = B_2$, and then $\Ct_1 = \Ct_2$ because the $B$-stationarity expresses $\Ct$ as a function of $B$. Every fixed point with $\Sigma_q\succ0$ is a stationary point in the domain, so there is at most one.
+
+\emph{Existence.} For $\Ct \succ \delta I$ the maximum over $B$ in $\mathfrak g$ is attained: $\mathcal L \to -\infty$ at the boundary of $\dom$ (a $\log\det \to -\infty$), and for $\|B\|\to\infty$ inside $\dom$ (only directions with $B$ negative in some sense remain unbounded) the linear term $\tr[B(\Ct-\delta I)] \to -\infty$ beats the logarithmic growth. $\mathfrak g$ is convex (a pointwise maximum of convex functions), lower semicontinuous, and coercive on $\{\Ct \succ \delta I\}$: as $\|\Ct\|\to\infty$, $\mathcal L(\Ct, \varepsilon I) \to \infty$ for a small fixed $\varepsilon I \in \dom$; as $v^\top(\Ct - \delta I)v = \eta \to 0$ for a unit vector $v$, the choice $B = -t\,vv^\top$ gives $\mathcal L \ge \frac1N\sum_q\log(1 + t\lambda_q v^\top M_q^{-1}v) - t\eta + \text{const}$, whose maximum over $t$ diverges like $\log(1/\eta)$. So $\mathfrak g$ has a minimiser $\Ct^\star$; let $B^\star$ be the unique maximiser of $\mathcal L(\Ct^\star,\cdot)$. By Danskin's theorem $\nabla\mathfrak g(\Ct^\star) = \partial_{\Ct}\mathcal L(\Ct^\star,B^\star) = 0$, and convexity in $\Ct$ makes $\Ct^\star$ the minimiser of $\mathcal L(\cdot,B^\star)$. Hence $(\Ct^\star,B^\star)$ is stationary in both variables, i.e.\ a fixed point with all $M_q - \lambda_q B^\star \succ 0$.
+\end{proof}
+
+Remarks. (i) Neither $g^2 > 0$ nor $\delta > 0$ is needed; $\sigma^2 > 0$ is needed only so that $M_q$ exists when $\lambda_q A$ is singular. (ii) $g^2$ shifts every $M_q$ up by $g^2 I$ and so enlarges the admissible set $\dom$: the rate penalty lets the network sustain a stronger target tilt before the Gaussian ceases to exist. (iii) $\delta$ keeps $\Ct \succ \delta I$ and so bounds the tilt, $\|B\| \le \|YY^\top\|/(k_1\delta^2)$ (in norm, not in the Loewner order); for $\delta = 0$ the fixed point still has $\Ct \succ 0$, since $\Ct = \frac1N\sum_q\lambda_q\Sigma_q \succeq \frac{\lambda_{\max}}{N}\,\Sigma_{q_{\max}} \succ 0$ for any $q_{\max}$ with $\lambda_{q_{\max}} = \lambda_{\max} > 0$. (iv) Other fixed points of the map \eqref{eq:master}, such as the one that damped iteration from the prior reaches in \texttt{rg\_diagonal\_reduction.tex} (smallest precision eigenvalue $-18$), have some $M_q - \lambda_q B \not\succ 0$ and lie outside $\dom$; they are not stationary points of \eqref{eq:lagrangian} on its domain and carry no Gaussian. (v) The same argument restricted to $U$-diagonal matrices proves the branch statement for \eqref{eq:linear-soln}.
+
+\subsection{The rank-deficient latent task}
+\label{sec:rank}
+Take the latent task introduced in the fixnote of Section~2 (at the statement of the ansatz) and used numerically in \path{rg_diagonal_reduction.tex}: $X = ZW_X^\top$, $Y = ZW_Y^\top$ with latent coordinates $Z \in \R^{P\times L}$, $L < P$ ($L$ rather than $K$, which is the kernel), $W_X \in \R^{m\times L}$, $W_Y \in \R^{n\times L}$, so that
+\begin{equation}
+  XX^\top = Z G_X Z^\top,\quad YY^\top = Z G_Y Z^\top,\qquad G_X = W_X^\top W_X,\ G_Y = W_Y^\top W_Y \in \R^{L\times L},
+\end{equation}
+share the column space $\Z = \operatorname{col}(Z)$. Let $\Pi$ be the orthogonal projector onto $\Z$, $\Pi_\perp = I - \Pi$, and let $Q_\Z \in \R^{P\times L}$ be an orthonormal basis of $\Z$, so that $Z = Q_\Z W$ with $W = Q_\Z^\top Z \in \R^{L\times L}$ invertible (not orthogonal) and $W^\top W = Z^\top Z$.
+
+\begin{lemma}
+Let $Z$ have full column rank $L < P$, and let $\sigma^2 > 0$, $g^2 \ge 0$, $\delta \ge 0$, $\lambda_q \ge 0$ with some $\lambda_q > 0$ (the hypotheses of Proposition~\ref{prop:unique}). Then the fixed point has the block form $\Ct = \Pi\Ct\Pi + c_0\Pi_\perp$ with
+\begin{equation}
+  c_0 = \delta + \frac{\sigma^2}{1 + g^2\sigma^2}\cdot\frac1N\sum_q\lambda_q
+      = \delta + \frac{\sigma^2}{1 + g^2\sigma^2}\,K_{i,i},
+  \label{eq:c0}
+\end{equation}
+the prior value of a mode with $\hat s_X = \hat s_Y = 0$ (\texttt{rg\_diagonal\_reduction.tex}), and $Q_\Z^\top\Ct Q_\Z$ solves the $L\times L$ problem \eqref{eq:master} with the restricted Gram matrices
+\begin{equation}
+  A \to \frac{k_0}{m}\, W G_X W^\top, \qquad YY^\top \to W G_Y W^\top .
+  \label{eq:restricted-gram}
+\end{equation}
+\end{lemma}
+\begin{proof}
+If $\Ct$ has the block form, so does $\Ct^{-1}$, and $\Ct^{-1}Z$ lies in $\Z$; hence $B = \frac1{k_1}\Ct^{-1}ZG_YZ^\top\Ct^{-1}$ is supported on $\Z$ and vanishes on $\Z^\perp$. $M_q$ is block diagonal with the scalar $(\sigma^{-2} + g^2)$ on $\Z^\perp$. So $\Sigma_q = (M_q - \lambda_q B)^{-1}$ is block diagonal with $\sigma^2/(1+g^2\sigma^2)$ on $\Z^\perp$, and $\mathcal F(\Ct)$ has the block form with the stated $c_0$. The block-form matrices are an invariant family of $\mathcal F$, and by Proposition~\ref{prop:unique} the fixed point is unique, so it lies in the family. On $\Z$ the restriction of \eqref{eq:master} is the $L\times L$ problem stated, since $Q_\Z^\top Z G Z^\top Q_\Z = W G W^\top$.
+\end{proof}
+
+Consequences. The $P - L$ directions orthogonal to the latent column space carry exactly the prior at every frequency: no learning, no rotation, and they do not interact with $\Z$. Everything of interest lives in the $L$-dimensional latent space, where the problem is again \eqref{eq:master} with the $L\times L$ Gram matrices \eqref{eq:restricted-gram}. A shared column space therefore does \emph{not} rescue the ansatz. By Proposition~\ref{prop:iff} applied in $\Z$ (generic $\sigma^2$), the ansatz is exact in $\Z$ iff the restricted Gram matrices commute,
+\begin{equation}
+  [W G_X W^\top, W G_Y W^\top] = 0 \iff G_X\,(Z^\top Z)\,G_Y = G_Y\,(Z^\top Z)\,G_X,
+  \label{eq:restricted-commute}
+\end{equation}
+a condition on $G_X$, $G_Y$ \emph{and} the latent Gram matrix $Z^\top Z$. It reduces to $[G_X, G_Y] = 0$ only when $Z^\top Z \propto I_L$ (orthogonal latent coordinates), and it holds for every $Z$ when $G_X \propto G_Y$, in particular when $W_X$ and $W_Y$ both have orthonormal columns ($G_X = G_Y = I_L$, the case singled out in the fixnote of Section~2 and used, with $W_Y$ scaled by $0.6$, in the numerical check of \path{rg_diagonal_reduction.tex}). The latent coordinates of that check, $Z_{\mu,k} \sim \mathcal U[0,1]$ i.i.d., are far from orthogonal ($\mathbb E[Z^\top Z] = P(\tfrac1{12} I_L + \tfrac14 \mathbf 1\mathbf 1^\top)$): there the commutation comes from $G_X \propto G_Y$, not from $Z$. Conversely, $[G_X, G_Y] = 0$ with a non-orthogonal $Z$ does not make the ansatz exact. The second rank-deficient instance of Section~\ref{sec:numerical} ($P = 5$, $L = 2$, $Z^\top Z$ with unit diagonal and off-diagonal $0.15$, $G_X = I_2$, $G_Y = \diag(1, 0.3)$) has $[G_X, G_Y] = 0$ and restricted Gram matrices with relative commutator $0.098$; its fixed point keeps the block structure to $10^{-16}$ and its latent-space eigenbasis rotates by up to $31.5^\circ$ across $q$. What the shared column space does buy is dimension: the ansatz-free problem is $L\times L$, with $L(L-1)/2$ rotation angles instead of $P(P-1)/2$.
+
+\paragraph{Two latents.}
+For $L = 2$, choose the orthonormal basis $Q_\Z$ of $\Z$ that diagonalises the input part, $\frac{k_0}{m}Q_\Z^\top XX^\top Q_\Z = \diag(\hat x_1, \hat x_2)$, and write the tilt in that basis as $B = \begin{psmallmatrix} b_{1,1} & b_{1,2}\\ b_{1,2} & b_{2,2}\end{psmallmatrix}$, $m_{q,i} = (\lambda_q\hat x_i + \sigma^2)^{-1} + g^2$. Then
+\begin{equation}
+  \Sigma_q^{-1} = \begin{pmatrix} m_{q,1} - \lambda_q b_{1,1} & -\lambda_q b_{1,2} \\ -\lambda_q b_{1,2} & m_{q,2} - \lambda_q b_{2,2}\end{pmatrix},
+  \qquad
+  \Sigma_q = \frac1{\Delta_q}\begin{pmatrix} m_{q,2} - \lambda_q b_{2,2} & \lambda_q b_{1,2} \\ \lambda_q b_{1,2} & m_{q,1} - \lambda_q b_{1,1}\end{pmatrix},
+\end{equation}
+with $\Delta_q = (m_{q,1}-\lambda_q b_{1,1})(m_{q,2}-\lambda_q b_{2,2}) - \lambda_q^2 b_{1,2}^2 > 0$. The functional basis at frequency $q$ is rotated from the input basis by the angle $\theta_q$ with
+\begin{equation}
+  \tan 2\theta_q = \frac{2 b_{1,2}}{\,b_{1,1} - b_{2,2} + \dfrac{\hat x_1 - \hat x_2}{(\lambda_q\hat x_1 + \sigma^2)(\lambda_q\hat x_2 + \sigma^2)}\,},
+  \label{eq:two-latent-angle}
+\end{equation}
+and the three unknowns $(c_{1,1}, c_{2,2}, c_{1,2})$ of $\Ct$ satisfy
+\begin{equation}
+  c_{1,1} = \delta + \frac1N\sum_q\frac{\lambda_q(m_{q,2}-\lambda_q b_{2,2})}{\Delta_q},\quad
+  c_{2,2} = \delta + \frac1N\sum_q\frac{\lambda_q(m_{q,1}-\lambda_q b_{1,1})}{\Delta_q},\quad
+  c_{1,2} = \frac1N\sum_q\frac{\lambda_q^2 b_{1,2}}{\Delta_q},
+  \label{eq:two-latent-system}
+\end{equation}
+with $B = \frac1{k_1}\Ct^{-1}G_Y'\Ct^{-1}$, $G_Y' = Q_\Z^\top YY^\top Q_\Z = W G_Y W^\top$, explicit for $2\times2$ matrices. Equation \eqref{eq:two-latent-angle} already exhibits the whole mechanism. The denominator is monotone in $\lambda_q$: the input term $(\hat x_1 - \hat x_2)/\big[(\lambda_q\hat x_1+\sigma^2)(\lambda_q\hat x_2+\sigma^2)\big]$ equals $(\hat x_1-\hat x_2)/\sigma^4$ at the finest scale ($\lambda_q\to0$) and vanishes at the coarsest ($\lambda_q\to\infty$), where only the target anisotropy $b_{1,1}-b_{2,2}$ remains. If input and target anisotropy have the same sign the angle grows monotonically from fine to coarse scales and stays below $45^\circ$. If they have opposite signs the denominator changes sign at some $\lambda^\star$, $\theta_q$ passes through $45^\circ$ there, and the leading functional mode \emph{changes identity} between fine and coarse scales: an avoided crossing of the two eigenvalues of $\Sigma_q$ as a function of $q$. Rotation requires $b_{1,2} \ne 0$, which at a fixed point happens iff the restricted Gram matrices \eqref{eq:restricted-gram} fail to commute (Proposition~\ref{prop:iff} in $\Z$, generic $\sigma^2$); the ansatz is the statement $b_{1,2}=0$. In the $P = 6$ demonstration of Section~\ref{sec:numerical} the leading pair of modes is of the opposite-sign kind: the denominator of \eqref{eq:theta}, the first-order form of \eqref{eq:two-latent-angle}, would vanish for it at $\lambda^\star = 5.65$, just beyond $\lambda_{\max} = 3.54$, so the avoided crossing is nearly, but not quite, realised within the kernel's spectrum.
+
+\section{Perturbative treatment}
+\label{sec:perturbative}
+Expand around the commuting point. Rotate into the eigenbasis of $XX^\top$ (covariance, Section~\ref{sec:structure}), so that $A = \diag(\hat s_{X,p}^2)$ with $\hat s_{X,p}^2 = k_0 s_{X,p}^2/m$, and write
+\begin{equation}
+  \frac{1}{k_1} YY^\top = \diag(\hat s_{Y,p}^2) + \epsilon\,\hat E, \qquad \hat s_{Y,p}^2 = \frac{s_{Y,p}^2}{k_1},\quad \hat E = \frac{E}{k_1}\ \text{symmetric, not diagonal},
+\end{equation}
+which is $YY^\top = U(S_Y^2 + \epsilon E)U^\top$ with $U$ absorbed. Indices $p, r = 1,\dots,P$ label the columns of $U$ (the ansatz cell types).
+
+\paragraph{Zeroth order.}
+At $\epsilon = 0$ everything is diagonal: $\Ct_0 = \diag(c_p)$ with $c_p$ the physical root of \eqref{eq:linear-soln} for mode $p$, $B_0 = \diag(\hat s_{Y,p}^2/c_p^2)$, and $\Sigma_q^{(0)} = \diag(d_{q,p})$, with, per mode, the quantities of \eqref{eq:linear-soln},
+\begin{equation}
+  d_{q,p} = \frac{c_p^2\,h_{q,p}/\lambda_q}{c_p^2 - \hat s_{Y,p}^2 h_{q,p}},\qquad
+  \frac{h_{q,p}}{\lambda_q} = \frac{\lambda_q\hat s_{X,p}^2 + \sigma^2}{1 + g^2(\lambda_q\hat s_{X,p}^2 + \sigma^2)},\qquad
+  d_{q,p}^{-1} = \frac{\lambda_q}{h_{q,p}} - \frac{\lambda_q\hat s_{Y,p}^2}{c_p^2}.
+\end{equation}
+
+\paragraph{First order.}
+Write $\Ct = \Ct_0 + \epsilon C_1$, $B = B_0 + \epsilon B_1$, $\Sigma_q = \Sigma_q^{(0)} + \epsilon\Sigma_q^{(1)}$. From $\Ct^{-1} = \Ct_0^{-1} - \epsilon\,\Ct_0^{-1}C_1\Ct_0^{-1} + O(\epsilon^2)$,
+\begin{equation}
+\begin{aligned}
+  B_1 &= \Ct_0^{-1}\hat E\,\Ct_0^{-1} - \Ct_0^{-1}C_1\Ct_0^{-1}\hat S_Y^2\Ct_0^{-1} - \Ct_0^{-1}\hat S_Y^2\Ct_0^{-1}C_1\Ct_0^{-1},\\
+  (B_1)_{p,r} &= \frac{\hat E_{p,r}}{c_pc_r} - (C_1)_{p,r}\,\frac{\hat s_{Y,r}^2c_p + \hat s_{Y,p}^2c_r}{c_p^2c_r^2},
+\end{aligned}
+  \label{eq:B1}
+\end{equation}
+with $\hat S_Y^2 = \diag(\hat s_{Y,p}^2)$.
+From $\Sigma_q = (M_q - \lambda_q B)^{-1}$ and $\mathrm d(X^{-1}) = -X^{-1}\,\mathrm dX\,X^{-1}$,
+\begin{equation}
+  \Sigma_q^{(1)} = \lambda_q\,\Sigma_q^{(0)} B_1 \Sigma_q^{(0)},\qquad
+  (\Sigma_q^{(1)})_{p,r} = \lambda_q\, d_{q,p}\,d_{q,r}\,(B_1)_{p,r}.
+  \label{eq:Sigma1}
+\end{equation}
+From the kernel self-consistency,
+\begin{equation}
+  (C_1)_{p,r} = \frac1N\sum_q\lambda_q(\Sigma_q^{(1)})_{p,r} = T_{p,r}\,(B_1)_{p,r},
+  \qquad
+  T_{p,r} \equiv \frac1N\sum_q \lambda_q^2\, d_{q,p}\, d_{q,r}.
+  \label{eq:T}
+\end{equation}
+$T_{p,r}$ is the linear response of the kernel to the tilt at the commuting point, the Jacobian $\partial\Ct/\partial B$, which is diagonal in the pair index $(p,r)$ because the zeroth order is. Substituting \eqref{eq:T} into \eqref{eq:B1} and solving the resulting scalar equation for each pair,
+\begin{equation}
+  \boxed{\;
+  (B_1)_{p,r} = \frac{\hat E_{p,r}\,c_pc_r}{c_p^2c_r^2 + T_{p,r}\big(\hat s_{Y,r}^2c_p + \hat s_{Y,p}^2c_r\big)},
+  \qquad
+  (C_1)_{p,r} = T_{p,r}\,(B_1)_{p,r}.\;}
+  \label{eq:first-order}
+\end{equation}
+The bare response $\hat E_{p,r}/(c_pc_r)$ is screened by the feedback through the kernel, the second term in the denominator.
+
+\paragraph{Correction to $D_q$.}
+The diagonal of \eqref{eq:Sigma1} gives the first-order change of the ansatz weights,
+\begin{equation}
+  \delta d_{q,p} = \epsilon\,\lambda_q d_{q,p}^2\,(B_1)_{p,p},\qquad
+  (B_1)_{p,p} = \frac{\hat E_{p,p}\,c_p}{c_p^3 + 2T_{p,p}\hat s_{Y,p}^2},
+\end{equation}
+which involves only the diagonal of $E$: to first order, off-diagonal (non-commuting) structure in $YY^\top$ does not change the spectra $D_q$ at all, it only rotates the basis. (The diagonal part of $E$ is the same as a change of $S_Y^2$ and is covered by the ansatz.)
+
+\paragraph{Correction to $U$: the rotation with $q$.}
+By first-order eigenvector perturbation theory, the eigenbasis of $\Sigma_q$ is $U_q = U(I + \epsilon\Theta_q) + O(\epsilon^2)$ with $\Theta_q$ antisymmetric,
+\begin{equation}
+\begin{aligned}
+  (\Theta_q)_{r,p} &= \frac{(\Sigma_q^{(1)})_{r,p}}{d_{q,p} - d_{q,r}}
+  = \frac{\lambda_q (B_1)_{p,r}}{d_{q,r}^{-1} - d_{q,p}^{-1}} \\[1ex]
+  &= \boxed{\;\frac{(B_1)_{p,r}}{\dfrac{\hat s_{X,p}^2 - \hat s_{X,r}^2}{(\lambda_q\hat s_{X,p}^2 + \sigma^2)(\lambda_q\hat s_{X,r}^2 + \sigma^2)} + \dfrac{\hat s_{Y,p}^2}{c_p^2} - \dfrac{\hat s_{Y,r}^2}{c_r^2}}\;}
+  \qquad (r \ne p),
+\end{aligned}
+  \label{eq:theta}
+\end{equation}
+where the last step uses $d_{q,p}^{-1} = (\lambda_q\hat s_{X,p}^2+\sigma^2)^{-1} + g^2 - \lambda_q\hat s_{Y,p}^2/c_p^2$ and the $g^2$ cancels in the difference. Column $p$ of $U_q$ is the cell type $p$ at spatial frequency $q$: $u_{q,p} = u_p + \epsilon\sum_{r\ne p}(\Theta_q)_{r,p}u_r$. Equation \eqref{eq:theta} is the first-order form of \eqref{eq:two-latent-angle} for every pair of modes, and it says the following.
+\begin{itemize}
+  \item The numerator $(B_1)_{p,r}$ is $q$-independent; all the scale dependence is in the denominator, through the input term $(\hat s_{X,p}^2 - \hat s_{X,r}^2)/[(\lambda_q\hat s_{X,p}^2+\sigma^2)(\lambda_q\hat s_{X,r}^2+\sigma^2)]$, which is monotone in $\lambda_q$.
+  \item \emph{Fine scales} ($\lambda_q \to 0$): the input term is $(\hat s_{X,p}^2 - \hat s_{X,r}^2)/\sigma^4$, generically large; the rotation $\epsilon(B_1)_{p,r}\big/[(\hat s_{X,p}^2 - \hat s_{X,r}^2)/\sigma^4 + b_p - b_r]$ is the first-order rotation of the eigenbasis of $A/\sigma^4 + B$ in \eqref{eq:limits}, and is small when the input spectrum is well separated on the scale of the noise.
+  \item \emph{Coarse scales} ($\lambda_q \to \infty$): the input term vanishes as $1/\lambda_q^2$ and the rotation tends to $\epsilon(B_1)_{p,r}/(b_p - b_r)$ with $b_p = \hat s_{Y,p}^2/c_p^2$, the first-order rotation of the eigenbasis of the tilt $B$, set by the target. This limit needs $\lambda_q^2 \gg |\hat s_{X,r}^{-2} - \hat s_{X,p}^{-2}|/|b_p - b_r|$, which the coarsest scale of a lattice generally does not satisfy: in the instance below the input term of the leading pair is still $0.087$ at $\lambda_{\max} = 3.54$ against a target term of $-0.041$, so the coarse-scale basis is the one in which target tilt and input anisotropy compete.
+  \item The two limits differ unless $\hat s_{X,p}^2 = \hat s_{X,r}^2$; so for non-commuting data the functional basis is a different basis at every spatial scale, rotating monotonically away from an input-set basis at fine scales towards the target-set basis, which the coarse scales approach only as far as $\lambda_{\max}$ allows. The rate penalty $g^2$ does not enter the rotation except through $c_p$ and $(B_1)_{p,r}$. If the input and target anisotropies of a pair have opposite signs, the denominator vanishes at some $\lambda^\star$ and first-order theory breaks down there: that is the avoided crossing of Section~\ref{sec:rank}, where the pair of cell types swaps identity across scales. In the instance below the leading pair $(1,2)$ is of this kind, with $\lambda^\star = 5.65$ just beyond $\lambda_{\max} = 3.54$: the crossing is nearly realised within the kernel's spectrum.
+\end{itemize}
+For the functional-cell-type question this is the result: the ansatz forbids by construction the one effect, a basis that depends on spatial scale, that would make ``cell types at scale $q$'' a non-trivial notion; the first-order theory predicts that effect to be present whenever $[XX^\top,YY^\top]\ne0$, of size $\epsilon\,|(B_1)_{p,r}|$ times a scale-dependent susceptibility that is largest at coarse scales.
+
+\section{Numerical route}
+\label{sec:numerical}
+\paragraph{Scheme.}
+Because the frequency decomposition is exact, one never needs the $NP\times NP$ Gaussian: solve \eqref{eq:master} by damped iteration
+\begin{equation}
+  \Ct \leftarrow \alpha\,\Ct + (1-\alpha)\,\mathcal F(\Ct),
+\end{equation}
+each step costing $N$ inversions of $P\times P$ matrices. Start from a large $\Ct = c_{\mathrm{start}} I$ so that the tilt is small and every $M_q - \lambda_q B \succ 0$ (the iteration must stay in $\dom$; a step that leaves it is halved and retried a few times before the solver raises and asks for a larger start), and stop when the residual $\max_{p,r}|\Ct - \mathcal F(\Ct)|_{p,r}$ is below $10^{-12}$. $\mathcal F$ is decreasing in $\Ct$ (a larger kernel weakens the tilt), so its Jacobian at the fixed point has negative eigenvalues and the undamped map oscillates when a slope exceeds one in magnitude; the required damping is not known in advance, so the solver tightens $\alpha$ (halving $1-\alpha$) whenever a step grows. By Proposition~\ref{prop:unique} any admissible fixed point reached is \emph{the} solution; agreement between two different starts checks that the iteration has converged, not uniqueness, which is the proposition's job. For larger $P$ one would switch to Newton's method on the $P(P+1)/2$ residual $\Ct - \mathcal F(\Ct)$, with the elementwise Jacobian $T_{p,r}$ of \eqref{eq:T} as a preconditioner, or minimise $\mathfrak g$ directly.
+
+\paragraph{Checks.}
+(a) In the commuting case ($\epsilon = 0$) the eigenvalues of $\Ct$ must equal the roots of \eqref{eq:linear-soln}. (b) The fixed point of the per-$q$ solver must be a fixed point of the full $NP\times NP$ kernel map $C \mapsto \frac1N\sum_{i,j}K_{i,j}\langle\phi_i\phi_j\rangle$ of \texttt{check\_rg\_linear\_soln.py}, which uses no Fourier decomposition. (c) Two starts must converge to the same point. (d) The first-order formulae \eqref{eq:first-order}, \eqref{eq:theta} must match $(\Ct(\epsilon)-\Ct(0))/\epsilon$ and $(U_q(\epsilon) - U)/\epsilon$ with a residual that halves when $\epsilon$ is halved. (e) The rank-deficient block structure of Section~\ref{sec:rank}.
+
+\paragraph{Instance.}
+Every parameter is set in \path{latex/notes/scripts/linear_without_ansatz.py} (run from the repository root with \texttt{uv run python latex/notes/scripts/linear\_without\_ansatz.py}; under a second): a ring of $N = 32$ sites with $K_{i,j} = \exp(-r_{i,j}^2/4)$ ($\lambda_q \in [3.7\times10^{-4}, 3.54]$); $P = 6$, $m = 6$; $k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $g^2 = 0.3$, $\delta = 0.5$ as in the companion notes; $XX^\top = U S_X^2U^\top$ with $U$ the $Q$ factor of a $6\times6$ standard normal matrix (\path{numpy.random.default_rng(0)}) and $S_X^2 = \diag(2.0, 1.4, 1.0, 0.7, 0.4, 0.2)$; $YY^\top = U(S_Y^2 + \epsilon E)U^\top$ with $S_Y^2 = \diag(1.0, 0.8, 0.6, 0.4, 0.25, 0.15)$ and $E = RS_Y^2R^\top - S_Y^2$, where $R$ is the product of Givens rotations by $30^\circ$ in the planes $(1,2),(2,3),\dots,(5,6)$. So at $\epsilon = 1$ the eigenbasis of $YY^\top$ is rotated by $30^\circ$--$41^\circ$ from that of $XX^\top$ (two non-commuting Gram matrices), at $\epsilon = 0$ they commute, and for $\epsilon\in[0,1]$ $YY^\top$ is a convex combination of positive matrices. The rank-deficient check uses $L = 3$ latents, $Z$ the $Q$ factor of a $6\times3$ normal matrix and $G_X, G_Y = GG^\top/3$ for $3\times3$ normal $G$ (\path{default_rng(1)}), with $m$ absorbed into $G_X$; a second rank-deficient instance has $P = 5$, $L = 2$, $Z = Q_\Z T^\top$ with $Q_\Z$ the $Q$ factor of a $5\times2$ normal matrix and $T$ the Cholesky factor of $Z^\top Z = \begin{psmallmatrix}1 & 0.15\\ 0.15 & 1\end{psmallmatrix}$, $G_X = I_2$ and $G_Y = \diag(1, 0.3)$, so that $[G_X, G_Y] = 0$ while \eqref{eq:restricted-commute} fails. The rotation of the rank-deficient instances is measured on $Q_\Z^\top\Sigma_qQ_\Z$, because the complement carries one degenerate eigenvalue at every $q$ and its eigenvectors are arbitrary. The tests in \path{tests/test_linear_without_ansatz.py} run the same checks on a smaller instance.
+
+\paragraph{Output.}
+{\scriptsize
+\begin{verbatim}
+ring N=32, width=1.414, P=6, m=6; lam_q in [0.000367, 3.54]
+  relative commutator |[A, YY^T]| at eps=1    : 0.040
+  angle (deg) of eigvecs of A to nearest of YY^T: [30.  41.4 41.4 41.4 41.4 30. ]
+
+[commuting case, eps = 0]
+  eig(Ct) - scalar roots, max abs             : 7.8e-13
+  off-diagonal fraction of Ct in U            : 2.6e-16
+
+[non-commuting case, eps = 1]  (37 iterations to a residual below 1e-12)
+  full NP x NP map residual at fixed point    : 9.5e-13
+  start 5 I vs start 50 I, max |diff|         : 2.7e-13
+  min eig of per-q precisions                 : 0.4412
+  eig(Ct)                                     : [0.7791 0.871  1.0319 1.2356 1.4839 1.7745]
+  max_q |[Sigma_q, Sigma_0]| / (|Sigma_q| |Sigma_0|): 0.009
+  max_q off-diag fraction of Sigma_q in eig(Ct): 0.031
+  q   lam_q    angle (deg) of each eigenvector of Sigma_q to its q=0 partner
+   0   3.5449  [0. 0. 0. 0. 0. 0.]
+   2   3.0383  [0.8 1.8 3.1 4.4 6.  5. ]
+   4   1.9130  [ 2.6  5.4  9.  12.  14.4 11.4]
+   6   0.8848  [ 4.   8.3 13.5 16.8 18.7 14.3]
+   8   0.3006  [ 4.8  9.7 15.5 18.9 20.3 15.3]
+  12   0.0138  [ 5.1 10.3 16.3 19.7 20.9 15.7]
+  16   0.0004  [ 5.1 10.4 16.4 19.7 20.9 15.7]
+  angle (deg) of each eigenvector of Sigma_q to the nearest eigenvector of a reference
+  q=0 (lam=3.5449) to U                       : [ 8.6 14.5 19.8 22.1 22.  16.2]
+  q=0 (lam=3.5449) to eig(B)                  : [44.5 58.7 50.7 44.3 46.6 45.6]
+  q=16 (lam=0.0004) to U                      : [3.5 4.4 3.6 2.5 1.2 0.5]
+  q=16 (lam=0.0004) to eig(A/sig^4 + B)       : [0. 0. 0. 0. 0. 0.]
+  eig(B) limit needs lam^2 >> |A^-1|/|B|      : 128; lam_max^2 = 12.6
+
+[first-order theory vs solver]
+  max |C1|, max |Theta|                       : 0.0649, 0.2721
+  eps=0.02: max |C1_num - C1|, |Theta_num - Theta|: 4.10e-05, 1.42e-03
+  eps=0.01: max |C1_num - C1|, |Theta_num - Theta|: 2.05e-05, 7.09e-04
+  residual ratio eps -> eps/2                 : C1 2.00, Theta 2.00  (2 = O(eps))
+  largest scale dependence: (Theta_q)_(r,p), (r,p)=(1,2): Theta[q=0]=-0.2721, Theta[q=N/2]=-0.0074
+  eq:theta denominator for modes (1,2) vanishes at lam*: 5.65 (lam_max = 3.54)
+
+[rank-deficient task, L=3 < P=6, orthonormal Z, non-commuting G_X, G_Y]  (371 iterations)
+  relative commutator |[G_X, G_Y]|            : 0.366
+  relative commutator of the Gram matrices on col(Z): 0.366
+  max |Pi Ct Pi_perp|                         : 3.8e-16
+  max |Pi_perp Ct Pi_perp - c0 Pi_perp|       : 5.1e-13   (c0 = 0.688679)
+  eig(Ct)                                     : [0.6887 0.6887 0.6887 0.7343 2.825  4.0894]
+  largest angle (deg) in col(Z) of a Sigma_q eigvec to q=0: 44.5
+
+[rank-deficient task, L=2 < P=5, Z^T Z off-diagonal 0.15, G_X = I, G_Y = diag(1.0, 0.3)]  (43 iterations)
+  relative commutator |[G_X, G_Y]|            : 0.000
+  relative commutator of the Gram matrices on col(Z): 0.098
+  max |Pi Ct Pi_perp|                         : 1.4e-16
+  max |Pi_perp Ct Pi_perp - c0 Pi_perp|       : 8.7e-13   (c0 = 0.688679)
+  eig(Ct)                                     : [0.6887 0.6887 0.6887 1.9591 2.7038]
+  largest angle (deg) in col(Z) of a Sigma_q eigvec to q=0: 31.5
+\end{verbatim}
+}
+
+\paragraph{Reading the output.}
+\begin{itemize}
+  \item Checks (a)--(c) pass to machine precision: the commuting case reproduces the scalar roots to $8\times10^{-13}$; the per-$q$ fixed point is a fixed point of the full $192\times192$ Gaussian to $10^{-12}$; the two starts agree to $3\times10^{-13}$; all per-$q$ precisions are positive definite (smallest eigenvalue $0.44$).
+  \item \emph{The per-$q$ eigenbases rotate.} At $\epsilon = 1$ no single basis diagonalises the $\Sigma_q$: in the eigenbasis of $\Ct$ (the best single candidate, and what the ansatz would return) the off-diagonal part of $\Sigma_q$ reaches $3.1\%$ of its norm, and the eigenvectors of $\Sigma_q$ at the finest scale ($q = 16$, $\lambda_q = 4\times10^{-4}$) are rotated by $5^\circ$ to $21^\circ$ from their partners at the coarsest scale ($q = 0$, $\lambda_q = 3.54$), per mode. The rotation accumulates monotonically with $q$ and saturates once $\lambda_q\hat s_X^2 \ll \sigma^2$ ($q \gtrsim 8$), as \eqref{eq:theta} predicts. The printed angles to the reference bases confirm the fine limit of \eqref{eq:limits} and show that the coarse one is not reached: at $q = 16$ the eigenbasis of $\Sigma_q$ coincides with that of $A/\sigma^4 + B$ to $0.00^\circ$ and is within $0.5^\circ$--$4.4^\circ$ of the input basis $U$; at $q = 0$ it is $44^\circ$--$59^\circ$ from the eigenbasis of $B$ but only $9^\circ$--$22^\circ$ from $U$. The target-set basis would need $\lambda_q^2 \gg \|A^{-1}\|/\|B\| = 128$, against $\lambda_{\max}^2 = 12.6$: at the coarsest scale of this ring the target tilt competes with the input anisotropy and does not dominate it.
+  \item \emph{Perturbation theory is right.} The closed forms \eqref{eq:first-order} and \eqref{eq:theta} agree with the solver to $4.1\times10^{-5}$ on $C_1$ (maximum entry $0.065$, i.e.\ $0.06\%$) and $1.4\times10^{-3}$ on $\Theta_q$ (maximum entry $0.27$, i.e.\ $0.5\%$) at $\epsilon = 0.02$, and both residuals halve exactly (ratio $2.00$) at $\epsilon = 0.01$: the discrepancy is the $O(\epsilon^2)$ term, not an error in the first order. The largest predicted scale dependence is for the pair of leading modes $(1,2)$: mixing coefficient $0.272\,\epsilon$ at the coarsest scale against $0.007\,\epsilon$ at the finest, a factor $37$, because the input term in the denominator of \eqref{eq:theta} is $0.087$ at $\lambda_q = 3.54$ and $1.75$ at $\lambda_q \to 0$ while the target term is $-0.041$ throughout. The two have opposite signs, and the printed $\lambda^\star = 5.65$ is where the denominator of \eqref{eq:theta} for this pair vanishes: the avoided crossing lies just outside the kernel's spectrum ($\lambda_{\max} = 3.54$).
+  \item \emph{Rank deficiency.} With $L = 3 < P = 6$ and non-commuting $G_X, G_Y$, $\Ct$ is block diagonal to $4\times10^{-16}$, the three directions outside the latent column space sit at the prior value $c_0 = 0.688679$ of \eqref{eq:c0} to $5\times10^{-13}$, and the three latent directions are learned ($0.73$, $2.8$, $4.1$) and rotated by up to $44^\circ$ within the latent space. The second instance has $[G_X, G_Y] = 0$ but a non-orthogonal $Z$: its restricted Gram matrices have relative commutator $0.098$, the block structure holds to $10^{-16}$ and $9\times10^{-13}$, and the latent eigenbasis rotates by up to $31.5^\circ$ across $q$, as \eqref{eq:restricted-commute} says and as $[G_X, G_Y] = 0$ alone would not predict.
+\end{itemize}
+
+\section{Assessment}
+\label{sec:assessment}
+\paragraph{Is it worth pursuing?}
+Yes, for the functional-cell-type question specifically, and the reason is Proposition~\ref{prop:iff}: the ansatz removes exactly the effect the section says it wants to study. Section~2 motivates $\Sigma_q$ by asking ``how these directions vary with $q$'', and then imposes that they do not. Without the ansatz the answer is: they vary iff the input and output Gram matrices fail to commute, the variation is monotone in $\lambda_q$, from an input-set basis at fine scales towards a target-set basis that the coarse scales approach as far as $\lambda_{\max}$ allows, its first-order size is \eqref{eq:theta}, and it can include an exchange of identity between two cell types across scales. Those are statements about cell types that depend on spatial scale, which is the stated object of the theory, and they are invisible under the ansatz. Whether real tasks are close to commuting is an empirical question (a random $X$ and $Y$ are not; the latent task with orthonormal $W_X, W_Y$ is), and the first-order formula is cheap enough to evaluate on any dataset to see how far from commuting it sits.
+
+\paragraph{What it costs.}
+Little, analytically and numerically, at the level of this note.
+\begin{itemize}
+  \item \emph{Analytically}, the scalar equation \eqref{eq:linear-soln} is replaced by the matrix equation \eqref{eq:master}, which has no closed form, but the structural results (unique solution, variational principle, per-$q$ basis as the eigenbasis of $M_q - \lambda_q B$, the two limits, the rank-deficient reduction, the two-latent angle formula, the first-order rotation) are all obtained above with elementary means and hold for any $N$ and in the continuum limit. The limiting-case analysis of the companion note \path{linear_solution_limits.tex} carries over mode by mode at zeroth order, and \eqref{eq:first-order}--\eqref{eq:theta} give the leading correction to each limit; the continuum limit replaces $\frac1N\sum_q$ by $\int\mathrm d^dq/(2\pi)^d$ in $T_{p,r}$ and in \eqref{eq:master} and nothing else changes.
+  \item \emph{Numerically}, the problem is $P\times P$ with $N$ inversions per iteration, independent of the ansatz; the demonstration takes $37$ iterations and about a second. The ansatz saves nothing here: the kernel $\Ct$ is $P\times P$ either way.
+  \item \emph{What one gives up} is the one-dimensional picture of a single ``spectrum'' $h_q$ per cell type: with rotation, the weight carried by cell type $p$ at scale $q$ is not a scalar $d_{q,p}$ but the $p$-th eigenvalue of $\Sigma_q$ attached to a $q$-dependent eigenvector, and ``the cell type $p$'' must be tracked across $q$ (by overlap, as the script does). Where the ansatz is a good approximation, the first-order theory says how good: the error of the spectra is $O(\epsilon^2)$ (the first-order spectral correction involves only the diagonal of $E$), and the rotation is $O(\epsilon)$ with the coefficient \eqref{eq:theta}.
+\end{itemize}
+
+\paragraph{Recommendation.}
+Keep the ansatz as the solvable zeroth order and present it as such, with the condition $[XX^\top,YY^\top] = 0$ under which it is exact (Proposition~\ref{prop:iff}). Add the matrix equation \eqref{eq:master} and the first-order rotation \eqref{eq:theta} as the statement of what the ansatz leaves out, since that is precisely the scale dependence of cell types. For the non-linear and multi-layer cases the same structure persists at the level of the single-site problem (one coupling $\Ct$ per layer, per-$q$ bases set by a pencil), so an ansatz-free numerical solver of the form used here is the natural tool, and the convex--concave structure of \eqref{eq:lagrangian} is what guarantees it finds the physical solution.
+\end{document}

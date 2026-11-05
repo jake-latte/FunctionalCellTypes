@@ -4,7 +4,7 @@
 \section{Renormalisation Group}
 \label{sec:rg}
 
-Our main object of interest is the single-site distribution:
+Our main object of interest is the single-site distribution\fix{, written with the conjugate rotated, $i \hat \Phi \to \hat \Phi$, so that $\hat \Phi$ in this section denotes the (real) saddle-point value of $i \hat \Phi$ in \eqref{eq:single-site}}:
 \begin{align*}
   \mathcal W[\Phi, \hat \Phi]
   &= 
@@ -13,16 +13,17 @@ Our main object of interest is the single-site distribution:
     + \frac12 \phi^{\mu}_i \left( \hat \Phi^{\mu,\nu}_{\alpha,\beta} K_{\alpha,i,\beta,j} - G_{i,j} \delta^{\mu,\nu}  \right) \phi^{\nu}_j
   \Bigg \}
 \end{align*}
+\fixnote{The $i$ multiplying $\hat \Phi$ in \eqref{eq:single-site} was dropped without comment. This is harmless, because at the saddle point $i \hat \Phi$ is real (for the last layer it equals $\tilde \Phi^{-1} \mathbb Y \tilde \Phi^{-1}$), and that real matrix is what every later use of $\hat \Phi$ in this section means; the rotation is now stated explicitly.}
 Eventually we will use the Renormalisation Group to attempt to handle this thing; but to begin with, we will develop intuition in the simplest possible case.
 
 \subsection{Linear Activation, One Hidden Layer}
 We begin by making some simplifying assumptions for the spatial kernels:
 \begin{align*}
-    K^{(0), \text{post}} = K^{(1), \text{pre}} \equiv K, 
+    K^{(0),\text{post}} = K^{(1),\text{pre}} \equiv K, 
     &&
-    K^{(0), \text{pre}} = k_0 I,
+    K^{(0),\text{pre}} = k_0 I,
     &&
-    K^{(1), \text{post}} = k_1 I,
+    K^{(1),\text{post}} = k_1 I,
     &&
     G = g^2 I
 \end{align*}
@@ -30,21 +31,25 @@ and studying the simplest possible case, where we have only one hidden layer. Re
 \begin{align*}
     & \mathbb X \equiv \Phi^{(0)},
     \qquad
-        \mathbb X^{\mu,\nu}_{i,j} = 
-            K^{(0), \text{post}}_{i,j} 
-            x^{\mu}_a K^{(0), \text{pre}}_{a,b} x^{\nu}_b
-        = k_0 x^{\mu}_a x^{\nu}_a K_{i,j}
+        \mathbb X^{\mu,\nu}_{i,j} =
+            \fix{\frac1m}
+            K^{(0),\text{post}}_{i,j}
+            x^{\mu}_a K^{(0),\text{pre}}_{a,b} x^{\nu}_b
+        = \fix{\frac{k_0}{m}} x^{\mu}_a x^{\nu}_a K_{i,j}
     \\
     & \Phi \equiv \Phi^{(1)},
     \qquad
         \Phi^{\mu,\nu}_{\alpha, \beta} =
-            K^{(1), \text{post}}_{\alpha,\beta}
+            K^{(1),\text{post}}_{\alpha,\beta}
+            \major{\frac1N}
             \left\langle
-                \phi^{\mu}_i K^{(1), \text{pre}}_{i,j} \phi^{\nu}_j
+                \phi^{\mu}_i K^{(1),\text{pre}}_{i,j} \phi^{\nu}_j
             \right\rangle
-        = k_1 \delta_{\alpha,\beta} \underbrace{ \left \langle \phi^{\mu}_i K_{i,j} \phi^{\nu}_j \right \rangle }_{C^{\mu,\nu}}
+        = k_1 \delta_{\alpha,\beta} \underbrace{ \major{\frac1N} \left \langle \phi^{\mu}_i K_{i,j} \phi^{\nu}_j \right \rangle }_{C^{\mu,\nu}}
 \end{align*}
-$C$ here measure the aggregate correlation in the hidden layer, and is the natural analogue of the more familar non-spatial kernels. 
+\majornote{rg\_kernel\_normalisation.tex}
+\fixnote{\eqref{eq:kernel-def} carries a $1/m$ for $l=0$, which was dropped from $\mathbb X$. It only rescales $k_0$, so nothing qualitative changes; it is restored here and below ($A = \frac{k_0}{m} X X^\top$, $\hat s_X^2 = k_0 s_X^2 / m$).}
+$C$ here \typo{measures} the aggregate correlation in the hidden layer, and is the natural analogue of the more \typo{familiar} non-spatial kernels.
 For convenience we define the regularised kernel
 \begin{align*}
     \tilde \Phi^{\mu,\nu}_{\alpha,\beta} 
@@ -68,11 +73,11 @@ In the path integral, this $\hat \Phi^{\mu,\nu}_{\alpha,\beta}$ term is contract
 \begin{align*}
     B^{\mu,\nu}
     \equiv
-    K^{(1), \text{post}}_{\alpha,\beta} \hat \Phi^{\mu,\nu}_{\alpha,\beta}
+    K^{(1),\text{post}}_{\alpha,\beta} \hat \Phi^{\mu,\nu}_{\alpha,\beta}
     =
     k^{-1}_1 \delta_{\alpha,\beta} [(\tilde C)^{-1}]^{\mu,m} \delta_{\alpha,a} y^m_a y^n_b \delta_{b, \beta} [(\tilde C^{-1})]^{n,\nu}
     =
-    k_1^{-1} [(\tilde C)^{-1}]^{\mu,m} y^m_{\alpha} y^n_{\alpha}  [(\tilde C)^{-1}]^{\mu,m}
+    k_1^{-1} [(\tilde C)^{-1}]^{\mu,m} y^m_{\alpha} y^n_{\alpha}  \typo{[(\tilde C)^{-1}]^{n,\nu}}
 \end{align*}
 or in matrix notation
 \begin{align*}
@@ -80,8 +85,9 @@ or in matrix notation
 \end{align*}
 It is also convenient to define
 \begin{align*}
-    A = k_0 X X^{\top}
+    A = \fix{\frac{k_0}{m}} X X^{\top}
 \end{align*}
+\fixnote{$1/m$ of $\mathbb X$; see the note at its definition.}
 
 \paragraph{Diagonalising Space}
 
@@ -93,9 +99,9 @@ The exponent in the path integral features a kernel of the form
 \end{align*}
 We can diagonalise this in space by choosing a basis for $K$; in this case, we will use the Fourier basis (tantamount to assuming translation invariance and periodic boundaries in the $i,j$ index). We denote by $F_{i,q}$ the discrete Fourier transform matrix with plane waves of frequency $q$ in the columns, such that $K = F \Lambda F^{*}$. We can therefore write the kernel as
 \begin{align*}
-    A^{\mu,\nu} \underbrace{ F_{i,q} \lambda_{q} F^*_{j,q} }_{K_{ij}} + \sigma_2 \delta^{\mu,\nu} \underbrace{ F_{i,q} F^*_{j,q} }_{\delta_{i,j}}
+    A^{\mu,\nu} \underbrace{ F_{i,q} \lambda_{q} F^*_{j,q} }_{K_{i,j}} + \typo{\sigma^2} \delta^{\mu,\nu} \underbrace{ F_{i,q} F^*_{j,q} }_{\delta_{i,j}}
     =
-    F_{i,q} ( \lambda_{q} A^{\mu,\nu} + \sigma^2 \delta^{\mu,\nu}) F_{j,q}
+    F_{i,q} ( \lambda_{q} A^{\mu,\nu} + \sigma^2 \delta^{\mu,\nu}) \typo{F^*_{j,q}}
 \end{align*}
 We therefore define the kernel that is block-diagonal in Fourier space
 \begin{align*}
@@ -109,7 +115,7 @@ where $\lambda_q$ are the eigenvalues of $K$. This allows us to complete the inv
 \end{align*}
 Similarly, we can diagonalise
 \begin{align*}
-    \hat \Phi^{\mu,\nu}_{\alpha,\beta} K^{(1), \text{post}}_{\alpha,\beta} K^{(1), \text{pre}}_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
+    \hat \Phi^{\mu,\nu}_{\alpha,\beta} K^{(1),\text{post}}_{\alpha,\beta} K^{(1),\text{pre}}_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
     =
     B^{\mu,\nu} K_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
     =
@@ -146,7 +152,7 @@ Without Jacobian penalty ($|F|=1$), we make the change of variables $\phi^{\mu}_
     \tilde \phi^{\nu *}_q 
   \Bigg \}
 \end{align*}
-We have here obtained the frequency-dependent data-interaction matrix $\Sigma_q$. For each $q$, this matrix can in principle have a different eigenbasis--these are the directions in data-space that define our functional cell types: the eigendirections of a low-frequency data interaction matrix describe response profiles common to all cells; the directions associated with an intermediate frequency describe functional variations between, say, areas, or equivalently describe course functional variation; and the directions associated with high frequency modes describe functional cells. So the task then is to diagonlise these $\Sigma_q$ and ask how these directions vary with $q$.
+We have here obtained the frequency-dependent data-interaction matrix $\Sigma_q$. For each $q$, this matrix can in principle have a different eigenbasis--these are the directions in data-space that define our functional cell types: the eigendirections of a low-frequency data interaction matrix describe response profiles common to all cells; the directions associated with an intermediate frequency describe functional variations between, say, areas, or equivalently describe \typo{coarse} functional variation; and the directions associated with high frequency modes describe functional cells. So the task then is to \typo{diagonalise} these $\Sigma_q$ and ask how these directions vary with $q$.
 
 \paragraph{Diagonalising Function}
 
@@ -156,43 +162,46 @@ The goal now is to diagonalise
     &&
     \text{with}
     &&
-    \tilde A_q = \lambda_q k_0 X X^{\top} + \sigma^2 I_P 
+    \tilde A_q = \lambda_q \fix{\frac{k_0}{m}} X X^{\top} + \sigma^2 I_P
     &&
     \text{and}
     &&
     \tilde B_q = \frac{\lambda_q}{k_1} \tilde C^{-1} Y Y^{\top} \tilde C^{-1} - g^2 I_P
 \end{align*}
+\fixnote{$1/m$ of $\mathbb X$; see the note at its definition.}
 Consider firstly the $C$ kernel lurking inside the $B$ term:
 \begin{align*}
     C^{\mu,\nu}
     =
-    \sum_{i,j} K_{i,j} \left \langle \phi^{\mu}_i \phi^{\nu}_j \right \rangle
-    = 
-    \sum_{i,j,q,q'} K_{i,j} F_{i,q} \left \langle \tilde \phi^{\mu}_q \tilde \phi^{\nu}_{q'} \right \rangle F_{j, q'}
+    \major{\frac1N} \sum_{i,j} K_{i,j} \left \langle \phi^{\mu}_i \phi^{\nu}_j \right \rangle
     =
-    \sum_{i,j,q,q'} K_{i,j} F_{i,q} \delta_{q,-q'} \Sigma^{\mu,\nu}_q F_{j, q'}
-    = 
-    \sum_q \lambda_q \Sigma^{\mu,\nu}_q
+    \major{\frac1N} \sum_{i,j,q,q'} K_{i,j} F_{i,q} \left \langle \tilde \phi^{\mu}_q \tilde \phi^{\nu}_{q'} \right \rangle F_{j, q'}
+    =
+    \major{\frac1N} \sum_{i,j,q,q'} K_{i,j} F_{i,q} \delta_{q,-q'} \Sigma^{\mu,\nu}_q F_{j, q'}
+    =
+    \major{\frac1N} \sum_q \lambda_q \Sigma^{\mu,\nu}_q
 \end{align*}
+\majornote{rg\_kernel\_normalisation.tex}
 where the $\sum_q \lambda_q$ appeared from
 \begin{align*}
-    \sum_{i,j,q'} K_{ij} F_{i,q} \delta_{q,-q'} F_{j,q'} 
+    \sum_{i,j,q'} K_{i,j} F_{i,q} \delta_{q,-q'} F_{j,q'} 
     =
     \sum_{i,j} K_{i,j} F_{i,q} F^*_{j,q}
     =
-    \sum_{i,j,q'} F_{i,q'} \lambda_{q'} F^*_{j,q'} F_{i,q} F^*_{j,q}
+    \sum_{i,j,q'} \fix{F_{j,q'} \lambda_{q'} F^*_{i,q'}} F_{i,q} F^*_{j,q}
     =
     \sum_{q'} \delta_{q,q'} \lambda_{q'}
     =
     \lambda_q
 \end{align*}
+\fixnote{With $K_{i,j} = \sum_{q'} F_{i,q'} \lambda_{q'} F^*_{j,q'}$ as written, $\sum_i F_{i,q'} F_{i,q} = \delta_{q',-q}$, so the sum gives $\lambda_{-q}$, not a $\delta_{q,q'}$. The stated result $\lambda_q$ is still right because $K$ is real and symmetric (so $\lambda_{-q} = \lambda_q$); using $K_{i,j} = K_{j,i}$ in the eigen-expansion makes the $\delta_{q,q'}$ step correct as written.}
 That $C$, and therefore $B$, is defined in terms of $\Sigma$, exposes the fundamental difficulty that if we are to diagonalise any one $\Sigma_q$, we have to make it consistent with those of all the $q$s.
 We therefore make the ansatz
 \begin{align*}
     \Sigma_q = U D_q U^{\top} \quad \forall q
 \end{align*}
 which is to say that all spatial frequencies express function using the same basis, $U$; the extent to which functional variation manifests on different spatial scales is captured by $D_q$.
-To make progress, we will also assume that this basis $U$ diagonalises the data kernels $XX^{\top}$ and $Y Y^{\top}$:
+To make progress, we will also assume that this basis $U$ diagonalises the data kernels $XX^{\top}$ and $Y Y^{\top}$\fix{, which is possible only if $[XX^{\top}, YY^{\top}] = 0$}:
 \begin{align*}
     X = U S_X V_X^{\top}
     \implies
@@ -202,24 +211,27 @@ To make progress, we will also assume that this basis $U$ diagonalises the data 
     \implies
     YY^{\top} = U S_Y^2 U^{\top}
 \end{align*}
+\fixnote{The ansatz was stated without the condition it needs. The condition holds, for example, for $X = Z W_X^{\top}$, $Y = Z W_Y^{\top}$ with orthonormal columns in $W_X, W_Y$, where $XX^{\top} = YY^{\top} = ZZ^{\top}$. Here $U \in \R^{P \times P}$ is orthogonal, $S_X \in \R^{P \times m}$ and $S_Y \in \R^{P \times n}$ are rectangular-diagonal (not square), and $S_X^2 \equiv S_X S_X^{\top}$, $S_Y^2 \equiv S_Y S_Y^{\top}$. Under the condition the ansatz is self-consistent: if every $\Sigma_q$ is diagonal in $U$, then so are $C$, $\tilde C$, $\tilde B_q$ and hence the updated $\Sigma_q$, so any fixed point reached by iterating from a $U$-diagonal start stays $U$-diagonal; the numerical check in rg\_kernel\_normalisation.tex confirms that the off-diagonal part of $U^{\top} \tilde C U$ is at machine precision. For generic data it is an approximation.}
 Now we can diagonalise $\tilde A$:
 \begin{align*}
     \tilde A_q 
     = 
-    U \Big( \lambda_q k_0 S_X^2 + \sigma^2 I_P  \Big) U^{\top}
+    U \Big( \lambda_q \fix{\frac{k_0}{m}} S_X^2 + \sigma^2 I_P  \Big) U^{\top}
     \equiv
     U D_{A,q} U^{\top}
 \end{align*}
+\fixnote{$1/m$ of $\mathbb X$; see the note at its definition.}
 Under the ansatz, we can also diagonalise $\tilde C$ and $\tilde B$:
 \begin{align*}
-    \tilde C 
-    = 
-    \lambda_q \Sigma_q + \frac{1}{k_1 \kappa} I_P 
-    = 
-    U \Big( \lambda_q D_q + \frac{1}{k_1 \kappa} I_P \Big) U^{\top} 
-    \equiv 
+    \tilde C
+    =
+    \major{\frac1N} \typo{\sum_q} \lambda_q \Sigma_q + \frac{1}{k_1 \kappa} I_P
+    =
+    U \Big( \major{\frac1N} \typo{\sum_q} \lambda_q D_q + \frac{1}{k_1 \kappa} I_P \Big) U^{\top}
+    \equiv
     U D_{C} U^{\top}
 \end{align*}
+\majornote{rg\_kernel\_normalisation.tex}
 and consequently
 \begin{align*}
     \tilde B_q 
@@ -237,59 +249,65 @@ Thus we have diagonalised the problem
     U \Big(D_{A,q}^{-1} - D_{B,q} \Big)^{-1} U^{\top} 
 \end{align*}
 \begin{align*}
-    D_{A,q} = \lambda_q k_0 S_X^2 + \sigma^2 I_P,
+    D_{A,q} = \lambda_q \fix{\frac{k_0}{m}} S_X^2 + \sigma^2 I_P,
     &&
     D_{B,q} = \frac{\lambda_q}{k_1} D_C^{-2} S_Y^2 - g^2 I_P,
     &&
-    D_C = \sum_q \lambda_q D_q + \frac{1}{k_1 \kappa} I_P
+    D_C = \major{\frac1N} \sum_q \lambda_q D_q + \frac{1}{k_1 \kappa} I_P
 \end{align*}
+\fixnote{$1/m$ of $\mathbb X$; see the note at its definition.}
+\majornote{rg\_kernel\_normalisation.tex}
 Let us denote by $d_q$ an element on the diagonal of $D_q$; by $a_q$ and $b_q$ elements on the diagonals of $D_{A,q}$ and $D_{B,q}$, respectively; and by $c$ an element on the diagonal of $D_C$. We define
 \begin{align*}
-    \hat s_X^2 = k_0 S_X^2
+    \hat s_X^2 = \fix{\frac{k_0 s_X^2}{m}}
     &&
     \hat s_Y^2 = \frac{s_Y^2}{k_1}
     &&
-    \hat \sigma^2_q = \frac{\hat \sigma^2}{\lambda_q}
+    \hat \sigma^2_q = \frac{\typo{\sigma^2}}{\lambda_q}
     &&
     \delta = \frac{1}{k_1 \kappa}
 \end{align*}
+\fixnote{$\hat s_X^2$ was defined through the matrix $S_X^2$ rather than its diagonal element $s_X^2$, and lacked the $1/m$ of $\mathbb X$; as used below it is the scalar $k_0 s_X^2/m$.}
 \begin{align*}
     d_q^{-1}
     =
     a_q^{-1} - b_q
     =
-    \frac{1}{\lambda_q \hat s_X^2 + \sigma^2} - \frac{\lambda_q \hat s_Y^2}{c} + g^2
+    \frac{1}{\lambda_q \hat s_X^2 + \sigma^2} - \major{\frac{\lambda_q \hat s_Y^2}{c^2}} + g^2
     =
-    \frac{\lambda_q}{h_q} - \frac{\lambda_q \hat S_Y^2}{c}
+    \frac{\lambda_q}{h_q} - \major{\frac{\lambda_q \typo{\hat s_Y^2}}{c^2}}
 \end{align*}
+\majornote{rg\_diagonal\_reduction.tex}
 where we have introduced
 \begin{align*}
     h_q 
     =
-    \frac{\lambda_q \hat s_X^2 + \sigma^2 }{\lambda_q^{-1} + g^2 (\lambda_q \hat s_X^2 + \hat \sigma^2_q)}
+    \frac{\lambda_q \hat s_X^2 + \sigma^2 }{\lambda_q^{-1} + g^2 (\major{\hat s_X^2} + \hat \sigma^2_q)}
 \end{align*}
+\majornote{rg\_diagonal\_reduction.tex}
 this gives
 \begin{align*}
-    d_q = \left(\frac{\lambda_q}{h_q} - \frac{\lambda_q \hat s_Y^2}{c} \right)^{-1}
+    d_q = \left(\frac{\lambda_q}{h_q} - \major{\frac{\lambda_q \hat s_Y^2}{c^2}} \right)^{-1}
     =
-    \frac{c h_q / \lambda_q}{c - \hat s_Y^2 h_q}
+    \major{\frac{c^2 h_q / \lambda_q}{c^2 - \hat s_Y^2 h_q}}
 \end{align*}
+\majornote{rg\_diagonal\_reduction.tex}
 and therefore
 \begin{align*}
     c 
     = 
-    \sum_q \lambda_q d_q  + \delta
+    \major{\frac1N} \sum_q \lambda_q d_q  + \delta
     =
-    c \sum_q \frac{h_q}{c - \hat s_Y^2 h_q} + \delta 
+    \major{\frac{c^2}{N} \sum_q \frac{h_q}{c^2 - \hat s_Y^2 h_q}} + \delta 
 \end{align*}
+\majornote{rg\_kernel\_normalisation.tex} \majornote{rg\_diagonal\_reduction.tex}
 which leaves the final implicit solution
 \begin{align}
-    1 - \frac{\delta}{c} = \sum_q \frac{h_q}{c - \hat s_Y^2 h_q}
+    1 - \frac{\delta}{c} = \major{\frac{c}{N} \sum_q \frac{h_q}{c^2 - \hat s_Y^2 h_q}}
     \label{eq:linear-soln}
 \end{align}
-
-\subsubsection{Interpreting \eqref{eq:linear-soln}}
-
-\paragraph{Latent Student-Teacher Task}
+\majornote{rg\_diagonal\_reduction.tex}
+\fix{The physical solution is the unique root with $c > \hat s_Y \sqrt{\max_q h_q}$, the branch on which every $d_q > 0$.}
+\fixnote{The branch was not stated. The right-hand side has a pole at $c^2 = \hat s_Y^2 \max_q h_q$, and beyond it the residual $1 - \delta/c - \frac{c}{N}\sum_q h_q/(c^2 - \hat s_Y^2 h_q)$ is strictly increasing, from $-\infty$ to $1$, so the root there is unique. Other roots, and the fixed point that naive damped iteration of the full matrix map reaches when started from the prior ($B = 0$), have a Gaussian precision that is not positive definite; solvers must start from large $C$ or enforce the constraint (see rg\_diagonal\_reduction.tex).}
 
 \end{document}
