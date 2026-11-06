@@ -221,7 +221,7 @@ uv run python notebooks/build_spatial.py --no-execute                     # rebu
 
 The spatial-prior notebook draws its spatially indexed kernels Phi^(l) (the data kernels A^(l) next to the latent
 kernel B = Z Z^T / k, the chosen trials, the pair grids) and its example outputs (a few test points drawn as panels, the R^2 and the scatter over all of them) from the
-held-out test set, the 3^k points of the latent lattice (one per sign pattern), not from the training samples.
+held-out test set, the 3^k points of the latent lattice (each latent at `latent_min`, the midpoint or `latent_max`), not from the training samples.
 
 **Spatial-experiment notebook.** The same figures for one setting of an already-run spatial experiment (for instance
 `python -m fct exp init ROOT --preset spatial_n_scan`, then `exp run`): give the experiment ROOT and the axis values

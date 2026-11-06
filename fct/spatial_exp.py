@@ -106,6 +106,6 @@ def load_exp_run(chosen: ExpSetting, member: int | None = None) -> tuple[TrainRu
     net, history = load_setting(chosen, member)
     run = TrainRun(chosen.directory, get_dataset(chosen.directory, cfg), net, history)
     test = get_latent_lattice_dataset(chosen.directory, cfg)
-    if len(test.x) != 3**cfg.data.n_latents:  # one point per sign pattern
+    if len(test.x) != 3**cfg.data.n_latents:  # one point of {lo, mid, hi}^k per row
         raise ValueError(f"the test set has {len(test.x)} points, not 3^{cfg.data.n_latents}")
     return run, test
