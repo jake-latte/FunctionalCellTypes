@@ -1,11 +1,11 @@
 """The linear theory of one hidden layer on a ring, as pure functions of a `Config` and a `Dataset`.
 
 The theory (latex/notes/linear_solution_limits.tex, eq:linear-soln; linear_without_ansatz.tex,
-eq:master) describes the stationary law of a linear one-hidden-layer network, N units on a ring
-with the spatial prior K (hidden kernel), input prior k0 I, readout prior k1 I, input noise sigma^2,
-rate penalty (r/2) sum phi^2 and ridge delta = P n / (beta k1). Per data mode with input and target
-weights sX2 = k0 s_X^2 / m, sY2 = s_Y^2 / k1 the hidden kernel eigenvalue c and the power
-spectrum d_q over spatial frequencies q solve
+eq:master) describes the stationary law exp(-beta L) of SGLD on a linear one-hidden-layer network:
+N units on a ring with the spatial prior of hidden spectrum lam_q, input prior k0 I, readout prior
+k1 I, input noise sigma^2, rate penalty (r/2) sum phi^2 in beta L, and ridge delta = P n / (beta k1).
+Per data mode with input and target weights sX2 = k0 s_X^2 / m, sY2 = s_Y^2 / k1 the hidden kernel
+eigenvalue c and the power spectrum d_q over spatial frequencies q solve
 
     alpha_q = lam_q sX2 + sig2,   pi_q = alpha_q / (1 + r alpha_q),   h_q = lam_q pi_q,
     1 - delta / c = (c / N) sum_q h_q / (c^2 - sY2 h_q)   on the branch c > sqrt(sY2 max_q h_q),
@@ -17,30 +17,37 @@ and without the shared-basis ansatz the P x P kernel C~ solves the master equati
     Sigma_q = [(lam_q A + sig2 I)^{-1} + r I - lam_q B]^{-1},   A = (k0/m) X X^T,
     B = C~^{-1} Y Y^T C~^{-1} / k1.
 
-sigma -> 0 is a first-class case: the input noise is a formal regulariser (the note's Section
-sec:sigma0), so `sig2` defaults to 0 everywhere and nothing divides by it. At sig2 = 0 a null mode
-(sX2 = sY2 = 0) and every frequency with lam_q = 0 get d_q = 0 exactly, and Sigma_q is evaluated in
-the form S (I + S T S)^{-1} S with S = (lam_q A + sig2 I)^{1/2}, T = r I - lam_q B, which is finite
-when lam_q A is singular.
+The per-mode solution needs an orthonormal teacher: X = Z W_X^T, Y = Z W_Y^T with W_X^T W_X =
+W_Y^T W_Y = I, so that X X^T = Y Y^T = Z Z^T and the data modes are the singular vectors of Z.
+For any other teacher the Gram matrices of X and Y are Z (W^T W) Z^T, not Z Z^T, and sX2, sY2 from
+the singular values of Z are wrong in scale (by about m / K for a Gaussian teacher), so
+`theory_parameters` and `predicted_spectra` refuse a dataset whose teacher maps are not
+orthonormal. `ansatz_free_kernel` uses the actual Gram matrices and holds for any teacher.
 
-The rate coefficient is called `r` in every signature: it is written g^2 in the notes until their
-rename, and `rate_coefficient` is the one place that derives it from a config.
+sigma -> 0 is a first-class case: the input noise is a formal regulariser (the limits note's
+Section sec:sigma0), so `sig2` defaults to 0 everywhere and nothing divides by it. At sig2 = 0 a
+null mode (sX2 = sY2 = 0) and every frequency with lam_q = 0 get d_q = 0 exactly, and Sigma_q is
+evaluated as S (I + S T S)^{-1} S with S = (lam_q A + sig2 I)^{1/2}, T = r I - lam_q B, which is
+finite when lam_q A is singular.
+
+lam_q is by default the spectrum of the prior the run trains with, N(0, M^{-1}) with `post.M` the
+hidden population's penalty matrix, whose eigenvalues are max(lam_q, min_rel_eig lam_0) of the
+kernel K. `exact_kernel=True` uses K's own spectrum instead (the limits note's numbers), which
+matches a run only under a parametrisation that trains with the unfloored prior.
 
 Dictionary (the plan's Section sec:dictionary): N = net.N; m = data.D_in; n = D_out of the task;
-P = data.P; K latents = data.n_latents, Z from dataset.factors z0..z{K-1}; the hidden kernel is
-`build_spaces`' hidden population K and lam_q its Fourier eigenvalues (DFT order, q = 0 the
-coarsest scale, q = N/2 the finest); k0, k1 are the input and output kernel amplitudes over
-train.weight_lambda (Cov(W) = K / weight_lambda for every layer); beta is train.beta under SGLD
-and 1 under Adam. The per-mode weights sx2, sy2 use the singular values of Z, which is exact for a
-teacher with orthonormal columns (X X^T = Y Y^T = Z Z^T) and the zeroth-order ansatz otherwise;
-`ansatz_free_kernel` uses the actual Gram matrices, so comparing the two measures the ansatz error.
+P = data.P; K latents = data.n_latents, Z from dataset.factors z0..z{K-1}; the hidden prior is
+`build_spaces`' hidden population on a d = 1 grid, lam_q its Fourier eigenvalues (DFT order, q = 0
+the coarsest scale, q = N/2 the finest); k0, k1 are the input and output kernel amplitudes over
+train.weight_lambda (Cov(W) = K / weight_lambda for every layer); beta = train.beta; r is
+`theory_rate(cfg)`.
 
 Everything is float64 numpy; torch tensors are accepted anywhere an array is. No file I/O.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import NamedTuple
 
 import numpy as np
@@ -48,16 +55,18 @@ import torch
 
 from fct.config import Config
 from fct.data import task_dims
-from fct.spatial import build_spaces
+from fct.spatial import LayerSpace, build_spaces
 from fct.tasks import Dataset
 
-ArrayLike = np.ndarray | torch.Tensor
+ArrayOrTensor = np.ndarray | torch.Tensor
 
 BISECT_STEPS = 200  # halvings of the root bracket: far below double precision at any scale
 # Eigenvalues of a kernel below -NEGATIVE_EIG_TOL * lam_max are an error; above, round-off set to 0.
 NEGATIVE_EIG_TOL = 1e-12
 CIRCULANT_TOL = 1e-10  # relative agreement required between the FFT of row 0 and eigvalsh
+SYMMETRY_TOL = 1e-12  # relative: max |K - K^T| allowed of a kernel
 SCALAR_KERNEL_TOL = 1e-12  # relative: an input/output kernel must be amplitude * I to this
+ORTHONORMAL_TOL = 1e-10  # max |W^T W - I| of an orthonormal teacher map
 # The ansatz-free solver: Newton on the upper triangle of C~ with a finite-difference Jacobian.
 NEWTON_STEPS = 100
 NEWTON_TOL = 1e-13  # on max |F(C~) - C~| relative to max(1, |C~|)
@@ -67,63 +76,110 @@ MAX_DOUBLINGS = 200  # of the starting c before the start is declared unreachabl
 SUBSPACE_TOL = 1e-12  # relative: eigenvalues of X X^T + Y Y^T below this span nothing
 
 
-def _array(x: ArrayLike) -> np.ndarray:
-    """A float64 numpy copy of an array or a (possibly CUDA) tensor."""
+def _array(x: ArrayOrTensor, name: str = "input") -> np.ndarray:
+    """A finite float64 numpy copy of an array or a (possibly CUDA) tensor; NaN or inf raise."""
     if isinstance(x, torch.Tensor):
         x = x.detach().cpu().numpy()
-    return np.asarray(x, dtype=np.float64)
+    a = np.asarray(x, dtype=np.float64)
+    if not np.isfinite(a).all():
+        raise ValueError(f"{name} must be finite; it has {int((~np.isfinite(a)).sum())} NaN/inf")
+    return a
+
+
+def _check_nonnegative(**values: float) -> None:
+    """Raise naming the first value that is not >= 0 (NaN included)."""
+    for name, value in values.items():
+        if not value >= 0:
+            raise ValueError(f"{name} must be >= 0, got {value}")
 
 
 # --------------------------------------------------------------------------- config
 
 
-def inverse_temperature(cfg: Config) -> float:
-    """beta of the stationary law exp(-beta L): train.beta under SGLD, 1 under Adam, which has no
-    temperature (the rule of `fct.train.prior_coefficient`)."""
-    return cfg.train.beta if cfg.train.optimizer == "sgld" else 1.0
+def _check_sgld(cfg: Config) -> None:
+    """The theory is the stationary law exp(-beta L) of SGLD; Adam finds a MAP point instead."""
+    if cfg.train.optimizer != "sgld":
+        raise ValueError(
+            f"the linear theory describes SGLD samples of exp(-beta L); train.optimizer is "
+            f"{cfg.train.optimizer!r}, which gives a MAP point, not samples"
+        )
 
 
-def rate_coefficient(cfg: Config) -> float:
-    """The rate-penalty coefficient r (written g^2 in the notes until the rename): the loss carries
-    rate_lambda * sum phi^2, so beta L carries beta rate_lambda sum phi^2 = (r/2) sum phi^2 and
-    r = 2 beta rate_lambda. This becomes `cfg.train.rate_lambda` when the rate-penalty code item
-    (docs/issues/rate-penalty-code.md) scales the penalty by 1 / (2 beta)."""
-    return 2.0 * inverse_temperature(cfg) * cfg.train.rate_lambda
+def theory_rate(cfg: Config) -> float:
+    """The rate-penalty coefficient r of the theory, (r/2) sum phi^2 in beta L. The loss carries
+    rate_lambda * sum phi^2 and the SGLD law is exp(-beta L), so r = 2 beta rate_lambda under
+    today's loss convention."""
+    _check_sgld(cfg)
+    return 2.0 * cfg.train.beta * cfg.train.rate_lambda
 
 
-def hidden_kernel(cfg: Config) -> np.ndarray:
-    """The hidden population's kernel K (N, N) of `build_spaces` for the configured network."""
+def _ring_spaces(cfg: Config) -> list[LayerSpace]:
+    """`build_spaces` of a one-hidden-layer network on a d = 1 grid ring; raises otherwise."""
+    if cfg.net.L != 1:
+        raise ValueError(f"the linear theory is for one hidden layer; net.L = {cfg.net.L}")
     if cfg.spatial is None:
         raise ValueError("the linear theory needs a spatial prior; cfg.spatial is None")
+    if cfg.spatial.d != 1:
+        raise ValueError(f"the linear theory is for a ring; spatial.d = {cfg.spatial.d}")
+    if cfg.spatial.hidden.embedding.kind != "grid":
+        raise ValueError(
+            "the linear theory needs evenly spaced hidden units; "
+            f"spatial.hidden.embedding.kind = {cfg.spatial.hidden.embedding.kind!r}, not 'grid'"
+        )
     m, n_out = task_dims(cfg.data)
-    return _array(build_spaces(cfg.spatial, m=m, N=cfg.net.N, L=cfg.net.L, n_out=n_out)[0].post.K)
+    return build_spaces(cfg.spatial, m=m, N=cfg.net.N, L=1, n_out=n_out)
 
 
-def ring_spectrum(K: ArrayLike) -> np.ndarray:
-    """lam_q, q = 0..N-1 in DFT order, of a circulant symmetric kernel: the FFT of its first row,
-    checked against `eigvalsh` (so a kernel that is not translation invariant fails loudly).
-    Round-off negatives are set to 0; a clearly negative eigenvalue is an error."""
-    K = _array(K)
-    if K.ndim != 2 or K.shape[0] != K.shape[1]:
-        raise ValueError(f"K must be square, got shape {K.shape}")
-    lam = np.fft.fft(K[0]).real
+def _circulant_spectrum(name: str, A: ArrayOrTensor) -> np.ndarray:
+    """The DFT-order spectrum of a symmetric circulant matrix: the FFT of its first row, checked
+    against `eigvalsh` so that a matrix that is not translation invariant fails loudly."""
+    A = _array(A, name)
+    if A.ndim != 2 or A.shape[0] != A.shape[1]:
+        raise ValueError(f"{name} must be square, got shape {A.shape}")
+    scale = max(np.abs(A).max(), np.finfo(float).tiny)
+    asymmetry = np.abs(A - A.T).max()
+    if asymmetry > SYMMETRY_TOL * scale:
+        raise ValueError(f"{name} is not symmetric: max |{name} - {name}^T| = {asymmetry:.3g}")
+    lam = np.fft.fft(A[0]).real
+    discrepancy = np.abs(np.sort(lam) - np.linalg.eigvalsh(A)).max()
+    if discrepancy > CIRCULANT_TOL * max(np.abs(lam).max(), np.finfo(float).tiny):
+        raise ValueError(
+            f"{name} is not circulant: the FFT of its first row misses its spectrum by "
+            f"{discrepancy:.3g}"
+        )
+    # A symmetric circulant has lam_q = lam_{-q}; averaging with the reflection removes the
+    # round-off difference, so every prediction is exactly even in q.
+    return 0.5 * (lam + np.roll(lam[::-1], 1))
+
+
+def ring_spectrum(K: ArrayOrTensor) -> np.ndarray:
+    """lam_q, q = 0..N-1 in DFT order, of a symmetric circulant kernel. Round-off negatives are
+    set to 0; a clearly negative eigenvalue is an error."""
+    lam = _circulant_spectrum("K", K)
     scale = max(np.abs(lam).max(), np.finfo(float).tiny)
-    eig = np.linalg.eigvalsh(K)
-    if np.abs(np.sort(lam) - eig).max() > CIRCULANT_TOL * scale:
-        raise ValueError("K is not circulant: the FFT of its first row is not its spectrum")
     if lam.min() < -NEGATIVE_EIG_TOL * scale:
         raise ValueError(f"K has a negative eigenvalue {lam.min():.3g}; it is not a covariance")
     # -1e-16 lam_0 at the Nyquist tail of a wrapped Gaussian is FFT round-off, not structure.
     return np.maximum(lam, 0.0)
 
 
+def penalty_spectrum(M: ArrayOrTensor) -> np.ndarray:
+    """lam_q in DFT order of the prior N(0, M^{-1}) of a symmetric circulant penalty matrix M:
+    the reciprocals of M's eigenvalues, which must be positive."""
+    mu = _circulant_spectrum("M", M)
+    if mu.min() <= 0:
+        raise ValueError(f"M has a non-positive eigenvalue {mu.min():.3g}; it is not a precision")
+    return 1.0 / mu
+
+
 def _scalar_kernel_amplitude(name: str, K: np.ndarray) -> float:
     """The a of K = a I; raises naming the population if K is not a multiple of the identity."""
     a = K[0, 0]
-    if np.abs(K - a * np.eye(K.shape[0])).max() > SCALAR_KERNEL_TOL * abs(a):
+    deviation = np.abs(K - a * np.eye(K.shape[0])).max()
+    if deviation > SCALAR_KERNEL_TOL * abs(a):
         raise ValueError(
             f"the theory needs the {name} kernel to be a multiple of the identity "
-            f"(spatial.{name}.kernel.length_scale = 0); it is not"
+            f"(spatial.{name}.kernel.length_scale = 0); it deviates by {deviation:.3g}"
         )
     return float(a)
 
@@ -132,18 +188,25 @@ def _scalar_kernel_amplitude(name: str, K: np.ndarray) -> float:
 
 
 def latent_matrix(factors: dict[str, torch.Tensor] | None, n_latents: int) -> np.ndarray:
-    """Z (P, K): the factors z0..z{K-1} of the linear teacher as columns."""
+    """Z (P, K): the factors z0..z{K-1} of the linear teacher as columns; any other z{i} factor
+    means the dataset was drawn with a different number of latents and is an error."""
     names = [f"z{i}" for i in range(n_latents)]
-    missing = [n for n in names if factors is None or n not in factors]
+    present = set(factors or {})
+    missing = [n for n in names if n not in present]
     if missing:
         raise ValueError(f"dataset.factors lacks the latent(s) {missing}")
-    return np.stack([_array(factors[n]) for n in names], axis=1)
+    extra = sorted(n for n in present - set(names) if n[0] == "z" and n[1:].isdigit())
+    if extra:
+        raise ValueError(
+            f"dataset.factors has latent(s) {extra} beyond data.n_latents = {n_latents}"
+        )
+    return np.stack([_array(factors[n], f"factor {n}") for n in names], axis=1)
 
 
-def latent_basis(Z: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
-    """Thin SVD of Z: (U_Z (P, K), s2 (K,)) with s2 descending, so column 0 is the mean direction
+def _latent_frame(Z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Thin SVD of Z: (U (P, K), s2 (K,)) with s2 descending, so column 0 is the mean direction
     of the uniform latent task; each column is signed so that its sum is non-negative."""
-    U, s, _ = np.linalg.svd(_array(Z), full_matrices=False)
+    U, s, _ = np.linalg.svd(Z, full_matrices=False)
     U = U * np.where(U.sum(axis=0) < 0, -1.0, 1.0)
     return U, s**2
 
@@ -154,22 +217,37 @@ def uniform_latent_s2(P: int, K: int, a: float) -> np.ndarray:
     return np.array([P * a**2 * (3 * K + 1) / 12] + [P * a**2 / 12] * (K - 1))
 
 
+def _check_orthonormal_teacher(dataset: Dataset) -> None:
+    """Raise unless dataset.extras holds W_X and W_Y with orthonormal columns."""
+    extras = dataset.extras or {}
+    missing = [k for k in ("W_X", "W_Y") if k not in extras]
+    if missing:
+        raise ValueError(f"dataset.extras lacks the teacher map(s) {missing}")
+    for key in ("W_X", "W_Y"):
+        W = _array(extras[key], key)
+        deviation = np.abs(W.T @ W - np.eye(W.shape[1])).max()
+        if deviation > ORTHONORMAL_TOL:
+            raise ValueError(
+                f'the per-mode theory needs an orthonormal teacher (data.teacher="orthonormal"): '
+                f"{key}^T {key} deviates by {deviation:.3g} from the identity; "
+                "ansatz_free_kernel holds for any teacher"
+            )
+
+
+# --------------------------------------------------------------------------- parameters
+
+
 @dataclass(frozen=True)
-class TheoryParameters:
-    """The dictionary applied to one config and dataset (see the module docstring)."""
+class NetworkParameters:
+    """The network side of the dictionary, which holds for any teacher (see the module docstring)."""
 
     N: int
     m: int
     n: int
     P: int
-    n_latents: int
     lam: np.ndarray  # (N,) DFT order
     lam0: float  # max_q lam_q
-    lam_bar: float  # mean_q lam_q = K_ii
-    U_Z: np.ndarray  # (P, K) left singular vectors of Z
-    s2: np.ndarray  # (K,) squared singular values of Z
-    sx2: np.ndarray  # (K,) k0 s2 / m
-    sy2: np.ndarray  # (K,) s2 / k1
+    lam_bar: float  # mean_q lam_q
     k0: float
     k1: float
     beta: float
@@ -178,51 +256,79 @@ class TheoryParameters:
     r: float
 
 
-def theory_parameters(cfg: Config, dataset: Dataset, sig2: float = 0.0) -> TheoryParameters:
-    """The theory's parameters from a config and its dataset; `sig2` is explicit because no config
-    field holds the input noise (sigma -> 0 is the default)."""
-    if cfg.net.L != 1:
-        raise ValueError(f"the linear theory is for one hidden layer; net.L = {cfg.net.L}")
+@dataclass(frozen=True)
+class TheoryParameters(NetworkParameters):
+    """`NetworkParameters` plus the per-mode weights of an orthonormal teacher."""
+
+    n_latents: int
+    U: np.ndarray  # (P, K) left singular vectors of Z
+    s2: np.ndarray  # (K,) squared singular values of Z
+    sx2: np.ndarray  # (K,) k0 s2 / m
+    sy2: np.ndarray  # (K,) s2 / k1
+
+
+def network_parameters(
+    cfg: Config, dataset: Dataset, sig2: float = 0.0, exact_kernel: bool = False
+) -> NetworkParameters:
+    """The network side of the dictionary for a config and its dataset, for any teacher; `sig2`
+    is explicit because no config field holds the input noise (sigma -> 0 is the default)."""
     if cfg.net.phi != "id":
         raise ValueError(f"the linear theory needs net.phi = 'id', got {cfg.net.phi!r}")
     if cfg.data.task != "linear_teacher":
         raise ValueError(f"the theory is for the linear_teacher task, got {cfg.data.task!r}")
-    if sig2 < 0:
-        raise ValueError(f"sig2 must be >= 0, got {sig2}")
-    if cfg.spatial is None:
-        raise ValueError("the linear theory needs a spatial prior; cfg.spatial is None")
-    m, n = task_dims(cfg.data)
-    spaces = build_spaces(cfg.spatial, m=m, N=cfg.net.N, L=1, n_out=n)
-    lam = ring_spectrum(spaces[0].post.K)
+    _check_sgld(cfg)
+    _check_nonnegative(sig2=sig2)
+    spaces = _ring_spaces(cfg)
+    hidden = spaces[0].post
+    lam = ring_spectrum(hidden.K) if exact_kernel else penalty_spectrum(hidden.M)
     # Cov(vec W) = (K_post (x) K_pre) / weight_lambda, so the scalar factors carry 1 / weight_lambda
     # and the hidden kernel enters as built.
     k0 = _scalar_kernel_amplitude("input", _array(spaces[0].pre.K)) / cfg.train.weight_lambda
     k1 = _scalar_kernel_amplitude("output", _array(spaces[1].post.K)) / cfg.train.weight_lambda
-    Z = latent_matrix(dataset.factors, cfg.data.n_latents)
-    P = Z.shape[0]
-    if dataset.x.shape != (P, m):
-        raise ValueError(f"dataset.x has shape {tuple(dataset.x.shape)}, expected {(P, m)}")
-    U_Z, s2 = latent_basis(Z)
-    beta = inverse_temperature(cfg)
-    return TheoryParameters(
+    m, n = task_dims(cfg.data)
+    P = cfg.data.P
+    for name, data, cols in (("x", dataset.x, m), ("y", dataset.y, n)):
+        if tuple(data.shape) != (P, cols):
+            raise ValueError(
+                f"dataset.{name} has shape {tuple(data.shape)}, expected {(P, cols)} (data.P = {P})"
+            )
+        _array(data, f"dataset.{name}")
+    beta = cfg.train.beta
+    return NetworkParameters(
         N=cfg.net.N,
         m=m,
         n=n,
         P=P,
-        n_latents=cfg.data.n_latents,
         lam=lam,
         lam0=float(lam.max()),
         lam_bar=float(lam.mean()),
-        U_Z=U_Z,
-        s2=s2,
-        sx2=k0 * s2 / m,
-        sy2=s2 / k1,
         k0=k0,
         k1=k1,
         beta=beta,
         delta=P * n / (beta * k1),
         sig2=float(sig2),
-        r=rate_coefficient(cfg),
+        r=theory_rate(cfg),
+    )
+
+
+def theory_parameters(
+    cfg: Config, dataset: Dataset, sig2: float = 0.0, exact_kernel: bool = False
+) -> TheoryParameters:
+    """`network_parameters` plus the per-mode weights from the SVD of Z; raises unless the
+    dataset's teacher is orthonormal, the case in which those weights are the theory."""
+    net = network_parameters(cfg, dataset, sig2, exact_kernel)
+    _check_orthonormal_teacher(dataset)
+    Z = latent_matrix(dataset.factors, cfg.data.n_latents)
+    if Z.shape[0] != net.P:
+        raise ValueError(f"the latents have {Z.shape[0]} rows, expected data.P = {net.P}")
+    U, s2 = _latent_frame(Z)
+    return TheoryParameters(
+        **{f.name: getattr(net, f.name) for f in fields(NetworkParameters)},
+        n_latents=cfg.data.n_latents,
+        U=U,
+        s2=s2,
+        sx2=net.k0 * s2 / net.m,
+        sy2=s2 / net.k1,
     )
 
 
@@ -234,151 +340,172 @@ def noise_floor(sig2: float, r: float) -> float:
     return sig2 / (1.0 + r * sig2)
 
 
-def prior_shrunk_variance(lam: ArrayLike, sx2: float, sig2: float, r: float) -> np.ndarray:
+def prior_shrunk_variance(lam: ArrayOrTensor, sx2: float, sig2: float, r: float) -> np.ndarray:
     """pi_q = alpha_q / (1 + r alpha_q), alpha_q = lam_q sx2 + sig2 (eq:factor)."""
-    alpha = _array(lam) * sx2 + sig2
+    alpha = _array(lam, "lam") * sx2 + sig2
     return alpha / (1.0 + r * alpha)
 
 
-def h_of(lam: ArrayLike, sx2: float, sig2: float, r: float) -> np.ndarray:
-    """h_q = lam_q pi_q (eq:hq)."""
-    return _array(lam) * prior_shrunk_variance(lam, sx2, sig2, r)
+def pi_lam(lam: ArrayOrTensor, sx2: float, sig2: float, r: float) -> np.ndarray:
+    """h_q = lam_q pi_q (eq:hq), the per-frequency weight of the self-consistency sum."""
+    return _array(lam, "lam") * prior_shrunk_variance(lam, sx2, sig2, r)
 
 
 def _residual(c: float, h: np.ndarray, sy2: float, delta: float) -> float:
     """1 - delta/c - (c/N) sum_q h_q / (c^2 - sY2 h_q): increasing in c above the pole."""
-    return 1.0 - delta / c - np.mean(c * h / (c**2 - sy2 * h))
+    with np.errstate(divide="ignore"):  # c^2 = sY2 h_q at the pole itself: -inf, still < 0
+        return 1.0 - delta / c - np.mean(c * h / (c**2 - sy2 * h))
 
 
-def physical_root(h: ArrayLike, sy2: float, delta: float) -> float:
+def physical_root(h: ArrayOrTensor, sy2: float, delta: float) -> float:
     """The root c of eq:linear-soln on the physical branch c > sqrt(sY2 max_q h_q), by bisection.
 
-    The residual rises from -inf at the pole to 1, so the root is unique. Brackets: just above the
-    pole the residual is very negative, and so is it at c = delta / 2 (the term -delta / c alone
-    gives -1), which serves when the pole lies below that (no target: pole = 0, where c -> 0 would
-    underflow). For c^2 >= 2 sY2 max h every denominator is at least c^2 / 2, so the sum is at most
-    2 mean(h) / c and the residual is positive once c > delta + 2 mean(h).
+    The residual rises from -inf at the pole to 1, so the root is unique. Lower bracket: the next
+    float above the pole, where the residual is -inf or very negative however close the root
+    lies, or c = delta / 2 when the pole is below that (the term -delta / c alone gives -1; no
+    target puts the pole at 0, where c -> 0 would underflow). Upper bracket: for c^2 >= 2 sY2 max h
+    every denominator is at least c^2 / 2, so the sum is at most 2 mean(h) / c and the residual is
+    at least 1 - (delta + 2 mean h) / c, which is 1/2 at twice the larger of the two bounds.
     """
-    h = _array(h)
-    if delta <= 0:
+    h = _array(h, "h")
+    _check_nonnegative(sy2=sy2)
+    if not delta > 0:
         raise ValueError(f"delta must be > 0, got {delta}")
     pole = np.sqrt(sy2 * h.max())
-    lo = pole * (1 + 1e-13) if pole >= delta / 2 else delta / 2
-    hi = max(np.sqrt(2 * sy2 * h.max()), delta + 2 * h.mean()) * (1 + 1e-13) + 1.0
-    if not (_residual(lo, h, sy2, delta) < 0 < _residual(hi, h, sy2, delta)):
-        raise ValueError(f"root not bracketed on [{lo:.3g}, {hi:.3g}]")
+    lo = np.nextafter(pole, np.inf) if pole >= delta / 2 else delta / 2
+    hi = 2.0 * max(np.sqrt(2 * sy2 * h.max()), delta + 2 * h.mean())
+    r_lo, r_hi = _residual(lo, h, sy2, delta), _residual(hi, h, sy2, delta)
+    if not (r_lo < 0 < r_hi):
+        raise ValueError(
+            f"root not bracketed: residual {r_lo:.3g} at c = {lo:.6g}, {r_hi:.3g} at c = {hi:.6g}"
+        )
     for _ in range(BISECT_STEPS):
         mid = 0.5 * (lo + hi)
         lo, hi = (mid, hi) if _residual(mid, h, sy2, delta) < 0 else (lo, mid)
     return 0.5 * (lo + hi)
 
 
-def per_mode_spectrum(
-    lam: ArrayLike, sx2: float, sy2: float, sig2: float, r: float, delta: float
-) -> tuple[float, np.ndarray]:
-    """(c, d_q) of one data mode: the self-consistent kernel eigenvalue and the power spectrum
-    over q (eq:linear-soln), with `r` the rate-penalty coefficient (g^2 in the notes).
+class Mode(NamedTuple):
+    c: float  # the kernel eigenvalue
+    d: np.ndarray  # (N,) the power spectrum
+    tau: float  # the target strength
+
+
+def solve_mode(
+    lam: ArrayOrTensor, sx2: float, sy2: float, sig2: float, r: float, delta: float
+) -> Mode:
+    """(c, d_q, tau) of one data mode (eq:linear-soln, eq:knobs), with `r` the rate coefficient.
 
     d_q = pi_q * c^2 / (c^2 - sY2 h_q) rather than h_q / lam_q: the quotient is 0/0 where
     lam_q = 0, while pi_q is 0 there at sig2 = 0 and sigma_0^2 otherwise. A null mode
-    (sx2 = sy2 = 0) at sig2 = 0 has h = 0, so c = delta and d = 0 exactly.
+    (sx2 = sy2 = 0) at sig2 = 0 has h = 0, so c = delta and d = 0 exactly. tau = sY2 max h / c^2
+    in [0, 1) says how far the mode is from the pole.
     """
-    lam = _array(lam)
-    for name, value in {"sx2": sx2, "sy2": sy2, "sig2": sig2, "r": r}.items():
-        if value < 0:
-            raise ValueError(f"{name} must be >= 0, got {value}")
-    if (lam < 0).any():
-        raise ValueError("lam has negative entries; pass it through ring_spectrum")
-    h = h_of(lam, sx2, sig2, r)
+    lam = _array(lam, "lam")
+    _check_nonnegative(sx2=sx2, sy2=sy2, sig2=sig2, r=r)
+    if lam.min() < 0:
+        raise ValueError(f"lam has a negative entry {lam.min():.3g}; pass it through ring_spectrum")
+    pi = prior_shrunk_variance(lam, sx2, sig2, r)
+    h = lam * pi
     c = physical_root(h, sy2, delta)
-    return c, prior_shrunk_variance(lam, sx2, sig2, r) * c**2 / (c**2 - sy2 * h)
+    return Mode(c, pi * c**2 / (c**2 - sy2 * h), sy2 * h.max() / c**2)
+
+
+def per_mode_spectrum(
+    lam: ArrayOrTensor, sx2: float, sy2: float, sig2: float, r: float, delta: float
+) -> tuple[float, np.ndarray]:
+    """(c, d_q) of one data mode: `solve_mode` without the target strength."""
+    c, d, _ = solve_mode(lam, sx2, sy2, sig2, r, delta)
+    return c, d
 
 
 def target_strength(
-    lam: ArrayLike, sx2: float, sy2: float, sig2: float, r: float, c: float
+    lam: ArrayOrTensor, sx2: float, sy2: float, sig2: float, r: float, c: float
 ) -> float:
     """tau = sY2 max_q h_q / c^2 in [0, 1): how far the mode is from the pole (eq:knobs)."""
-    return sy2 * h_of(lam, sx2, sig2, r).max() / c**2
+    return sy2 * pi_lam(lam, sx2, sig2, r).max() / c**2
 
 
 @dataclass(frozen=True)
 class Prediction:
     """The per-mode theory of every latent mode: `d[k]` is the power spectrum of the tuning map
-    on `U_Z[:, k]` (DFT order), `c[k]` its kernel eigenvalue, `tau[k]` its target strength; the
-    P - K null directions are flat at `null_floor` = sigma_0^2."""
+    on `U[:, k]` (DFT order), `c[k]` its kernel eigenvalue, `tau[k]` its target strength; the
+    P - K null directions are flat at `null_floor` = sigma_0^2. `lam`, `U` and `s2` are read
+    from `params`."""
 
-    lam: np.ndarray  # (N,)
-    U_Z: np.ndarray  # (P, K)
-    s2: np.ndarray  # (K,)
     d: np.ndarray  # (K, N)
     null_floor: float
     c: np.ndarray  # (K,)
     tau: np.ndarray  # (K,)
     params: TheoryParameters
 
+    @property
+    def lam(self) -> np.ndarray:
+        return self.params.lam
 
-def predicted_spectra(cfg: Config, dataset: Dataset, sig2: float = 0.0) -> Prediction:
-    """`per_mode_spectrum` of every latent mode of the config's task (the theory's prediction for
-    the measured tuning-map spectra); sigma^2 = 0 unless `sig2` is given."""
-    tp = theory_parameters(cfg, dataset, sig2)
-    modes = [
-        per_mode_spectrum(tp.lam, sx2, sy2, tp.sig2, tp.r, tp.delta)
-        for sx2, sy2 in zip(tp.sx2, tp.sy2)
-    ]
-    c = np.array([m[0] for m in modes])
-    tau = np.array(
-        [
-            target_strength(tp.lam, sx2, sy2, tp.sig2, tp.r, ck)
-            for sx2, sy2, ck in zip(tp.sx2, tp.sy2, c)
-        ]
-    )
+    @property
+    def U(self) -> np.ndarray:
+        return self.params.U
+
+    @property
+    def s2(self) -> np.ndarray:
+        return self.params.s2
+
+
+def predicted_spectra(
+    cfg: Config, dataset: Dataset, sig2: float = 0.0, exact_kernel: bool = False
+) -> Prediction:
+    """`solve_mode` of every latent mode of the config's task (the theory's prediction for the
+    measured tuning-map spectra); sigma^2 = 0 unless `sig2` is given. Needs an orthonormal
+    teacher (`theory_parameters`)."""
+    tp = theory_parameters(cfg, dataset, sig2, exact_kernel)
+    modes = [solve_mode(tp.lam, a, b, tp.sig2, tp.r, tp.delta) for a, b in zip(tp.sx2, tp.sy2)]
     return Prediction(
-        lam=tp.lam,
-        U_Z=tp.U_Z,
-        s2=tp.s2,
-        d=np.stack([m[1] for m in modes]),
+        d=np.stack([mode.d for mode in modes]),
         null_floor=noise_floor(tp.sig2, tp.r),
-        c=c,
-        tau=tau,
+        c=np.array([mode.c for mode in modes]),
+        tau=np.array([mode.tau for mode in modes]),
         params=tp,
     )
 
 
 # --------------------------------------------------------------------------- spectrum summaries
+# `_autocorrelation` and `_half_power_q` are the theory-side copies of the measurement module's
+# functions of the same name (fct/spectrum.py); they go once both modules share a base.
 
 
-def autocorrelation(d: ArrayLike) -> np.ndarray:
+def _autocorrelation(d: np.ndarray) -> np.ndarray:
     """R(r) = (1/N) sum_q d_q e^{2 pi i q r / N}, r = 0..N-1, of a power spectrum in DFT order."""
-    return np.fft.ifft(_array(d)).real
+    return np.fft.ifft(d).real
 
 
-def half_power_q(d: ArrayLike) -> float:
+def _half_power_q(d: np.ndarray) -> float:
     """Largest |q| at which d_q - d_{N/2} is at least half of d_0 - d_{N/2} (d in DFT order): the
-    Nyquist value is the measurable floor, as in the limits note's definition of q_{1/2}."""
-    d = _array(d)
+    Nyquist value is the measurable floor, as in the limits note's definition of q_{1/2}. Well
+    defined for a predicted (mean) spectrum, which is even and decreasing on the ring."""
     q = np.abs(np.fft.fftfreq(d.size) * d.size)
     floor = d[d.size // 2]
     return float(q[(d - floor) >= 0.5 * (d[0] - floor)].max())
 
 
-class SpectrumSummary(NamedTuple):
+class PredictedSummary(NamedTuple):
     q_half: float
     share0: float  # d_0 / sum_q d_q
     lag1: float  # R(1) / R(0)
 
 
-def spectrum_summary(d: ArrayLike) -> SpectrumSummary:
-    """(q_half, share0, lag1) of one power spectrum in DFT order; an identically zero spectrum
-    (a null mode at sigma = 0) has no summary and is an error."""
-    d = _array(d)
+def predicted_summary(d: ArrayOrTensor) -> PredictedSummary:
+    """(q_half, share0, lag1) of one predicted power spectrum in DFT order; an identically zero
+    spectrum (a null mode at sigma = 0) has no summary and is an error."""
+    d = _array(d, "d")
     if d.ndim != 1 or d.size < 2:
         raise ValueError(f"d must be a 1-d spectrum with at least 2 entries, got shape {d.shape}")
-    if (d < 0).any():
-        raise ValueError("a power spectrum cannot be negative")
+    if d.min() < 0:
+        raise ValueError(f"a power spectrum cannot be negative; min d = {d.min():.3g}")
     if not (d > 0).any():
         raise ValueError("the spectrum is identically zero: no shape to summarise")
-    R = autocorrelation(d)
-    return SpectrumSummary(half_power_q(d), float(d[0] / d.sum()), float(R[1] / R[0]))
+    R = _autocorrelation(d)
+    return PredictedSummary(_half_power_q(d), float(d[0] / d.sum()), float(R[1] / R[0]))
 
 
 # --------------------------------------------------------------------------- the ansatz-free kernel
@@ -388,12 +515,20 @@ class NotPhysicalError(ValueError):
     """Some per-frequency precision is not positive definite: no Gaussian exists for this C~."""
 
 
-def _symmetric_sqrt(A: np.ndarray) -> np.ndarray:
-    """The PSD square root of a symmetric PSD matrix; round-off negatives are clamped to 0."""
+def _psd_eigh(A: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Eigenvalues (round-off negatives clamped to 0) and eigenvectors of a symmetric PSD matrix."""
     w, V = np.linalg.eigh(A)
     if w.min() < -NEGATIVE_EIG_TOL * max(abs(w).max(), np.finfo(float).tiny):
         raise ValueError(f"matrix is not positive semi-definite (min eigenvalue {w.min():.3g})")
-    return (V * np.sqrt(np.maximum(w, 0.0))) @ V.T
+    return np.maximum(w, 0.0), V
+
+
+def _per_q_roots(A: np.ndarray, lam: np.ndarray, sig2: float) -> np.ndarray:
+    """S_q = (lam_q A + sig2 I)^{1/2}, shape (N, L, L), from one eigendecomposition of A:
+    every lam_q A + sig2 I shares A's eigenvectors, with eigenvalues lam_q w + sig2."""
+    w, V = _psd_eigh(A)
+    roots = np.sqrt(lam[:, None] * w[None, :] + sig2)  # (N, L)
+    return np.einsum("ik,qk,jk->qij", V, roots, V)
 
 
 def _data_subspace(XX: np.ndarray, YY: np.ndarray) -> np.ndarray:
@@ -437,6 +572,7 @@ def _kernel_map(
 
 
 def _sym_from_upper(v: np.ndarray, n: int) -> np.ndarray:
+    """The symmetric n x n matrix whose upper triangle (row-major, `np.triu_indices`) is v."""
     C = np.zeros((n, n))
     C[np.triu_indices(n)] = v
     return C + np.triu(C, 1).T
@@ -445,6 +581,7 @@ def _sym_from_upper(v: np.ndarray, n: int) -> np.ndarray:
 def _physical_start(residual, n: int, c: float) -> np.ndarray:
     """c I on the admissible set: B shrinks like c^{-2}, so doubling c reaches it."""
     iu = np.triu_indices(n)
+    c_start = c
     for _ in range(MAX_DOUBLINGS):
         v = (c * np.eye(n))[iu]
         try:
@@ -452,7 +589,9 @@ def _physical_start(residual, n: int, c: float) -> np.ndarray:
             return v
         except NotPhysicalError:
             c *= 2
-    raise NotPhysicalError("no admissible starting point found by doubling c")
+    raise NotPhysicalError(
+        f"no admissible starting point c I found by doubling c from {c_start:.3g} to {c:.3g}"
+    )
 
 
 def _newton(residual, v: np.ndarray) -> np.ndarray:
@@ -476,21 +615,25 @@ def _newton(residual, v: np.ndarray) -> np.ndarray:
             step /= 2
         else:
             raise RuntimeError(
-                "the Newton line search found no admissible step that reduces the residual"
+                f"the Newton line search found no admissible step that reduces the residual "
+                f"{size:.3g} at max |C~| = {np.abs(v).max():.3g}"
             )
         v = v + step
     raise RuntimeError(f"Newton did not converge in {NEWTON_STEPS} steps: residual {size:.3g}")
 
 
-def ansatz_free_kernel(cfg: Config, dataset: Dataset, sig2: float = 0.0) -> np.ndarray:
+def ansatz_free_kernel(
+    cfg: Config, dataset: Dataset, sig2: float = 0.0, exact_kernel: bool = False
+) -> np.ndarray:
     """C~ (P, P), the fixed point of the master equation eq:master for the config's network and
-    the dataset's actual Gram matrices (no shared-basis ansatz), at input noise `sig2`.
+    the dataset's actual Gram matrices (no shared-basis ansatz), at input noise `sig2`. Holds for
+    any teacher, orthonormal or not.
 
     Solved on the subspace spanned by the data (K-dimensional for the latent task) and set to the
     prior value c_0 = delta + sigma_0^2 lam_bar on its complement, which is exact.
     """
-    tp = theory_parameters(cfg, dataset, sig2)
-    X, Y = _array(dataset.x), _array(dataset.y)
+    tp = network_parameters(cfg, dataset, sig2, exact_kernel)
+    X, Y = _array(dataset.x, "dataset.x"), _array(dataset.y, "dataset.y")
     XX, YY = X @ X.T, Y @ Y.T
     Q = _data_subspace(XX, YY)
     c0 = tp.delta + noise_floor(tp.sig2, tp.r) * tp.lam_bar
@@ -499,7 +642,7 @@ def ansatz_free_kernel(cfg: Config, dataset: Dataset, sig2: float = 0.0) -> np.n
         return complement
     A = tp.k0 / tp.m * (Q.T @ XX @ Q)
     YY_q = Q.T @ YY @ Q
-    S = np.stack([_symmetric_sqrt(lam_q * A + tp.sig2 * np.eye(A.shape[0])) for lam_q in tp.lam])
+    S = _per_q_roots(A, tp.lam, tp.sig2)
     n = A.shape[0]
     iu = np.triu_indices(n)
 
