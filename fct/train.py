@@ -166,22 +166,25 @@ def _check_sgld_step_resolves_the_prior(
     own (`_check_sgld_step_resolves_the_loss`). Adam rescales its steps and needs no such check.
     """
     if factors is None:
-        stiffest, prior = 1.0, "whitened spatial prior"
-    else:
-        stiffest = max(
-            torch.linalg.eigvalsh(rows)[-1].item() * torch.linalg.eigvalsh(cols)[-1].item()
-            for rows, cols in factors.values()
-        )
-        prior = "spatial prior"
+        step = tc.lr * prior_coefficient(tc)
+        if step >= 1:
+            raise ValueError(
+                f"SGLD with lr={tc.lr:g} diverges on the whitened spatial prior alone: lr * "
+                f"weight_lambda / (2 beta) = {step:.3g} must be < 1; lower lr or "
+                "weight_lambda, or raise beta"
+            )
+        return
+    stiffest = max(
+        torch.linalg.eigvalsh(rows)[-1].item() * torch.linalg.eigvalsh(cols)[-1].item()
+        for rows, cols in factors.values()
+    )
     step = tc.lr * prior_coefficient(tc) * stiffest
     if step >= 1:
-        remedy = "lower lr or weight_lambda, or raise beta"
-        if factors is not None:
-            remedy = f"{remedy}, or widen the floor min_rel_eig"
         raise ValueError(
-            f"SGLD with lr={tc.lr:g} diverges on the {prior} alone: lr * weight_lambda / "
+            f"SGLD with lr={tc.lr:g} diverges on the spatial prior alone: lr * weight_lambda / "
             f"(2 beta) * lambda_max(M) = {step:.3g} must be < 1 (lambda_max(M) = "
-            f"{stiffest:.3g}); {remedy}"
+            f"{stiffest:.3g}); lower lr or weight_lambda, raise beta, or widen the floor "
+            "min_rel_eig"
         )
 
 
@@ -203,6 +206,8 @@ def largest_hessian_eigenvalue(
 
     def normalised(vs: list[Tensor]) -> list[Tensor]:
         norm = math.sqrt(sum(x.square().sum().item() for x in vs))
+        if not norm > 0:  # also catches NaN: a non-finite loss would otherwise hide here
+            raise ValueError(f"power iteration found a Hessian-vector product of norm {norm}")
         return [x / norm for x in vs]
 
     v, lam = normalised(v), 0.0
@@ -215,18 +220,21 @@ def largest_hessian_eigenvalue(
 
 
 def _check_sgld_step_resolves_the_loss(
-    net: Net, dataset: Dataset, tc: TrainConfig, weight_penalty: WeightPenalty, log
+    net: Net,
+    dataset: Dataset,
+    tc: TrainConfig,
+    weight_penalty: WeightPenalty,
+    log: Callable[[str], None],
 ) -> None:
     """Raise if an SGLD step of size lr is unstable on the full loss at the current net: the
     data term adds, along the directions the data spans, a curvature the prior-only bound
     does not see. lr * lambda_max(Hessian) >= 1, half the divergence limit, is refused; the
     value is logged otherwise (the step-size rule of the experiment plan aims at 0.1)."""
+    coefficient = prior_coefficient(tc)
 
     def loss() -> Tensor:
-        coefficient = prior_coefficient(tc)
-        return compute_loss(net, dataset.x, dataset.y, coefficient, tc.rate_lambda, weight_penalty)[
-            0
-        ]
+        x, y = dataset.x, dataset.y
+        return compute_loss(net, x, y, coefficient, tc.rate_lambda, weight_penalty)[0]
 
     lam = largest_hessian_eigenvalue(loss, net.parameters())
     step = tc.lr * lam
