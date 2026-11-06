@@ -1212,51 +1212,6 @@ records the factor applied (1.0 when unset). `lambda_max` absorbs the overall sc
 experiment axis works as any spatial axis (the experiment's `weight_lambda` must be 1). While unset, the field is left out of the section hash,
 so every hash from before it existed is unchanged.
 
-## spectrum.py (tuning-map spectra on the ring)
-
-Pure functions on torch tensors (any floating dtype and device; float64 in, float64 out): hidden activity
-`h (P, N)` of N neurons over P patterns, neuron i at ring site i (the grid embedding of `spatial.py`), becomes
-tuning maps, their unitary-DFT power, the null-direction power and summary statistics. No file I/O, no `Config`.
-Every function raises `ValueError` on a bad shape, a non-float or non-finite input, `K >= P`, or a basis that is
-not orthonormal (`TypeError` for a non-tensor). Spectra are in FFT order, `q = 0, 1, .., N/2, .., -1`.
-
-Every estimator is per network: one trained network, or one ensemble member, gives one sample of each spectrum
-and summary, and spread is taken across members (`member_mean_sem`). `average_records` / `record_sem` pool the
-records of one chain and are a diagnostic of burn-in and mixing, not an estimator: one SGLD chain is not trusted
-to visit independent networks.
-
-```python
-latent_basis(factors: Mapping[str, Tensor]) -> LatentBasis(U (P, K), s2 (K,), Z (P, K))
-    # Z = [z0 .. z{K-1}] stacked by index (z10 after z9; any other key raises); thin SVD Z = U S V^T, s descending,
-    # columns flipped so 1^T u_k >= 0; s2 = S^2 (measured, finite-P); u_1 the mean direction for latents on [0, a]
-tuning_maps(h (..., P, N), U (P, K)) -> t (..., K, N)          # t = U^T h, t_{k,i} = u_k^T h_i
-power_spectrum(t (..., K, N)) -> d (..., K, N)                 # |fft(t, dim=-1) / sqrt(N)|^2, no mean subtracted
-null_power(h (..., P, N), U (P, K)) -> (..., N)                # (sum_p |h~_p(q)|^2 - sum_k |t~_k(q)|^2) / (P - K) (Parseval over [U, U_perp])
-mode_spectra(h (..., P, N), U (P, K)) -> (..., K + 1, N)       # rows 0..K-1 power_spectrum(tuning_maps), row K null_power: one monitor record
-fold_q(d (..., N)) -> (..., N/2 + 1)                           # (d_q + d_{-q}) / 2 at |q| = 0..N/2; N even
-autocorrelation(d (..., N)) -> R (..., N)                      # R(r) = (1/N) sum_q d_q e^{2 pi i q r / N} = ifft(d).real
-half_power_q(d (N,)) -> int                                    # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even
-spectrum_summary(d (N,)) -> Summary(q_half, share0, lag1, d0, d_nyq, R (N,))   # share0 = d_0 / sum_q d_q, lag1 = R(1)/R(0)
-gaussian_width(R (N,), ell) -> float                           # sqrt(-ell^2 / (2 ln(R(ell)/R(0)))); ell an integer lag in 1..N-1
-contrast_angle_statistic(t2 (N,), t3 (N,)) -> float            # <cos 4 theta_i>, theta_i = atan2(t3_i, t2_i) on (-pi, pi]
-theta_histogram(t2 (N,), t3 (N,)) -> (36,) int64               # counts on the fixed bins (-pi + j w, -pi + (j+1) w], w = 2 pi / 36
-average_records(records (R, ...), burn_in) -> (...)            # mean over records[burn_in:] of one chain (diagnostic)
-integrated_autocorr_time(records (R, ...), burn_in) -> tau (...)   # 1 + 2 sum_{k=1}^{W} rho_k, Sokal window: first W >= 5 tau(W)
-record_sem(records (R, ...), burn_in) -> (...)                 # sqrt(C(0) tau / n): the chain mean's error with n_eff = n / tau
-member_mean_sem(values (B, ...)) -> (mean (...), sem (...))   # across independent members: std (ddof 1) / sqrt(B), B >= 2
-```
-
-The angle statistic needs the orthonormal frame `(u_2, u_3)` = rows 1, 2 of `tuning_maps`: tuning to an oblique
-pair such as the raw `(z_2, z_3)` squeezes an isotropic cloud along the bisector and biases it negative (for
-unit-variance tunings with correlation rho, `<cos 4 theta> = -r^2`, `r = (sqrt(1+rho) - sqrt(1-rho)) /
-(sqrt(1+rho) + sqrt(1-rho))`). `atan2` can return `-pi`; it is mapped to `pi`, so `theta_histogram` bins are
-right-closed on `(-pi, pi]` and histograms of records and members sum.
-
-`record_sem`: `rho_k = C(k) / C(0)` from the biased autocovariance of the records after burn-in (FFT, zero-padded
-to 2n). The window W is the first lag with `W >= 5 tau(W)` (Sokal 1997), searched up to n/4; if it is not reached
-there the chain is too short for its correlation time and the function raises, as it does for fewer than 20
-records (W >= 5 even for independent records). Constant records give `tau = 1` and a standard error of 0.
-
 ## Spatial weight prior in training
 
 `Config.spatial = SpatialConfig(...)` replaces the weight L2 norm of the training loss by the spatial prior; `None` (the
@@ -1286,6 +1241,68 @@ default, and what every `config.json` written before the field existed loads as)
   is not checked.
 - Not covered: the initial weights are still iid `N(0, 1)` rather than drawn from the prior, so the prior term starts
   large for a wide kernel; the mean-field solver still assumes the L2 prior.
+
+## spectrum.py (tuning-map spectra on the ring)
+
+Pure functions on torch tensors (any floating dtype and device; the dtype is preserved): hidden activity
+`h (P, N)` of N neurons over P patterns, neuron i at ring site i (the grid embedding of `spatial.py`), becomes
+tuning maps, their unitary-DFT power, the null-direction power and summary statistics. No file I/O, no `Config`.
+Every function raises `ValueError` on a bad shape, a non-float or non-finite input, `K >= P`, or a basis that is
+not orthonormal (`TypeError` for a non-tensor). Spectra are in FFT order, `q = 0, 1, .., N/2, .., -1`. Every
+function except `latent_basis` takes leading batch dims `...` (records, members); a summary of one map `(N,)` is a
+Python number, of `(..., N)` a tensor `(...)`. Index convention: `u_k` is column k-1 of `U` and row k-1 of `t`, so
+the angle uses rows 1 and 2 of `tuning_maps`.
+
+Every estimator is per network: one trained network, or one ensemble member, gives one sample of each spectrum
+and summary, and spread is taken across members (`member_mean_sem`). `average_records` / `record_sem` pool the
+records of one chain and are a diagnostic of burn-in and mixing, not an estimator: one SGLD chain is not trusted
+to visit independent networks.
+
+```python
+latent_basis(factors: Mapping[str, Tensor]) -> LatentBasis(U (P, K), s2 (K,), Z (P, K))
+    # Z = [z0 .. z{K-1}] stacked by index (z10 after z9; other keys and colliding names such as z1/z01 raise); thin SVD
+    # Z = U S V^T, s descending, columns flipped so 1^T u_k >= 0; s2 = S^2 (measured, finite-P). Precondition: u_1 is the
+    # mean direction, cos(u_1, 1) >= 1/2 * sqrt(3K/(3K+1)) (the [0, a] value); symmetric latents raise (see below)
+tuning_maps(h (..., P, N), U (P, K)) -> t (..., K, N)          # t = U^T h, t_{k,i} = u_k^T h_i
+power_spectrum(t (..., N)) -> d (..., N)                       # |fft(t, dim=-1) / sqrt(N)|^2, no mean subtracted
+null_power(h (..., P, N), U (P, K)) -> (..., N)                # sum_p |fft(r_p)/sqrt(N)|^2 / (P - K), r = h - U U^T h (U_perp never formed)
+mode_spectra(h (..., P, N), U (P, K)) -> (..., K + 1, N)       # rows 0..K-1 power_spectrum(tuning_maps), row K null_power: one monitor record
+fold_q(d (..., N)) -> (..., N/2 + 1)                           # (d_q + d_{-q}) / 2 at |q| = 0..N/2; N even
+autocorrelation(d (..., N)) -> R (..., N)                      # R(r) = (1/N) sum_q d_q e^{2 pi i q r / N} = ifft(d).real
+half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; raises if d_0 < d_{N/2}
+spectrum_summary(d (..., N)) -> Summary(q_half, share0, lag1, d0, d_nyq, R (..., N))   # share0 = d_0 / sum_q d_q, lag1 = R(1)/R(0)
+gaussian_width(R (..., N), ell) -> float | (...)               # sqrt(-ell^2 / (2 ln(R(ell)/R(0)))); ell an integer lag in 1..N-1
+contrast_angle_statistic(t2 (..., N), t3 (..., N)) -> float | (...)   # <cos 4 theta_i> over neurons, theta_i = atan2(t3_i, t2_i) on (-pi, pi]
+theta_histogram(t2 (..., N), t3 (..., N)) -> (..., 36) int64   # counts on the fixed bins (-pi + j w, -pi + (j+1) w], w = 2 pi / 36
+average_records(records (R, ...), burn_in) -> (...)            # mean over records[burn_in:] of one chain (diagnostic)
+integrated_autocorr_time(records (R, ...), burn_in) -> tau (...)   # 1 + 2 sum_{k=1}^{W} rho_k, Sokal window: first W >= 5 tau(W); tau >= 1
+record_sem(records (R, ...), burn_in) -> (...)                 # sqrt(C(0) tau / n): the chain mean's error with n_eff = n / tau
+member_mean_sem(values (B, ...)) -> (mean (...), sem (...))   # across independent members: std (ddof 1) / sqrt(B), B >= 2
+```
+
+The latent basis needs latents on `[0, a]`. Then `u_1` is the mean direction and its cosine with the constant
+pattern vector is `sqrt(3K/(3K+1))` (0.95 at K = 3). For symmetric latents (on `[-a, a]`) the K singular values are
+degenerate up to `O(P^-1/2)` noise, the SVD frame is a random rotation of col(Z) (at P = 256, K = 3: s2 = 93, 82,
+72 and cos(u_1, 1) = 0.07), and `latent_basis` raises, saying the mean direction is undefined.
+
+`null_power` projects out col(Z) before the FFT. Subtracting the latent power from the total would cancel
+catastrophically when the null floor is far below the latent power (at sigma = 0 the floor is 0, and the
+subtraction left values of either sign at 1e-14).
+
+The angle statistic needs the orthonormal frame `(u_2, u_3)`: tuning to an oblique pair such as the raw
+`(z_2, z_3)` squeezes an isotropic cloud along the bisector and biases it negative (for unit-variance tunings with
+correlation rho, `<cos 4 theta> = -r^2`, `r = (sqrt(1+rho) - sqrt(1-rho)) / (sqrt(1+rho) + sqrt(1-rho))`). `atan2`
+can return `-pi`; it is mapped to `pi`, so `theta_histogram` bins are right-closed on `(-pi, pi]` and histograms of
+records and members sum. A silent neuron (`t2 = t3 = 0`) has `theta = 0` and counts as axis-aligned.
+
+`record_sem`: `rho_k = C(k) / C(0)` from the biased autocovariance of the records after burn-in (FFT, zero-padded
+to 2n). The window W is the first lag with `W >= 5 tau(W)` (Sokal 1997; with `tau = 1 + 2 sum rho_k` this 5 is
+Sokal's c = 10 in his `tau_int = 1/2 + sum rho_k` convention, emcee's pairing), searched up to n/4. If it is not
+reached there the chain is too short for its correlation time and the function raises. It needs at least 100
+records after burn-in: shorter chains of even independent records miss the window by sampling noise (19% of
+chains at 20 records, 0.03% at 100). Sokal's window assumes positive correlations; anticorrelated records meet it
+trivially with `tau < 1` (even negative), and `tau` is clamped at 1, which overstates their error. Constant
+records give `tau = 1` and a standard error of 0.
 
 ## tuning.py, exp_report.py and the phase-transition figures
 
