@@ -71,6 +71,7 @@ from fct.config import (
 from fct.data import Dataset, get_dataset, task_dims
 from fct.meanfield import meanfield_hash, run_meanfield
 from fct.monitor import make_mir_monitor
+from fct.schema import exclude_at_default
 from fct.spatial import SpatialConfig
 from fct.train import load_trained, train_from_config
 
@@ -192,8 +193,8 @@ class ExpConfig(StrictModel):
 
     `description` is free text saying what the experiment is. It is documentation only: it never
     enters a hash or a directory name, `same_experiment` ignores it, and exp.json omits it when
-    it is None. exp.json also omits `B` (the ensemble size) and `init` (the initial law) at
-    their defaults, so an absent `B` or `init` means the default.
+    it is None. exp.json also omits the other fields of `EXP_JSON_OMITTED_AT_DEFAULT` (`B`,
+    `init`, ...) at their defaults, so an absent one means the default.
 
     The same data, net and training seeds are used for every setting, so settings differ only
     in the axes. Everything else is the base `Config` a setting starts from (the shared
@@ -381,27 +382,24 @@ def exp_path(root: Path) -> Path:
     return Path(root) / EXP_FILE
 
 
+# Fields left out of exp.json while they hold the value every exp.json written before they
+# existed implies, so an absent field means that value: dotted path -> that value.
+EXP_JSON_OMITTED_AT_DEFAULT: dict[str, Any] = {
+    "description": None,
+    "B": NetConfig().B,
+    "init": NetConfig().init,
+    "linear_teacher.teacher": LinearTeacherParams.model_fields["teacher"].default,
+    "spatial.parametrisation": SpatialConfig().parametrisation,
+}
+
+
 def exp_text(exp: ExpConfig) -> str:
-    """The text of exp.json. `description` is left out when None, `B` and `init` when they are
-    the library defaults, `linear_teacher.teacher` when it is "gaussian" and
-    `spatial.parametrisation` when it is "penalty", so an exp.json holds only what departs
-    from the defaults and an absent `B`, `init`, `teacher` or `parametrisation` means the
-    default. Leaving out `B`, `init` and `parametrisation` keeps exp.json files written before
-    they existed byte-identical; `teacher` follows the same rule, so a Gaussian-teacher
-    exp.json stays minimal and the pinned texts in test_phase_transition_preset.py moved only
-    by the rename of `latent_range` to `latent_min` / `latent_max` (files that still spell
-    `latent_range` are rejected)."""
-    exclude: dict[str, Any] = {}
-    if exp.description is None:
-        exclude["description"] = True
-    if exp.B == NetConfig().B:
-        exclude["B"] = True
-    if exp.init == NetConfig().init:
-        exclude["init"] = True
-    if exp.linear_teacher.teacher == "gaussian":
-        exclude["linear_teacher"] = {"teacher"}
-    if exp.spatial is not None and exp.spatial.parametrisation == "penalty":
-        exclude["spatial"] = {"parametrisation": True}
+    """The text of exp.json, without the fields of `EXP_JSON_OMITTED_AT_DEFAULT` that hold
+    their defaults (`fct.schema.exclude_at_default`): an exp.json holds only what departs from
+    them, files written before those fields existed (and the pinned texts in
+    test_phase_transition_preset.py) stay byte-identical, and an absent field means its
+    default."""
+    exclude = exclude_at_default(exp, EXP_JSON_OMITTED_AT_DEFAULT)
     return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
 
 

@@ -101,6 +101,15 @@ version of the forward pass of `MLP`. Version 2 reads the output from the post-a
 hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
 enters the hash by value.
 
+Fields added after artefacts existed. A field added to a hashed section or to exp.json is left out of it while it holds
+its default, the value every artefact written before the field existed implies, so those hashes and exp.json texts stay
+byte-identical and an absent field means its default; at any other value it enters, and the artefact is new. The fields
+are listed once, in two tables of dotted paths: `config.HASH_OMITTED_AT_DEFAULT` for `section_hash` (`net.B`,
+`net.init`, `data.teacher`, `spatial.lambda_max`, `spatial.parametrisation`) and `exp.EXP_JSON_OMITTED_AT_DEFAULT` for
+exp.json (`description`, `B`, `init`, `linear_teacher.teacher`, `spatial.parametrisation`). Both go through one helper,
+`schema.exclude_at_default(model, table) -> exclude`, which builds the nested pydantic `exclude` and skips a path whose
+parent is None (an unset `spatial` section). A new field of this kind is a new table entry, nothing else.
+
 The meanfield section enters every hash as `MeanFieldConfig.hash_payload()`, not as its nested dump: the problem fields
 and the solver fields that existed before the sampler choice (`config.LEGACY_SOLVER_FIELDS`, `log_int` and `save_int`
 included) in one flat dict, which is how the section was hashed before it was split. The step-control fields
@@ -227,8 +236,7 @@ class Config(BaseModel):
     is_whitened: bool   # property: spatial is set and its parametrisation is "whitened"; the one test of the parametrisation
     def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `LOSS_VERSION` when `train` is), first 12 hex chars; >=1 section required
         # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
-        # with `net`: net.B dropped when it is 1, so every single-network cache keeps its hash
-        # with `data`: data.teacher dropped when it is "gaussian", so every Gaussian-teacher cache keeps its hash
+        # every field of HASH_OMITTED_AT_DEFAULT dropped while at its default ("Fields added after artefacts existed")
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -966,7 +974,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
 # [A-Za-z_][A-Za-z0-9_]*. Files are read at call time, so a new file is seen at once with an editable install; a wheel holds the files it was built with.
 def preset(name, directory=None) -> ExpConfig    # the base experiment <directory or fct/presets>/<name>.json, read through importlib.resources (so also from inside a wheel) and validated; PresetError (an ExpError, so a ValueError) naming the full path if the name is unknown (the message lists the presets and the ignored files) or the file is unreadable or invalid
 def preset_names(directory=None) -> list[str]     # sorted, found at call time: regular files `<stem>.json` with stem matching [A-Za-z_][A-Za-z0-9_]*; folders (even `x.json`), dotfiles, a bare `.json`, README and other files are ignored; `*.json` files whose stem breaks the rule are reported by the unknown-preset error
-def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json (UTF-8; every writer goes through write_exp_text, which writes a .tmp sibling and renames it; exp_text(exp) leaves `description` out when it is None, `B` out when it equals `NetConfig().B`, `linear_teacher.teacher` out when it is "gaussian" and `spatial.parametrisation` out when it is "penalty", so an experiment without them has the text it had before those fields existed; an absent `B`, `teacher` or `parametrisation` means the default); load raises FileNotFoundError naming the path
+def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json (UTF-8; every writer goes through write_exp_text, which writes a .tmp sibling and renames it; exp_text(exp) leaves out every field of EXP_JSON_OMITTED_AT_DEFAULT at its default ("Fields added after artefacts existed")); load raises FileNotFoundError naming the path
 def same_experiment(a, b) -> bool                      # every field equal except `description` (model_dump(exclude={"description"})); used wherever two experiments are compared (lrtune's trial root, migrate's resume check)
 def expand(exp) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given exp.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow an experiment in a fresh ROOT)
 def get_setting(exp, index) -> Setting                 # ExpError (a ValueError) "index i is out of range; valid indices are 0..N-1"
@@ -1272,9 +1280,9 @@ default, and what every `config.json` written before the field existed loads as)
   not parameters and not checkpointed: a resumed run rebuilds them from the config, so resume is exact.
 - Hash: the `spatial` section enters `section_hash` with `train` only when it is set, so the caches of runs without it keep
   their hashes (pinned in `tests/test_spatial_prior.py`), and a run trained without the prior is stale for a config with it.
-  Within it `lambda_max` is hashed only when set and `parametrisation` only as `"whitened"`, and `net.init` enters the net
-  section only as `"prior"`, so every penalty run started from the standard draw keeps its hash and a whitened run, or a
-  run started from the prior, has a new one.
+  Within it `lambda_max` and `parametrisation`, and `net.init` in the net section, follow "Fields added after artefacts
+  existed": every penalty run started from the standard draw keeps its hash, and a whitened run, or a run started from
+  the prior, has a new one.
 - SGLD stability. The prior's stiffest curvature is `(weight_lambda / beta) lambda_max(M^post) lambda_max(M^pre)`, which a wide
   kernel makes large (up to `1 / (min_rel_eig * lambda_max(K))` per factor). An Euler step diverges once
   `lr * weight_lambda / (2 beta) * lambda_max(M^post) lambda_max(M^pre) >= 1`, so `make_weight_penalty` raises for SGLD before the
@@ -1342,11 +1350,12 @@ history keys and checkpoint layout; how their dynamics differ is below ("Dynamic
   - A singular `K` (or one with eigenvalues below round-off) confines `W` to the range of `S` under whitening: that is
     the exact, degenerate prior. The penalty path instead gives those directions the floor's variance
     `min_rel_eig lambda_max(K)`, so the two differ there.
-- Hash. `parametrisation` enters the train hash only as `"whitened"` (the `lambda_max` rule), so every penalty hash is
-  unchanged and a whitened run has a new hash; `Config` requires `weight_lambda > 0` under whitening (the prior
+- Hash. `parametrisation` enters the train hash only as `"whitened"` ("Fields added after artefacts existed"), so every
+  penalty hash is unchanged and a whitened run has a new hash; `Config` requires `weight_lambda > 0` under whitening (the prior
   `N(0, K / weight_lambda)` and the initial draw need it). `min_rel_eig` is unused under whitening but still hashed.
-  An experiment may run `spatial.parametrisation` as an axis (`--axis 'spatial.parametrisation=["penalty","whitened"]'`)
-  to show the two ways of training equivalent.
+  An experiment may run `spatial.parametrisation` as an axis (`--axis 'spatial.parametrisation=["penalty","whitened"]'`,
+  with `--set init=prior`, since every axis value is validated against the experiment's base) to train the two side by
+  side.
 
 ## spectrum.py (tuning-map spectra on the ring)
 
