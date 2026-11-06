@@ -28,7 +28,7 @@ from fct.exp import (
 )
 from fct.exp_view import tuning_view
 from fct.meanfield import readout_activities
-from fct.model import MLP, make_net
+from fct.model import MLP, effective_weights, make_net
 from fct.modularity import information_overlap, rate_overlap
 from fct.phase_view import (
     ENSEMBLE_KEYS,
@@ -56,6 +56,7 @@ from fct.spatial import (
     build_spaces,
     data_kernel,
     weight_quadratic_form,
+    whitening_factors,
 )
 from fct.spatial_view import data_kernels, empirical_kernels
 from fct.tasks import Dataset, latent_lattice_dataset
@@ -520,6 +521,18 @@ def test_weight_kernels_are_float64_whatever_the_net_dtype():
     ones = torch.ones(2, 2, dtype=torch.float32)
     net = MLP.from_weights(ones, [], ones.clone(), 1.0, get_phi("id"))
     assert all(k.post.dtype == torch.float64 for k in weight_kernels(net))
+
+
+def test_weight_kernels_of_a_whitened_net_are_those_of_its_effective_weights():
+    """Under the whitened prior `net.U` is xi; the kernels are of W = S xi S."""
+    spaces = build_spaces(_random_spatial(1), m=2, N=3, L=1, n_out=2)
+    factors = whitening_factors(spaces)
+    net = make_net(NetConfig(N=3, L=1, phi="id", seed=0), 2, 2, CPU, F64, whitening=factors)
+    first, readout = weight_kernels(net)
+    W = {name: w.detach() for name, w in effective_weights(net).items()}
+    assert torch.equal(first.post, empirical_kernels(W["U"])[0])
+    assert torch.equal(readout.pre, empirical_kernels(W["V"].T)[1])
+    assert not torch.allclose(first.post, empirical_kernels(net.U.detach())[0])
 
 
 def test_overlaps_of_two_neurons_each_tuned_to_its_own_latent():

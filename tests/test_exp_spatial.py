@@ -258,6 +258,38 @@ def test_spatial_tiny_runs_end_to_end_and_resumes(tmp_path, capsys):
     assert "2 done, 0 partial, 0 missing, 0 stale" in capsys.readouterr().out
 
 
+def test_a_parametrisation_axis_trains_the_penalty_and_the_whitened_prior_side_by_side(
+    tmp_path, capsys
+):
+    """`spatial.parametrisation` as an axis: the settings differ in directory and hash (the
+    penalty ones keep the preset's hashes), every setting trains on spatial_tiny, and the two
+    paths share their history keys; a whitened net is read back with its factors."""
+    root = str(tmp_path)
+    axis = 'spatial.parametrisation=["penalty","whitened"]'
+    assert main(["exp", "init", root, "--preset", "spatial_tiny", "--axis", axis]) == 0
+    exp = load_exp(tmp_path)
+    settings = expand(exp)
+    configs = [setting_config(exp, s) for s in settings]
+    assert [c.spatial.parametrisation for c in configs] == ["penalty", "whitened"] * 2
+    dirs = [setting_dir(tmp_path, s) for s in settings]
+    assert len(set(dirs)) == 4 and "whitened" in dirs[1].name and "penalty" in dirs[0].name
+    hashes = [_train_hash(exp, i) for i in range(4)]
+    assert len(set(hashes)) == 4
+    plain = preset("spatial_tiny")
+    assert (hashes[0], hashes[2]) == (_train_hash(plain, 0), _train_hash(plain, 1))
+    assert main(["exp", "run", root]) == 0
+    capsys.readouterr()
+    assert main(["exp", "status", root]) == 0
+    assert "4 done, 0 partial, 0 missing, 0 stale" in capsys.readouterr().out
+    dtype = torch.float32
+    penalty_net, penalty_history = load_trained(dirs[0], configs[0], torch.device("cpu"), dtype)
+    whitened_net, whitened_history = load_trained(dirs[1], configs[1], torch.device("cpu"), dtype)
+    assert penalty_net.whitening is None and whitened_net.whitening is not None
+    assert set(penalty_history) == set(whitened_history)
+    assert penalty_history["epoch"] == whitened_history["epoch"]
+    assert set(penalty_net.state_dict()) == set(whitened_net.state_dict())
+
+
 class _Interrupt(Exception):
     pass
 

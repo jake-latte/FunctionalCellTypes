@@ -121,6 +121,7 @@ from IPython.display import Markdown, display
 from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.exp_view import tuning_view
 from fct.meanfield import readout_activities
+from fct.model import effective_weights
 from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import (
     data_kernel,
@@ -469,7 +470,7 @@ EMPIRICAL = r"""def plot_kernel_comparison(comparison, space):
 
 
 if D == 1:
-    plot_kernel_comparison(ordered_kernel_comparison(SPACES[0], RUN.net.U), SPACES[0])
+    plot_kernel_comparison(ordered_kernel_comparison(SPACES[0], effective_weights(RUN.net)["U"]), SPACES[0])
     plt.show()
 else:
     display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""
@@ -512,7 +513,7 @@ def plot_weights_by_position(W, space):
 
 
 if D == 1:
-    plot_weights_by_position(RUN.net.U, SPACES[0])
+    plot_weights_by_position(effective_weights(RUN.net)["U"], SPACES[0])
     plt.show()
 else:
     display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""

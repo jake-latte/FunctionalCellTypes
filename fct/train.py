@@ -490,7 +490,9 @@ def train(
     weight penalty of `make_weight_penalty`; resume from the latest checkpoint if any.
 
     If `final.pt` exists the net is loaded from it and nothing else happens (no optimiser,
-    no RNG change). A checkpoint with `epoch=s` is written before the step of epoch s; the
+    no RNG change). A fresh SGLD run under the whitened spatial prior first checks that `lr`
+    resolves the loss's curvature at the initial net (`_check_sgld_step_resolves_the_loss`,
+    which logs the value). A checkpoint with `epoch=s` is written before the step of epoch s; the
     step, history entry and log line follow. An interruption at epoch t therefore resumes at
     the last multiple of `save_int` at or before t, repeating the deterministic steps since.
 

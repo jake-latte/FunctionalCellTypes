@@ -31,7 +31,7 @@ from fct.cache import cache_paths
 from fct.config import DataConfig, resolve_device, resolve_dtype
 from fct.data import Dataset, get_dataset, make_dataset
 from fct.exp_view import tuning_view
-from fct.model import MLP, EnsembleMLP
+from fct.model import MLP, EnsembleMLP, effective_weights
 from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import LayerSpace
 from fct.spatial_exp import ExpSetting, select_setting
@@ -364,10 +364,12 @@ def _overlaps(
 
 
 def weight_kernels(net: MLP) -> list[KernelPair]:
-    """`empirical_kernels` of every weight of `net` in (post, pre) orientation (layers 0..L; the
-    readout is `V.T`), in float64 on the CPU like the prior kernels they are compared with."""
-    weights = [net.U, *net.J, net.V.T]
-    return [KernelPair(*empirical_kernels(W.detach().cpu().to(torch.float64))) for W in weights]
+    """`empirical_kernels` of every effective weight of `net` (`fct.model.effective_weights`:
+    S xi S under the whitened prior) in (post, pre) orientation (layers 0..L; the readout is
+    `V.T`), in float64 on the CPU like the prior kernels they are compared with."""
+    W = effective_weights(net)
+    weights = [W["U"], *(W[f"J.{k}"] for k in range(net.L - 1)), W["V"].T]
+    return [KernelPair(*empirical_kernels(w.detach().cpu().to(torch.float64))) for w in weights]
 
 
 def member_view(
