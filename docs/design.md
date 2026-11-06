@@ -31,6 +31,7 @@ fct/
   monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
   spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1}, the factorised weight quadratic form (pure)
   spectrum.py      # tuning maps on the ring, unitary-DFT spectra per latent mode and the null mean, q_1/2 / share / lag-1, cos 4 theta, record and member errors (pure)
+  linear_theory.py # the linear one-hidden-layer theory on a ring from a Config and a Dataset: per-mode spectra, summaries, the ansatz-free kernel (pure)
   spatial_exp.py  # spatial-experiment notebook: pick one setting of a spatial experiment by axis values, load its trained net and the 3^k latent-lattice test set
   spatial_view.py  # spatial-prior notebook: config, resumable run, ring/lattice layout of neurons and weights, empirical kernels (pure + one I/O function)
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
@@ -1349,6 +1350,45 @@ input (shape, dtype, non-finite) and fewer than 200 records after burn-in raise;
 of elements are marked unreliable at 100 records, one in 1.3 x 10^6 at 150 and none at 200. Records are constant
 when `C(0) <= (8 eps max(|mean|, tiny))^2` (rounding leaves a constant within 3 eps |mean| of its mean); they give
 `tau = 1`, `sem = 0` and `reliable = True`.
+
+## linear_theory.py (the linear theory from a config)
+
+The predictions of `latex/notes/linear_solution_limits.tex` (the per-mode solution, eq:linear-soln) and
+`linear_without_ansatz.tex` (the master equation, eq:master) for a linear one-hidden-layer network on a ring, as pure
+functions of the `Config` that configures the run and its `Dataset`. The maths and the dictionary from theory symbols to
+config fields are stated once, in the module docstring; `latex/notes/fct_experiment_plan.tex` (Section D4, the dictionary,
+Appendix "Reproducing the numbers") is the source. Float64 numpy throughout; tensors are accepted as inputs.
+
+```python
+inverse_temperature(cfg) -> float          # train.beta under SGLD, 1 under Adam (prior_coefficient's rule)
+rate_coefficient(cfg) -> float             # r, the rate-penalty coefficient (g^2 in the notes): 2 beta rate_lambda today; rate_lambda once rate-penalty-code lands
+hidden_kernel(cfg) -> (N, N)               # build_spaces' hidden population K
+ring_spectrum(K) -> (N,)                   # lam_q in DFT order (FFT of row 0, checked against eigvalsh; round-off negatives -> 0, real ones raise)
+latent_matrix(factors, K) -> Z (P, K); latent_basis(Z) -> (U_Z (P, K), s2 (K,))   # thin SVD, s2 descending, columns signed so 1^T u >= 0
+uniform_latent_s2(P, K, a) -> (K,)         # the P >> K formula: P a^2 (3K+1)/12 then P a^2/12
+theory_parameters(cfg, dataset, sig2=0.0) -> TheoryParameters(N, m, n, P, n_latents, lam, lam0, lam_bar, U_Z, s2, sx2, sy2, k0, k1, beta, delta, sig2, r)
+noise_floor(sig2, r) -> sigma_0^2 = sig2 / (1 + r sig2);  prior_shrunk_variance(lam, sx2, sig2, r) -> pi_q;  h_of(lam, sx2, sig2, r) -> h_q
+physical_root(h, sy2, delta) -> c          # bisection on the branch c > sqrt(sy2 max h)
+per_mode_spectrum(lam, sx2, sy2, sig2, r, delta) -> (c, d (N,))   # the port of the script's spectrum_d
+target_strength(lam, sx2, sy2, sig2, r, c) -> tau
+predicted_spectra(cfg, dataset, sig2=0.0) -> Prediction(lam, U_Z, s2, d (K, N), null_floor, c (K,), tau (K,), params)
+autocorrelation(d) -> R (N,);  half_power_q(d) -> q_half;  spectrum_summary(d) -> SpectrumSummary(q_half, share0, lag1)
+ansatz_free_kernel(cfg, dataset, sig2=0.0) -> C~ (P, P)    # the fixed point of eq:master for the dataset's actual Gram matrices
+```
+
+`theory_parameters` validates the config against the theory (one hidden layer, `phi = "id"`, the `linear_teacher` task, a
+spatial prior whose input and output kernels are multiples of the identity) and fails loudly otherwise. k0 and k1 are the input
+and output kernel amplitudes over `train.weight_lambda` (Cov(W) = K / weight_lambda for every layer), the hidden kernel enters
+as built (so `lambda_max` is honoured), and delta = P n / (beta k1). `sig2` is an explicit argument because no config field
+holds the input noise: sigma -> 0 is the default, and at `sig2 = 0` a null mode and every frequency with lam_q = 0 get d_q = 0
+exactly (nothing divides by sigma). The per-mode weights use the singular values of Z, exact for an orthonormal teacher
+(X X^T = Y Y^T = Z Z^T) and the zeroth-order ansatz otherwise; `ansatz_free_kernel` uses the actual Gram matrices, solved by
+Newton (finite-difference Jacobian, steps halved until admissible and descending) on the subspace spanned by the data and set
+to the prior value delta + sigma_0^2 lam_bar on its complement, which is exact. Each per-frequency covariance is evaluated as
+S (I + S T S)^{-1} S with S = (lam_q A + sig2 I)^{1/2}, the form that stays finite at sig2 = 0.
+
+`spectrum_summary` here is the theory-side (q_half, share0, lag1) of one predicted spectrum; the measurement-side summaries of
+sampled activity live in the spectrum module of the plan's W6.
 
 ## tuning.py, exp_report.py and the phase-transition figures
 
