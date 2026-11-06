@@ -223,6 +223,7 @@ class Config(BaseModel):
     spatial: SpatialConfig | None = None   # the spatial weight prior (fct.spatial); None -> weight L2 norm
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
+    is_whitened: bool   # property: spatial is set and its parametrisation is "whitened"; the one test of the parametrisation
     def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `LOSS_VERSION` when `train` is), first 12 hex chars; >=1 section required
         # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
         # with `net`: net.B dropped when it is 1, so every single-network cache keeps its hash
@@ -367,7 +368,6 @@ WeightPenalty = Callable[[Net], Tensor]   # 0-d for an MLP, (B,) for an ensemble
 def per_member(net, t, reduce=torch.sum) -> Tensor   # reduce over every axis but the member axis (all axes for an MLP)
 def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None or its parametrisation is "whitened" (the plain |xi|^2), else the spatial prior for net's sizes, dtype and device
     # for SGLD refuses a step the prior's stiffest curvature cannot take, on either path; ValueError if the net's parametrisation is not the config's
-def whitened(cfg: Config) -> bool                        # cfg.spatial is set with parametrisation "whitened"
 def make_net_from_config(cfg: Config, D_in, D_out, device, dtype) -> Net   # make_net of cfg.net; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) and xi ~ N(0, I / weight_lambda); the one place a Config becomes a net
 def largest_hessian_eigenvalue(loss_fn, params, n_iter=20, seed=0) -> float   # power iteration on Hessian-vector products (double backward); local generator, parameters and .grad untouched
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)

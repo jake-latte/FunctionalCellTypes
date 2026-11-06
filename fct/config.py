@@ -438,17 +438,18 @@ class Config(StrictModel):
     def _whitened_draws_from_a_proper_prior(self) -> Self:
         # Under "whitened" xi starts from N(0, I / weight_lambda) and W's prior covariance is
         # K / weight_lambda; neither exists at weight_lambda = 0.
-        if (
-            self.spatial is not None
-            and self.spatial.parametrisation == "whitened"
-            and self.train.weight_lambda <= 0
-        ):
+        if self.is_whitened and self.train.weight_lambda <= 0:
             raise ValueError(
                 f"train.weight_lambda is {self.train.weight_lambda!r} but "
                 "spatial.parametrisation is 'whitened', whose prior N(0, K / weight_lambda) "
                 "needs weight_lambda > 0"
             )
         return self
+
+    @property
+    def is_whitened(self) -> bool:
+        """Whether this config trains the whitened parametrisation of the spatial prior."""
+        return self.spatial is not None and self.spatial.parametrisation == "whitened"
 
     def section_hash(self, *sections: str) -> str:
         """Hash of the named sections, so an artefact can tell which config it came from.

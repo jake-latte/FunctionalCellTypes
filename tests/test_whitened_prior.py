@@ -4,8 +4,6 @@ plain |xi|^2, so the sampled prior is K itself (no eigenvalue floor). Ground tru
 the prior covariance (K_post (x) K_pre) / weight_lambda, which the penalty path only
 approximates."""
 
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -63,6 +61,12 @@ def test_the_parametrisation_defaults_to_the_penalty_and_an_old_config_loads():
     assert SpatialConfig.model_validate(raw).parametrisation == "penalty"
     with pytest.raises(ValueError, match="parametrisation"):
         SpatialConfig(parametrisation="other")
+
+
+def test_a_config_is_whitened_only_with_a_spatial_section_under_whitened():
+    assert not Config().is_whitened
+    assert not Config(spatial=SpatialConfig()).is_whitened
+    assert Config(spatial=_whitened()).is_whitened
 
 
 def test_the_penalty_parametrisation_keeps_the_pinned_hash_and_whitened_changes_it():
@@ -377,15 +381,24 @@ def test_the_whitened_penalty_is_the_plain_sum_of_squares_of_xi():
     assert parts["weight_l2"].item() == pytest.approx(hand.item(), rel=1e-12)
 
 
-def test_the_parametrisation_of_the_net_must_match_the_config():
+def test_the_parametrisation_of_the_net_must_match_the_config(tmp_path):
+    """The message names the net's factors and the config's parametrisation (None without a
+    spatial section)."""
     whitened, penalty = _cfg(), _cfg(parametrisation="penalty")
+    no_prior = penalty.model_copy(update={"spatial": None})
     ds, whitened_net = _setup(whitened)
     _, plain_net = _setup(penalty)
-    for cfg, net in ((whitened, plain_net), (penalty, whitened_net)):
-        with pytest.raises(ValueError, match="parametrisation"):
+    cases = (
+        (whitened, plain_net, "has no whitening factors .* spatial.parametrisation is 'whitened'"),
+        (penalty, whitened_net, "has whitening factors .* spatial.parametrisation is 'penalty'"),
+        (no_prior, whitened_net, "has whitening factors .* spatial.parametrisation is None"),
+    )
+    for cfg, net, message in cases:
+        with pytest.raises(ValueError, match=message):
             make_weight_penalty(cfg, net)
-        with pytest.raises(ValueError, match="parametrisation"):
-            train(cfg, ds, net, Path("/nonexistent"), **QUIET)
+        with pytest.raises(ValueError, match=message):
+            train(cfg, ds, net, tmp_path, **QUIET)
+    assert not any(tmp_path.rglob("*.pt"))
 
 
 def test_the_prior_only_step_bound_under_whitening_is_lr_times_weight_lambda_over_two_beta():

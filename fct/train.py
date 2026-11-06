@@ -48,11 +48,6 @@ _REQUIRED_KEYS = ("epoch", "net_state_dict", "optim_state_dict", "history", "rng
 N_HESSIAN_ITERATIONS = 20
 
 
-def whitened(cfg: Config) -> bool:
-    """Whether `cfg` trains the whitened parametrisation of the spatial prior."""
-    return cfg.spatial is not None and cfg.spatial.parametrisation == "whitened"
-
-
 def make_net_from_config(
     cfg: Config, D_in: int, D_out: int, device: torch.device, dtype: torch.dtype
 ) -> Net:
@@ -61,7 +56,7 @@ def make_net_from_config(
     these sizes and xi drawn from its prior N(0, I / weight_lambda), so that every direction
     the data does not touch starts in equilibrium. The one place a config turns into a net,
     for training and for loading alike."""
-    if not whitened(cfg):
+    if not cfg.is_whitened:
         return make_net(cfg.net, D_in, D_out, device, dtype)
     spaces = build_spaces(cfg.spatial, m=D_in, N=cfg.net.N, L=cfg.net.L, n_out=D_out)
     init_std = cfg.train.weight_lambda**-0.5  # weight_lambda > 0: `Config` checks it
@@ -74,12 +69,13 @@ def _check_parametrisation_matches(cfg: Config, net: Net) -> None:
     """A net with whitening factors is trained only under "whitened" and a net without only
     under the penalty (or no prior): the loss and the readers would otherwise silently take
     xi for W or W for xi."""
-    has, wants = net.whitening is not None, whitened(cfg)
-    if has != wants:
+    has = net.whitening is not None
+    if has != cfg.is_whitened:
+        parametrisation = None if cfg.spatial is None else cfg.spatial.parametrisation
         raise ValueError(
             f"the net {'has' if has else 'has no'} whitening factors but the config's "
-            f"parametrisation is {'whitened' if wants else 'not whitened'}; build the net "
-            "with make_net_from_config"
+            f"spatial.parametrisation is {parametrisation!r}; build the net with "
+            "make_net_from_config"
         )
 
 
@@ -261,7 +257,7 @@ def make_weight_penalty(cfg: Config, net: Net) -> WeightPenalty:
     _check_parametrisation_matches(cfg, net)
     if cfg.spatial is None:
         return type(net).weight_l2
-    if cfg.spatial.parametrisation == "whitened":
+    if cfg.is_whitened:
         if cfg.train.optimizer == "sgld":
             _check_sgld_step_resolves_the_prior(None, cfg.train)
         return type(net).weight_l2
@@ -536,7 +532,7 @@ def train(
         # why the RNG state is checkpointed.
         torch.manual_seed(tc.seed)
         start, history = 0, _new_history(monitor is not None, tc.optimizer)
-        if tc.optimizer == "sgld" and whitened(cfg):
+        if tc.optimizer == "sgld" and cfg.is_whitened:
             # At the initial net only: a resumed run passed this when it started.
             _check_sgld_step_resolves_the_loss(net, dataset, tc, weight_penalty, log)
     else:
