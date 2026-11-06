@@ -434,6 +434,22 @@ class Config(StrictModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _whitened_draws_from_a_proper_prior(self) -> Self:
+        # Under "whitened" xi starts from N(0, I / weight_lambda) and W's prior covariance is
+        # K / weight_lambda; neither exists at weight_lambda = 0.
+        if (
+            self.spatial is not None
+            and self.spatial.parametrisation == "whitened"
+            and self.train.weight_lambda <= 0
+        ):
+            raise ValueError(
+                f"train.weight_lambda is {self.train.weight_lambda!r} but "
+                "spatial.parametrisation is 'whitened', whose prior N(0, K / weight_lambda) "
+                "needs weight_lambda > 0"
+            )
+        return self
+
     def section_hash(self, *sections: str) -> str:
         """Hash of the named sections, so an artefact can tell which config it came from.
 
@@ -442,10 +458,11 @@ class Config(StrictModel):
         `LOSS_VERSION` when "train" is. `train.optimizer` / `train.beta` are left out of the
         hash for the adam optimiser, `net.B` when it is 1 and `data.teacher` when it is
         "gaussian". The `spatial` section enters with "train" only when it is set (without its
-        `lambda_max` while that is None), so runs without a spatial prior keep the hashes they
-        had before the section existed. The meanfield section enters as
-        `MeanFieldConfig.hash_payload()`, not as its dump. Canonical JSON (sorted keys) makes
-        the hash independent of field and argument order.
+        `lambda_max` while that is None, and without `parametrisation` while that is
+        "penalty"), so runs without a spatial prior keep the hashes they had before the section
+        existed and penalty runs those from before the whitened parametrisation did. The
+        meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its dump.
+        Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
             raise ValueError("section_hash needs at least one section name")
@@ -471,6 +488,8 @@ class Config(StrictModel):
                     self.spatial.lambda_max is None
                 ):  # omitted while None: configs without it hash as before
                     del hashed["spatial"]["lambda_max"]
+                if self.spatial.parametrisation == "penalty":  # the same rule for the default
+                    del hashed["spatial"]["parametrisation"]
         canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 

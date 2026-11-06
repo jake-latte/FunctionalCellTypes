@@ -298,6 +298,7 @@ def test_spatial_hash_is_canonical_json_of_the_train_section_with_the_spatial_se
     }
     del payload["train"]["optimizer"], payload["train"]["beta"]  # not hashed for adam
     del payload["spatial"]["lambda_max"]  # not hashed while unset
+    del payload["spatial"]["parametrisation"]  # not hashed while "penalty"
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
     assert cfg.section_hash("train") == expected
 
