@@ -1275,8 +1275,8 @@ gaussian_width(R (..., N), ell) -> float | (...)               # sqrt(-ell^2 / (
 contrast_angle_statistic(t2 (..., N), t3 (..., N)) -> float | (...)   # <cos 4 theta_i> over neurons, theta_i = atan2(t3_i, t2_i) on (-pi, pi]
 theta_histogram(t2 (..., N), t3 (..., N)) -> (..., 36) int64   # counts on the fixed bins (-pi + j w, -pi + (j+1) w], w = 2 pi / 36
 average_records(records (R, ...), burn_in) -> (...)            # mean over records[burn_in:] of one chain (diagnostic)
-integrated_autocorr_time(records (R, ...), burn_in) -> tau (...)   # 1 + 2 sum_k rho_k, Geyer's initial monotone sequence of pairs
-record_sem(records (R, ...), burn_in) -> (...)                 # sqrt(C(0) tau / n): the chain mean's error with n_eff = n / tau
+integrated_autocorr_time(records (R, ...), burn_in) -> TauEstimate(tau (...), reliable (...) bool)   # 1 + 2 sum_k rho_k, Geyer's initial monotone sequence; NaN where not reliable
+record_sem(records (R, ...), burn_in) -> SemEstimate(sem, tau, reliable)   # sem = sqrt(C(0) tau / n), n_eff = n / tau; NaN exactly where not reliable
 member_mean_sem(values (B, ...)) -> (mean (...), sem (...))   # across independent members: std (ddof 1) / sqrt(B), B >= 2
 ```
 
@@ -1285,9 +1285,17 @@ cosine of `u_1` with the constant pattern vector is `sqrt(3K/(3K+1))` (0.95 at K
 `[-a, a]`) the K singular values are degenerate up to `O(P^-1/2)` noise, the SVD frame is a random rotation of col(Z)
 (at P = 256, K = 3: s2 = 93, 82, 72 and cos(u_1, 1) = 0.07), and `latent_basis` raises, saying the mean direction is
 undefined. It requires `s_1^2 / s_2^2 >= 2` (K >= 2) and the cosine at half its `[0, a]` value (the only check at
-K = 1). Simulated over 2 x 10^5 draws, these never reject `[0, a]` latents at P >= 16 and accept symmetric ones in
-1.7% of draws at P = 16, K = 2 (0.7% at K = 3), 0.05% at P = 32 and none at P = 64. At P = 16, K <= 3 the two
-distributions overlap, so no threshold reaches zero false rejection with false acceptance below 0.1%.
+K = 1, which is therefore the weakest case). Simulated false rejection of `[0, a]` latents / false acceptance of
+symmetric ones, both checks, 2 x 10^5 draws per cell:
+
+| P  | K = 1      | K = 2         | K = 3     | K = 4     |
+|----|------------|---------------|-----------|-----------|
+| 16 | 0 / 8.3%   | 5e-6 / 1.73%  | 0 / 0.73% | 0 / 0.40% |
+| 32 | 0 / 1.31%  | 0 / 0.064%    | 0 / 0.011%| 0 / 0.005%|
+| 64 | 0 / 3.4e-4 | 0 / 0         | 0 / 0     | 0 / 0     |
+
+At P = 16, K <= 3 the two distributions overlap, so no threshold has near-zero false rejection with false
+acceptance below 0.1%. The presets run at P = 256, where none of this matters.
 
 `half_power_q` is a statistic of a mean spectrum (over records or members). In one record `d_0` and `d_{N/2}` are
 single chi^2 draws whose order is noise: a map with mean `D_0 = 100 D_{N/2}` has `d_0 < d_{N/2}` with probability
@@ -1311,11 +1319,18 @@ to 2n). `tau` is Geyer's initial monotone sequence estimator (Geyer 1992): the p
 rho_{2m+1}` are summed over their initial positive run, made non-increasing, `tau = -1 + 2 sum_m Gamma_m`, over lags
 up to n/2. Pairing cancels the alternation of an anticorrelated component, so a slow component under it is still
 seen (a cut-off window such as Sokal's stops at lag 1 there and reports tau about 1 for a chain with tau = 7.8), and
-`tau < 1` is returned for anticorrelated records. It raises when the pairs stay positive to lag n/2, when the chain
-holds fewer than 20 correlation times (`n < 20 tau`: too short to trust), and when `tau <= 0`. It needs at least
-200 records after burn-in, because one failing element fails the call: with independent records, 2.6e-5 of elements
-and 19% of calls over 8192 elements fail at 100 records, and none of 1.3 x 10^6 elements at 150 or 200. Constant
-records give `tau = 1` and a standard error of 0.
+`tau < 1` is returned for anticorrelated records. Geyer's estimator is biased low for strongly alternating records
+(AR(1) with phi <= -0.8), and at phi about -0.9 it often gives `tau <= 0`.
+
+Reliability is per element, never per call: these are burn-in diagnostics, and one slow element must not fail a
+monitor-sized call. An element is unreliable when its pairs stay positive to lag n/2, when `tau <= 0`, or when the
+chain holds fewer than 20 correlation times (`n < 20 tau`, judged on the estimated tau, which is itself biased low on
+short chains: at n = 1000 a third of tau = 80 elements pass). Unreliable elements get NaN in `tau` and `sem` and
+False in `reliable`; callers must read `reliable`, and a NaN never appears without its mask saying why. Only bad
+input (shape, dtype, non-finite) and fewer than 200 records after burn-in raise; with independent records, 2.6e-5
+of elements are marked unreliable at 100 records, one in 1.3 x 10^6 at 150 and none at 200. Records are constant
+when `C(0) <= (8 eps max(|mean|, tiny))^2` (rounding leaves a constant within 3 eps |mean| of its mean); they give
+`tau = 1`, `sem = 0` and `reliable = True`.
 
 ## tuning.py, exp_report.py and the phase-transition figures
 
