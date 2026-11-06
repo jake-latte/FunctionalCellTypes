@@ -20,6 +20,8 @@ build/
 *.vrb
 *.xdv
 *.pdf
+# biber leaves main.bbl-SAVE-ERROR / main.bcf-SAVE-ERROR after a failed run
+*-SAVE-ERROR
 
 # Python / fct library
 cache/

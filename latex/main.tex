@@ -1,8 +1,14 @@
 % =============================================================================
 %  Functional Cell Types -- main document
 %
-%  Build:            latexmk -pdf main.tex                 (or: make)
-%  Single section:   latexmk -pdf sections/01_setup.tex    (or: make sec SEC=01_setup)
+%  Build (from latex/); each target writes to a build/ beside its source:
+%    this document:  make                    -> build/main.pdf
+%    one section:    make sec SEC=01_setup   -> sections/build/01_setup.pdf
+%    one note:       make note NOTE=<name>   -> notes/build/<name>.pdf
+%    all notes:      make notes              -> notes/build/
+%    clean:          make clean              (removes the three build/ dirs)
+%  A bare `latexmk <file>.tex` run inside latex/, sections/ or notes/ does the
+%  same, via the .latexmkrc in each of those directories.
 %
 %  Structure
 %    preamble.tex    packages, theorem environments, layout
