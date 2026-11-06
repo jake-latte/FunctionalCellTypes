@@ -299,7 +299,8 @@ uv run ruff format --check fct tests   # formatting
 
 The manuscript lives in `latex/`; run the commands below from that directory. It is a modular LaTeX document. One file per section under `sections/`; each compiles
 on its own (via the `subfiles` package) so sections can be worked on
-independently.
+independently. Building needs TeX Live with `latexmk`, `pdflatex`, `biber`,
+and the `subfiles` and `biblatex` packages.
 
 ### Build
 
@@ -308,6 +309,7 @@ make                                    # full document -> build/main.pdf
 make sec SEC=02_renormalisation_group   # one section   -> sections/build/02_renormalisation_group.pdf
 make note NOTE=continuum_limit          # one note      -> notes/build/continuum_limit.pdf
 make notes                              # every notes/*.tex -> notes/build/
+make check                              # verify every build lands in a build/ dir
 make clean                              # removes build/, sections/build/, notes/build/
 ```
 
@@ -315,7 +317,7 @@ Every build writes to a `build/` directory beside its root `.tex` file
 (`latex/`, `latex/sections/` or `latex/notes/`); these are gitignored. The
 notes in `notes/` are self-contained articles built one at a time. A bare
 `latexmk <file>.tex` run from any of those three directories does the same,
-via the `.latexmkrc` each one carries.
+via that directory's `.latexmkrc`.
 
 In VS Code with LaTeX Workshop, `.vscode/settings.json` makes Ctrl+Alt+B
 compile whichever file is open (the whole document from `main.tex`, a section,
@@ -332,6 +334,9 @@ folders in the explorer.
 | `sections/*.tex`  | One section per file.                                     |
 | `references.bib`  | Bibliography (biblatex + biber, author-year).             |
 | `figures/`        | Graphics; `\includegraphics{name}` resolves here.         |
+| `notes/*.tex`     | Self-contained articles (own preamble); built one at a time. |
+| `scripts/`        | `check_build_dirs.sh`, run by `make check`.               |
+| `.latexmkrc`      | latexmk settings (output to `build/`); `sections/` and `notes/` delegate to it. |
 
 ### Adding a section
 

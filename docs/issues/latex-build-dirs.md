@@ -61,7 +61,9 @@ time. Some read figures from `latex/notes/figures/`.
 ## Inputs / outputs / interfaces
 - Inputs: `latex/Makefile`, `.vscode/settings.json`, `.gitignore`,
   `latex/main.tex` (header comment only), `README.md` (LaTeX section only).
-- Outputs: those files edited; three new `.latexmkrc` files.
+- Outputs: those files edited; three new `.latexmkrc` files (the ones in
+  `sections/` and `notes/` delegate to `latex/.latexmkrc`);
+  `latex/scripts/check_build_dirs.sh` and a `make check` target that runs it.
 - Interfaces: `make`, `make sec SEC=..`, `make note NOTE=..`, `make notes`,
   `make clean`, all run from `latex/`; VS Code Ctrl+Alt+B on any root file.
 
