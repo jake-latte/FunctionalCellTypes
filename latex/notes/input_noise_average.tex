@@ -37,7 +37,8 @@ Gibbs measure, its posterior is tilted by the loss, and
 average). A simulation that draws $\eta$ once and keeps it (\emph{quenched}) or
 draws it afresh at every SGLD step (the \emph{averaged-loss} law) samples a
 different measure over the weights. For the linear one-hidden-layer network
-the three differ at $O(\sigma^2)$ and most visibly on the $P-K$ null
+the three differ at $O(\sigma^2)$ (the quenched one at $O(\sigma)$ per
+realisation, $O(\sigma^2)$ after averaging over $\eta$) and most visibly on the $P-K$ null
 directions of the hidden activity, which are pure $\eta$: their level is
 $\sigma_0^2 = \sigma^2/(1+r\sigma^2)$ (annealed), $\sigma^2$ (quenched) or $0$
 (fresh draws, noise-free output), i.e.\ $0.5$ against $1$ against $0$ at
@@ -55,8 +56,10 @@ the two samplers.
 \label{sec:measures}
 
 One hidden layer of \texttt{eq:ff-network} (the comparison needs only the
-layer that carries $\eta$), with the code's names $U = W^{(0)}\in\R^{N\times m}$,
-$V = W^{(1)}\in\R^{N\times n}$, $\Theta = (U,V)$:
+layer that carries $\eta$), with the code's names $U = W^{(0)}\in\R^{N\times m}$
+and $V = W^{(1)\top}\in\R^{N\times n}$ (\texttt{eq:ff-network} has
+$W^{(L)}_{\alpha,j}$ of shape $n\times N$; the code stores its transpose),
+$\Theta = (U,V)$:
 \begin{equation}
   h^\mu = \hb^\mu + \eta^\mu,\qquad
   \hb^\mu = \frac{1}{\sqrt m}\,U x^\mu,\qquad
@@ -100,7 +103,8 @@ $\eta$ integral is \texttt{eq:single-site-reg},
 \end{equation}
 which adds $\sigma^2 I$ to the quadratic form $-\frac12\hat h^{(1)}\Phi^{(0)}\hat h^{(1)}$
 left by the $U$ integral: the first-layer covariance is $\Phi^{(0)} + \sigma^2 I$
-(Section~2 of the notes; Lemma~1 of \path{linear_solution_limits.tex}). Every
+(Section~2 of the notes; the Lemma ``Gaussian single site'' of
+\path{linear_solution_limits.tex}). Every
 formula in the notes that contains $\sigma$ refers to this measure. In the
 language of disordered systems $\log\Z$ is the \emph{annealed} average over
 the disorder $\eta$: the average sits inside the logarithm.
@@ -117,7 +121,7 @@ and an observable is $\E_\eta\langle O\rangle_\eta$: the average over $\eta$
 is taken \emph{outside} ($\E_\eta\log Z(\eta)$ for the free energy). The
 annealed $\Theta$-marginal, $\propto\int\D\eta\,e^{-\beta\Lc(\Theta,\eta)-\|\eta\|^2/2\sigma^2}$,
 is a marginal likelihood and a different function of $\Theta$ than
-$\E_\eta\,p(\Theta\mid\eta)$; the two coincide only when $\Lc$ does not depend
+$\E_\eta\,p(\Theta\mid\eta)$; the two coincide when $\Lc$ does not depend
 on $\eta$.
 
 \paragraph{(c) Fresh draws: the averaged-loss law.}
@@ -144,9 +148,13 @@ constant; hence
 \end{equation}
 so that $\beta\E_\eta\Lc = \beta\Lc(\Theta,0) + \frac{P\kappa\sigma^2}{2N}\|V\|_F^2 + \text{const}$:
 a ridge on the readout and nothing else. Against the prior
-$\frac{1}{2k_1}\|V\|_F^2$ (for $K^{(1)} = k_1 I$) the ridge is of relative
-order $k_1P\kappa\sigma^2/N = \beta k_1\sigma^2/(nN)$, so at large $N$ the
-fresh-draw law over $\Theta$ is the $\sigma = 0$ law. It is not the annealed
+$\frac{1}{2k_1}\|V\|_F^2$ (for $K^{(1)} = k_1 I$; the same order with the
+limits note's spatial $K^{(1)} = k_1 I_n\otimes K$) the ridge is of relative
+order $k_1P\kappa\sigma^2/N = \beta k_1\sigma^2/(nN)$, i.e.\ $O(\beta/N)$ at
+fixed $\beta$: $2\times10^{-4}$ at $\sigma^2 = 0.01$, $\beta = 10$, $n = 8$,
+$N = 64$, and $2\%$ if $\sigma^2$ were $1$ there. So at large $N$, with
+$\beta$ not scaled up with $N$, the fresh-draw law over $\Theta$ is the
+$\sigma = 0$ law. It is not the annealed
 measure (Section~\ref{sec:samplers}, Remark~\ref{rem:small-sigma} gives the
 $O(\sigma^2)$ difference), and the hidden-layer statistics the theory
 predicts are joint over $(\Theta,\eta)$, which the sampler of
@@ -156,13 +164,19 @@ predicts are joint over $(\Theta,\eta)$, which the sampler of
 \label{sec:differ}
 
 Take $\phi(h) = h$ and the latent task of \path{linear_solution_limits.tex},
-$X = ZW_X^\top$, $Y = ZW_Y^\top$ with $Z\in\R^{P\times K}$ and $P\gg K$.
-Write $H,\bar H,\eta\in\R^{P\times N}$ for the matrices with rows $h^\mu$,
-$\hb^\mu$, $\eta^\mu$, so $\bar H = XU^\top/\sqrt m = Z\,(W_X^\top U^\top)/\sqrt m$
+$X = ZW_X^\top$, $Y = ZW_Y^\top$ with $Z\in\R^{P\times K}$, $P\gg K$, and
+orthonormal columns of $W_X$ and $W_Y$, so that $XX^\top = YY^\top = ZZ^\top$
+(with the code's default Gaussian teacher $XX^\top = ZG_XZ^\top$,
+$G_X = W_X^\top W_X$, and the data modes below change; the null-floor argument
+needs only $\col(X) = \col(Y) = \col(Z)$). As in the limits note, $K$ denotes
+both the number of latents and, where it appears, the spatial kernel; and
+$U$ here is the first-layer weight matrix, not the limits note's data-mode
+basis. Write $H,\bar H,\eta\in\R^{P\times N}$ for the matrices with rows
+$h^\mu$, $\hb^\mu$, $\eta^\mu$, so $\bar H = XU^\top/\sqrt m = Z\,(W_X^\top U^\top)/\sqrt m$
 has every column in $\col(Z)$. Let $u_1,\dots,u_K$ be the eigenvectors of
-$ZZ^\top$ (the data modes, with $s_X^2 = s_Y^2 = s_k^2$) and
-$u_\perp$ any of the $P-K$ unit vectors orthogonal to $\col(Z)$ (the null
-modes, $s_X = s_Y = 0$). The tuning map of neuron $i$ to a direction $u$ is
+$ZZ^\top$ (the data modes, with $s_X^2 = s_Y^2 = s_k^2$) and $u_\perp$ any
+unit vector in $\col(Z)^\perp$, a $(P-K)$-dimensional space (the null modes,
+$s_X = s_Y = 0$). The tuning map of neuron $i$ to a direction $u$ is
 $t_i = u^\top H_{\cdot,i}$, and the quantity the theory predicts is its
 spatial power spectrum $d_q$ (\texttt{eq:tuning-map} of the limits note).
 Because the weights enter $H$ only through $\bar H$,
@@ -187,9 +201,17 @@ $\frac1{2\sigma^2}\|\eta_\perp\|^2$. Hence
   \label{eq:null-annealed}
 \end{equation}
 the same precision as in Section~\ref{sec:samplers}. The rank-$n$ term moves
-$n$ of the $N$ eigenvalues by $O(\kappa k_1)$, an $O(n/N)$ effect on the
-trace; in the mean-field solution it is the readout tilt $B$, which vanishes
-on null modes ($\sY = 0$). So
+$n$ of the $N$ eigenvalues of $A$ by $\frac\kappa Ns_k^2\approx\kappa k_1$
+($s_k^2$ the squared singular values of $V$, $\approx Nk_1$ under the prior),
+an $O(n/N)$ effect on the trace: the null level per neuron, the mean
+diagonal of $A^{-1}$, is $\sigma_0^2$ up to a relative correction
+$\approx n\kappa k_1/(Nc)$. At the parameters of prediction~4 of the limits
+note ($\beta = 0.25$, $P = 256$, $n = 8$, $N = 64$, $c = 2$) this is
+$8\times10^{-6}$ (Monte Carlo over $V$: $7.6\times10^{-6}$; at $N = 12$,
+$n = 3$, $\kappa = 0.033$ the mean diagonal is $0.5496$ against
+$\sigma_0^2 = 0.5521$, a relative $0.0044$, as the formula gives). The
+mean-field solution drops this $1/N$ correction; there the readout tilt
+vanishes on the null modes because $u_\perp^\top Y = 0$. So
 \begin{equation}
   \langle t_i t_j\rangle = \sigma_0^2\,\delta_{ij},\qquad
   \sigma_0^2 = \frac{1}{\sigma^{-2} + r} = \frac{\sigma^2}{1 + r\sigma^2}:
@@ -206,15 +228,15 @@ $\E_\eta[(u_\perp^\top\eta)_i(u_\perp^\top\eta)_j] = \sigma^2\delta_{ij}$.
 The null level is $\sigma^2$, white, and untouched by $r$: the weights can
 move $H$ only inside the $K$-dimensional span $\col(Z)$, so the rate penalty
 cannot reach what lies outside it. Inside the span the frozen $\eta$ enters
-through the terms of $\beta\Lc$ that are linear in $\eta$
-(\eqref{eq:expand} below): $r\sum_\mu\hb^{\mu\top}\eta^\mu$, linear in $U$,
-is a random shift of the prior mean of $W^{(0)}$; and
-$\kappa\sum_\mu e^{\mu\top}V^\top\eta^\mu$ amounts to replacing the targets by
-$y^\mu - V^\top\eta^\mu/N$. Both involve only the projection of $\eta$ on
-$\col(Z)$. The only $\Theta$-dependent term quadratic in $\eta$ is
-$\frac{\kappa}{2N}\tr(V^\top\eta^\top\eta V)$, a ridge on $V$ with the realised
-$\eta^\top\eta\approx P\sigma^2 I_N$, i.e.\ the fresh-draw ridge of
-\eqref{eq:avg-loss} to leading order in $P$.
+in two ways (\eqref{eq:expand} below). The rate term contributes
+$r\sum_\mu\hb^{\mu\top}\eta^\mu$, linear in $U$: a random shift of the prior
+mean of $W^{(0)}$, involving only the projection of $\eta$ on $\col(Z)$. The
+data term is \emph{exactly} the noise-free data term with the targets
+replaced by $y^\mu - V^\top\eta^\mu/N$, a $V$-dependent random target shift;
+its part quadratic in $\eta$, $\frac{\kappa}{2N}\tr(V^\top\eta^\top\eta V)$, is
+a ridge on $V$ with the realised $\eta^\top\eta\approx P\sigma^2I_N$, i.e.\
+the fresh-draw ridge of \eqref{eq:avg-loss} to leading order in $P$, and its
+part linear in $\eta$ is $O(\sigma)$ per realisation.
 
 \paragraph{Fresh draws.}
 The law \eqref{eq:fresh} is over $\Theta$ alone, and the hidden activity it
@@ -327,19 +349,24 @@ is the noise-free loss, and the constant collects
 $-\frac{PN}{2}\log(2\pi)$ and the normalisation of the prior of $\eta$,
 neither of which depends on $\Theta$.
 
-\emph{Cost.} $A$ is a scalar plus a rank-$n$ matrix, so with the thin SVD
-$V = QSR^\top$ ($Q\in\R^{N\times n}$, $S = \operatorname{diag}(s_1,\dots,s_n)$),
+\emph{Cost.} $A$ is a scalar plus a rank-$n$ matrix, so by the Woodbury
+identity, in terms of the $n\times n$ Gram matrix $V^\top V$,
 \begin{equation}
-  A^{-1} = \frac1c\Big(I_N - Q\,\operatorname{diag}\Big(\frac{s_k^2}{cN/\kappa + s_k^2}\Big)Q^\top\Big),
+  A^{-1} = \frac1c\Big(I_N - V\Big(\frac{cN}{\kappa}I_n + V^\top V\Big)^{-1}V^\top\Big),
   \qquad
-  \log\det A = N\log c + \sum_{k=1}^n\log\Big(1 + \frac{\kappa s_k^2}{cN}\Big),
+  \log\det A = N\log c + \log\det\Big(I_n + \frac{\kappa}{cN}V^\top V\Big),
   \label{eq:woodbury}
 \end{equation}
-at $O(Nn^2)$ (Woodbury), and every $A^{-1}b^\mu$ costs $O(Nn)$, so one
-evaluation of $\Leff$ costs the same order as a forward pass, $O(PN(m+n))$.
-A draw from $\mathcal N(0,A^{-1})$ is $A^{-1/2}\xi$ with $\xi\sim\mathcal N(0,I_N)$
+at $O(Nn^2)$, and every $A^{-1}b^\mu$ costs $O(Nn)$, so one evaluation of
+$\Leff$ costs the same order as a forward pass, $O(PN(m+n))$. This is the
+form to implement: it is smooth in $V$ everywhere, whereas the equivalent
+expression through the singular values of $V$ has an undefined derivative at
+repeated singular values. The singular values are needed only for the
+conditional draw, which is not differentiated: with the thin SVD
+$V = QSR^\top$ ($Q\in\R^{N\times n}$, $S = \operatorname{diag}(s_1,\dots,s_n)$),
+a draw from $\mathcal N(0,A^{-1})$ is $A^{-1/2}\xi$ with $\xi\sim\mathcal N(0,I_N)$
 and $A^{-1/2} = c^{-1/2}\big(I_N - Q\,\operatorname{diag}(1 - \sqrt{1 - D_k})Q^\top\big)$,
-$D_k = s_k^2/(cN/\kappa + s_k^2)$, from the same SVD.
+$D_k = s_k^2/(cN/\kappa + s_k^2)$.
 
 \emph{Use.} SGLD on $\Leff$ (autodiff through \eqref{eq:woodbury}) samples the
 exact $\Theta$-marginal of \eqref{eq:annealed}. At each measurement draw
@@ -354,7 +381,8 @@ with $m^\mu = \hb^\mu + A^{-1}b^\mu$, which has lower variance per sample.
 \label{rem:small-sigma}
 With $A = \sigma^{-2}(I + \sigma^2 M)$, $M = rI_N + \frac\kappa N VV^\top$,
 one has $\log\det A = -N\log\sigma^2 + \sigma^2\tr M + O(\sigma^4)$ and
-$A^{-1} = \sigma^2 I + O(\sigma^4)$, so
+$A^{-1} = \sigma^2 I + O(\sigma^4)$, so, up to a $\Theta$-independent
+constant (which absorbs the $-\frac{PN}{2}\log\sigma^2$),
 \begin{equation}
   \beta\Leff = \beta\Lc(\Theta,0) + \frac{P\sigma^2}{2}\Big(Nr + \frac{\kappa}{N}\|V\|_F^2\Big)
   - \frac{\sigma^2}{2}\sum_\mu\|b^\mu\|^2 + O(\sigma^4) .
@@ -365,16 +393,22 @@ $-\frac{\sigma^2}2\sum_\mu\|r\hb^\mu + \kappa Ve^\mu\|^2$, is the gain the
 sampled noise makes by tilting against the loss, which the fresh-draw law
 lacks. The quenched law has the same expansion in the disorder with the
 random linear terms of \eqref{eq:expand} in place of this deterministic one.
-All three agree at $\sigma = 0$ and differ at $O(\sigma^2)$.
+All three agree at $\sigma = 0$; the annealed and fresh-draw laws differ at
+$O(\sigma^2)$, the quenched law at $O(\sigma)$ per realisation and to
+$O(\sigma^2)$ after averaging over $\eta$.
 \end{remark}
 
 \emph{Restrictions.} (ii) needs $\phi(h) = h$: for a nonlinear $\phi$ the
 $\eta$ integral is not Gaussian and (i) is the only exact option. A deeper
 \emph{linear} network keeps the closed form, since $f$ and every $h^{(l)}$
-stay linear in $\eta$, but the rate penalties of layers $l\ge2$ add
-$\frac{r}{N^{l-1}}(W^{(l-1)}\cdots W^{(1)})^\top(W^{(l-1)}\cdots W^{(1)})$ to
-$A$: a full-rank $N\times N$ precision, $O(N^3)$ per evaluation instead of
-$O(Nn^2)$.
+stay linear in $\eta$. In the convention of \texttt{eq:ff-network},
+$h^{(l+1)} = W^{(l)}\phi^{(l)}/\sqrt N$ for $1\le l\le L-1$ and the readout
+is $W^{(L)}$ (so the $V = W^{(1)\top}$ of the one-layer case becomes
+$W^{(L)\top}$, and $W^{(1)},\dots,W^{(L-1)}$ are hidden-to-hidden matrices);
+writing $M_l = W^{(l-1)}\cdots W^{(1)}/N^{(l-1)/2}$ for the map from
+$h^{(1)}$ to $h^{(l)}$, the rate penalties of layers $l\ge2$ add
+$r\sum_{l\ge2}M_l^\top M_l$ to $A$: a full-rank $N\times N$ precision,
+$O(N^3)$ per evaluation instead of $O(Nn^2)$.
 
 \section{Policy}
 \label{sec:policy}
@@ -383,7 +417,7 @@ $O(Nn^2)$.
   \item $\sigma$ is a formal regulariser. Its only job in the derivation is to
     make the first-layer covariance $\Phi^{(0)} + \sigma^2 I$ invertible
     ($\Phi^{(0)} = \frac{k_0}{m}XX^\top\otimes K^{(0),\mathrm{post}}$ has rank at
-    most $KN < NP$ for the latent task, since $XX^\top = ZZ^\top$ has rank $K$),
+    most $KN < NP$ for the latent task, since $XX^\top$ has rank $K$),
     so that the Gaussian integral over $\hat h^{(1)}$ in
     \texttt{eq:single-site} converges.
   \item Every analysis and every prediction is stated in the limit
