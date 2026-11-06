@@ -1,0 +1,407 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+\newcommand{\R}{\mathbb R}
+\newcommand{\E}{\mathbb E}
+\newcommand{\D}{\mathcal D}
+\newcommand{\Lc}{\mathcal L}
+\newcommand{\Leff}{\mathcal L_{\mathrm{eff}}}
+\newcommand{\Z}{\mathcal Z}
+\newcommand{\Pw}{\mathcal P_{\mathrm w}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\col}{\operatorname{col}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\sX}{\hat s_X^2}
+\newcommand{\sY}{\hat s_Y^2}
+\newcommand{\hb}{\bar h}
+\newcommand{\lr}{\mathrm{lr}}
+\newtheorem{lemma}{Lemma}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+\title{Section 1 note: the input-noise average\\(annealed, quenched and fresh draws)}
+\author{}
+\date{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The notes integrate the first-layer noise $\eta$ of \texttt{eq:ff-network}
+\emph{together with} the weights: $\eta$ is a sampled variable of the joint
+Gibbs measure, its posterior is tilted by the loss, and
+\texttt{eq:single-site-reg} is that Gaussian integral (the \emph{annealed}
+average). A simulation that draws $\eta$ once and keeps it (\emph{quenched}) or
+draws it afresh at every SGLD step (the \emph{averaged-loss} law) samples a
+different measure over the weights. For the linear one-hidden-layer network
+the three differ at $O(\sigma^2)$ and most visibly on the $P-K$ null
+directions of the hidden activity, which are pure $\eta$: their level is
+$\sigma_0^2 = \sigma^2/(1+r\sigma^2)$ (annealed), $\sigma^2$ (quenched) or $0$
+(fresh draws, noise-free output), i.e.\ $0.5$ against $1$ against $0$ at
+$\sigma^2 = r = 1$. Two samplers reproduce the annealed measure exactly:
+$\eta = \sigma\zeta$ with $\zeta$ a $P\times N$ parameter under SGLD, for any
+activation; and, for a linear network, the closed-form marginal
+$\Leff(\Theta)$ with a rank-$n$ Woodbury precision. Policy: $\sigma$ is a
+formal regulariser, every prediction is stated at $\sigma\to0^+$ where the
+three measures coincide, the \texttt{fct} code has no $\eta$, and the two
+noise-floor predictions of \path{linear_solution_limits.tex} wait for one of
+the two samplers.
+\end{abstract}
+
+\section{The three measures}
+\label{sec:measures}
+
+One hidden layer of \texttt{eq:ff-network} (the comparison needs only the
+layer that carries $\eta$), with the code's names $U = W^{(0)}\in\R^{N\times m}$,
+$V = W^{(1)}\in\R^{N\times n}$, $\Theta = (U,V)$:
+\begin{equation}
+  h^\mu = \hb^\mu + \eta^\mu,\qquad
+  \hb^\mu = \frac{1}{\sqrt m}\,U x^\mu,\qquad
+  f^\mu = \frac1N V^\top\phi(h^\mu),\qquad
+  \eta^\mu\in\R^N,\ \mu = 1,\dots,P,
+  \label{eq:net}
+\end{equation}
+where $\hb$ is the noise-free preactivation. With $\kappa = \beta/(Pn)$ the
+tempered loss is
+\begin{equation}
+  \beta\Lc(\Theta,\eta)
+  = \frac{\kappa N}{2}\sum_\mu\|f^\mu - y^\mu\|^2
+  + \Pw(\Theta)
+  + \frac r2\sum_\mu\|\phi(h^\mu)\|^2 ,
+  \label{eq:loss}
+\end{equation}
+with $\Pw$ the Gaussian weight prior of \texttt{eq:prior-weights} and $r$ the
+rate-penalty coefficient,\footnote{The main text currently writes $g^2$ for
+this $r$ ($G = g^2 I$ in $\mathcal P_{\mathrm{rates}}$); a rename is pending.
+The limits note's $\sigma_0^2 = \sigma^2/(1+g^2\sigma^2)$ is the
+$\sigma^2/(1+r\sigma^2)$ below.} and $\eta$ carries its own, untempered,
+prior $\frac{1}{2\sigma^2}\|\eta\|^2$. Three measures over the weights can be
+built from \eqref{eq:loss}.
+
+\paragraph{(a) Annealed: the notes.}
+\begin{equation}
+  \Z = \int\D\Theta\,\D\eta\;
+  e^{-\beta\Lc(\Theta,\eta)}\,e^{-\|\eta\|^2/2\sigma^2} .
+  \label{eq:annealed}
+\end{equation}
+This is a joint Gibbs measure on $(\Theta,\eta)$. The conditional
+$p(\eta\mid\Theta)\propto e^{-\beta\Lc(\Theta,\eta)-\|\eta\|^2/2\sigma^2}$ is
+\emph{not} the prior: the loss tilts it, and the rate penalty in particular
+shrinks it. In the notes' path integral the constraint
+$h^{(1)} = Ux/\sqrt m + \eta$ is enforced by the conjugate $\hat h^{(1)}$
+through $e^{-i\hat h^{(1)}\cdot(h^{(1)} - Ux/\sqrt m - \eta)}$, so the
+$\eta$ integral is \texttt{eq:single-site-reg},
+\begin{equation}
+  \int\D\eta\,e^{-\|\eta\|^2/2\sigma^2 + i\,\eta\cdot\hat h^{(1)}}
+  \propto e^{-\frac{\sigma^2}{2}\|\hat h^{(1)}\|^2},
+\end{equation}
+which adds $\sigma^2 I$ to the quadratic form $-\frac12\hat h^{(1)}\Phi^{(0)}\hat h^{(1)}$
+left by the $U$ integral: the first-layer covariance is $\Phi^{(0)} + \sigma^2 I$
+(Section~2 of the notes; Lemma~1 of \path{linear_solution_limits.tex}). Every
+formula in the notes that contains $\sigma$ refers to this measure. In the
+language of disordered systems $\log\Z$ is the \emph{annealed} average over
+the disorder $\eta$: the average sits inside the logarithm.
+
+\paragraph{(b) Quenched: one draw per dataset.}
+Draw $\eta\sim\mathcal N(0,\sigma^2 I)$ once, with the data, and keep it at
+every step. The sampler then equilibrates to the Gibbs measure at fixed $\eta$,
+\begin{equation}
+  p(\Theta\mid\eta) = \frac{e^{-\beta\Lc(\Theta,\eta)}}{Z(\eta)},\qquad
+  Z(\eta) = \int\D\Theta\,e^{-\beta\Lc(\Theta,\eta)},
+  \label{eq:quenched}
+\end{equation}
+and an observable is $\E_\eta\langle O\rangle_\eta$: the average over $\eta$
+is taken \emph{outside} ($\E_\eta\log Z(\eta)$ for the free energy). The
+annealed $\Theta$-marginal, $\propto\int\D\eta\,e^{-\beta\Lc(\Theta,\eta)-\|\eta\|^2/2\sigma^2}$,
+is a marginal likelihood and a different function of $\Theta$ than
+$\E_\eta\,p(\Theta\mid\eta)$; the two coincide only when $\Lc$ does not depend
+on $\eta$.
+
+\paragraph{(c) Fresh draws: the averaged-loss law.}
+Draw $\eta_t\sim\mathcal N(0,\sigma^2I)$ independently at every SGLD step,
+$\Theta_{t+1} = \Theta_t - \lr\,\nabla_\Theta\Lc(\Theta_t,\eta_t) + \sqrt{2\lr/\beta}\,\xi_t$.
+Since $\eta_t$ is independent of $\Theta_t$, the drift averages to
+$-\nabla_\Theta\E_\eta\Lc(\Theta,\eta)$, and its fluctuation about that mean is
+$O(\lr)$ per step against the $O(\sqrt{\lr})$ injected noise, so as $\lr\to0$
+the stationary law is
+\begin{equation}
+  p(\Theta)\propto e^{-\beta\,\E_\eta\Lc(\Theta,\eta)} .
+  \label{eq:fresh}
+\end{equation}
+For the linear network ($\phi(h) = h$), $f^\mu = V^\top\hb^\mu/N + V^\top\eta^\mu/N$
+is linear in $\eta$, the cross terms vanish by $\E\eta = 0$, and the rate
+term contributes $\frac r{2\beta}\E\|\eta\|^2 = \frac{r}{2\beta}PN\sigma^2$, a
+constant; hence
+\begin{equation}
+  \E_\eta\Lc(\Theta,\eta)
+  = \Lc(\Theta,0) + \frac{N}{2Pn}\sum_{\mu,\alpha}\Var_\eta f^\mu_\alpha + \text{const},
+  \qquad
+  \Var_\eta f^\mu_\alpha = \frac{\sigma^2}{N^2}\sum_i V_{i\alpha}^2 ,
+  \label{eq:avg-loss}
+\end{equation}
+so that $\beta\E_\eta\Lc = \beta\Lc(\Theta,0) + \frac{P\kappa\sigma^2}{2N}\|V\|_F^2 + \text{const}$:
+a ridge on the readout and nothing else. Against the prior
+$\frac{1}{2k_1}\|V\|_F^2$ (for $K^{(1)} = k_1 I$) the ridge is of relative
+order $k_1P\kappa\sigma^2/N = \beta k_1\sigma^2/(nN)$, so at large $N$ the
+fresh-draw law over $\Theta$ is the $\sigma = 0$ law. It is not the annealed
+measure (Section~\ref{sec:samplers}, Remark~\ref{rem:small-sigma} gives the
+$O(\sigma^2)$ difference), and the hidden-layer statistics the theory
+predicts are joint over $(\Theta,\eta)$, which the sampler of
+\eqref{eq:fresh} never holds: $\eta_t$ is discarded after each step.
+
+\section{Where they differ: the linear one-hidden-layer network}
+\label{sec:differ}
+
+Take $\phi(h) = h$ and the latent task of \path{linear_solution_limits.tex},
+$X = ZW_X^\top$, $Y = ZW_Y^\top$ with $Z\in\R^{P\times K}$ and $P\gg K$.
+Write $H,\bar H,\eta\in\R^{P\times N}$ for the matrices with rows $h^\mu$,
+$\hb^\mu$, $\eta^\mu$, so $\bar H = XU^\top/\sqrt m = Z\,(W_X^\top U^\top)/\sqrt m$
+has every column in $\col(Z)$. Let $u_1,\dots,u_K$ be the eigenvectors of
+$ZZ^\top$ (the data modes, with $s_X^2 = s_Y^2 = s_k^2$) and
+$u_\perp$ any of the $P-K$ unit vectors orthogonal to $\col(Z)$ (the null
+modes, $s_X = s_Y = 0$). The tuning map of neuron $i$ to a direction $u$ is
+$t_i = u^\top H_{\cdot,i}$, and the quantity the theory predicts is its
+spatial power spectrum $d_q$ (\texttt{eq:tuning-map} of the limits note).
+Because the weights enter $H$ only through $\bar H$,
+\begin{equation}
+  u_\perp^\top H = u_\perp^\top\eta
+  \qquad\text{for every }\Theta:
+  \label{eq:null-is-noise}
+\end{equation}
+the null directions of the hidden activity are pure noise, whatever the
+weights do. Their level is where the three measures separate most sharply.
+
+\paragraph{Annealed.}
+Project the exponent of \eqref{eq:annealed} on $u_\perp$, with
+$\eta_\perp = \eta^\top u_\perp\in\R^N$. The data term sees
+$u_\perp^\top F = u_\perp^\top\eta V/N$ and $u_\perp^\top Y = 0$, so it
+contributes $\frac{\kappa N}{2}\|\eta_\perp^\top V\|^2/N^2 = \frac{\kappa}{2N}\eta_\perp^\top VV^\top\eta_\perp$;
+the rate term contributes $\frac r2\|\eta_\perp\|^2$ and the prior
+$\frac1{2\sigma^2}\|\eta_\perp\|^2$. Hence
+\begin{equation}
+  \eta_\perp\mid\Theta\sim\mathcal N\big(0,\,A^{-1}\big),\qquad
+  A = (\sigma^{-2} + r)\,I_N + \frac{\kappa}{N}VV^\top ,
+  \label{eq:null-annealed}
+\end{equation}
+the same precision as in Section~\ref{sec:samplers}. The rank-$n$ term moves
+$n$ of the $N$ eigenvalues by $O(\kappa k_1)$, an $O(n/N)$ effect on the
+trace; in the mean-field solution it is the readout tilt $B$, which vanishes
+on null modes ($\sY = 0$). So
+\begin{equation}
+  \langle t_i t_j\rangle = \sigma_0^2\,\delta_{ij},\qquad
+  \sigma_0^2 = \frac{1}{\sigma^{-2} + r} = \frac{\sigma^2}{1 + r\sigma^2}:
+\end{equation}
+white, at the floor of the limits note's Lemma~``High-frequency floor''.
+The rate penalty acts on the \emph{sampled} noise and shrinks it. Inside
+$\col(Z)$, $\sigma^2$ enters additively in $\alpha_q = \lambda_q\sX + \sigma^2$
+and from there $h_q$, $c$ and every $d_q$ of the implicit solution.
+
+\paragraph{Quenched.}
+By \eqref{eq:null-is-noise} the null tuning map $u_\perp^\top\eta$ is fixed by
+the draw and has no $\Theta$ dependence at all: over the disorder,
+$\E_\eta[(u_\perp^\top\eta)_i(u_\perp^\top\eta)_j] = \sigma^2\delta_{ij}$.
+The null level is $\sigma^2$, white, and untouched by $r$: the weights can
+move $H$ only inside the $K$-dimensional span $\col(Z)$, so the rate penalty
+cannot reach what lies outside it. Inside the span the frozen $\eta$ enters
+through the terms of $\beta\Lc$ that are linear in $\eta$
+(\eqref{eq:expand} below): $r\sum_\mu\hb^{\mu\top}\eta^\mu$, linear in $U$,
+is a random shift of the prior mean of $W^{(0)}$; and
+$\kappa\sum_\mu e^{\mu\top}V^\top\eta^\mu$ amounts to replacing the targets by
+$y^\mu - V^\top\eta^\mu/N$. Both involve only the projection of $\eta$ on
+$\col(Z)$. The only $\Theta$-dependent term quadratic in $\eta$ is
+$\frac{\kappa}{2N}\tr(V^\top\eta^\top\eta V)$, a ridge on $V$ with the realised
+$\eta^\top\eta\approx P\sigma^2 I_N$, i.e.\ the fresh-draw ridge of
+\eqref{eq:avg-loss} to leading order in $P$.
+
+\paragraph{Fresh draws.}
+The law \eqref{eq:fresh} is over $\Theta$ alone, and the hidden activity it
+describes is the noise-free $\bar H$, whose columns lie in $\col(Z)$: the
+null modes have $d_q = 0$ exactly, there is no floor, and the latent modes
+sit at their $\sigma = 0$ values up to the $O(1/N)$ ridge on $V$. (If the
+current $\eta_t$ is added to the measured $H$, the null level is $\sigma^2$,
+an untilted draw independent of $\Theta_t$: the quenched number, not
+$\sigma_0^2$.)
+
+\paragraph{Agreement and size of the difference.}
+As $\sigma\to0$ all three reduce to $e^{-\beta\Lc(\Theta,0)}$: null modes at
+$d_q = 0$, latent modes at their $\sigma = 0$ spectra
+(Section~\ref{sec:policy}). At finite $\sigma$ the difference is $O(1)$. In the
+setting of prediction~4 of the limits note, $\sigma^2 = 1$, $r = 1$:
+\begin{center}
+  \begin{tabular}{@{}lll@{}}
+    \toprule
+    measure & null-mode level & at $\sigma^2 = r = 1$\\
+    \midrule
+    annealed (the notes) & $\sigma_0^2 = \sigma^2/(1 + r\sigma^2)$ & $0.5$\\
+    quenched (one fixed draw) & $\sigma^2$ & $1$\\
+    fresh draws, noise-free output & $0$ & $0$\\
+    fresh draws, $\eta_t$ included & $\sigma^2$ & $1$\\
+    \bottomrule
+  \end{tabular}
+\end{center}
+A simulation with a fixed or a fresh $\eta$ would therefore read the floor a
+factor $2$ above the theory (or not at all) and falsify prediction~4 for the
+wrong reason.
+
+\section{The proper treatment at \texorpdfstring{$\sigma > 0$}{sigma > 0}}
+\label{sec:samplers}
+
+Two samplers of the annealed measure \eqref{eq:annealed} are exact.
+
+\paragraph{(i) The noise as a parameter.}
+Write $\eta = \sigma\zeta$ with $\zeta\in\R^{P\times N}$ and add
+$\frac{1}{2\beta}\|\zeta\|^2$ to the loss,
+\begin{equation}
+  \Lc'(\Theta,\zeta) = \Lc(\Theta,\sigma\zeta) + \frac{1}{2\beta}\|\zeta\|^2 .
+\end{equation}
+SGLD on $(\Theta,\zeta)$ has the stationary law
+$e^{-\beta\Lc'} = e^{-\beta\Lc(\Theta,\sigma\zeta)}e^{-\|\zeta\|^2/2}$, which is
+\eqref{eq:annealed} in the variable $\zeta = \eta/\sigma$. The prior
+curvature of $\zeta$ is $1/\beta$, the same as that of a weight with unit
+prior, so one learning rate serves both. This works for any activation
+$\phi$; it costs $PN$ extra parameters and a forward pass on the training set
+that adds $\sigma\zeta$ to the first layer (D2 of
+\path{fct_experiment_plan.tex}). The measured hidden activity is
+$H = \bar H + \sigma\zeta$ with the \emph{current} $\zeta$, which is what
+makes the tuning-map statistics joint over $(\Theta,\eta)$.
+
+\paragraph{(ii) Closed-form marginal for a linear network.}
+With $\phi(h) = h$ the exponent of \eqref{eq:annealed} is quadratic in each
+$\eta^\mu$, so $\eta$ can be integrated exactly. Let
+\begin{equation}
+  e^\mu = \frac1N V^\top\hb^\mu - y^\mu\in\R^n
+  \quad\text{(the noise-free residual)},\qquad
+  c = \sigma^{-2} + r .
+\end{equation}
+Per pattern, the three terms of $-\beta\Lc - \|\eta\|^2/2\sigma^2$ that
+contain $\eta^\mu$ are the data term, the rate term and the prior:
+\begin{align}
+  -\frac{\kappa N}{2}\Big\|e^\mu + \frac1N V^\top\eta^\mu\Big\|^2
+  &= -\frac{\kappa N}{2}\|e^\mu\|^2
+     - \kappa\,e^{\mu\top}V^\top\eta^\mu
+     - \frac{\kappa}{2N}\,\eta^{\mu\top}VV^\top\eta^\mu ,
+  \nonumber\\
+  -\frac r2\|\hb^\mu + \eta^\mu\|^2
+  &= -\frac r2\|\hb^\mu\|^2 - r\,\hb^{\mu\top}\eta^\mu - \frac r2\|\eta^\mu\|^2 ,
+  \label{eq:expand}\\
+  -\frac{1}{2\sigma^2}\|\eta^\mu\|^2 . &
+  \nonumber
+\end{align}
+Collecting the quadratic and the linear parts,
+\begin{equation}
+  -\beta\Lc(\Theta,\eta) - \frac{\|\eta\|^2}{2\sigma^2}
+  = -\beta\Lc(\Theta,0)
+    + \sum_\mu\Big[-\tfrac12\,\eta^{\mu\top}A\,\eta^\mu + b^{\mu\top}\eta^\mu\Big],
+\end{equation}
+\begin{equation}
+  \boxed{\;
+  \begin{gathered}
+  A = c\,I_N + \frac{\kappa}{N}VV^\top = \Big(\frac1{\sigma^2} + r\Big)I_N + \frac{\beta}{PnN}VV^\top,\\
+  b^\mu = -r\,\hb^\mu - \kappa\,Ve^\mu = -r\,\hb^\mu - \frac{\beta}{Pn}\,Ve^\mu .
+  \end{gathered}
+  \;}
+  \label{eq:Ab}
+\end{equation}
+$A$ is the same for every pattern (it depends on $V$ only) and is positive
+definite for every $\sigma > 0$. The Gaussian integral
+$\int d\eta^\mu\,e^{-\frac12\eta^\top A\eta + b^\top\eta} = (2\pi)^{N/2}(\det A)^{-1/2}e^{\frac12 b^\top A^{-1}b}$
+then gives $\Z = \int\D\Theta\,e^{-\beta\Leff(\Theta)}$ with
+\begin{equation}
+  \boxed{\;
+  \beta\Leff(\Theta) = \beta\Lc(\Theta,0) + \frac P2\log\det A
+  - \frac12\sum_\mu b^{\mu\top}A^{-1}b^\mu
+  \;}\qquad(+\ \text{const}),
+  \label{eq:Leff}
+\end{equation}
+and the conditional law of the noise given the weights,
+\begin{equation}
+  \eta^\mu\mid\Theta\;\sim\;\mathcal N\big(A^{-1}b^\mu,\;A^{-1}\big),
+  \quad\text{independently over }\mu .
+  \label{eq:eta-cond}
+\end{equation}
+Here $\beta\Lc(\Theta,0) = \frac{\kappa N}{2}\sum_\mu\|e^\mu\|^2 + \Pw(\Theta) + \frac r2\sum_\mu\|\hb^\mu\|^2$
+is the noise-free loss, and the constant collects
+$-\frac{PN}{2}\log(2\pi)$ and the normalisation of the prior of $\eta$,
+neither of which depends on $\Theta$.
+
+\emph{Cost.} $A$ is a scalar plus a rank-$n$ matrix, so with the thin SVD
+$V = QSR^\top$ ($Q\in\R^{N\times n}$, $S = \operatorname{diag}(s_1,\dots,s_n)$),
+\begin{equation}
+  A^{-1} = \frac1c\Big(I_N - Q\,\operatorname{diag}\Big(\frac{s_k^2}{cN/\kappa + s_k^2}\Big)Q^\top\Big),
+  \qquad
+  \log\det A = N\log c + \sum_{k=1}^n\log\Big(1 + \frac{\kappa s_k^2}{cN}\Big),
+  \label{eq:woodbury}
+\end{equation}
+at $O(Nn^2)$ (Woodbury), and every $A^{-1}b^\mu$ costs $O(Nn)$, so one
+evaluation of $\Leff$ costs the same order as a forward pass, $O(PN(m+n))$.
+A draw from $\mathcal N(0,A^{-1})$ is $A^{-1/2}\xi$ with $\xi\sim\mathcal N(0,I_N)$
+and $A^{-1/2} = c^{-1/2}\big(I_N - Q\,\operatorname{diag}(1 - \sqrt{1 - D_k})Q^\top\big)$,
+$D_k = s_k^2/(cN/\kappa + s_k^2)$, from the same SVD.
+
+\emph{Use.} SGLD on $\Leff$ (autodiff through \eqref{eq:woodbury}) samples the
+exact $\Theta$-marginal of \eqref{eq:annealed}. At each measurement draw
+$\eta^\mu$ from \eqref{eq:eta-cond} once and form $H = \bar H + \eta$: this
+is an exact joint sample of $(\Theta,\eta)$, so the tuning-map statistics
+$\langle t_it_j\rangle$ are those of the theory. Alternatively use the
+conditional moments directly (Rao--Blackwell),
+$\E[h^\mu h^{\nu\top}\mid\Theta] = m^\mu m^{\nu\top} + \delta^{\mu\nu}A^{-1}$
+with $m^\mu = \hb^\mu + A^{-1}b^\mu$, which has lower variance per sample.
+
+\begin{remark}[Check: the three measures at small $\sigma$]
+\label{rem:small-sigma}
+With $A = \sigma^{-2}(I + \sigma^2 M)$, $M = rI_N + \frac\kappa N VV^\top$,
+one has $\log\det A = -N\log\sigma^2 + \sigma^2\tr M + O(\sigma^4)$ and
+$A^{-1} = \sigma^2 I + O(\sigma^4)$, so
+\begin{equation}
+  \beta\Leff = \beta\Lc(\Theta,0) + \frac{P\sigma^2}{2}\Big(Nr + \frac{\kappa}{N}\|V\|_F^2\Big)
+  - \frac{\sigma^2}{2}\sum_\mu\|b^\mu\|^2 + O(\sigma^4) .
+\end{equation}
+The first correction is exactly $\beta\E_\eta\Lc - \beta\Lc(\Theta,0)$ of
+\eqref{eq:avg-loss} (the fresh-draw ridge plus its constant); the second,
+$-\frac{\sigma^2}2\sum_\mu\|r\hb^\mu + \kappa Ve^\mu\|^2$, is the gain the
+sampled noise makes by tilting against the loss, which the fresh-draw law
+lacks. The quenched law has the same expansion in the disorder with the
+random linear terms of \eqref{eq:expand} in place of this deterministic one.
+All three agree at $\sigma = 0$ and differ at $O(\sigma^2)$.
+\end{remark}
+
+\emph{Restrictions.} (ii) needs $\phi(h) = h$: for a nonlinear $\phi$ the
+$\eta$ integral is not Gaussian and (i) is the only exact option. A deeper
+\emph{linear} network keeps the closed form, since $f$ and every $h^{(l)}$
+stay linear in $\eta$, but the rate penalties of layers $l\ge2$ add
+$\frac{r}{N^{l-1}}(W^{(l-1)}\cdots W^{(1)})^\top(W^{(l-1)}\cdots W^{(1)})$ to
+$A$: a full-rank $N\times N$ precision, $O(N^3)$ per evaluation instead of
+$O(Nn^2)$.
+
+\section{Policy}
+\label{sec:policy}
+
+\begin{enumerate}[nosep]
+  \item $\sigma$ is a formal regulariser. Its only job in the derivation is to
+    make the first-layer covariance $\Phi^{(0)} + \sigma^2 I$ invertible
+    ($\Phi^{(0)} = \frac{k_0}{m}XX^\top\otimes K^{(0),\mathrm{post}}$ has rank at
+    most $KN < NP$ for the latent task, since $XX^\top = ZZ^\top$ has rank $K$),
+    so that the Gaussian integral over $\hat h^{(1)}$ in
+    \texttt{eq:single-site} converges.
+  \item Every analysis and every prediction is stated in the limit
+    $\sigma\to0^+$. By Section~\texttt{sec:sigma0} of
+    \path{linear_solution_limits.tex} the limit is regular:
+    $\alpha_q = \lambda_q\sX$, the floor is $0$, the null modes have
+    $d_q = 0$ (the hidden activity is confined to $\col(Z)$ and the support of
+    the prior), and every other formula of the implicit solution goes over
+    unchanged (checked there at $\sigma^2 = 10^{-8}$ against $\sigma = 0$).
+  \item The \texttt{fct} code has no $\eta$. At $\sigma = 0$ the three measures
+    of Section~\ref{sec:measures} coincide, so a simulation without noise
+    tests the $\sigma\to0^+$ theory with no ambiguity about which average is
+    meant.
+  \item Predictions~4 and~5 of the limits note (the white null modes at
+    $\sigma_0^2$, and the noise-dominated regime) are deferred. When they are
+    taken up they need sampler~(i) or~(ii) of Section~\ref{sec:samplers};
+    a fixed or a freshly drawn $\eta$ measures $\sigma^2$ or $0$ in place of
+    $\sigma_0^2$ (Section~\ref{sec:differ}) and must not be used.
+\end{enumerate}
+
+\end{document}
