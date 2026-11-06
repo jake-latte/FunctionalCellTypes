@@ -16,6 +16,9 @@ import torch
 
 from fct import spectrum as sp
 
+# The script that produced the limits note's numbers is the reference implementation of
+# half_power_q, autocorrelation and lag-1; it is a standalone check outside the fct package,
+# so it is loaded by path rather than imported.
 SCRIPT = (
     Path(__file__).resolve().parents[1]
     / "latex"
@@ -97,10 +100,25 @@ def test_latent_basis_orders_latents_by_index_not_by_string():
     assert torch.equal(basis.Z[:, 10], factors["z10"])
 
 
+def test_latent_basis_rejects_symmetric_latents_without_a_mean_direction():
+    """Latents on [-a, a] have K near-degenerate singular values: u_1 is a random direction."""
+    gen = torch.Generator().manual_seed(15)
+    z = 2 * torch.rand((256, 3), dtype=F64, generator=gen) - 1
+    with pytest.raises(ValueError, match="symmetric.*mean direction is undefined"):
+        sp.latent_basis({f"z{k}": z[:, k] for k in range(3)})
+
+
+def test_latent_basis_accepts_one_latent_on_zero_to_a():
+    basis = sp.latent_basis(uniform_factors(500, 1))
+    assert basis.U.shape == (500, 1)
+
+
 @pytest.mark.parametrize(
     "factors, match",
     [
         ({}, "no latents"),
+        ({name: torch.rand(5, dtype=F64) for name in ("z0", "z1", "z01")}, "collide"),
+        ({"z0": torch.ones(6, dtype=F64), "z1": torch.ones(6, dtype=F64)}, "rank-deficient"),
         ({"z0": torch.zeros(5, dtype=F64), "z2": torch.zeros(5, dtype=F64)}, "z0..z"),
         ({"z0": torch.zeros(5, dtype=F64), "where": torch.zeros(5, dtype=F64)}, "where"),
         ({"z0": torch.zeros((5, 2), dtype=F64)}, "1-D"),
@@ -112,6 +130,13 @@ def test_latent_basis_orders_latents_by_index_not_by_string():
 def test_latent_basis_rejects_bad_factors(factors, match):
     with pytest.raises(ValueError, match=match):
         sp.latent_basis(factors)
+
+
+def test_non_tensor_inputs_raise_type_error():
+    with pytest.raises(TypeError, match="torch tensor"):
+        sp.latent_basis({"z0": [1.0, 2.0, 3.0]})
+    with pytest.raises(TypeError, match="torch tensor"):
+        sp.power_spectrum(np.ones((2, 8)))
 
 
 # ------------------------------------------------------------------ tuning_maps, spectra
@@ -134,6 +159,7 @@ def test_power_spectrum_is_unitary_and_keeps_the_mean():
     expected = torch.zeros((1, 32), dtype=F64)
     expected[0, 0] = 32 * 4.0
     torch.testing.assert_close(sp.power_spectrum(constant), expected, atol=1e-12, rtol=0)
+    torch.testing.assert_close(sp.power_spectrum(constant[0]), expected[0], atol=1e-12, rtol=0)
 
 
 def test_power_spectrum_recovers_a_known_spectrum_within_sampling_error():
@@ -167,6 +193,28 @@ def test_null_power_equals_the_explicit_projection_on_a_random_complement():
     torch.testing.assert_close(sp.null_power(h, U), explicit, atol=1e-12, rtol=0)
 
 
+def test_null_power_is_zero_for_activity_in_the_latent_span():
+    """sigma -> 0: h = U t has no null power; a subtraction of totals would leave round-off."""
+    P, K, N = 40, 3, 64
+    gen = torch.Generator().manual_seed(16)
+    U = sp.latent_basis(uniform_factors(P, K)).U
+    t = 30.0 * torch.randn((K, N), dtype=F64, generator=gen)  # latent power ~ 10^3
+    assert float(sp.null_power(U @ t, U).abs().max()) < 1e-25
+    assert float(sp.mode_spectra(U @ t, U)[K].abs().max()) < 1e-25
+
+
+def test_null_power_resolves_a_small_floor_under_large_latent_power():
+    P, K, N, floor = 40, 3, 64, 1e-3
+    gen = torch.Generator().manual_seed(17)
+    U = sp.latent_basis(uniform_factors(P, K)).U
+    U_perp = torch.linalg.qr(U, mode="complete").Q[:, K:]
+    t = 30.0 * torch.randn((K, N), dtype=F64, generator=gen)
+    noise = math.sqrt(floor) * torch.randn((P - K, N), dtype=F64, generator=gen)
+    expected = sp.power_spectrum(noise).mean(dim=0)  # the null directions' power, exactly
+    null = sp.null_power(U @ t + U_perp @ noise, U)
+    assert float(((null - expected) / expected).abs().max()) < 1e-9
+
+
 def test_null_power_recovers_a_white_floor():
     """Null directions filled with white noise of variance sigma0^2 give a flat sigma0^2."""
     P, K, N, n, sigma0_2 = 40, 3, 64, 2000, 0.5
@@ -194,7 +242,7 @@ def test_mode_spectra_stacks_the_modes_and_the_null_mean():
 
 def test_spectra_are_float64_safe_and_keep_float32():
     U = sp.latent_basis(uniform_factors(20, 2)).U
-    h = torch.randn((20, 8), dtype=F64)
+    h = torch.randn((20, 8), dtype=F64, generator=torch.Generator().manual_seed(18))
     assert sp.mode_spectra(h, U).dtype == F64
     assert sp.mode_spectra(h.float(), U.float()).dtype == torch.float32
 
@@ -204,17 +252,17 @@ def test_spectra_are_float64_safe_and_keep_float32():
     [
         (lambda h, U: sp.tuning_maps(h[0], U), "at least 2-D"),
         (lambda h, U: sp.tuning_maps(h[:-1], U), "rows"),
-        (lambda h, U: sp.tuning_maps(h, U[:, :0]), "K"),
+        (lambda h, U: sp.tuning_maps(h, U[:, :0]), "1 <= K < P"),
         (lambda h, U: sp.tuning_maps(h, 2 * U), "orthonormal"),
         (lambda h, U: sp.tuning_maps(h * float("inf"), U), "finite"),
         (lambda h, U: sp.null_power(h, torch.eye(20, dtype=F64)), "K < P"),
-        (lambda h, U: sp.power_spectrum(h[0, 0]), "2-D"),
+        (lambda h, U: sp.power_spectrum(h[0, 0]), "scalar"),
         (lambda h, U: sp.power_spectrum(h.to(torch.int64)), "floating"),
     ],
 )
 def test_maps_and_spectra_reject_bad_inputs(call, match):
     U = sp.latent_basis(uniform_factors(20, 2)).U
-    h = torch.randn((20, 8), dtype=F64)
+    h = torch.randn((20, 8), dtype=F64, generator=torch.Generator().manual_seed(19))
     with pytest.raises(ValueError, match=match):
         call(h, U)
 
@@ -262,6 +310,33 @@ def test_spectrum_summary_gives_the_limits_note_numbers(limits, name, mode1, mod
         assert summary.lag1 == pytest.approx(lag1, abs=5e-4)
 
 
+def test_summaries_batch_over_leading_dims():
+    rng = np.random.default_rng(20)
+    d = rng.exponential(size=(3, 2, 16))
+    d = torch.from_numpy(0.5 * (d + np.roll(d[..., ::-1], 1, axis=-1)))
+    d[..., 0] += 5.0  # peaked at q = 0, so every half-power frequency is defined
+    batched = sp.spectrum_summary(d)
+    assert batched.q_half.shape == batched.share0.shape == batched.lag1.shape == (3, 2)
+    assert batched.R.shape == (3, 2, 16)
+    for i in range(3):
+        for j in range(2):
+            one = sp.spectrum_summary(d[i, j])
+            assert isinstance(one.q_half, int) and isinstance(one.lag1, float)
+            assert int(batched.q_half[i, j]) == one.q_half == sp.half_power_q(d[i, j])
+            assert float(batched.share0[i, j]) == pytest.approx(one.share0, rel=1e-14)
+            assert float(batched.lag1[i, j]) == pytest.approx(one.lag1, rel=1e-14)
+            assert (float(batched.d0[i, j]), float(batched.d_nyq[i, j])) == (one.d0, one.d_nyq)
+    torch.testing.assert_close(sp.half_power_q(d), batched.q_half)
+
+
+def test_half_power_q_rejects_a_spectrum_rising_to_nyquist():
+    d = torch.linspace(1.0, 2.0, 8, dtype=F64)  # d_0 = 1 < d_{N/2}
+    with pytest.raises(ValueError, match="d_0 .* d_N/2"):
+        sp.half_power_q(d)
+    with pytest.raises(ValueError, match="d_0 .* d_N/2"):
+        sp.spectrum_summary(d)
+
+
 def test_gaussian_width_inverts_a_gaussian_autocorrelation():
     N, width = 64, 5.0
     r = torch.arange(N, dtype=F64)
@@ -271,12 +346,19 @@ def test_gaussian_width_inverts_a_gaussian_autocorrelation():
         sp.gaussian_width(R, 2.5)
     with pytest.raises(ValueError, match="R\\(ell\\)/R\\(0\\)"):
         sp.gaussian_width(-R, 4.0)
+    for lag in (0, N):
+        with pytest.raises(ValueError, match="integer lag"):
+            sp.gaussian_width(R, lag)
+    with pytest.raises(ValueError, match="scalar"):
+        sp.gaussian_width(R[0], 1)
+    widths = sp.gaussian_width(torch.stack([R, R**4]), 4.0)  # R^4 is a Gaussian of width / 2
+    torch.testing.assert_close(widths, torch.tensor([width, width / 2], dtype=F64))
 
 
 @pytest.mark.parametrize(
     "call, match",
     [
-        (lambda: sp.spectrum_summary(torch.ones((2, 8), dtype=F64)), "1-D"),
+        (lambda: sp.spectrum_summary(torch.tensor(1.0, dtype=F64)), "scalar"),
         (lambda: sp.spectrum_summary(torch.ones(7, dtype=F64)), "even"),
         (lambda: sp.spectrum_summary(torch.zeros(8, dtype=F64)), "positive"),
         (lambda: sp.half_power_q(torch.full((8,), float("nan"), dtype=F64)), "finite"),
@@ -290,9 +372,9 @@ def test_summaries_reject_bad_inputs(call, match):
 
 # ------------------------------------------------------------------ angle statistic
 def per_network_cos4(t2: torch.Tensor, t3: torch.Tensor) -> tuple[float, float]:
-    """Mean over networks of the per-network statistic, and its standard error."""
-    values = torch.tensor([sp.contrast_angle_statistic(a, b) for a, b in zip(t2, t3)])
-    return float(values.mean()), float(values.std() / math.sqrt(len(values)))
+    """Mean over networks (leading axis) of the per-network statistic, and its standard error."""
+    mean, sem = sp.member_mean_sem(sp.contrast_angle_statistic(t2, t3))
+    return float(mean), float(sem)
 
 
 def isotropic_networks(P: int, N: int, n: int, seed: int) -> torch.Tensor:
@@ -332,6 +414,9 @@ def test_angle_statistic_is_one_on_the_axes():
     t2 = torch.tensor([1.0, 0.0, -2.0, 0.0], dtype=F64)
     t3 = torch.tensor([0.0, 3.0, 0.0, -1.0], dtype=F64)
     assert sp.contrast_angle_statistic(t2, t3) == pytest.approx(1.0, abs=1e-12)
+    diagonal = torch.ones(4, dtype=F64)
+    batched = sp.contrast_angle_statistic(torch.stack([t2, diagonal]), torch.stack([t3, diagonal]))
+    torch.testing.assert_close(batched, torch.tensor([1.0, -1.0], dtype=F64))
 
 
 def test_theta_histogram_uses_36_fixed_bins_on_minus_pi_to_pi():
@@ -346,14 +431,21 @@ def test_theta_histogram_uses_36_fixed_bins_on_minus_pi_to_pi():
     # atan2(-0.0, -1) = -pi is the same angle as pi, so it lands in the last bin too
     minus_pi = sp.theta_histogram(torch.tensor([-1.0], dtype=F64), torch.tensor([-0.0], dtype=F64))
     assert int(minus_pi[35]) == 1 and int(minus_pi.sum()) == 1
+    batched = sp.theta_histogram(
+        torch.stack([torch.cos(angles), torch.ones_like(angles)]),
+        torch.stack([torch.sin(angles), torch.zeros_like(angles)]),
+    )
+    assert batched.shape == (2, 36)
+    assert torch.equal(batched[0], expected)
+    assert int(batched[1, 17]) == angles.numel()  # theta = 0 is the right edge of bin 17
 
 
 @pytest.mark.parametrize("fn", [sp.contrast_angle_statistic, sp.theta_histogram])
 def test_angle_functions_reject_bad_inputs(fn):
     with pytest.raises(ValueError, match="same shape"):
         fn(torch.ones(4, dtype=F64), torch.ones(5, dtype=F64))
-    with pytest.raises(ValueError, match="1-D"):
-        fn(torch.ones((2, 4), dtype=F64), torch.ones((2, 4), dtype=F64))
+    with pytest.raises(ValueError, match="non-empty"):
+        fn(torch.ones((2, 0), dtype=F64), torch.ones((2, 0), dtype=F64))
     with pytest.raises(ValueError, match="finite"):
         fn(torch.full((4,), float("nan"), dtype=F64), torch.ones(4, dtype=F64))
 
@@ -390,6 +482,15 @@ def test_record_sem_is_calibrated_on_correlated_chains():
     assert float((sem / naive).mean()) == pytest.approx(3.0, rel=0.1)  # sqrt(tau) = 3
 
 
+def test_anticorrelated_records_get_tau_one_and_the_naive_sem():
+    """AR(1) with phi = -0.5 has tau = 1/3; the windowed estimate is clamped to tau = 1."""
+    records = ar1_chains(-0.5, 4000, 50, seed=21)
+    tau = sp.integrated_autocorr_time(records, burn_in=0)
+    assert torch.equal(tau, torch.ones(50, dtype=F64))
+    naive = records.std(dim=0, correction=0) / math.sqrt(4000)
+    torch.testing.assert_close(sp.record_sem(records, burn_in=0), naive)
+
+
 def test_record_sem_of_independent_records_is_the_naive_sem():
     records = torch.randn((4000, 200), dtype=F64, generator=torch.Generator().manual_seed(12))
     ratio = sp.record_sem(records, burn_in=0) / (records.std(dim=0) / math.sqrt(4000))
@@ -408,7 +509,7 @@ def test_records_drop_the_burn_in_and_keep_trailing_shape():
 
 
 def test_record_sem_of_constant_records_is_zero():
-    sem = sp.record_sem(torch.ones((50, 3), dtype=F64), burn_in=0)
+    sem = sp.record_sem(torch.ones((200, 3), dtype=F64), burn_in=0)
     assert torch.equal(sem, torch.zeros(3, dtype=F64))
 
 
@@ -418,7 +519,7 @@ def test_record_sem_of_constant_records_is_zero():
         (lambda r: sp.average_records(r, burn_in=-1), "burn_in"),
         (lambda r: sp.average_records(r, burn_in=200), "burn_in"),
         (lambda r: sp.record_sem(r[:, 0, 0] * float("nan"), 0), "finite"),
-        (lambda r: sp.record_sem(r, burn_in=198), "at least"),
+        (lambda r: sp.record_sem(r, burn_in=101), "at least 100"),
         (lambda r: sp.record_sem(torch.arange(200.0, dtype=F64), 0), "too short"),
     ],
 )
