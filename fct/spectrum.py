@@ -36,26 +36,33 @@ N_THETA_BINS = 36
 # latents on [0, a], s_1^2 / s_2^2 -> 3K + 1 (7 at K = 2); for symmetric latents it is
 # 1 + O(P^-1/2). The gap is required to reach MIN_GAP, and the cosine of u_1 with the constant
 # pattern vector to reach MEAN_DIRECTION_FRACTION of its [0, a] value sqrt(3K / (3K + 1)).
-# Simulated rates, 2 x 10^5 draws per cell (false rejection of [0, a] latents / false
-# acceptance of symmetric ones, both checks together):
-#   P = 16: K = 2  0 / 1.7%,  K = 3  0 / 0.7%,  K = 4  0 / 0.4%
-#   P = 32: K = 2  0 / 0.05%, K = 3  0 / 0.02%, K = 4  0 / 0.003%
-#   P = 64: 0 / 0 for K = 2, 3, 4
-# At P = 16, K <= 3 the two distributions overlap, so no threshold has both zero false
-# rejection and false acceptance below 0.1%; MIN_GAP keeps false rejection at zero.
+# K = 1 has no s_2 and only the cosine check, the weakest case. Simulated rates, 2 x 10^5
+# draws per cell (false rejection of [0, a] latents / false acceptance of symmetric ones,
+# both checks together):
+#   P = 16: K = 1  0 / 8.3%,  K = 2  5e-6 / 1.73%, K = 3  0 / 0.73%,  K = 4  0 / 0.40%
+#   P = 32: K = 1  0 / 1.31%, K = 2  0 / 0.064%,   K = 3  0 / 0.011%, K = 4  0 / 0.005%
+#   P = 64: K = 1  0 / 3.4e-4, K >= 2  0 / 0
+# At P = 16, K <= 3 the two distributions overlap, so no threshold has both near-zero false
+# rejection and false acceptance below 0.1%. The presets run at P = 256, where the [0, a]
+# and symmetric distributions are far apart and none of this matters.
 MIN_GAP = 2.0
 MEAN_DIRECTION_FRACTION = 0.5
 # Geyer's initial monotone sequence: pairs Gamma_m = rho_{2m} + rho_{2m+1} are summed while
 # positive (made non-increasing), over lags up to half the chain.
 MAX_LAG_FRACTION = 0.5
-# A chain shorter than MIN_EFFECTIVE_RECORDS correlation times (n < 20 tau) is too short for
-# its tau to be trusted, and raises rather than return an underestimate.
+# An element of a chain shorter than MIN_EFFECTIVE_RECORDS correlation times (n < 20 tau) is
+# too short for its tau to be trusted, and is marked unreliable (NaN) rather than returned
+# as an underestimate.
 MIN_EFFECTIVE_RECORDS = 20
-# Even independent records can look too short by sampling noise, and one element failing fails
-# the whole call. In simulation (1.3 x 10^6 elements of independent records, calls of 8192
-# elements): at 100 records 2.6e-5 of elements fail and 19% of calls; at 150 and 200 records,
-# no element or call failed. 200 leaves a margin.
+# Even independent records can look too short by sampling noise. In simulation (1.3 x 10^6
+# elements of independent records) 2.6e-5 of elements are marked unreliable at 100 records,
+# one element in 1.3 x 10^6 at 150 and none at 200. Fewer than MIN_SEM_RECORDS records is a
+# caller error and raises.
 MIN_SEM_RECORDS = 200
+# Records are constant when C(0) <= (CONSTANT_EPS * eps * max(|mean|, tiny))^2: rounding
+# leaves |x - mean| of a constant x below 3 eps |mean| (measured up to 10^5 records in float32
+# and float64), so 8 eps leaves a margin while staying far below any real fluctuation.
+CONSTANT_EPS = 8.0
 _LATENT_NAME = re.compile(r"z(\d+)")
 
 
@@ -63,6 +70,17 @@ class LatentBasis(NamedTuple):
     U: Tensor  # (P, K) orthonormal columns, column 0 the mean direction u_1
     s2: Tensor  # (K,) squared singular values of Z, descending
     Z: Tensor  # (P, K) the latents z0..z{K-1} stacked as columns
+
+
+class TauEstimate(NamedTuple):
+    tau: Tensor  # (...) integrated autocorrelation time; NaN where not reliable
+    reliable: Tensor  # (...) bool: n >= 20 tau, Geyer's pairs ended before n/2, tau > 0
+
+
+class SemEstimate(NamedTuple):
+    sem: Tensor  # (...) standard error of the chain mean; NaN where not reliable
+    tau: Tensor  # (...) as in TauEstimate
+    reliable: Tensor  # (...) bool, as in TauEstimate
 
 
 class Summary(NamedTuple):
@@ -179,9 +197,11 @@ def latent_basis(factors: Mapping[str, Tensor]) -> LatentBasis:
     the cosine of u_1 with the constant pattern vector must be at least
     MEAN_DIRECTION_FRACTION (1/2) of sqrt(3K / (3K + 1)), its value for iid latents on
     [0, a]. Symmetric latents (on [-a, a]) fail: their singular values are degenerate up to
-    O(P^-1/2) noise and the SVD frame is then a random rotation of col(Z). In simulation the
-    checks never rejected [0, a] latents (P >= 16) and accepted symmetric ones in 1.7% of
-    draws at P = 16, K = 2, 0.05% at P = 32 and none at P = 64 (rates at MIN_GAP).
+    O(P^-1/2) noise and the SVD frame is then a random rotation of col(Z). The simulated
+    false rejection / false acceptance rates are tabulated at MIN_GAP: false acceptance of
+    symmetric latents is 1.73% at P = 16, K = 2 and 8.3% at P = 16, K = 1 (only the cosine
+    check), and 0.064% at P = 32, K = 2. The presets run at P = 256, where none of this
+    matters.
     """
     if not factors:
         raise ValueError("factors holds no latents z0..z{K-1}")
@@ -386,49 +406,38 @@ def average_records(records: Tensor, burn_in: int) -> Tensor:
     return _check_records(records, burn_in).mean(dim=0)
 
 
-def _c0_and_tau(x: Tensor) -> tuple[Tensor, Tensor]:
-    """(C(0) (...), tau (...)) of records x (n, ...), already checked by `_check_sem_records`.
+def _c0_tau_reliable(x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    """(C(0), tau, reliable), each (...), of records x (n, ...) checked by `_check_sem_records`.
 
     C(0) is the biased variance and rho_k = C(k) / C(0) the autocorrelation, by FFT (zero-padded
     to 2n, so the correlation is linear, not circular). tau is Geyer's initial monotone
     sequence estimator: Gamma_m = rho_{2m} + rho_{2m+1} is summed over the initial run of
     positive pairs, made non-increasing, tau = -1 + 2 sum_m Gamma_m. Pairing cancels the
     alternation of anticorrelated components, so a slow component under a fast alternating
-    one is still seen. Constant elements have rho = 0 and tau = 1.
+    one is still seen. Constant elements (CONSTANT_EPS) get C(0) = 0, tau = 1 and are reliable.
+    An element is unreliable, with tau = NaN, when its pairs stay positive to lag n/2, when
+    tau <= 0, or when n < MIN_EFFECTIVE_RECORDS * tau.
     """
     n = x.shape[0]
-    centred = x - x.mean(dim=0)
+    mean = x.mean(dim=0)
+    centred = x - mean
     spectrum = torch.fft.rfft(centred, n=2 * n, dim=0).abs().square()
     acov = torch.fft.irfft(spectrum, n=2 * n, dim=0)[:n] / n
-    c0 = acov[0].clamp(min=0)
-    constant = c0 <= 0
+    finfo = torch.finfo(x.dtype)
+    constant = acov[0] <= (CONSTANT_EPS * finfo.eps * mean.abs().clamp(min=finfo.tiny)) ** 2
+    c0 = torch.where(constant, torch.zeros_like(acov[0]), acov[0])
     rho = torch.where(constant, torch.zeros_like(acov), acov / torch.where(constant, 1.0, c0))
     rho[0] = 1.0
 
     n_pairs = int(MAX_LAG_FRACTION * n) // 2
     gamma = rho[0 : 2 * n_pairs : 2] + rho[1 : 2 * n_pairs : 2]  # (n_pairs, ...)
     ended = gamma <= 0
-    if not ended.any(dim=0).all():
-        raise ValueError(
-            f"chain too short: the autocorrelation pairs stay positive up to lag {2 * n_pairs} "
-            f"of {n} records for {int((~ended.any(dim=0)).sum())} element(s)"
-        )
     run = ended.to(torch.int8).argmax(dim=0, keepdim=True)  # first non-positive pair
     m = torch.arange(n_pairs, device=x.device).reshape((-1,) + (1,) * (x.ndim - 1))
     monotone = gamma.cummin(dim=0).values
     tau = -1 + 2 * torch.where(m < run, monotone, 0.0).sum(dim=0)
-    if (tau <= 0).any():
-        raise ValueError(
-            f"non-positive tau estimate {float(tau.min()):.3g}: the records alternate so strongly "
-            "at lag 1 that their integrated autocorrelation time is not resolved"
-        )
-    if (n < MIN_EFFECTIVE_RECORDS * tau).any():
-        raise ValueError(
-            f"chain too short: tau up to {float(tau.max()):.3g} leaves fewer than "
-            f"{MIN_EFFECTIVE_RECORDS} correlation times in {n} records for "
-            f"{int((n < MIN_EFFECTIVE_RECORDS * tau).sum())} element(s)"
-        )
-    return c0, tau
+    reliable = ended.any(dim=0) & (tau > 0) & (n >= MIN_EFFECTIVE_RECORDS * tau)
+    return c0, torch.where(reliable, tau, torch.nan), reliable
 
 
 def _check_sem_records(records: Tensor, burn_in: int) -> Tensor:
@@ -441,33 +450,35 @@ def _check_sem_records(records: Tensor, burn_in: int) -> Tensor:
     return x
 
 
-def integrated_autocorr_time(records: Tensor, burn_in: int) -> Tensor:
-    """tau = 1 + 2 sum_k rho_k per element, (R, ...) -> (...), Geyer's initial monotone sequence.
+def integrated_autocorr_time(records: Tensor, burn_in: int) -> TauEstimate:
+    """tau = 1 + 2 sum_k rho_k per element, (R, ...) -> TauEstimate(tau (...), reliable (...)).
 
-    The sum runs over the initial positive run of pairs rho_{2m} + rho_{2m+1} (Geyer 1992),
-    up to lag n/2; tau < 1 for anticorrelated records. Raises if some element's pairs stay
-    positive throughout, if tau leaves fewer than MIN_EFFECTIVE_RECORDS (20) correlation times
-    in the chain (it is too short to trust), if tau <= 0, and for fewer than MIN_SEM_RECORDS
-    (200) records after burn-in, below which independent records fail by sampling noise (at
-    100 records about 1 call in 5 over 8192 elements; none seen at 200). Any failing element
-    fails the call.
+    Geyer's initial monotone sequence (Geyer 1992): the sum runs over the initial positive
+    run of pairs rho_{2m} + rho_{2m+1}, up to lag n/2; tau < 1 for anticorrelated records.
+    Per element, never per call: an element is unreliable, and its tau NaN, when its pairs
+    stay positive to n/2, when tau <= 0, or when n < MIN_EFFECTIVE_RECORDS (20) tau, a chain
+    too short to trust. Callers must read `reliable`; a NaN never appears without it. Geyer's
+    estimator is biased low for strongly alternating records (AR(1) with phi <= -0.8) and at
+    phi about -0.9 often gives tau <= 0; such elements are unreliable. Raises only for bad
+    input and for fewer than MIN_SEM_RECORDS (200) records after burn-in.
     """
-    _, tau = _c0_and_tau(_check_sem_records(records, burn_in))
-    return tau
+    _, tau, reliable = _c0_tau_reliable(_check_sem_records(records, burn_in))
+    return TauEstimate(tau=tau, reliable=reliable)
 
 
-def record_sem(records: Tensor, burn_in: int) -> Tensor:
-    """Standard error of the chain mean after burn-in, (R, ...) -> (...): sqrt(C(0) tau / n).
+def record_sem(records: Tensor, burn_in: int) -> SemEstimate:
+    """Standard error of the chain mean after burn-in: (R, ...) -> SemEstimate, each (...).
 
-    n / tau is the effective number of independent records, C(0) the variance of the records
-    and tau their integrated autocorrelation time (`integrated_autocorr_time`, with its
-    checks and minimum of 200 records). A diagnostic: comparing it across burn-in
-    values, or with the spread across members, shows whether the chain has equilibrated; it is
-    not the error of a per-network estimator.
+    sem = sqrt(C(0) tau / n): n / tau is the effective number of independent records, C(0)
+    the variance of the records and tau their integrated autocorrelation time, with its
+    `reliable` mask (`integrated_autocorr_time`); sem is NaN exactly where tau is. Constant
+    records give sem 0. A diagnostic: comparing it across burn-in values, or with the spread
+    across members, shows whether the chain has equilibrated; it is not the error of a
+    per-network estimator, so one unreliable element does not fail the call.
     """
     x = _check_sem_records(records, burn_in)
-    c0, tau = _c0_and_tau(x)
-    return (c0 * tau / x.shape[0]).sqrt()
+    c0, tau, reliable = _c0_tau_reliable(x)
+    return SemEstimate(sem=(c0 * tau / x.shape[0]).sqrt(), tau=tau, reliable=reliable)
 
 
 def member_mean_sem(values: Tensor) -> tuple[Tensor, Tensor]:
