@@ -4,11 +4,15 @@ plain |xi|^2, so the sampled prior is K itself (no eigenvalue floor). Ground tru
 the prior covariance (K_post (x) K_pre) / weight_lambda, which the penalty path only
 approximates."""
 
+from pathlib import Path
+
 import pytest
 import torch
 
 from fct.config import Config, NetConfig, TrainConfig
+from fct.data import make_dataset
 from fct.model import MLP, EnsembleMLP, effective_weights, make_net
+from fct.sgld import SGLD
 from fct.spatial import (
     EmbeddingSpec,
     KernelSpec,
@@ -20,7 +24,20 @@ from fct.spatial import (
     whitening_factors,
     whitening_matrix,
 )
-from fct.train import compute_loss
+from fct.train import (
+    _step,
+    compute_loss,
+    largest_hessian_eigenvalue,
+    load_latest_checkpoint,
+    load_trained,
+    make_net_from_config,
+    make_weight_penalty,
+    prior_coefficient,
+    train,
+    train_from_config,
+)
+from tests.pinned_training import pinned_config
+from tests.test_ensemble import _member_noise, _single_noise, _with_B
 from tests.test_lambda_max import PINNED_SPATIAL_HASH, _pinned_spatial
 
 CPU, F64 = torch.device("cpu"), torch.float64
@@ -289,3 +306,285 @@ def test_an_ensemble_refuses_members_with_different_or_missing_factors():
     with pytest.raises(ValueError, match="whitening"):
         EnsembleMLP([whitened[0], different])
     assert EnsembleMLP(whitened).B == 2
+
+
+# ---------------------------------------------------------------- training
+
+QUIET = {"log": lambda s: None}
+
+
+def _cfg(optimizer: str = "sgld", B: int = 1, parametrisation: str = "whitened", **train_kw):
+    """The pinned SGLD run (dense random-embedding kernels, N = 6, L = 2) under the given
+    parametrisation; "adam" takes lr 1e-2."""
+    cfg = pinned_config("sgld", B=B)
+    train_kw = {"optimizer": optimizer, **train_kw}
+    if optimizer == "adam":
+        train_kw.setdefault("lr", 1e-2)
+    spatial = cfg.spatial.model_copy(update={"parametrisation": parametrisation})
+    train = cfg.train.model_copy(update=train_kw)
+    return Config.model_validate(
+        {**cfg.model_dump(), "spatial": spatial.model_dump(), "train": train.model_dump()}
+    )
+
+
+def _setup(cfg: Config):
+    ds = make_dataset(cfg.data, CPU, F64)
+    return ds, make_net_from_config(cfg, ds.x.shape[1], ds.y.shape[1], CPU, F64)
+
+
+def _same_state(a, b) -> bool:
+    return set(a.state_dict()) == set(b.state_dict()) and all(
+        torch.equal(v, b.state_dict()[k]) for k, v in a.state_dict().items()
+    )
+
+
+def test_make_net_from_config_builds_the_plain_net_under_the_penalty_bit_for_bit():
+    cfg = _cfg(parametrisation="penalty")
+    ds, net = _setup(cfg)
+    plain = make_net(cfg.net, ds.x.shape[1], ds.y.shape[1], CPU, F64)
+    assert net.whitening is None and _same_state(net, plain)
+
+
+@pytest.mark.parametrize("B", [1, 3])
+def test_make_net_from_config_whitens_with_the_configs_factors_and_draws_xi_from_the_prior(B):
+    cfg = _cfg(B=B)
+    ds, net = _setup(cfg)
+    m, n_out = ds.x.shape[1], ds.y.shape[1]
+    spaces = build_spaces(cfg.spatial, m=m, N=cfg.net.N, L=cfg.net.L, n_out=n_out)
+    assert net.whitening is not None
+    for name, (rows, cols) in whitening_factors(spaces).items():
+        got_rows, got_cols = net.whitening.factors(name)
+        assert torch.equal(got_rows, rows) and torch.equal(got_cols, cols), name
+    standard = make_net(cfg.net, m, n_out, CPU, F64)
+    assert cfg.train.weight_lambda == 1e-2  # xi ~ N(0, I / weight_lambda): std 10
+    for (name, xi), (_, w) in zip(net.named_parameters(), standard.named_parameters(), strict=True):
+        assert torch.equal(xi, 10.0 * w), name
+
+
+def test_the_whitened_penalty_is_the_plain_sum_of_squares_of_xi():
+    cfg = _cfg()
+    ds, net = _setup(cfg)
+    penalty = make_weight_penalty(cfg, net)
+    assert penalty is type(net).weight_l2
+    hand = sum(p.square().sum() for p in net.parameters())
+    assert torch.equal(penalty(net), hand) or torch.allclose(penalty(net), hand, rtol=1e-15)
+    tc = cfg.train
+    loss, parts = compute_loss(net, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)
+    data = 0.5 * net.N * (ds.y - net(ds.x)[1]).square().mean()
+    rates = net.phi(net(ds.x)[0]).square().sum()
+    want = data + tc.weight_lambda / (2 * tc.beta) * hand + tc.rate_lambda * rates
+    assert loss.item() == pytest.approx(want.item(), rel=1e-12)
+    assert parts["weight_l2"].item() == pytest.approx(hand.item(), rel=1e-12)
+
+
+def test_the_parametrisation_of_the_net_must_match_the_config():
+    whitened, penalty = _cfg(), _cfg(parametrisation="penalty")
+    ds, whitened_net = _setup(whitened)
+    _, plain_net = _setup(penalty)
+    for cfg, net in ((whitened, plain_net), (penalty, whitened_net)):
+        with pytest.raises(ValueError, match="parametrisation"):
+            make_weight_penalty(cfg, net)
+        with pytest.raises(ValueError, match="parametrisation"):
+            train(cfg, ds, net, Path("/nonexistent"), **QUIET)
+
+
+def test_the_prior_only_step_bound_under_whitening_is_lr_times_weight_lambda_over_two_beta():
+    """The prior |xi|^2 weight_lambda / (2 beta) has curvature weight_lambda / beta in every
+    direction, so lr * weight_lambda / (2 beta) >= 1 is refused, whatever the kernel."""
+    too_big = _cfg(lr=1.0, weight_lambda=4.0, beta=1.0)  # 1 * 4 / 2 = 2
+    _, net = _setup(too_big)
+    with pytest.raises(ValueError, match="diverges on the whitened spatial prior"):
+        make_weight_penalty(too_big, net)
+    fine = _cfg(lr=0.4, weight_lambda=4.0, beta=1.0)  # 0.4 * 4 / 2 = 0.8
+    _, net = _setup(fine)
+    assert make_weight_penalty(fine, net) is type(net).weight_l2
+    adam = _cfg("adam", lr=1.0, weight_lambda=4.0, beta=1.0)  # Adam rescales its steps
+    _, net = _setup(adam)
+    assert make_weight_penalty(adam, net) is type(net).weight_l2
+
+
+def test_largest_hessian_eigenvalue_of_a_quadratic_is_its_largest_curvature():
+    curvatures = torch.tensor([1.0, 2.0, 3.0, 10.0], dtype=F64)
+    theta = torch.zeros(4, dtype=F64, requires_grad=True)
+    other = torch.ones(2, 3, dtype=F64, requires_grad=True)
+    lam = largest_hessian_eigenvalue(
+        lambda: 0.5 * (curvatures * theta.square()).sum() + 0.5 * 4.0 * other.square().sum(),
+        [theta, other],
+    )
+    assert lam == pytest.approx(10.0, rel=1e-6)
+    assert theta.grad is None and other.grad is None  # nothing left on the parameters
+
+
+def test_largest_hessian_eigenvalue_leaves_the_global_rng_alone():
+    cfg = _cfg()
+    ds, net = _setup(cfg)
+    state = torch.get_rng_state()
+    largest_hessian_eigenvalue(lambda: compute_loss(net, ds.x, ds.y, 0.1, 0.0)[0], net.parameters())
+    assert torch.equal(torch.get_rng_state(), state)
+
+
+def test_sgld_under_whitening_refuses_a_step_the_loss_curvature_cannot_take(tmp_path):
+    """The prior-only bound misses the data term's curvature; the run-start check estimates
+    lambda_max of the loss Hessian at the initial net and refuses lr * lambda_max >= 1."""
+    cfg = _cfg()
+    ds, net = _setup(cfg)
+    tc = cfg.train
+    penalty = make_weight_penalty(cfg, net)
+
+    def loss():
+        return compute_loss(net, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)[0]
+
+    lam = largest_hessian_eigenvalue(loss, net.parameters())
+    assert lam > 0
+    too_big = _cfg(lr=2.0 / lam)
+    assert too_big.train.lr * too_big.train.weight_lambda / (2 * too_big.train.beta) < 1
+    _, net = _setup(too_big)
+    with pytest.raises(ValueError, match=rf"lr={too_big.train.lr:g}.*lambda_max"):
+        train(too_big, ds, net, tmp_path / "big", **QUIET)
+    assert not any((tmp_path / "big").rglob("*.pt"))
+    fine = _cfg(lr=0.5 / lam, n_epochs=1)
+    lines = []
+    _, net = _setup(fine)
+    train(fine, ds, net, tmp_path / "fine", log=lines.append)
+    assert any("lambda_max" in line for line in lines)
+
+
+def test_the_penalty_path_logs_no_curvature_check(tmp_path):
+    cfg = _cfg(parametrisation="penalty", n_epochs=1)
+    ds, net = _setup(cfg)
+    lines = []
+    train(cfg, ds, net, tmp_path, log=lines.append)
+    assert not any("lambda_max" in line for line in lines)
+
+
+@pytest.mark.parametrize("optimizer", ["adam", "sgld"])
+@pytest.mark.parametrize("B", [1, 2])
+def test_a_whitened_run_round_trips_through_its_checkpoints_and_final_file(tmp_path, optimizer, B):
+    cfg = _cfg(optimizer, B=B)
+    ds = make_dataset(cfg.data, CPU, F64)
+    net, history = train_from_config(cfg, ds, tmp_path, **QUIET)
+    assert net.whitening is not None
+    loaded, loaded_history = load_trained(tmp_path, cfg, CPU, F64)
+    assert loaded.whitening is not None and _same_state(loaded, net)
+    assert loaded_history == history
+    for name, w in effective_weights(net).items():
+        assert torch.equal(effective_weights(loaded)[name], w), name
+    ckpt_net, _, epoch = load_latest_checkpoint(tmp_path, cfg, CPU, F64)
+    assert ckpt_net.whitening is not None and epoch == 6
+    assert set(
+        torch.load(tmp_path / "train" / "final.pt", weights_only=True)["net_state_dict"]
+    ) == {
+        "U",
+        "J.0",
+        "V",
+    }
+    if optimizer == "sgld":
+        penalty_hist = train_from_config(
+            _cfg(optimizer, B=B, parametrisation="penalty"), ds, tmp_path / "penalty", **QUIET
+        )[1]
+        assert set(penalty_hist) == set(history)  # the same history keys on both paths
+
+
+class Interrupt(Exception):
+    pass
+
+
+def test_a_resumed_whitened_sgld_run_equals_the_uninterrupted_one(tmp_path):
+    cfg = _cfg("sgld", save_int=2, n_epochs=7)
+    ds, ref = _setup(cfg)
+    ref, ref_history = train(cfg, ds, ref, tmp_path / "ref", **QUIET)
+
+    def stop_at_five(line):
+        if line.startswith("[00004"):
+            raise Interrupt
+
+    _, net = _setup(cfg)
+    with pytest.raises(Interrupt):
+        train(cfg, ds, net, tmp_path / "run", log=stop_at_five)
+    _, net = _setup(cfg)
+    net, history = train(cfg, ds, net, tmp_path / "run", **QUIET)
+    assert _same_state(net, ref) and history == ref_history
+
+
+def test_a_whitened_adam_ensemble_equals_its_members_trained_separately(tmp_path):
+    cfg = _cfg("adam", B=3)
+    ds, ens = _setup(cfg)
+    starts = [ens.member(b) for b in range(3)]
+    ens, history = train(cfg, ds, ens, tmp_path / "ens", **QUIET)
+    single_cfg = _with_B(cfg, 1)
+    for b, start in enumerate(starts):
+        single, single_history = train(single_cfg, ds, start, tmp_path / f"m{b}", **QUIET)
+        for name, p in ens.named_parameters():
+            want = dict(single.named_parameters())[name]
+            torch.testing.assert_close(p[b], want, rtol=1e-12, atol=1e-14)
+        for key in ("mse", "loss", "weight_l2", "rate_l2"):
+            got = torch.tensor([entry[b] for entry in history[key]])
+            torch.testing.assert_close(got, torch.tensor(single_history[key]), rtol=1e-12, atol=0)
+
+
+def test_whitened_sgld_steps_of_an_ensemble_equal_separate_members():
+    cfg = _cfg("sgld", B=3)
+    ds, ens = _setup(cfg)
+    singles = [ens.member(b) for b in range(3)]
+    tc = cfg.train
+    gens = [torch.Generator().manual_seed(100 + b) for b in range(3)]
+    optim = SGLD(ens.parameters(), tc.lr, tc.beta, member_axis=True, noise=_member_noise(gens))
+    parts = [_step(ens, optim, ds, tc, make_weight_penalty(cfg, ens)) for _ in range(5)]
+    for b, single in enumerate(singles):
+        gen = torch.Generator().manual_seed(100 + b)
+        single_optim = SGLD(single.parameters(), tc.lr, tc.beta, noise=_single_noise(gen))
+        penalty = make_weight_penalty(_with_B(cfg, 1), single)
+        single_parts = [_step(single, single_optim, ds, tc, penalty) for _ in range(5)]
+        for name, p in ens.named_parameters():
+            want = dict(single.named_parameters())[name]
+            torch.testing.assert_close(p[b], want, rtol=1e-12, atol=1e-14)
+        for got, want in zip(parts, single_parts, strict=True):
+            for key in ("loss", "weight_l2", "grad_norm", "param_msd"):
+                torch.testing.assert_close(got[key][b], want[key], rtol=1e-10, atol=0)
+
+
+def test_prior_only_sgld_samples_every_mode_of_the_whitened_prior():
+    """(iv): SGLD on the prior term alone, from the prior initialisation, on an N = 8 ring
+    (U: 8 x 4, V: 8 x 2). Each direction of xi is a quadratic of curvature c = weight_lambda /
+    beta, so the finite-lr law (tests/test_sgld.py) gives every mode of W = S xi S the variance
+    lambda_q^post lambda_q^pre / (weight_lambda (1 - lr c / 2)): here lr c = 0.3, a 17.6%
+    inflation that distinguishes the law from the lr -> 0 limit. 2000 records three
+    relaxation times apart give a relative standard error of ~3.3% per mode."""
+    weight_lambda, beta, lr = 2.0, 0.5, 0.075  # lr * c = 0.075 * 4 = 0.3
+    wide = SpatialConfig(
+        input=PopulationSpec(kernel=KernelSpec(length_scale=0.2)),
+        hidden=PopulationSpec(kernel=KernelSpec(length_scale=0.25)),
+        output=PopulationSpec(kernel=KernelSpec(length_scale=0.3)),
+    )
+    spaces = _spaces(L=1, spatial=wide)
+    factors = whitening_factors(spaces)
+    net = make_net(
+        _net_cfg(L=1), D_IN, D_OUT, CPU, F64, whitening=factors, init_std=weight_lambda**-0.5
+    )
+    coefficient = weight_lambda / (2 * beta)
+    torch.manual_seed(3)
+    optim = SGLD(net.parameters(), lr=lr, beta=beta)
+    every, n_records, burn_in = 10, 2000, 100
+    records = {name: [] for name, _ in net.named_parameters()}
+    for step in range(burn_in + every * n_records):
+        optim.zero_grad()
+        (coefficient * net.weight_l2()).backward()
+        optim.step()
+        if step >= burn_in and (step - burn_in) % every == 0:
+            for name, p in net.named_parameters():
+                records[name].append(p.detach().clone())
+    inflation = 1 / (1 - lr * weight_lambda / beta / 2)
+    ratios = []
+    for name in factors:
+        xi = torch.stack(records[name])  # (n_records, r, c)
+        W = net.whitening.whiten(name, xi).reshape(n_records, -1)
+        post_pre = {
+            "U": (spaces[0].post.K, spaces[0].pre.K),
+            "V": (spaces[1].pre.K, spaces[1].post.K),
+        }
+        mode_variance, modes = torch.linalg.eigh(torch.kron(*post_pre[name]) / weight_lambda)
+        sample = (W @ modes).square().mean(0)
+        ratios.append(sample / (inflation * mode_variance))
+    ratios = torch.cat(ratios)
+    assert ratios.min() > 0.9 and ratios.max() < 1.1
+    assert ratios.mean().item() == pytest.approx(1.0, abs=0.03)  # not the lr -> 0 law (0.85)
