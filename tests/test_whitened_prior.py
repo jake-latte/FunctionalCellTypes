@@ -41,6 +41,7 @@ from fct.train import (
 )
 from tests.pinned_training import pinned_config
 from tests.test_ensemble import _member_noise, _single_noise, _with_B
+from tests.test_exp_spatial import _Interrupt
 from tests.test_lambda_max import PINNED_SPATIAL_HASH, _pinned_spatial
 
 CPU, F64 = torch.device("cpu"), torch.float64
@@ -326,31 +327,54 @@ def test_factors_that_do_not_fit_the_parameters_are_rejected():
         make_net(_net_cfg(), D_IN, D_OUT, CPU, F64, whitening={"U": good["U"], "V": good["V"]})
 
 
+def _assert_covariance(W: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """The sample covariance of the rows of W (n, d), zero mean, is `target` (d, d): every
+    variance and the variance along every eigenvector of the target to 5%, every correlation
+    (entry over sqrt(diag_i diag_j)) to 0.06, and the target's modes uncorrelated to 0.06.
+    Returns the target's mode variances."""
+    n = W.shape[0]
+    sample = W.T @ W / n
+    assert torch.allclose(sample.diagonal(), target.diagonal(), rtol=0.05, atol=0)
+    scale = torch.sqrt(target.diagonal()[:, None] * target.diagonal()[None, :])
+    assert ((sample - target).abs() / scale).max() < 0.06
+    mode_variance, modes = torch.linalg.eigh(target)
+    projected = modes.T @ sample @ modes
+    assert torch.allclose(projected.diagonal(), mode_variance, rtol=0.05, atol=0)
+    mode_scale = torch.sqrt(mode_variance[:, None] * mode_variance[None, :])
+    off = projected - torch.diag(projected.diagonal())
+    assert (off.abs() / mode_scale).max() < 0.06
+    return mode_variance
+
+
 def test_prior_draws_of_xi_give_w_the_kronecker_covariance():
-    """(ii): xi ~ N(0, I / weight_lambda) and W = S_post xi S_pre over 10^4 draws has sample
-    covariance (K_post (x) K_pre) / weight_lambda on an N = 8 ring: every entry's variance,
-    and the variance along every eigenvector of the target, whose softest modes lie below
-    1e-6 of the stiffest (the penalty path's floor would have raised them). The relative
-    standard error of a sample variance is sqrt(2 / n) = 1.4%, so 5% is 3.5 sigma."""
+    """xi ~ N(0, I / weight_lambda) and W = S_rows xi S_cols over 10^4 draws has sample
+    covariance (K_post (x) K_pre) / weight_lambda on an N = 8 ring, for U (hidden by input)
+    and for V (stored hidden by output): every entry, and the variance along every
+    eigenvector of the target, whose softest modes for U lie below 1e-6 of the stiffest (the
+    penalty path's floor would have raised them). The relative standard error of a sample
+    variance is sqrt(2 / n) = 1.4%, so 5% is 3.5 sigma; a correlation's is about 1 / sqrt(n)
+    = 1%, so 0.06 bounds the largest of a few hundred entries."""
     weight_lambda, n_draws = 2.0, 10_000
     wide = SpatialConfig(
         input=PopulationSpec(kernel=KernelSpec(length_scale=0.2)),
         hidden=PopulationSpec(kernel=KernelSpec(length_scale=0.25)),
+        output=PopulationSpec(kernel=KernelSpec(length_scale=0.3)),
     )
     spaces = _spaces(L=1, spatial=wide)
-    space = spaces[0]  # U: post = hidden ring of N, pre = input ring of D_IN
     factors = whitening_factors(spaces)
     net = make_net(_net_cfg(L=1), D_IN, D_OUT, CPU, F64, whitening=factors)
     gen = torch.Generator().manual_seed(0)
-    xi = torch.randn(n_draws, N, D_IN, dtype=F64, generator=gen) / weight_lambda**0.5
-    W = net.whitening.whiten("U", xi).reshape(n_draws, -1)  # vec row-major
-    target = torch.kron(space.post.K, space.pre.K) / weight_lambda
-    sample = W.T @ W / n_draws
-    assert torch.allclose(sample.diagonal(), target.diagonal(), rtol=0.05, atol=0)
-    mode_variance, modes = torch.linalg.eigh(target)
-    assert mode_variance.min() > 0 and mode_variance.min() < 1e-6 * mode_variance.max()
-    sample_mode_variance = (W @ modes).square().mean(0)
-    assert torch.allclose(sample_mode_variance, mode_variance, rtol=0.05, atol=0)
+    kernels = {  # in the stored orientation: U (post, pre), V (pre, post)
+        "U": (spaces[0].post.K, spaces[0].pre.K),
+        "V": (spaces[1].pre.K, spaces[1].post.K),
+    }
+    for name, (rows, cols) in kernels.items():
+        shape = (n_draws, rows.shape[0], cols.shape[0])
+        xi = torch.randn(shape, dtype=F64, generator=gen) / weight_lambda**0.5
+        W = net.whitening.whiten(name, xi).reshape(n_draws, -1)  # vec row-major
+        mode_variance = _assert_covariance(W, torch.kron(rows, cols) / weight_lambda)
+        if name == "U":
+            assert 0 < mode_variance.min() < 1e-6 * mode_variance.max()
 
 
 def test_an_ensemble_carries_the_factors_and_its_members_do_too():
@@ -515,7 +539,7 @@ def test_the_whitened_penalty_is_the_plain_sum_of_squares_of_xi():
     penalty = make_weight_penalty(cfg, net)
     assert penalty is type(net).weight_l2
     hand = sum(p.square().sum() for p in net.parameters())
-    assert torch.equal(penalty(net), hand) or torch.allclose(penalty(net), hand, rtol=1e-15)
+    torch.testing.assert_close(penalty(net), hand, rtol=1e-15, atol=0)
     tc = cfg.train
     loss, parts = compute_loss(net, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)
     data = 0.5 * net.N * (ds.y - net(ds.x)[1]).square().mean()
@@ -632,10 +656,10 @@ def test_sgld_under_whitening_refuses_a_step_the_loss_curvature_cannot_take(tmp_
     assert any("lambda_max" in line for line in lines)
 
 
-def _smoke_s8_k100(lr: float) -> Config:
-    """Setting S8 of the experiment plan's smoke ring at k = 1 / weight_lambda = 100: N = 16
-    ring of hidden length scale 2 sites (box 16), unstructured input and output kernels,
-    P = 32 linear-teacher patterns with m = n = 4 and 2 latents, phi = id, beta = 10."""
+def _ring_at_k_100(lr: float) -> Config:
+    """A linear net on a ring at prior scale k = 1 / weight_lambda = 100: N = 16 hidden units
+    of length scale 2 sites (box 16), unstructured input and output kernels, P = 32
+    linear-teacher patterns with m = n = 4 and 2 latents, phi = id, beta = 10."""
     flat = {"kernel": {"length_scale": 0.0, "amplitude": 1.0}}
     return Config.model_validate(
         {
@@ -663,18 +687,19 @@ def _smoke_s8_k100(lr: float) -> Config:
     )
 
 
-def test_the_curvature_check_refuses_the_prior_only_step_on_the_smoke_ring_at_k_100(tmp_path):
+def test_the_curvature_check_refuses_the_prior_only_step_on_a_ring_at_k_100(tmp_path):
     """At k = 100 the prior alone admits lr = 0.2 (lr * weight_lambda / (2 beta) = 1e-4), but
     the data term's curvature (lambda_max ~ 40-100 at the prior draw) makes lr * lambda_max
-    ~ 10: the run-start check must refuse it before any checkpoint is written, and accept the
-    plan's step-rule value 0.0005 (lr * lambda_max ~ 0.05)."""
-    too_big = _smoke_s8_k100(0.2)
+    ~ 10: the run-start check must refuse it before any checkpoint is written, and accept
+    lr = 0.0005 (lr * lambda_max ~ 0.05, within the 0.1 that keeps the stiffest mode's
+    variance inflation under 5%)."""
+    too_big = _ring_at_k_100(0.2)
     ds, net = _setup(too_big)
     assert too_big.train.lr * prior_coefficient(too_big.train) < 1  # the prior check passes
     with pytest.raises(ValueError, match=r"lr=0\.2 .*lambda_max"):
         train(too_big, ds, net, tmp_path / "big", **QUIET)
     assert not any((tmp_path / "big").rglob("*.pt"))
-    fine = _smoke_s8_k100(0.0005)
+    fine = _ring_at_k_100(0.0005)
     _, net = _setup(fine)
     lines = []
     train(fine, ds, net, tmp_path / "fine", log=lines.append)
@@ -717,10 +742,6 @@ def test_a_whitened_run_round_trips_through_its_checkpoints_and_final_file(tmp_p
         assert set(penalty_hist) == set(history)  # the same history keys on both paths
 
 
-class Interrupt(Exception):
-    pass
-
-
 def test_a_resumed_whitened_sgld_run_equals_the_uninterrupted_one(tmp_path):
     cfg = _cfg("sgld", save_int=2, n_epochs=7)
     ds, ref = _setup(cfg)
@@ -728,10 +749,10 @@ def test_a_resumed_whitened_sgld_run_equals_the_uninterrupted_one(tmp_path):
 
     def stop_at_five(line):
         if line.startswith("[00004"):
-            raise Interrupt
+            raise _Interrupt
 
     _, net = _setup(cfg)
-    with pytest.raises(Interrupt):
+    with pytest.raises(_Interrupt):
         train(cfg, ds, net, tmp_path / "run", log=stop_at_five)
     _, net = _setup(cfg)
     net, history = train(cfg, ds, net, tmp_path / "run", **QUIET)
@@ -776,7 +797,7 @@ def test_whitened_sgld_steps_of_an_ensemble_equal_separate_members():
 
 
 def test_prior_only_sgld_samples_every_mode_of_the_whitened_prior():
-    """(iv): SGLD on the prior term alone, from the prior initialisation, on an N = 8 ring
+    """SGLD on the prior term alone, from the prior initialisation, on an N = 8 ring
     (U: 8 x 4, V: 8 x 2). Each direction of xi is a quadratic of curvature c = weight_lambda /
     beta, so the finite-lr law (tests/test_sgld.py) gives every mode of W = S xi S the variance
     lambda_q^post lambda_q^pre / (weight_lambda (1 - lr c / 2)): here lr c = 0.3, a 17.6%
