@@ -97,34 +97,30 @@ HASHED_SECTIONS = [
 ]
 
 
-def _pinned_configs() -> list[Config]:
-    """Every preset setting's config and the legacy fixture config, none of which sets a teacher."""
-    configs = [setting_config(preset(n), s) for n in preset_names() for s in expand(preset(n))]
-    return configs + [load_config(LEGACY_CONFIG_FILE)]
-
-
 def _with_teacher(cfg: Config, teacher: str) -> Config:
     dump = cfg.model_dump()
     return Config.model_validate({**dump, "data": {**dump["data"], "teacher": teacher}})
 
 
-def test_the_pinned_configs_carry_the_default_teacher():
-    assert {c.data.teacher for c in _pinned_configs()} == {"gaussian"}
-
-
-@pytest.mark.parametrize("sections", HASHED_SECTIONS)
-def test_an_explicit_gaussian_teacher_keeps_every_hash(sections):
-    for cfg in _pinned_configs():
-        explicit = _with_teacher(cfg, "gaussian")
-        assert explicit.section_hash(*sections) == cfg.section_hash(*sections)
-
-
-def test_the_gaussian_teacher_hashes_as_a_data_section_without_the_field():
-    cfg = load_config(LEGACY_CONFIG_FILE)
+def _data_hash_without_teacher(cfg: Config) -> str:
+    """The data hash as computed before `teacher` existed: the canonical dump lacking the key."""
     hashed = cfg.model_dump(include={"data", "dtype"})
     del hashed["data"]["teacher"]
-    canonical = json.dumps(hashed, sort_keys=True)
-    assert cfg.section_hash("data") == hashlib.sha256(canonical.encode()).hexdigest()[:12]
+    return hashlib.sha256(json.dumps(hashed, sort_keys=True).encode()).hexdigest()[:12]
+
+
+@pytest.mark.parametrize("name", [*sorted(PINNED), "legacy_config"])
+def test_the_gaussian_teacher_hashes_as_a_data_section_without_the_field(name):
+    # Fails if section_hash keeps `teacher` for the Gaussian teacher. The train, solve and
+    # result hashes that include the data are guarded by the pins (preset_hashes.json,
+    # meanfield_hashes.json), which hold no `teacher`.
+    if name == "legacy_config":
+        configs = [load_config(LEGACY_CONFIG_FILE)]
+    else:
+        configs = [setting_config(preset(name), s) for s in expand(preset(name))]
+    for cfg in configs:
+        assert cfg.data.teacher == "gaussian"
+        assert cfg.section_hash("data") == _data_hash_without_teacher(cfg)
 
 
 @pytest.mark.parametrize("sections", HASHED_SECTIONS)

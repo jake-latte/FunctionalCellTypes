@@ -371,20 +371,19 @@ def _teacher_maps(cfg: DataConfig, reference: Dataset) -> tuple[Tensor, Tensor]:
 
 
 def latent_lattice_dataset(cfg: DataConfig, reference: Dataset) -> Dataset:
-    """One sample per point of the lattice {lo, (lo + hi) / 2, hi}^k of a linear teacher's
-    latents.
+    """One sample per point of the lattice {lo, mid, hi}^k of a linear teacher's latents.
 
-    k = cfg.n_latents, lo = cfg.latent_min and hi = cfg.latent_max, giving 3^k rows. Row i is
-    the i-th element of the Cartesian product of (lo, mid, hi) taken k times: z0 varies
-    slowest, the last latent fastest, so row i is reproducible from i alone (digit j of i in
-    base 3, most significant first, selects latent j's value from (lo, mid, hi)). x and y use the W_X and W_Y in
-    `reference.extras`, so the points are held-out data of the same teacher. Pure: nothing is
-    read or written on disk.
+    k = cfg.n_latents, lo = cfg.latent_min, hi = cfg.latent_max and mid = (lo + hi) / 2, giving
+    3^k rows. Row i is the i-th element of the Cartesian product of (lo, mid, hi) taken k times:
+    z0 varies slowest, the last latent fastest, so row i is reproducible from i alone (digit j
+    of i in base 3, most significant first, selects latent j's value from (lo, mid, hi)). x and
+    y use the W_X and W_Y in `reference.extras`, so the points are held-out data of the same
+    teacher. Pure: nothing is read or written on disk.
 
     `cfg` must be the DataConfig `reference` was generated from. Its D_in and n_latents are
     checked against the shapes of the maps; `latent_min` and `latent_max` cannot be verified
-    from the reference and are taken on trust. The maps are assumed to share `reference.x`'s dtype and
-    device, which the result inherits.
+    from the reference and are taken on trust. The maps are assumed to share `reference.x`'s
+    dtype and device, which the result inherits.
     """
     if cfg.task != "linear_teacher":
         raise ValueError(

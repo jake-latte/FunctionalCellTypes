@@ -378,9 +378,12 @@ def exp_path(root: Path) -> Path:
 
 def exp_text(exp: ExpConfig) -> str:
     """The text of exp.json. `description` is left out when None, `B` when it is the library
-    default and `linear_teacher.teacher` when it is "gaussian", so exp.json files written before
-    those fields existed (and the pinned texts in test_phase_transition_preset.py) stay
-    byte-identical; an absent `B` or `teacher` therefore means the default."""
+    default and `linear_teacher.teacher` when it is "gaussian", so an exp.json holds only what
+    departs from the defaults and an absent `B` or `teacher` means the default. Leaving out
+    `B` keeps exp.json files written before it existed byte-identical; `teacher` follows the
+    same rule, so a Gaussian-teacher exp.json stays minimal and the pinned texts in
+    test_phase_transition_preset.py moved only by the rename of `latent_range` to
+    `latent_min` / `latent_max` (files that still spell `latent_range` are rejected)."""
     exclude: dict[str, Any] = {}
     if exp.description is None:
         exclude["description"] = True

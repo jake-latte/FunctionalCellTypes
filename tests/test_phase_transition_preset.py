@@ -35,24 +35,24 @@ LAMBDAS = [0.1, 0.5, 0.75, 0.9, 0.99]
 # latent interval spelled `latent_min` / `latent_max`; the file adds a description to it and
 # nothing else, so the text with that key removed must still be the old one.
 OLD_EXP_JSON = {
-    "full": "0a38938025be6af607416f68131dc73afb8e8bc116495e973b14459facc4c044",
-    "lambda_exp": "8e0c88343f0413f328a64e269bab370e16fb0e700db577b8e236a435db833ee3",
-    "modularity": "0a38938025be6af607416f68131dc73afb8e8bc116495e973b14459facc4c044",
-    "phase_transition": "e0e498cc65190b09e7c8b09389aaef54a05f067ecaa596cc00ef26d1082bdae2",
-    "spatial_exp": "b6ab301de6953a037275e4c4a7fdab1672aac9d756c764c85be943e8e626adf6",
-    "spatial_n_scan": "913e4c32aa4bc666f47703c9ef6ca5198686cf0d718fc3500b3d3a5f265ab6fd",
-    "spatial_tiny": "d08077ea9dd2638ddb737b7509ff22c3287e68dc8f81888cf53eea141a7fcd28",
     "tiny": "49e6c5936f9854c106bc056637c6e07fd6ef49cf0e6a81dc23bb5d33accf8b02",
+    "full": "0a38938025be6af607416f68131dc73afb8e8bc116495e973b14459facc4c044",
+    "modularity": "0a38938025be6af607416f68131dc73afb8e8bc116495e973b14459facc4c044",
+    "lambda_exp": "8e0c88343f0413f328a64e269bab370e16fb0e700db577b8e236a435db833ee3",
+    "spatial_tiny": "d08077ea9dd2638ddb737b7509ff22c3287e68dc8f81888cf53eea141a7fcd28",
+    "spatial_n_scan": "913e4c32aa4bc666f47703c9ef6ca5198686cf0d718fc3500b3d3a5f265ab6fd",
+    "spatial_exp": "b6ab301de6953a037275e4c4a7fdab1672aac9d756c764c85be943e8e626adf6",
+    "phase_transition": "e0e498cc65190b09e7c8b09389aaef54a05f067ecaa596cc00ef26d1082bdae2",
 }
 NEW_EXP_JSON = {
-    "full": "ae24961b09720fb9439e140d34041a108c7f067982ad9d8442da42d798db810f",
-    "lambda_exp": "841dcdc2317868d445b4ddec6a9dfd403438498d7733fece7c5aab827be3f52d",
-    "modularity": "46f5fdbc004ffad557dcc63c9549963aeac2c3b556f19ed30194962fa451d51c",
-    "phase_transition": "d856bc439c305fa21c4508ec52ce8df3366803ba885a63a69258745017dc25b2",
-    "spatial_exp": "3a5126b0509804ecd716a675c1e12d47b564dc3b89aab283213cc1476040c15a",
-    "spatial_n_scan": "dc50b8aec339769a35d9f146cda9e858f9354e84105f705d2923f8b67ea9a564",
-    "spatial_tiny": "6afc7b586b1eaef6b72090785c10d24d6a6f08e1dcf32bcc8a4333174cfe71b7",
     "tiny": "5a5b65629334c478eb9a0c13f2401182a4856bd5e467e877bcef7afa84e65a08",
+    "full": "ae24961b09720fb9439e140d34041a108c7f067982ad9d8442da42d798db810f",
+    "modularity": "46f5fdbc004ffad557dcc63c9549963aeac2c3b556f19ed30194962fa451d51c",
+    "lambda_exp": "841dcdc2317868d445b4ddec6a9dfd403438498d7733fece7c5aab827be3f52d",
+    "spatial_tiny": "6afc7b586b1eaef6b72090785c10d24d6a6f08e1dcf32bcc8a4333174cfe71b7",
+    "spatial_n_scan": "dc50b8aec339769a35d9f146cda9e858f9354e84105f705d2923f8b67ea9a564",
+    "spatial_exp": "3a5126b0509804ecd716a675c1e12d47b564dc3b89aab283213cc1476040c15a",
+    "phase_transition": "d856bc439c305fa21c4508ec52ce8df3366803ba885a63a69258745017dc25b2",
 }
 
 
@@ -123,7 +123,7 @@ def test_a_preset_writes_the_exp_json_it_wrote_before_plus_its_description(name)
 @pytest.mark.parametrize("name", sorted(NEW_EXP_JSON))
 def test_an_exp_json_written_before_B_existed_loads_with_the_default_B(name):
     text = exp_text(preset(name))
-    assert _sha(text) == NEW_EXP_JSON[name]  # the pinned text, written by the code without B
+    assert _sha(text) == NEW_EXP_JSON[name]  # the pinned text, which leaves the default B out
     assert "B" not in json.loads(text)
     loaded = ExpConfig.model_validate_json(text)
     assert loaded.B == 1

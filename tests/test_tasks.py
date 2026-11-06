@@ -156,7 +156,7 @@ def test_embed_is_position_only():
 # --- linear teacher -----------------------------------------------------------------------
 
 
-def test_linear_teacher_latents_are_uniform_on_the_range():
+def test_linear_teacher_latents_are_uniform_on_a_symmetric_interval():
     cfg = _cfg("linear_teacher", P=20_000, latent_min=-2.0, latent_max=2.0)
     ds = make_dataset(cfg, CPU, F64)
     z = torch.stack([ds.factors[f"z{i}"] for i in range(3)], dim=1)

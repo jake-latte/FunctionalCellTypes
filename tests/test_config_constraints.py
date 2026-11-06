@@ -22,7 +22,8 @@ from fct.config import (
 # Section hashes key cached artefacts, so the dumped JSON of the defaults must not change
 # unintentionally (adding a config field changes every hash that includes its section, so old
 # caches become stale). The data pin is a literal; the sections that include train are rebuilt
-# from canonical JSON, which also holds the loss version.
+# from canonical JSON, which also holds the loss version. DATA_HASH moved once deliberately,
+# when `latent_range` was renamed to `latent_min` / `latent_max`.
 DATA_HASH = "292f74b412b0"
 TRAIN_SECTIONS = [
     ("data", "net", "train"),

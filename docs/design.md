@@ -128,6 +128,11 @@ Models are stored as `state_dict` and rebuilt from the config with `make_net`.
 ## config.py
 
 ```python
+Teacher = Literal["gaussian", "orthonormal"]       # the linear teacher's map type (DataConfig, LinearTeacherParams)
+def reject_latent_range(data: Any) -> None        # ValueError naming latent_min / latent_max if a raw mapping
+                                                  # still carries the removed latent_range (a before-validator of both models)
+def check_latent_interval(latent_min, latent_max) -> None   # ValueError unless latent_min < latent_max and
+                                                  # latent_max - latent_min is finite (an after-validator of both models)
 class DataConfig(BaseModel):      # model_config = ConfigDict(extra="forbid") on every model
     task: Literal["position", "linear_teacher", "object_action", "what_where"] = "position"
     P: int = 4096; D_in: int = 64

@@ -30,8 +30,10 @@ SHAPES = {
     3: [[2, 2, 2], [2, 2, 3], [2, 2, 2]],
     4: [[2, 2, 2, 2], [2, 2, 2, 3], [2, 2, 2, 2]],
 }
-# Section hash of the config in `_pinned_spatial`, from the code before `lambda_max` existed
-# with the data section's latent interval as `latent_min` / `latent_max`.
+# Section hash of the config in `_pinned_spatial`. It was pinned with the code before
+# `lambda_max` existed and recomputed after `latent_range` was renamed to `latent_min` /
+# `latent_max` (that code never had the new fields, so it could not have written this value);
+# the recomputation changed no other field.
 PINNED_SPATIAL_HASH = "1ef37eb7a218"
 SECTIONS = ("data", "net", "train")
 
