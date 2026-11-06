@@ -113,6 +113,37 @@ def test_latent_basis_accepts_one_latent_on_zero_to_a():
     assert basis.U.shape == (500, 1)
 
 
+def test_latent_basis_rejects_one_symmetric_latent_by_its_cosine():
+    z = 2 * torch.rand(256, dtype=F64, generator=torch.Generator().manual_seed(22)) - 1
+    with pytest.raises(ValueError, match="symmetric.*mean direction is undefined") as error:
+        sp.latent_basis({"z0": z})
+    assert "degenerate" not in str(error.value)  # one latent has no second singular value
+
+
+def frame_accepted(z: torch.Tensor) -> bool:
+    try:
+        sp.latent_basis({f"z{k}": z[:, k] for k in range(z.shape[1])})
+    except ValueError as error:
+        assert "mean direction is undefined" in str(error)
+        return False
+    return True
+
+
+@pytest.mark.parametrize("P, K", [(16, 2), (16, 3), (32, 2)])
+def test_latent_basis_frame_check_at_small_p(P, K):
+    """Never rejects latents on [0, a]; accepts few symmetric draws even at P = 16.
+
+    The cosine test alone accepts about 6% of symmetric draws at P = 16; adding the gap
+    s_1^2 / s_2^2 >= 2 brings that to 1.7% at K = 2 and 0.7% at K = 3 (see latent_basis).
+    """
+    gen = torch.Generator().manual_seed(23)
+    n = 2000
+    positive = torch.rand((n, P, K), dtype=F64, generator=gen)
+    assert all(frame_accepted(z) for z in positive)
+    accepted = sum(frame_accepted(2 * z - 1) for z in positive)
+    assert accepted / n < 0.03, f"{accepted} of {n} symmetric draws accepted"
+
+
 @pytest.mark.parametrize(
     "factors, match",
     [
@@ -204,7 +235,7 @@ def test_null_power_is_zero_for_activity_in_the_latent_span():
 
 
 def test_null_power_resolves_a_small_floor_under_large_latent_power():
-    P, K, N, floor = 40, 3, 64, 1e-3
+    P, K, N, floor = 40, 3, 64, 1e-6
     gen = torch.Generator().manual_seed(17)
     U = sp.latent_basis(uniform_factors(P, K)).U
     U_perp = torch.linalg.qr(U, mode="complete").Q[:, K:]
@@ -287,7 +318,7 @@ def test_summaries_agree_with_the_script_on_random_spectra(limits):
         summary = sp.spectrum_summary(d_t)
         np.testing.assert_allclose(sp.autocorrelation(d_t).numpy(), limits.autocorrelation(d))
         np.testing.assert_allclose(summary.R.numpy(), limits.autocorrelation(d))
-        assert sp.half_power_q(d_t) == limits.half_power_q(d) == summary.q_half
+        assert sp.half_power_q(d_t) == limits.half_power_q(d)
         assert summary.lag1 == pytest.approx(limits.autocorr_lag1(d), rel=1e-12)
         assert summary.share0 == pytest.approx(d[0] / d.sum(), rel=1e-12)
         assert (summary.d0, summary.d_nyq) == (d[0], d[N // 2])
@@ -306,7 +337,7 @@ def test_spectrum_summary_gives_the_limits_note_numbers(limits, name, mode1, mod
     _, spectra = limits.prediction_spectra(*limits.PREDICTIONS[name])
     for d, (q_half, share0, lag1) in zip(spectra, (mode1, mode2)):
         summary = sp.spectrum_summary(torch.from_numpy(d))
-        assert summary.q_half == q_half
+        assert sp.half_power_q(torch.from_numpy(d)) == q_half
         assert summary.share0 == pytest.approx(share0, abs=5e-4)
         assert summary.lag1 == pytest.approx(lag1, abs=5e-4)
 
@@ -317,25 +348,37 @@ def test_summaries_batch_over_leading_dims():
     d = torch.from_numpy(0.5 * (d + np.roll(d[..., ::-1], 1, axis=-1)))
     d[..., 0] += 5.0  # peaked at q = 0, so every half-power frequency is defined
     batched = sp.spectrum_summary(d)
-    assert batched.q_half.shape == batched.share0.shape == batched.lag1.shape == (3, 2)
+    assert batched.share0.shape == batched.lag1.shape == batched.d0.shape == (3, 2)
     assert batched.R.shape == (3, 2, 16)
     for i in range(3):
         for j in range(2):
             one = sp.spectrum_summary(d[i, j])
-            assert isinstance(one.q_half, int) and isinstance(one.lag1, float)
-            assert int(batched.q_half[i, j]) == one.q_half == sp.half_power_q(d[i, j])
+            assert isinstance(one.share0, float) and isinstance(one.lag1, float)
+            assert isinstance(sp.half_power_q(d[i, j]), int)
             assert float(batched.share0[i, j]) == pytest.approx(one.share0, rel=1e-14)
             assert float(batched.lag1[i, j]) == pytest.approx(one.lag1, rel=1e-14)
             assert (float(batched.d0[i, j]), float(batched.d_nyq[i, j])) == (one.d0, one.d_nyq)
-    torch.testing.assert_close(sp.half_power_q(d), batched.q_half)
+    q_half = sp.half_power_q(d)
+    assert q_half.shape == (3, 2) and q_half.dtype == torch.int64
+    assert q_half.tolist() == [[sp.half_power_q(d[i, j]) for j in range(2)] for i in range(3)]
+
+
+def test_spectrum_summary_runs_on_noisy_white_null_rows():
+    """One record of a white spectrum has d_0 < d_{N/2} half the time; the summary still runs."""
+    gen = torch.Generator().manual_seed(24)
+    d = -torch.log(torch.rand((4, 64, 64), dtype=F64, generator=gen))  # exponential power
+    summary = sp.spectrum_summary(d)
+    assert summary.lag1.shape == (4, 64) and "q_half" not in summary._fields
+    assert bool((d[..., 0] < d[..., 32]).any())  # half_power_q would raise on these rows
 
 
 def test_half_power_q_rejects_a_spectrum_rising_to_nyquist():
     d = torch.linspace(1.0, 2.0, 8, dtype=F64)  # d_0 = 1 < d_{N/2}
     with pytest.raises(ValueError, match="d_0 .* d_N/2"):
         sp.half_power_q(d)
-    with pytest.raises(ValueError, match="d_0 .* d_N/2"):
-        sp.spectrum_summary(d)
+    batch = torch.stack([d, d.flip(-1), d])  # rows 0 and 2 rise to Nyquist
+    with pytest.raises(ValueError, match="2 of 3 spectra.*first at batch index \\[0\\]"):
+        sp.half_power_q(batch)
 
 
 def test_gaussian_width_inverts_a_gaussian_autocorrelation():
@@ -363,6 +406,8 @@ def test_gaussian_width_inverts_a_gaussian_autocorrelation():
         (lambda: sp.spectrum_summary(torch.ones(7, dtype=F64)), "even"),
         (lambda: sp.spectrum_summary(torch.zeros(8, dtype=F64)), "positive"),
         (lambda: sp.half_power_q(torch.full((8,), float("nan"), dtype=F64)), "finite"),
+        (lambda: sp.spectrum_summary(torch.ones((0, 8), dtype=F64)), "empty"),
+        (lambda: sp.half_power_q(torch.ones((0, 8), dtype=F64)), "empty"),
         (lambda: sp.autocorrelation(torch.ones(8, dtype=torch.int64)), "floating"),
     ],
 )
@@ -483,13 +528,25 @@ def test_record_sem_is_calibrated_on_correlated_chains():
     assert float((sem / naive).mean()) == pytest.approx(3.0, rel=0.1)  # sqrt(tau) = 3
 
 
-def test_anticorrelated_records_get_tau_one_and_the_naive_sem():
-    """AR(1) with phi = -0.5 has tau = 1/3; the windowed estimate is clamped to tau = 1."""
-    records = ar1_chains(-0.5, 4000, 50, seed=21)
-    tau = sp.integrated_autocorr_time(records, burn_in=0)
-    assert torch.equal(tau, torch.ones(50, dtype=F64))
-    naive = records.std(dim=0, correction=0) / math.sqrt(4000)
-    torch.testing.assert_close(sp.record_sem(records, burn_in=0), naive)
+def test_integrated_autocorr_time_of_anticorrelated_chains():
+    """AR(1) with phi = -0.5 has tau = (1 + phi) / (1 - phi) = 1/3."""
+    tau = sp.integrated_autocorr_time(ar1_chains(-0.5, 4000, 200, seed=21), burn_in=0)
+    assert float(tau.mean()) == pytest.approx(1 / 3, rel=0.1)
+
+
+@pytest.mark.parametrize("b", [0.8, 0.9])
+def test_record_sem_is_calibrated_on_a_slow_plus_alternating_chain(b):
+    """sqrt(1-b) AR(0.95) + sqrt(b) AR(-0.9): the alternation must not hide the slow part.
+
+    tau = (1 - b) 39 + b (0.1 / 1.9): 7.8 at b = 0.8, 3.9 at b = 0.9. Sokal's window stops at
+    W = 1 here and gives tau about 1.
+    """
+    slow = ar1_chains(0.95, 4000, 200, seed=25)
+    alternating = ar1_chains(-0.9, 4000, 200, seed=26)
+    records = math.sqrt(1 - b) * slow + math.sqrt(b) * alternating
+    sem = sp.record_sem(records, burn_in=0)
+    spread = records.mean(dim=0).std()
+    assert float(sem.square().mean().sqrt()) == pytest.approx(float(spread), rel=0.2)
 
 
 def test_record_sem_of_independent_records_is_the_naive_sem():
@@ -520,7 +577,7 @@ def test_record_sem_of_constant_records_is_zero():
         (lambda r: sp.average_records(r, burn_in=-1), "burn_in"),
         (lambda r: sp.average_records(r, burn_in=200), "burn_in"),
         (lambda r: sp.record_sem(r[:, 0, 0] * float("nan"), 0), "finite"),
-        (lambda r: sp.record_sem(r, burn_in=101), "at least 100"),
+        (lambda r: sp.record_sem(r, burn_in=1), "at least 200"),
         (lambda r: sp.record_sem(torch.arange(200.0, dtype=F64), 0), "too short"),
     ],
 )
