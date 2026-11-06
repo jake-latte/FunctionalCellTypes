@@ -182,29 +182,46 @@ def largest_hessian_eigenvalue(
     n_iter: int = N_HESSIAN_ITERATIONS,
     seed: int = 0,
 ) -> float:
-    """The largest eigenvalue of the Hessian of `loss_fn()` with respect to `params`, estimated
-    by `n_iter` power iterations of Hessian-vector products (double backward through the
-    gradient of one evaluation): a Rayleigh quotient, so a lower bound that converges from
-    below. The start vector comes from a local generator, so the global RNG is untouched; the
+    """The largest (most positive) eigenvalue of the Hessian H of `loss_fn()` with respect to
+    `params`, from Hessian-vector products (double backward through the gradient of one
+    evaluation). `n_iter` power iterations on H converge to the eigenvalue of largest
+    magnitude, lambda_1; if that is negative, a second `n_iter` on H + |lambda_1| I, whose
+    spectrum is then (up to the error of lambda_1) non-negative with lambda_max + |lambda_1| on
+    top, give lambda_max after the shift is subtracted. Each pass returns a Rayleigh quotient,
+    so the estimate does not exceed lambda_max beyond round-off and the error of the shift.
+    The start vectors come from a local generator, so the global RNG is untouched; the
     parameters and their `.grad` are left as they were."""
     params = list(params)
     grads = torch.autograd.grad(loss_fn(), params, create_graph=True)
     gen = torch.Generator().manual_seed(seed)
-    v = [torch.randn(p.shape, generator=gen, dtype=p.dtype).to(p.device) for p in params]
 
-    def normalised(vs: list[Tensor]) -> list[Tensor]:
-        norm = math.sqrt(sum(x.square().sum().item() for x in vs))
-        if not norm > 0:  # also catches NaN: a non-finite loss would otherwise hide here
-            raise ValueError(f"power iteration found a Hessian-vector product of norm {norm}")
-        return [x / norm for x in vs]
-
-    v, lam = normalised(v), 0.0
-    for _ in range(n_iter):
+    def hvp(v: list[Tensor]) -> list[Tensor]:
         dot = sum((g * x).sum() for g, x in zip(grads, v, strict=True))
-        hv = [h.detach() for h in torch.autograd.grad(dot, params, retain_graph=True)]
-        lam = sum((h * x).sum().item() for h, x in zip(hv, v, strict=True))
-        v = normalised(hv)
+        return [h.detach() for h in torch.autograd.grad(dot, params, retain_graph=True)]
+
+    def top_magnitude(shift: float) -> float:
+        """Power iteration on H + shift I: its eigenvalue of largest magnitude."""
+        v = _normalised([torch.randn(p.shape, generator=gen, dtype=p.dtype) for p in params])
+        v = [x.to(p.device) for x, p in zip(v, params, strict=True)]
+        lam = 0.0
+        for _ in range(n_iter):
+            av = [h + shift * x for h, x in zip(hvp(v), v, strict=True)]
+            lam = sum((a * x).sum().item() for a, x in zip(av, v, strict=True))
+            v = _normalised(av)
+        return lam
+
+    lam = top_magnitude(0.0)
+    if lam < 0:
+        lam = top_magnitude(-lam) + lam
     return lam
+
+
+def _normalised(vs: list[Tensor]) -> list[Tensor]:
+    """`vs` scaled to unit norm as one vector."""
+    norm = math.sqrt(sum(x.square().sum().item() for x in vs))
+    if not norm > 0:  # also catches NaN: a non-finite loss would otherwise hide here
+        raise ValueError(f"power iteration found a Hessian-vector product of norm {norm}")
+    return [x / norm for x in vs]
 
 
 def _check_sgld_step_resolves_the_loss(

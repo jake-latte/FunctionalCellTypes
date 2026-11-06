@@ -443,6 +443,19 @@ def test_largest_hessian_eigenvalue_of_a_quadratic_is_its_largest_curvature():
     assert theta.grad is None and other.grad is None  # nothing left on the parameters
 
 
+def test_largest_hessian_eigenvalue_is_the_top_of_the_spectrum_not_the_largest_magnitude():
+    """0.5 (-100 p0^2 + 50 p1^2): plain power iteration finds -100, under which lr = 0.05 would
+    pass the check although lr * 50 = 2.5 diverges along p1. The estimate must be 50."""
+    p = torch.tensor([0.3, -0.2], dtype=F64, requires_grad=True)
+    curvatures = torch.tensor([-100.0, 50.0], dtype=F64)
+    lam = largest_hessian_eigenvalue(lambda: 0.5 * (curvatures * p.square()).sum(), [p])
+    assert lam == pytest.approx(50.0, rel=1e-6)
+    concave = largest_hessian_eigenvalue(
+        lambda: -0.5 * (torch.tensor([3.0, 7.0]) * p.square()).sum(), [p]
+    )
+    assert concave == pytest.approx(-3.0, rel=1e-6)
+
+
 def test_largest_hessian_eigenvalue_leaves_the_global_rng_alone():
     cfg = _cfg()
     ds, net = _setup(cfg)
