@@ -432,3 +432,18 @@ def test_a_legacy_file_that_no_longer_validates_says_the_old_code_could_not_load
     assert "old code could not load it either" in message
     assert "validate under the current config" in message and "stale" in message
     assert _snapshot(tmp_path) == before
+
+
+def test_a_legacy_file_with_latent_range_names_both_readings_and_the_hand_edit(tmp_path):
+    # `legacy_sweep_latent_range.json` is `legacy_sweep_tiny.json` as it was before the latent
+    # interval became two fields: it spells `latent_range`, as every real legacy sweep.json does.
+    shutil.copy(FIXTURES / "legacy_sweep_latent_range.json", tmp_path / "sweep.json")
+    before = _snapshot(tmp_path)
+    with pytest.raises(MigrationError) as info:
+        migrate_exp(tmp_path)
+    message = str(info.value)
+    assert "linear_teacher.latent_range" in message
+    assert "latent_min" in message and "latent_max" in message
+    assert "[-a, a]" in message and "[0, a]" in message
+    assert "could not load it either" not in message
+    assert _snapshot(tmp_path) == before

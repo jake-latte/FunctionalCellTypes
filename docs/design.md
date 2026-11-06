@@ -983,7 +983,9 @@ keeps the old (in)consistency instead of judging it: a record left by an earlier
 deletes settings) is renamed too and reported as "kept from an earlier experiment", with ", `exp run` refuses it, as before" when its
 directory belongs to the current experiment under another hash. `plan_migration` reads and checks everything and writes nothing: the
 converted file must validate as `ExpConfig` (a legacy file that does not, say one carrying the removed `meanfield.readout`, is refused
-naming the field: the old code could not load it either, so the folder's results are stale under the current code), every
+naming the field: the old code could not load it either, so the folder's results are stale under the current code; one whose
+linear teacher spells `latent_range` is refused with both readings, [-a, a] and [0, a], and the hand edit to `latent_min` /
+`latent_max` for each, since the file cannot tell which interval drew its latents), every
 setting.json must be readable JSON with exactly one of the two hash keys, and a record with the experiment's own hash must have the
 `index` and `axes` that the experiment gives its directory. `apply_plan` then converts the setting files, writes exp.json, and removes
 sweep.json last, each file by `<name>.tmp` and `os.replace`; a failed write (an `OSError`) leaves a folder that running the command

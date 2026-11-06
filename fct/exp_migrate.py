@@ -97,7 +97,28 @@ def _exp_json_is_the_conversion(root: Path, converted: dict[str, Any]) -> bool:
     )
 
 
+def _refuse_latent_range(tree: dict[str, Any], root: Path) -> None:
+    """MigrationError if the linear teacher still spells `latent_range`. It is not converted:
+    the file cannot tell which interval the code that ran it drew the latents on."""
+    teacher = tree.get("linear_teacher")
+    if not (isinstance(teacher, dict) and "latent_range" in teacher):
+        return
+    a = teacher["latent_range"]
+    raise MigrationError(
+        f"{root / LEGACY_EXP_FILE} sets linear_teacher.latent_range = {a!r}, which the current "
+        "config replaces by linear_teacher.latent_min and linear_teacher.latent_max. It is not "
+        "converted automatically because it has two possible readings: the committed code drew "
+        "the latents uniformly on [-a, a], but a version drew them on [0, a], and the file does "
+        'not record which one ran it. Edit the file by hand: replace "latent_range": a by '
+        f'"latent_min": {-a!r}, "latent_max": {a!r} for [-a, a], or by "latent_min": 0.0, '
+        f'"latent_max": {a!r} for [0, a], then run the migration again. Either way the '
+        "folder's results are stale under the current code (the data hashes changed with the "
+        "rename)."
+    )
+
+
 def _validated(tree: dict[str, Any], root: Path) -> ExpConfig:
+    _refuse_latent_range(tree, root)
     try:
         return ExpConfig.model_validate(tree)
     except ValidationError as err:
