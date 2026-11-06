@@ -14,7 +14,8 @@ net reads its output as V^T phi(h^L) / N (MODEL_VERSION 2) and whose tilt projec
 `hmc_solve_<problem>_legacy_steps.pt` at `LEGACY_STEP_CONTROL` (the plain Algorithm 1).
 `write_fixtures` rewrites all of them. `legacy_config.json` is the flat layout of the code
 before the solver sub-section (commit d1d3091), edited by hand: the `readout` key deleted and
-the step-control fields added at their `LEGACY_STEP_CONTROL` values. `write_fixtures` would
+the step-control fields added at their `LEGACY_STEP_CONTROL` values, and `latent_range: 1.0`
+replaced by `latent_max: 1.0, latent_min: -1.0`, which moved its `result` hash. `write_fixtures` would
 save it in the current nested layout, so restore it from git after running it.
 
 Only flat `MeanFieldConfig` keyword arguments are used here, which both the old flat schema and

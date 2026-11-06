@@ -312,7 +312,7 @@ def test_spatial_exp_fixed_values():
         assert c.spatial.output.kernel.length_scale == 0.15
         assert c.spatial.min_rel_eig == 1e-2
         assert (c.net.N, c.data.P, c.net.L, c.net.g, c.dtype) == (512, 128, 1, 1.0, "float64")
-        assert (c.data.D_in, c.data.latent_range) == (64, 1.0)
+        assert (c.data.D_in, c.data.latent_min, c.data.latent_max) == (64, -1.0, 1.0)
         t = c.train
         assert (t.rate_lambda, t.weight_lambda, t.optimizer, t.beta) == (0.0, 20.0, "sgld", 1e4)
         assert (t.lr, t.n_epochs) == (1e-2, 250_000)

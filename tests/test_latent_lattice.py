@@ -13,7 +13,9 @@ CPU, F64 = torch.device("cpu"), torch.float64
 
 
 def _cfg(k=2, a=1.0, **kw) -> DataConfig:
-    return DataConfig(task="linear_teacher", P=20, D_in=6, n_latents=k, latent_range=a, **kw)
+    return DataConfig(
+        task="linear_teacher", P=20, D_in=6, n_latents=k, latent_min=-a, latent_max=a, **kw
+    )
 
 
 def _latents(ds: Dataset, k: int) -> torch.Tensor:
@@ -53,6 +55,15 @@ def test_each_latent_takes_each_value_equally_often_and_scales_with_a(k):
     for i in range(k):
         for v in (-2.5, 0.0, 2.5):
             assert int((z[:, i] == v).sum()) == 3 ** (k - 1)
+
+
+def test_an_asymmetric_interval_gives_its_ends_and_midpoint():
+    cfg = DataConfig(
+        task="linear_teacher", P=20, D_in=6, n_latents=2, latent_min=0.0, latent_max=1.0
+    )
+    z = _latents(latent_lattice_dataset(cfg, make_dataset(cfg, CPU, F64)), 2)
+    expected = [[u / 2, v / 2] for u in range(3) for v in range(3)]
+    assert torch.equal(z, torch.tensor(expected, dtype=F64))
 
 
 def test_inputs_and_targets_are_the_reference_linear_maps():

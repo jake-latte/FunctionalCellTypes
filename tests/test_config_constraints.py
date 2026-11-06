@@ -23,7 +23,7 @@ from fct.config import (
 # unintentionally (adding a config field changes every hash that includes its section, so old
 # caches become stale). The data pin is a literal; the sections that include train are rebuilt
 # from canonical JSON, which also holds the loss version.
-DATA_HASH = "37d33c6aae26"
+DATA_HASH = "292f74b412b0"
 TRAIN_SECTIONS = [
     ("data", "net", "train"),
     ("data", "net", "train", "meanfield"),
@@ -43,7 +43,7 @@ _POSITIVE_INT = {
     AnalysisConfig: ["n_grid", "n_components", "n_cols"],
 }  # fmt: skip
 _POSITIVE_FLOAT = {
-    DataConfig: ["var", "latent_range"],
+    DataConfig: ["var"],
     NetConfig: ["g"],
     TrainConfig: ["lr"],
     MeanFieldConfig: ["beta", "learning_prefactor", "prior_scale", "alpha"],

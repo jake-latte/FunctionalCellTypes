@@ -154,7 +154,7 @@ def test_trial_picks_spread_over_the_sign_patterns_sorted_by_the_chosen_latent()
             if isinstance(node, ast.FunctionDef):
                 exec(ast.unparse(node), ns)  # noqa: S102 - the notebook's own function
     k, a = 2, 1.0
-    cfg = DataConfig(task="linear_teacher", P=4, D_in=3, n_latents=k, latent_range=a)
+    cfg = DataConfig(task="linear_teacher", P=4, D_in=3, n_latents=k, latent_min=-a, latent_max=a)
     maps = torch.eye(3, k, dtype=torch.float64)
     reference = Dataset(
         x=torch.zeros(4, 3, dtype=torch.float64),

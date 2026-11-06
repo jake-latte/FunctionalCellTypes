@@ -31,27 +31,28 @@ from fct.train import _check_sgld_step_resolves_the_prior, load_trained
 DS = [1, 2, 3, 4]
 LAMBDAS = [0.1, 0.5, 0.75, 0.9, 0.99]
 # sha256 of the exp.json text of each preset. OLD_EXP_JSON is the text the Python presets wrote
-# (lambda_exp at 7 points per axis, which is what the file holds); the file adds a description to
-# it and nothing else, so the text with that key removed must still be the old one.
+# (lambda_exp at 7 points per axis, which is what the file holds), with the linear teacher's
+# latent interval spelled `latent_min` / `latent_max`; the file adds a description to it and
+# nothing else, so the text with that key removed must still be the old one.
 OLD_EXP_JSON = {
-    "tiny": "712cdde2fac021c1e596ddf21d6d51c4f9f9ee73661b580ac9634f3465a1a14a",
-    "full": "25b55b25a244b6337c2d33008c33dc862eb976644d62c847223fe4cee3bbcd73",
-    "modularity": "25b55b25a244b6337c2d33008c33dc862eb976644d62c847223fe4cee3bbcd73",
-    "lambda_exp": "cbdfb5c226b67f4867e7f47d05fed64b283afa35bb148aa49ba04489ba15e1be",
-    "spatial_tiny": "a00715e7482b7163121feaa9ea303ac246fdd5ba01aad86876054d3124e06a83",
-    "spatial_n_scan": "1abd77565bc39ada4188857a397a7ca1222518915399aa85159479bf21e08c1e",
-    "spatial_exp": "2165b782d399d9ec44373dabc3b0fdc096ef8b87fb0ab5772f3a8cbc5c7def4d",
-    "phase_transition": "391a7da6e4320bae43e8538d4af90a3ffca694ff22f5580a4657ecbd56c9b3e7",
+    "full": "0a38938025be6af607416f68131dc73afb8e8bc116495e973b14459facc4c044",
+    "lambda_exp": "8e0c88343f0413f328a64e269bab370e16fb0e700db577b8e236a435db833ee3",
+    "modularity": "0a38938025be6af607416f68131dc73afb8e8bc116495e973b14459facc4c044",
+    "phase_transition": "e0e498cc65190b09e7c8b09389aaef54a05f067ecaa596cc00ef26d1082bdae2",
+    "spatial_exp": "b6ab301de6953a037275e4c4a7fdab1672aac9d756c764c85be943e8e626adf6",
+    "spatial_n_scan": "913e4c32aa4bc666f47703c9ef6ca5198686cf0d718fc3500b3d3a5f265ab6fd",
+    "spatial_tiny": "d08077ea9dd2638ddb737b7509ff22c3287e68dc8f81888cf53eea141a7fcd28",
+    "tiny": "49e6c5936f9854c106bc056637c6e07fd6ef49cf0e6a81dc23bb5d33accf8b02",
 }
 NEW_EXP_JSON = {
-    "tiny": "f42d0b55033e3b77cb42f9b289bb07f417fcd065146eaafc7cf6e42fde01e3ae",
-    "full": "f910c5de65dee0f40ba9779f96c1c8754544fe9b8020904a30b44c0051b5b304",
-    "modularity": "7f4c526e57140c010d9f7fa1f063f6756e12461132a32b82037c74561fb2da64",
-    "lambda_exp": "1790f54686c064dd97cfac9daac4c62f64565475f1fbc150c10fce08288402c2",
-    "spatial_tiny": "dc9d9a2e902d202592063b9172241e067141cd661426c9f72cac329b0d6b10fe",
-    "spatial_n_scan": "13d8e5a817bedf0548182143f4b94b42044e63a7fd601b22a334fca4207eb47c",
-    "spatial_exp": "10533d2be87cf11bf83d21bd3bc202d90fd1da0c7089b232abbde72a58512477",
-    "phase_transition": "3c1684daacf2f562ee3240c543fd9d1625605fa7473c4be229d2a761f08917fa",
+    "full": "ae24961b09720fb9439e140d34041a108c7f067982ad9d8442da42d798db810f",
+    "lambda_exp": "841dcdc2317868d445b4ddec6a9dfd403438498d7733fece7c5aab827be3f52d",
+    "modularity": "46f5fdbc004ffad557dcc63c9549963aeac2c3b556f19ed30194962fa451d51c",
+    "phase_transition": "d856bc439c305fa21c4508ec52ce8df3366803ba885a63a69258745017dc25b2",
+    "spatial_exp": "3a5126b0509804ecd716a675c1e12d47b564dc3b89aab283213cc1476040c15a",
+    "spatial_n_scan": "dc50b8aec339769a35d9f146cda9e858f9354e84105f705d2923f8b67ea9a564",
+    "spatial_tiny": "6afc7b586b1eaef6b72090785c10d24d6a6f08e1dcf32bcc8a4333174cfe71b7",
+    "tiny": "5a5b65629334c478eb9a0c13f2401182a4856bd5e467e877bcef7afa84e65a08",
 }
 
 

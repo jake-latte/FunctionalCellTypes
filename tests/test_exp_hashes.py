@@ -3,8 +3,11 @@
 `fixtures/preset_hashes.json` was computed with the code that defined the presets in Python
 (`lambda_exp` at its 7 log-spaced points per axis): for each preset the
 experiment hash, and for each setting its train hash (`section_hash("data", "net", "train")`),
-its mean-field (solve) hash and its directory. A renamed or restructured experiment must not
-move any of them, or finished runs would be taken for stale.
+its mean-field (solve) hash and its directory. The train and solve hashes were recomputed when
+the data section's `latent_range` became `latent_min` / `latent_max` (a field rename, so every
+hash holding the data section moved); the experiment hashes and directories are the original
+ones. A renamed or restructured experiment must not move any of them, or finished runs would be
+taken for stale.
 """
 
 import json

@@ -45,8 +45,8 @@ CPU, F64 = torch.device("cpu"), torch.float64
 
 # ---------------------------------------------------------------- pins of runs without the prior
 
-# Section hashes of three configs without a spatial prior, from the LOSS_VERSION 4, MODEL_VERSION 2 code: the
-# spatial section must not enter them when it is unset.
+# Section hashes of three configs without a spatial prior, from the LOSS_VERSION 4, MODEL_VERSION 2 code with
+# the latent interval as `latent_min` / `latent_max`: the spatial section must not enter them when it is unset.
 SMALL = Config(
     data=DataConfig(P=16, D_in=4, d=2, embedding="linear", seed=1),
     net=NetConfig(N=8, L=2, g=1.0, phi="tanh", seed=2),
@@ -57,12 +57,12 @@ SMALL = Config(
 TRAIN = ("data", "net", "train")
 ANALYSIS = ("data", "net", "train", "analysis")
 HASH_PINS = [
-    (default_config(), {TRAIN: "542a8cb8b9da", ANALYSIS: "bd9eb0126f20"}),
+    (default_config(), {TRAIN: "97e1aa717ba3", ANALYSIS: "d0626f9af4ff"}),
     (
         Config(train=TrainConfig(optimizer="sgld", beta=2.0)),
-        {TRAIN: "90fbfc347a8b", ANALYSIS: "d15368ec62ec"},
+        {TRAIN: "b1a93046b4f5", ANALYSIS: "63cd3997a68f"},
     ),
-    (SMALL, {TRAIN: "5a456f800eb7", ANALYSIS: "4eb572dcf97e"}),
+    (SMALL, {TRAIN: "2bf60c07341b", ANALYSIS: "4ed6c35ef5a8"}),
 ]
 # compute_loss on the SMALL net (prior coefficient 0.1, rate_lambda=1e-3) and the squared norm of
 # each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output V^T phi(h^L) / N).

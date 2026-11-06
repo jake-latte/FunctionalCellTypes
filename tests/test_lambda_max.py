@@ -30,8 +30,9 @@ SHAPES = {
     3: [[2, 2, 2], [2, 2, 3], [2, 2, 2]],
     4: [[2, 2, 2, 2], [2, 2, 2, 3], [2, 2, 2, 2]],
 }
-# Section hash of the config in `_pinned_spatial`, from the code before `lambda_max` existed.
-PINNED_SPATIAL_HASH = "c93ee7958838"
+# Section hash of the config in `_pinned_spatial`, from the code before `lambda_max` existed
+# with the data section's latent interval as `latent_min` / `latent_max`.
+PINNED_SPATIAL_HASH = "1ef37eb7a218"
 SECTIONS = ("data", "net", "train")
 
 

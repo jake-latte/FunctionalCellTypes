@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
 import numpy as np
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, FiniteFloat, ValidationError, model_validator
 
 from fct.cache import (
     CachePaths,
@@ -59,7 +59,9 @@ from fct.config import (
     PosInt,
     StrictModel,
     TrainConfig,
+    check_latent_interval,
     load_config,
+    reject_latent_range,
     resolve_device,
     resolve_dtype,
     save_config,
@@ -152,7 +154,19 @@ class Setting:
 class LinearTeacherParams(StrictModel):
     n_features: PosInt  # m: dimension of both x and y
     n_latents: PosInt
-    latent_range: PosFloat
+    latent_min: FiniteFloat
+    latent_max: FiniteFloat
+
+    @model_validator(mode="before")
+    @classmethod
+    def _latent_range_was_replaced(cls, data: Any) -> Any:
+        reject_latent_range(data)
+        return data
+
+    @model_validator(mode="after")
+    def _latent_interval_is_nonempty(self) -> Self:
+        check_latent_interval(self.latent_min, self.latent_max)
+        return self
 
 
 class ObjectActionParams(StrictModel):
@@ -256,7 +270,8 @@ def _task_fields(exp: ExpConfig, task: str) -> dict:
         return {
             "D_in": params.n_features,
             "n_latents": params.n_latents,
-            "latent_range": params.latent_range,
+            "latent_min": params.latent_min,
+            "latent_max": params.latent_max,
         }
     return params.model_dump()
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
 import torch
-from pydantic import Field, model_validator
+from pydantic import Field, FiniteFloat, model_validator
 
 # The constrained types and StrictModel are re-exported: other modules import them from here.
 from fct.schema import NonNegFloat, NonNegInt, PosFloat, PosInt, StrictModel
@@ -35,11 +35,31 @@ LOSS_VERSION = 4
 MODEL_VERSION = 2
 
 
+def reject_latent_range(data: Any) -> None:
+    """ValueError naming the replacement fields if `data` (a raw mapping) carries the removed
+    `latent_range`; the strict models would reject it anyway, but without saying what to use."""
+    if isinstance(data, dict) and "latent_range" in data:
+        raise ValueError(
+            "latent_range was replaced by latent_min and latent_max (the latents are uniform "
+            f"on [latent_min, latent_max]); for latent_range={data['latent_range']!r} set "
+            "latent_min=-latent_range and latent_max=latent_range"
+        )
+
+
+def check_latent_interval(latent_min: float, latent_max: float) -> None:
+    """ValueError unless latent_min < latent_max, so the latents' interval is not empty."""
+    if not latent_min < latent_max:
+        raise ValueError(
+            f"latent_min must be below latent_max; got latent_min={latent_min}, "
+            f"latent_max={latent_max}"
+        )
+
+
 class DataConfig(StrictModel):
     """Data settings. `task` selects the generator and only that task's fields are read: the
     fields of other tasks are ignored, but they still enter the cache hash, so changing one
     makes an existing data cache stale. Sizes and counts are PosInt (>= 1) except
-    `max_objects` (>= 0); `latent_range` is PosFloat. Constraints between fields (the task's
+    `max_objects` (>= 0). Constraints between fields (latent_min < latent_max, the task's
     fixed D_in, max_objects <= grid_size**2, n_motifs <= 511, D_in > n_latents) are checked
     here so a bad config fails at load time.
     """
@@ -58,13 +78,26 @@ class DataConfig(StrictModel):
     embedding: Literal["linear", "fourier"] = "fourier"
     # linear_teacher
     n_latents: PosInt = 3
-    latent_range: PosFloat = 1.0
+    # The latents are iid uniform on [latent_min, latent_max].
+    latent_min: FiniteFloat = -1.0
+    latent_max: FiniteFloat = 1.0
     # object_action
     grid_size: PosInt = 5
     max_objects: NonNegInt = 3
     # what_where
     n_motifs: PosInt = 8
     seed: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _latent_range_was_replaced(cls, data: Any) -> Any:
+        reject_latent_range(data)
+        return data
+
+    @model_validator(mode="after")
+    def _latent_interval_is_nonempty(self) -> Self:
+        check_latent_interval(self.latent_min, self.latent_max)
+        return self
 
     @model_validator(mode="after")
     def _fourier_needs_even_D_in(self) -> Self:

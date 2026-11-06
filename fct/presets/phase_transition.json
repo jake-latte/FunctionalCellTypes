@@ -12,7 +12,8 @@
   "linear_teacher": {
     "n_features": 64,
     "n_latents": 2,
-    "latent_range": 1.0
+    "latent_min": -1.0,
+    "latent_max": 1.0
   },
   "object_action": {
     "grid_size": 5,

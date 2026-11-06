@@ -12,7 +12,7 @@ CPU, F32 = torch.device("cpu"), torch.float32
 
 def _cfg(task, seed=0, P=24):
     fields = {
-        "linear_teacher": {"D_in": 6, "n_latents": 2, "latent_range": 1.0},
+        "linear_teacher": {"D_in": 6, "n_latents": 2, "latent_min": -1.0, "latent_max": 1.0},
         "object_action": {"D_in": 18, "grid_size": 3, "max_objects": 2},
         "what_where": {"D_in": 81, "n_motifs": 4},
     }[task]
