@@ -262,36 +262,48 @@ def test_spatial_tiny_runs_end_to_end_and_resumes(tmp_path, capsys):
 
 
 def test_exp_json_names_the_parametrisation_only_when_it_is_whitened():
-    """An exp.json written before the field existed stays byte-identical (the penalty is left
-    out), and a whitened experiment writes the field and loads back to itself."""
+    """An exp.json written before the fields existed stays byte-identical (the penalty and the
+    standard initial law are left out), and a whitened experiment, which starts from the
+    prior, writes both fields and loads back to itself."""
     penalty = preset("spatial_tiny")
-    assert "parametrisation" not in json.loads(exp_text(penalty))["spatial"]
+    text = json.loads(exp_text(penalty))
+    assert "parametrisation" not in text["spatial"] and "init" not in text
     assert ExpConfig.model_validate_json(exp_text(penalty)) == penalty
     spatial = penalty.spatial.model_copy(update={"parametrisation": "whitened"})
-    whitened = penalty.model_copy(update={"spatial": spatial})
-    assert json.loads(exp_text(whitened))["spatial"]["parametrisation"] == "whitened"
+    whitened = penalty.model_copy(update={"spatial": spatial, "init": "prior"})
+    text = json.loads(exp_text(whitened))
+    assert text["spatial"]["parametrisation"] == "whitened" and text["init"] == "prior"
     assert ExpConfig.model_validate_json(exp_text(whitened)) == whitened
+    with pytest.raises(ValueError, match=r'net\.init="prior"'):
+        ExpConfig.model_validate_json(exp_text(penalty.model_copy(update={"spatial": spatial})))
 
 
 def test_a_parametrisation_axis_trains_the_penalty_and_the_whitened_prior_side_by_side(
     tmp_path, capsys
 ):
-    """`spatial.parametrisation` as an axis: the settings differ in directory and hash (the
-    penalty ones keep the preset's hashes), every setting trains on spatial_tiny, and the two
-    paths share their history keys; a whitened net is read back with its factors."""
+    """`spatial.parametrisation` as an axis, both paths starting from their prior (`--set
+    init=prior`): the settings differ in directory and hash, each penalty setting is the
+    preset's but for `net.init`, every setting trains on spatial_tiny, and the two paths share
+    their history keys; a whitened net is read back with its factors."""
     root = str(tmp_path)
     axis = 'spatial.parametrisation=["penalty","whitened"]'
-    assert main(["exp", "init", root, "--preset", "spatial_tiny", "--axis", axis]) == 0
+    args = ["exp", "init", root, "--preset", "spatial_tiny", "--set", "init=prior"]
+    assert main([*args, "--axis", axis]) == 0
     exp = load_exp(tmp_path)
     settings = expand(exp)
     configs = [setting_config(exp, s) for s in settings]
     assert [c.spatial.parametrisation for c in configs] == ["penalty", "whitened"] * 2
+    assert all(c.net.init == "prior" for c in configs)
     dirs = [setting_dir(tmp_path, s) for s in settings]
     assert len(set(dirs)) == 4 and "whitened" in dirs[1].name and "penalty" in dirs[0].name
     hashes = [_train_hash(exp, i) for i in range(4)]
     assert len(set(hashes)) == 4
     plain = preset("spatial_tiny")
-    assert (hashes[0], hashes[2]) == (_train_hash(plain, 0), _train_hash(plain, 1))
+    for config, setting in zip(configs[::2], expand(plain), strict=True):
+        standard = config.model_copy(
+            update={"net": config.net.model_copy(update={"init": "standard"})}
+        )
+        assert standard == setting_config(plain, setting)
     assert main(["exp", "run", root]) == 0
     capsys.readouterr()
     assert main(["exp", "status", root]) == 0

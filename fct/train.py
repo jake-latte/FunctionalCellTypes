@@ -29,7 +29,13 @@ from fct.config import Config, TrainConfig, resolve_device, resolve_dtype
 from fct.data import Dataset
 from fct.model import MLP, EnsembleMLP, Net, make_net
 from fct.sgld import SGLD
-from fct.spatial import build_spaces, parameter_factors, weight_quadratic_form, whitening_factors
+from fct.spatial import (
+    build_spaces,
+    floored_whitening_factors,
+    parameter_factors,
+    weight_quadratic_form,
+    whitening_factors,
+)
 
 # Monitor entries are lists over layers, the rest numbers; for an ensemble every entry but
 # `epoch` and `monitor_epoch` has a member axis first (see `train`).
@@ -51,18 +57,37 @@ N_HESSIAN_ITERATIONS = 20
 def make_net_from_config(
     cfg: Config, D_in: int, D_out: int, device: torch.device, dtype: torch.dtype
 ) -> Net:
-    """The net `cfg` describes for `D_in` inputs and `D_out` outputs: `make_net` of `cfg.net`,
-    and under the whitened parametrisation with the factors S = K^{1/2} of `cfg.spatial` for
-    these sizes and xi drawn from its prior N(0, I / weight_lambda), so that every direction
-    the data does not touch starts in equilibrium. The one place a config turns into a net,
-    for training and for loading alike."""
-    if not cfg.is_whitened:
-        return make_net(cfg.net, D_in, D_out, device, dtype)
+    """The net `cfg` describes for `D_in` inputs and `D_out` outputs. The one place a config
+    turns into a net, for training and for loading alike.
+
+    Every path starts from the same standard-normal draw z of `make_net(cfg.net)`. Under
+    `net.init = "standard"` the parameters are z (the only start before `net.init` existed).
+    Under "prior" W is drawn from the prior the loss encodes, so every direction the data does
+    not touch starts in equilibrium: whitened, xi = z / sqrt(weight_lambda) with the factors
+    S = K^{1/2}; under the penalty, W = S_fl,rows z S_fl,cols / sqrt(weight_lambda) with the
+    square roots of the floored kernels M^{-1} (`floored_whitening_factors`), which is the
+    whitened start's W bit for bit when nothing is floored; without a spatial prior, W =
+    z / sqrt(weight_lambda)."""
+    prior = cfg.net.init == "prior"
+    init_std = cfg.train.weight_lambda**-0.5 if prior else 1.0  # > 0: `Config` checks it
+    if cfg.spatial is None or not prior:
+        return make_net(cfg.net, D_in, D_out, device, dtype, init_std=init_std)
     spaces = build_spaces(cfg.spatial, m=D_in, N=cfg.net.N, L=cfg.net.L, n_out=D_out)
-    init_std = cfg.train.weight_lambda**-0.5  # weight_lambda > 0: `Config` checks it
-    return make_net(
-        cfg.net, D_in, D_out, device, dtype, whitening=whitening_factors(spaces), init_std=init_std
-    )
+    if cfg.is_whitened:
+        factors = whitening_factors(spaces)
+        return make_net(cfg.net, D_in, D_out, device, dtype, whitening=factors, init_std=init_std)
+    net = make_net(cfg.net, D_in, D_out, device, dtype, init_std=init_std)
+    return _correlate(net, floored_whitening_factors(spaces))
+
+
+def _correlate(net: Net, factors: dict[str, tuple[Tensor, Tensor]]) -> Net:
+    """`net` with every parameter p replaced, in place, by S_rows p S_cols: the product
+    `Whitening.whiten` forms, so the same factors give the same weights."""
+    with torch.no_grad():
+        for name, p in net.named_parameters():
+            rows, cols = (S.to(p.device, p.dtype) for S in factors[name])
+            p.copy_(rows @ p @ cols)
+    return net
 
 
 def _check_parametrisation_matches(cfg: Config, net: Net) -> None:

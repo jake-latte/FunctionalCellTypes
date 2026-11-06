@@ -305,15 +305,31 @@ def whitening_matrix(K: torch.Tensor) -> torch.Tensor:
     return (eigvecs * eigvals.clamp(min=0).sqrt()) @ eigvecs.T
 
 
-def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, FloorReport]:
-    """M ~ K^{-1} from the symmetric eigendecomposition with eigenvalues floored at
-    min_rel_eig * (largest eigenvalue); returns M and the `FloorReport`."""
+def _floored_eigh(
+    K: torch.Tensor, min_rel_eig: float
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """K's eigenvalues, eigenvectors, the eigenvalues floored at min_rel_eig * (largest), and
+    that floor: the spectrum of the kernel the penalty encodes, M^{-1}."""
     if not 0 < min_rel_eig < 1:
         raise ValueError(f"min_rel_eig must lie in (0, 1), got {min_rel_eig}")
     eigvals, eigvecs = _psd_eigh(K)
+    floor = min_rel_eig * eigvals[-1].item()
+    return eigvals, eigvecs, eigvals.clamp(min=floor), floor
+
+
+def floored_square_root(K: torch.Tensor, min_rel_eig: float) -> torch.Tensor:
+    """(M^{-1})^{1/2}, M = `penalty_matrix(K, min_rel_eig)`: the symmetric square root of the
+    floored kernel the penalty encodes, which draws the penalty's prior. With nothing floored
+    it is `whitening_matrix(K)` bit for bit (the same decomposition and the same eigenvalues)."""
+    _, eigvecs, floored, _ = _floored_eigh(K, min_rel_eig)
+    return (eigvecs * floored.sqrt()) @ eigvecs.T
+
+
+def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, FloorReport]:
+    """M ~ K^{-1} from the symmetric eigendecomposition with eigenvalues floored at
+    min_rel_eig * (largest eigenvalue); returns M and the `FloorReport`."""
+    eigvals, eigvecs, floored, floor = _floored_eigh(K, min_rel_eig)
     top, bottom = eigvals[-1].item(), eigvals[0].item()
-    floor = min_rel_eig * top
-    floored = eigvals.clamp(min=floor)
     M = (eigvecs / floored) @ eigvecs.T
     n_floored = int((eigvals < floor).sum().item())
     report = FloorReport(
@@ -332,8 +348,9 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
 
 @dataclass(frozen=True)
 class Population:
-    """One population's embedding, kernel K (n, n), penalty M (n, n) with its floor report, and
-    square root S = K^{1/2} (n, n) for the whitened parametrisation. `scale` is the factor
+    """One population's embedding, kernel K (n, n), penalty M (n, n) with its floor report,
+    square root S = K^{1/2} (n, n) for the whitened parametrisation, and S_floored, the square
+    root of the floored kernel M^{-1} that draws the penalty's prior. `scale` is the factor
     applied to the unit-amplitude kernel G under `lambda_max` (lambda_max / top eigenvalue of
     G); it is 1.0 when `lambda_max` is unset, where K carries the spec's amplitude instead."""
 
@@ -344,6 +361,7 @@ class Population:
     M: torch.Tensor
     report: FloorReport
     S: torch.Tensor
+    S_floored: torch.Tensor
     scale: float = 1.0
 
 
@@ -379,7 +397,8 @@ def _make_population(
         scale = cfg.lambda_max / torch.linalg.eigvalsh(K)[-1].item()
         K = scale * K
     M, report = penalty_matrix(K, cfg.min_rel_eig)
-    return Population(name, emb, spec.kernel, K, M, report, whitening_matrix(K), scale)
+    S, S_floored = whitening_matrix(K), floored_square_root(K, cfg.min_rel_eig)
+    return Population(name, emb, spec.kernel, K, M, report, S, S_floored, scale)
 
 
 def build_spaces(cfg: SpatialConfig, m: int, N: int, L: int, n_out: int) -> list[LayerSpace]:
@@ -479,6 +498,15 @@ def whitening_factors(spaces: list[LayerSpace]) -> dict[str, tuple[torch.Tensor,
     `parameter_factors`: W = S_rows xi S_cols is the layer's S^post xi S^pre for U and J, and
     for V (stored (pre, post)) its transpose, rows S^pre and columns S^post."""
     return _factors_by_parameter(spaces, lambda pop: pop.S)
+
+
+def floored_whitening_factors(
+    spaces: list[LayerSpace],
+) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    """(S_floored_rows, S_floored_cols) of every parameter, keyed and oriented like
+    `whitening_factors`: S_floored_rows z S_floored_cols / sqrt(weight_lambda), z standard
+    normal, is a draw from the penalty's (floored) prior."""
+    return _factors_by_parameter(spaces, lambda pop: pop.S_floored)
 
 
 def _factors_by_parameter(

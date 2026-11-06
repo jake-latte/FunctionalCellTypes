@@ -49,6 +49,7 @@ from fct.cache import (
 from fct.config import (
     Config,
     DataConfig,
+    InitLaw,
     MeanFieldConfig,
     NetConfig,
     NonNegFloat,
@@ -191,8 +192,8 @@ class ExpConfig(StrictModel):
 
     `description` is free text saying what the experiment is. It is documentation only: it never
     enters a hash or a directory name, `same_experiment` ignores it, and exp.json omits it when
-    it is None. exp.json also omits `B` (the ensemble size) at its default, so an absent `B`
-    means the default.
+    it is None. exp.json also omits `B` (the ensemble size) and `init` (the initial law) at
+    their defaults, so an absent `B` or `init` means the default.
 
     The same data, net and training seeds are used for every setting, so settings differ only
     in the axes. Everything else is the base `Config` a setting starts from (the shared
@@ -236,6 +237,10 @@ class ExpConfig(StrictModel):
     L: PosInt = NetConfig().L
     g: PosFloat = NetConfig().g
     B: PosInt = NetConfig().B
+    # The initial law (`NetConfig.init`); "prior" is required by the whitened parametrisation,
+    # and a shared field (`--set init=prior`) because a `spatial.parametrisation` axis value is
+    # validated against the experiment's base, which must already start from the prior.
+    init: InitLaw = NetConfig().init
     phi: Phi = NetConfig().phi
     weight_lambda: NonNegFloat = TrainConfig().weight_lambda
     rate_lambda: NonNegFloat = TrainConfig().rate_lambda
@@ -377,20 +382,22 @@ def exp_path(root: Path) -> Path:
 
 
 def exp_text(exp: ExpConfig) -> str:
-    """The text of exp.json. `description` is left out when None, `B` when it is the library
-    default, `linear_teacher.teacher` when it is "gaussian" and `spatial.parametrisation`
-    when it is "penalty", so an exp.json holds only what departs from the defaults and an
-    absent `B`, `teacher` or `parametrisation` means the default. Leaving out `B` and
-    `parametrisation` keeps exp.json files written before they existed byte-identical;
-    `teacher` follows the same rule, so a Gaussian-teacher exp.json stays minimal and the
-    pinned texts in test_phase_transition_preset.py moved only by the rename of
-    `latent_range` to `latent_min` / `latent_max` (files that still spell `latent_range` are
-    rejected)."""
+    """The text of exp.json. `description` is left out when None, `B` and `init` when they are
+    the library defaults, `linear_teacher.teacher` when it is "gaussian" and
+    `spatial.parametrisation` when it is "penalty", so an exp.json holds only what departs
+    from the defaults and an absent `B`, `init`, `teacher` or `parametrisation` means the
+    default. Leaving out `B`, `init` and `parametrisation` keeps exp.json files written before
+    they existed byte-identical; `teacher` follows the same rule, so a Gaussian-teacher
+    exp.json stays minimal and the pinned texts in test_phase_transition_preset.py moved only
+    by the rename of `latent_range` to `latent_min` / `latent_max` (files that still spell
+    `latent_range` are rejected)."""
     exclude: dict[str, Any] = {}
     if exp.description is None:
         exclude["description"] = True
     if exp.B == NetConfig().B:
         exclude["B"] = True
+    if exp.init == NetConfig().init:
+        exclude["init"] = True
     if exp.linear_teacher.teacher == "gaussian":
         exclude["linear_teacher"] = {"teacher"}
     if exp.spatial is not None and exp.spatial.parametrisation == "penalty":
@@ -506,7 +513,9 @@ def _base_config(exp: ExpConfig, task: str) -> Config:
     """The shared part of every setting's `Config`; the axes are written over it."""
     return Config(
         data=data_config(exp, task),
-        net=NetConfig(N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, B=exp.B, seed=exp.seeds.net),
+        net=NetConfig(
+            N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, B=exp.B, init=exp.init, seed=exp.seeds.net
+        ),
         train=TrainConfig(
             n_epochs=exp.n_epochs,
             lr=exp.lr,

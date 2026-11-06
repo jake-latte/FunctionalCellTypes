@@ -17,7 +17,10 @@ from fct.spatial import (
     PopulationSpec,
     SpatialConfig,
     build_spaces,
+    floored_square_root,
+    floored_whitening_factors,
     parameter_factors,
+    penalty_matrix,
     periodic_gaussian_kernel,
     whitening_factors,
     whitening_matrix,
@@ -53,6 +56,9 @@ def _whitened(spatial: SpatialConfig | None = None) -> SpatialConfig:
     return (spatial or SpatialConfig()).model_copy(update={"parametrisation": "whitened"})
 
 
+PRIOR_INIT = NetConfig(init="prior")
+
+
 # ---------------------------------------------------------------- config and hash
 
 
@@ -68,7 +74,33 @@ def test_the_parametrisation_defaults_to_the_penalty_and_an_old_config_loads():
 def test_a_config_is_whitened_only_with_a_spatial_section_under_whitened():
     assert not Config().is_whitened
     assert not Config(spatial=SpatialConfig()).is_whitened
-    assert Config(spatial=_whitened()).is_whitened
+    assert Config(spatial=_whitened(), net=PRIOR_INIT).is_whitened
+
+
+def test_net_init_defaults_to_standard_and_an_old_config_loads():
+    assert NetConfig().init == "standard"
+    raw = NetConfig().model_dump()
+    del raw["init"]
+    assert NetConfig.model_validate(raw).init == "standard"
+    with pytest.raises(ValueError, match="init"):
+        NetConfig(init="other")
+
+
+def test_a_whitened_config_must_start_from_its_prior():
+    with pytest.raises(ValueError, match=r'net\.init="prior"'):
+        Config(spatial=_whitened())
+    assert Config(spatial=_whitened(), net=PRIOR_INIT).net.init == "prior"
+    assert Config(spatial=SpatialConfig(), net=PRIOR_INIT).net.init == "prior"  # either path
+    assert Config(net=PRIOR_INIT).net.init == "prior"  # and without a spatial prior
+
+
+def test_net_init_enters_the_hash_only_as_prior():
+    base = Config(spatial=_pinned_spatial())
+    explicit = base.model_copy(update={"net": NetConfig(init="standard")})
+    assert explicit.section_hash(*TRAIN) == PINNED_SPATIAL_HASH
+    prior = base.model_copy(update={"net": PRIOR_INIT})
+    assert prior.section_hash(*TRAIN) != PINNED_SPATIAL_HASH
+    assert prior.section_hash("data") == base.section_hash("data")
 
 
 def test_the_penalty_parametrisation_keeps_the_pinned_hash_and_whitened_changes_it():
@@ -76,17 +108,21 @@ def test_the_penalty_parametrisation_keeps_the_pinned_hash_and_whitened_changes_
     assert base.section_hash(*TRAIN) == PINNED_SPATIAL_HASH
     explicit = _pinned_spatial().model_copy(update={"parametrisation": "penalty"})
     assert base.model_copy(update={"spatial": explicit}).section_hash(*TRAIN) == PINNED_SPATIAL_HASH
-    whitened = base.model_copy(update={"spatial": _whitened(_pinned_spatial())})
-    assert whitened.section_hash(*TRAIN) != PINNED_SPATIAL_HASH
-    assert whitened.section_hash("data", "net") == base.section_hash("data", "net")
+    prior = base.model_copy(update={"net": PRIOR_INIT})
+    whitened = prior.model_copy(update={"spatial": _whitened(_pinned_spatial())})
+    assert whitened.section_hash(*TRAIN) != prior.section_hash(*TRAIN)
+    assert whitened.section_hash("data", "net") == prior.section_hash("data", "net")
 
 
-def test_whitened_needs_a_positive_weight_lambda():
+@pytest.mark.parametrize("spatial", [None, SpatialConfig(), _whitened()])
+def test_a_prior_draw_needs_a_positive_weight_lambda(spatial):
     with pytest.raises(ValueError, match="weight_lambda"):
-        Config(spatial=_whitened(), train=TrainConfig(weight_lambda=0.0))
-    cfg = Config(spatial=_whitened(), train=TrainConfig(weight_lambda=0.5))
+        Config(spatial=spatial, net=PRIOR_INIT, train=TrainConfig(weight_lambda=0.0))
+    cfg = Config(spatial=spatial, net=PRIOR_INIT, train=TrainConfig(weight_lambda=0.5))
     assert cfg.train.weight_lambda == 0.5
-    # The penalty path keeps accepting weight_lambda = 0 (no prior term).
+
+
+def test_the_standard_draw_keeps_accepting_a_zero_weight_lambda():
     assert Config(spatial=SpatialConfig(), train=TrainConfig(weight_lambda=0.0)).spatial
 
 
@@ -116,6 +152,33 @@ def test_whitening_matrix_rejects_a_clearly_negative_kernel():
     K = torch.diag(torch.tensor([1.0, -0.5], dtype=F64))
     with pytest.raises(ValueError, match="negative"):
         whitening_matrix(K)
+
+
+def test_the_floored_square_root_is_that_of_the_inverse_penalty():
+    """S_floored S_floored = M^{-1}: the kernel the penalty encodes, its eigenvalues floored at
+    min_rel_eig times the largest."""
+    K = _ring_kernel(8, 0.25)
+    M, report = penalty_matrix(K, 1e-2)
+    assert report.n_floored > 0
+    S = floored_square_root(K, 1e-2)
+    assert torch.allclose(S, S.T, rtol=0, atol=1e-14)
+    assert torch.allclose(S @ S, torch.linalg.inv(M), rtol=0, atol=1e-10)
+    assert not torch.allclose(S @ S, K, rtol=0, atol=1e-4)  # the floor shows
+
+
+def test_the_floored_square_root_is_the_square_root_bit_for_bit_when_nothing_is_floored():
+    K = _ring_kernel(8, 0.1)
+    assert penalty_matrix(K, 1e-6)[1].n_floored == 0
+    assert torch.equal(floored_square_root(K, 1e-6), whitening_matrix(K))
+
+
+def test_floored_whitening_factors_follow_the_stored_orientation():
+    spaces = _spaces(2)
+    floored = floored_whitening_factors(spaces)
+    rows, cols = floored["V"]
+    assert torch.equal(rows, spaces[-1].pre.S_floored)
+    assert torch.equal(cols, spaces[-1].post.S_floored)
+    assert torch.equal(floored["U"][0], spaces[0].post.S_floored)
 
 
 def test_populations_carry_the_square_root_of_their_kernel():
@@ -325,10 +388,18 @@ def test_an_ensemble_refuses_members_with_different_or_missing_factors():
 QUIET = {"log": lambda s: None}
 
 
-def _cfg(optimizer: str = "sgld", B: int = 1, parametrisation: str = "whitened", **train_kw):
+def _cfg(
+    optimizer: str = "sgld",
+    B: int = 1,
+    parametrisation: str = "whitened",
+    init: str | None = None,
+    **train_kw,
+):
     """The pinned SGLD run (dense random-embedding kernels, N = 6, L = 2) under the given
-    parametrisation; "adam" takes lr 1e-2."""
-    cfg = pinned_config("sgld", B=B)
+    parametrisation, starting from the prior under "whitened" and from the standard draw
+    under the penalty unless `init` says otherwise; "adam" takes lr 1e-2."""
+    init = init or ("prior" if parametrisation == "whitened" else "standard")
+    cfg = pinned_config("sgld", B=B, init=init)
     train_kw = {"optimizer": optimizer, **train_kw}
     if optimizer == "adam":
         train_kw.setdefault("lr", 1e-2)
@@ -371,6 +442,71 @@ def test_make_net_from_config_whitens_with_the_configs_factors_and_draws_xi_from
     assert cfg.train.weight_lambda == 1e-2  # xi ~ N(0, I / weight_lambda): std 10
     for (name, xi), (_, w) in zip(net.named_parameters(), standard.named_parameters(), strict=True):
         assert torch.equal(xi, 10.0 * w), name
+
+
+def _unfloored(cfg: Config) -> Config:
+    """`cfg` on grid embeddings with kernels narrow enough that nothing is floored."""
+    pop = PopulationSpec(kernel=KernelSpec(length_scale=0.15))
+    spatial = cfg.spatial.model_copy(update={"input": pop, "hidden": pop, "output": pop})
+    return cfg.model_copy(update={"spatial": spatial})
+
+
+@pytest.mark.parametrize("B", [1, 3])
+def test_without_a_floor_both_paths_start_from_the_same_weights(B):
+    penalty = _unfloored(_cfg(B=B, parametrisation="penalty", init="prior"))
+    whitened = _unfloored(_cfg(B=B))
+    ds, penalty_net = _setup(penalty)
+    _, whitened_net = _setup(whitened)
+    spaces = build_spaces(penalty.spatial, m=ds.x.shape[1], N=6, L=2, n_out=ds.y.shape[1])
+    assert all(s.pre.report.n_floored == s.post.report.n_floored == 0 for s in spaces)
+    want = effective_weights(whitened_net)
+    for name, w in effective_weights(penalty_net).items():
+        assert torch.equal(w, want[name]), name
+
+
+def test_the_standard_draw_under_the_penalty_is_the_pinned_one():
+    cfg = _cfg(parametrisation="penalty")
+    _, net = _setup(cfg)
+    plain = make_net(cfg.net, net.D_in, net.D_out, CPU, F64)
+    assert _same_state(net, plain)
+
+
+def test_the_penalty_prior_draw_has_the_floored_covariance():
+    """10^4 members of an ensemble under the penalty with init "prior": the sample covariance of
+    each weight is (K_fl^post (x) K_fl^pre) / weight_lambda, K_fl = M^{-1} the floored kernel
+    the penalty encodes (5%, against a relative standard error of 1.4%), along every
+    eigenvector of the target and entry by entry, and the floor moves some mode by more."""
+    weight_lambda, n_draws = 2.0, 10_000
+    wide = SpatialConfig(
+        input=PopulationSpec(kernel=KernelSpec(length_scale=0.2)),
+        hidden=PopulationSpec(kernel=KernelSpec(length_scale=0.25)),
+        output=PopulationSpec(kernel=KernelSpec(length_scale=0.3)),
+        min_rel_eig=1e-2,
+    )
+    cfg = Config(
+        net=NetConfig(N=N, L=1, g=1.0, phi="tanh", seed=5, B=n_draws, init="prior"),
+        train=TrainConfig(weight_lambda=weight_lambda),
+        spatial=wide,
+    )
+    net = make_net_from_config(cfg, D_IN, D_OUT, CPU, F64)
+    spaces = build_spaces(wide, m=D_IN, N=N, L=1, n_out=D_OUT)
+    assert spaces[0].post.report.n_floored > 0
+    for name, (post, pre) in {
+        "U": (spaces[0].post, spaces[0].pre),
+        "V": (spaces[1].pre, spaces[1].post),
+    }.items():
+        W = dict(net.named_parameters())[name].detach().reshape(n_draws, -1)
+        floored = torch.kron(torch.linalg.inv(post.M), torch.linalg.inv(pre.M)) / weight_lambda
+        mode_variance, modes = torch.linalg.eigh(floored)
+        sample = W.T @ W / n_draws
+        assert torch.allclose(sample.diagonal(), floored.diagonal(), rtol=0.05, atol=0), name
+        projected = modes.T @ sample @ modes
+        assert torch.allclose(projected.diagonal(), mode_variance, rtol=0.05, atol=0), name
+        off = projected - torch.diag(projected.diagonal())
+        scale = torch.sqrt(mode_variance[:, None] * mode_variance[None, :])
+        assert (off.abs() / scale).max() < 0.06, name  # uncorrelated modes: ~N(0, 1/100)
+        exact = torch.kron(post.K, pre.K) / weight_lambda
+        assert ((modes.T @ exact @ modes).diagonal() / mode_variance).min() < 0.5, name
 
 
 def test_the_whitened_penalty_is_the_plain_sum_of_squares_of_xi():
@@ -504,7 +640,7 @@ def _smoke_s8_k100(lr: float) -> Config:
     return Config.model_validate(
         {
             "data": {"task": "linear_teacher", "P": 32, "D_in": 4, "n_latents": 2},
-            "net": {"N": 16, "L": 1, "phi": "id", "g": 1.0},
+            "net": {"N": 16, "L": 1, "phi": "id", "g": 1.0, "init": "prior"},
             "train": {
                 "optimizer": "sgld",
                 "beta": 10.0,

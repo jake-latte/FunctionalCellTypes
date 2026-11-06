@@ -161,6 +161,7 @@ class NetConfig(BaseModel):
     phi: Literal["relu", "tanh", "sigmoid", "id"] = "relu"   # "id": phi(h) = h, a linear net
     seed: int = 0
     B: int = 1                          # ensemble size (>= 1): B > 1 trains B non-interacting nets in one run (see "Ensembles" below); hashed only when != 1
+    init: Literal["standard", "prior"] = "standard"   # initial law: every parameter N(0, 1), or W from the prior the loss encodes (see "Spatial weight prior in training"); hashed only as "prior"; required by the whitened parametrisation
 class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
     weight_lambda: float = 2e-4; rate_lambda: float = 1e-3
@@ -369,7 +370,7 @@ def per_member(net, t, reduce=torch.sum) -> Tensor   # reduce over every axis bu
 def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None or its parametrisation is "whitened" (the plain |xi|^2), else the spatial prior for net's sizes, dtype and device
     # for SGLD refuses a step the prior's stiffest curvature cannot take, on either path; ValueError if the net's parametrisation is not the config's
 def prior_stiffness(factors) -> float   # max over parameters of lambda_max(M_rows) lambda_max(M_cols): the prior's curvature is 2 prior_coefficient times it along its stiffest direction (1 under whitening)
-def make_net_from_config(cfg: Config, D_in, D_out, device, dtype) -> Net   # make_net of cfg.net; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) and xi ~ N(0, I / weight_lambda); the one place a Config becomes a net
+def make_net_from_config(cfg: Config, D_in, D_out, device, dtype) -> Net   # the one place a Config becomes a net: make_net of cfg.net (standard-normal z), under net.init "prior" scaled by weight_lambda ** -0.5 and, under the penalty, correlated by floored_whitening_factors; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) as the net's factors
 def largest_hessian_eigenvalue(loss_fn, params, n_iter=20, seed=0) -> float   # the most positive Hessian eigenvalue: power iteration on Hessian-vector products (double backward) finds the largest magnitude lambda_1, and if that is negative a second pass on H + |lambda_1| I finds the top; local generator, parameters and .grad untouched
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
@@ -938,8 +939,9 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_min, latent_max, teacher = "gaussian"), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
-    # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, weight_lambda,
-    # rate_lambda, optimizer, beta; an axis of the same name wins. spatial: SpatialConfig | None = None, the spatial weight prior of every setting
+    # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, init, weight_lambda,
+    # rate_lambda, optimizer, beta; an axis of the same name wins (init is shared so that `--set init=prior` makes a whitened axis value valid
+    # against the base, which every axis value is checked against alone). spatial: SpatialConfig | None = None, the spatial weight prior of every setting
     # (written to Config.spatial; training hashes change with it, exp_hash does not). A `spatial.<path>` axis varies a field of the section and
     # is rejected at load ("set the experiment's spatial section first") when the experiment has none; `spatial` itself is a valid axis only while the
     # section is None (its values are whole dumps, or None). A dict- or list-valued axis value (or one whose text exceeds MAX_LABEL_VALUE = 24 characters) is labelled in directory names as `<axis>-<6 hex of the
@@ -1213,10 +1215,12 @@ periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post
 wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
 penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, fraction_floored, n_negative, cond_before, cond_after))
 whitening_matrix(K) -> S                                  # K^{1/2}, symmetric PSD, eigenvalues clamped at 0 (no floor); raises on a clearly negative one
-build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties; each Population has K, M, report, S
+floored_square_root(K, min_rel_eig) -> S_floored          # (M^{-1})^{1/2}: the square root of the floored kernel the penalty encodes; whitening_matrix(K) bit for bit when nothing is floored
+build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties; each Population has K, M, report, S, S_floored
 weight_quadratic_form(W, M_rows, M_cols) -> Tensor        # tr(M_rows W M_cols W^T), any dtype/device; identity factors give W.square().sum() exactly; W (..., r, c) gives one value per matrix
 parameter_factors(spaces) -> {"U" | "J.k" | "V": (M_rows, M_cols)}   # factors of each MLP weight in its STORED orientation (V: (M_pre, M_post))
 whitening_factors(spaces) -> {"U" | "J.k" | "V": (S_rows, S_cols)}   # the same, with S: W = S_rows xi S_cols (see "Spatial weight prior in training")
+floored_whitening_factors(spaces) -> {"U" | "J.k" | "V": (S_fl_rows, S_fl_cols)}   # the same, with S_floored: the penalty path's prior draw
 data_kernel(psi (P, n_pre), K_pre (n_pre, n_pre)) -> (P, P)           # A = psi K_pre psi^T / n_pre: the data factor of the paper's Phi^{mu nu}_ij = K^post_ij A_{mu nu} (eq. phi-diagonalised); K_pre = I gives psi psi^T / n_pre
 spatial_kernel_pairs(A (P, P), K_post (n, n), trials) -> (S, S, n, n)   # block [s, t] = A[trials[s], trials[t]] * K_post; ValueError on non-square inputs and on trials empty or outside 0..P-1
 ```
@@ -1270,9 +1274,12 @@ default, and what every `config.json` written before the field existed loads as)
   `lr * weight_lambda / (2 beta) * lambda_max(M^post) lambda_max(M^pre) >= 1`, so `make_weight_penalty` raises for SGLD before the
   first step. The check is necessary, not sufficient (the data and rate terms add curvature). Adam rescales its steps and
   is not checked.
-- Not covered: under the penalty the initial weights are still iid `N(0, 1)` rather than drawn from the prior, so the
-  prior term starts large for a wide kernel (the whitened parametrisation below starts from its prior); the mean-field
-  solver still assumes the L2 prior.
+- Initial law (`net.init`). Under `"standard"` (the default, and the only start before the field existed) every
+  parameter is iid `N(0, 1)`, far from the prior for a wide kernel. Under `"prior"` W is drawn from the prior the loss
+  encodes, from the same standard-normal draw `z`: `W0 = S_fl,post z S_fl,pre / sqrt(weight_lambda)` with `S_fl` the
+  square root of the floored kernel `M^{-1}` (`floored_square_root`); without a spatial prior `z / sqrt(weight_lambda)`.
+  It needs `weight_lambda > 0` and enters the net hash only as `"prior"`.
+- Not covered: the mean-field solver still assumes the L2 prior.
 
 The whitened parametrisation (`spatial.parametrisation = "whitened"`; the default `"penalty"` is everything above).
 The floor caps the prior's soft modes (`lambda_q^eff = max(lambda_q, min_rel_eig * lambda_0)`) and makes SGLD stiff
@@ -1281,12 +1288,14 @@ The floor caps the prior's soft modes (`lambda_q^eff = max(lambda_q, min_rel_eig
 0, no inversion, no floor; `Population.S`, `whitening_factors(spaces)` per parameter in its stored orientation like
 `parameter_factors`), and the penalty is the plain `|xi|^2` with the unchanged coefficient `weight_lambda / (2 beta)`, so
 `Cov(vec W) = (K^post (x) K^pre) / weight_lambda` exactly for every spectrum and the prior curvature is
-`weight_lambda / beta` in every direction of `xi`. Nothing else differs between the two paths: same data, seeds, loss
-coefficients, monitor, history keys (`weight_l2` holds `|xi|^2`) and checkpoint layout.
+`weight_lambda / beta` in every direction of `xi`. The two paths share data, seeds, loss coefficients, monitor,
+history keys and checkpoint layout; how their dynamics differ is below ("Dynamics").
 
-- How the net applies it. `make_net_from_config` (train.py) builds the net with `whitening=whitening_factors(spaces)`
-  and `init_std = weight_lambda ** -0.5`, so `xi ~ N(0, I / weight_lambda)` is a draw from its prior and every
-  direction the data does not touch starts in equilibrium. The net holds `xi` as its parameters under the unchanged
+- How the net applies it. `Config` requires `net.init = "prior"` under `"whitened"` (a start away from the prior
+  would contradict the reason for the parametrisation), and `make_net_from_config` (train.py) builds the net with
+  `whitening=whitening_factors(spaces)` and `init_std = weight_lambda ** -0.5`, so `xi ~ N(0, I / weight_lambda)` is a
+  draw from its prior and every direction the data does not touch starts in equilibrium. With nothing floored the
+  penalty path's `"prior"` start is the same `W0` bit for bit (same `z`, and `S_floored` is then `S`). The net holds `xi` as its parameters under the unchanged
   names `U`, `J.<k>`, `V` and the factors in a `Whitening` submodule of non-persistent buffers; `forward` materialises
   `W = S_rows xi S_cols` each call (two extra small matmuls per weight per step) through `effective_weights(net)`,
   which for a plain net returns the parameters themselves (the same tensors, so the penalty path is bit for bit what it

@@ -130,6 +130,7 @@ class DataConfig(StrictModel):
 
 
 Phi = Literal["relu", "tanh", "sigmoid", "id"]
+InitLaw = Literal["standard", "prior"]
 Optimizer = Literal["adam", "sgld"]
 
 
@@ -143,6 +144,12 @@ class NetConfig(StrictModel):
     # (`fct.model.EnsembleMLP`); they share the data and differ in initial weights and SGLD
     # noise. B enters the hash only when it is not 1, so single-network caches keep theirs.
     B: PosInt = 1
+    # Initial weights: "standard" draws every parameter N(0, 1); "prior" draws W from its prior,
+    # N(0, (K_post (x) K_pre) / weight_lambda) with the kernels the trained prior encodes (the
+    # floored M^{-1} under the penalty, K itself under "whitened", I without a spatial prior),
+    # from the same standard-normal draw (`fct.train.make_net_from_config`). Hashed only as
+    # "prior", so every earlier cache keeps its hash; the whitened parametrisation requires it.
+    init: InitLaw = "standard"
 
 
 class TrainConfig(StrictModel):
@@ -435,14 +442,23 @@ class Config(StrictModel):
         return self
 
     @model_validator(mode="after")
-    def _whitened_draws_from_a_proper_prior(self) -> Self:
-        # Under "whitened" xi starts from N(0, I / weight_lambda) and W's prior covariance is
-        # K / weight_lambda; neither exists at weight_lambda = 0.
-        if self.is_whitened and self.train.weight_lambda <= 0:
+    def _whitened_starts_from_its_prior(self) -> Self:
+        # The whitened parametrisation exists to sample the exact prior; a start away from it
+        # would leave the directions the data does not touch to relax on the slowest scale.
+        if self.is_whitened and self.net.init != "prior":
             raise ValueError(
-                f"train.weight_lambda is {self.train.weight_lambda!r} but "
-                "spatial.parametrisation is 'whitened', whose prior N(0, K / weight_lambda) "
-                "needs weight_lambda > 0"
+                f'spatial.parametrisation is "whitened" but net.init is "{self.net.init}"; '
+                'set net.init="prior" so that xi starts from its prior'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _a_prior_draw_needs_a_proper_prior(self) -> Self:
+        # The prior N(0, K / weight_lambda) does not exist at weight_lambda = 0.
+        if self.net.init == "prior" and self.train.weight_lambda <= 0:
+            raise ValueError(
+                f"train.weight_lambda is {self.train.weight_lambda!r} but net.init is "
+                '"prior", whose draw N(0, K / weight_lambda) needs weight_lambda > 0'
             )
         return self
 
@@ -457,11 +473,12 @@ class Config(StrictModel):
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
         belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and
         `LOSS_VERSION` when "train" is. `train.optimizer` / `train.beta` are left out of the
-        hash for the adam optimiser, `net.B` when it is 1 and `data.teacher` when it is
-        "gaussian". The `spatial` section enters with "train" only when it is set (without its
-        `lambda_max` while that is None, and without `parametrisation` while that is
-        "penalty"), so runs without a spatial prior keep the hashes they had before the section
-        existed and penalty runs those from before the whitened parametrisation did. The
+        hash for the adam optimiser, `net.B` when it is 1, `net.init` when it is "standard" and
+        `data.teacher` when it is "gaussian". The `spatial` section enters with "train" only
+        when it is set (without its `lambda_max` while that is None, and without
+        `parametrisation` while that is "penalty"), so runs without a spatial prior keep the
+        hashes they had before the section existed and penalty runs those from before the
+        whitened parametrisation did. The
         meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
@@ -479,6 +496,8 @@ class Config(StrictModel):
             hashed["model_version"] = MODEL_VERSION
             if self.net.B == 1:  # a single network hashes as before the ensemble size existed
                 del hashed["net"]["B"]
+            if self.net.init == "standard":  # the same rule for the initial law
+                del hashed["net"]["init"]
         if "train" in sections:  # the loss definition lives in the train section
             hashed["loss_version"] = LOSS_VERSION
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes
