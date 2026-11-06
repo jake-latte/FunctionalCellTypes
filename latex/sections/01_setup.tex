@@ -222,7 +222,7 @@ Until now I have suppressed the $\eta$ that were introduced \typo{in} \eqref{eq:
   \exp \left(-\frac{\sigma^2}{2} [\hat h^{(1)\mu}_i]^2 \right)
   \label{eq:single-site-reg}
 \end{align}
-This term will regularise the input covariance to the first hidden layer. In general, I will have my cake and eat it by generally considering the limit $\sigma \rightarrow 0^+$ and everything is nicely invertible, and so suppress it in the notation for the single-site below.
+This term will regularise the input covariance to the first hidden layer. In general, I will have my cake and eat it by generally considering the limit $\sigma \rightarrow 0^+$ and everything is nicely invertible, and so suppress it in the notation for the single-site below. \major{The expectation in \eqref{eq:single-site-reg} is the annealed average: $\eta$ is a sampled variable of the joint Gibbs measure over $(\Theta, \eta)$, with its posterior tilted by the loss, whereas a network run with one fixed noise draw or with a fresh draw at every step realises a different measure; all predictions are taken at $\sigma \rightarrow 0^+$, where the three coincide.} \majornote{\detokenize{input_noise_average.tex}}
 
 \subsection{Single-Site}
 
