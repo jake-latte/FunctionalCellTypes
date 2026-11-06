@@ -12,13 +12,16 @@ import numpy as np
 import pytest
 import torch
 
+from fct.config import NetConfig
 from fct.exp_view import TuningView
+from fct.model import make_net
 from fct.spatial import (
     EmbeddingSpec,
     PopulationSpec,
     SpatialConfig,
     build_spaces,
     data_kernel,
+    whitening_factors,
 )
 from fct.spatial_view import ordered_kernel_comparison, population_spec
 from fct.tuning import tuning_curves
@@ -126,7 +129,15 @@ def test_source_notebook_exposes_task_net_training_and_spatial_parameters():
         assert name in cells[0]
     assert "OPTIMIZER =" in cells[1] and "BETA =" in cells[1] and "N_EPOCHS =" in cells[1]
     spatial = next(c for c in cells if "INPUT =" in c)
-    for name in ("HIDDEN =", "OUTPUT =", "MIN_REL_EIG =", "D =", "population_spec"):
+    for name in (
+        "HIDDEN =",
+        "OUTPUT =",
+        "MIN_REL_EIG =",
+        "D =",
+        "population_spec",
+        "PARAMETRISATION =",
+        "INIT =",
+    ):
         assert name in spatial
     assert '"sgld"' in cells[1] and '"adam"' in cells[1]
 
@@ -257,6 +268,23 @@ def test_kernel_comparison_and_weights_render_on_a_ring(notebook_functions, tmp_
     comparison = ordered_kernel_comparison(space, W)
     assert_png(notebook_functions["plot_kernel_comparison"](comparison, space), tmp_path)
     assert_png(notebook_functions["plot_weights_by_position"](W, space), tmp_path)
+
+
+def test_the_weight_figures_read_the_effective_weights_of_a_whitened_net(notebook_functions):
+    """Under whitening the parameter U is xi; both weight figures must be given W = S xi S."""
+    spatial = SpatialConfig(parametrisation="whitened")
+    spaces = build_spaces(spatial, m=6, N=8, L=1, n_out=2)
+    cfg = NetConfig(N=8, L=1, phi="tanh", seed=3)
+    net = make_net(
+        cfg, 6, 2, torch.device("cpu"), torch.float64, whitening=whitening_factors(spaces)
+    )
+    W = notebook_functions["first_layer_weights"](net)
+    rows, cols = whitening_factors(spaces)["U"]
+    assert torch.equal(W, (rows @ net.U @ cols).detach())
+    assert not torch.allclose(W, net.U.detach())
+    comparison = ordered_kernel_comparison(spaces[0], W)
+    xi_comparison = ordered_kernel_comparison(spaces[0], net.U.detach())
+    assert not torch.allclose(comparison.post_empirical, xi_comparison.post_empirical)
 
 
 def test_weight_image_rows_follow_the_ring_order(notebook_functions):
@@ -677,6 +705,17 @@ def test_set_parameters_replaces_the_value_and_keeps_the_comment():
 def test_set_parameters_fails_on_a_name_the_notebook_does_not_set():
     with pytest.raises(ValueError, match="NOT_A_PARAMETER"):
         set_parameters(build_notebook(), {"NOT_A_PARAMETER": 1})
+
+
+def test_executes_under_the_whitened_parametrisation(tmp_path):
+    """The floor tables say that nothing is floored and give the whitened step bound."""
+    params = {**TINY, "OPTIMIZER": "sgld", "PARAMETRISATION": "whitened", "INIT": "prior"}
+    nb = execute_notebook(build_notebook(), tmp_path, params)
+    text = _text_outputs(nb)
+    assert "ERROR" not in text
+    assert sum(_n_figures(c) for c in nb.cells) == N_FIGURES
+    assert "not floored: exact prior" in text
+    assert "SGLD step check" in text  # the run-start check of the whitened path ran
 
 
 @pytest.mark.parametrize("optimizer", ["adam", "sgld"])
