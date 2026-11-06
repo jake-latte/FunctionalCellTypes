@@ -46,6 +46,19 @@ outcomes change the dictionary and the sampling protocol).
   axis of $z_2$ exact and makes the statistic a statement about the latents
   rather than about a random frame), with the limits note's oblique-frame bias
   re-derived for that frame.
+- Prediction 6's statistic (PI decision pending). The spectrum re-review
+  showed that at $K = 3$ the three latents project onto the contrast plane as
+  axes $120^\circ$ apart, so $\langle\cos4\theta\rangle$ averages to zero over
+  them: neurons each tuned to exactly one latent give $\langle\cos4\theta\rangle
+  = 0.036$ (below the $0.1$ threshold) and $\langle\cos6\theta\rangle = -0.998$.
+  As written, P6 passes even when every neuron is an individual-latent cell
+  type. Candidate: the frame-independent $|\langle e^{6i\theta}\rangle|$
+  (sixfold symmetry of the projected latent axes, $\pm$ sign), which also
+  removes the dependence on the noise-fixed $(u_2, u_3)$ frame.
+- $q_{1/2}$ is a statistic of a mean spectrum: on one record $d_0$ and
+  $d_{N/2}$ are single $\chi^2_1$ draws, so a per-network $q_{1/2}$ needs an
+  average over something (PI decision: records within a network are pooling,
+  which the PI distrusts; members are the other option).
 - The summary of conclusions and the order of work list the new item slugs.
 
 ## Acceptance criteria
