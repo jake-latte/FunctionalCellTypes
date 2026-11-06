@@ -207,6 +207,30 @@ def test_exp_init_accepts_a_preset_added_to_the_folder(folder, use_folder, tmp_p
     assert (load_exp(root).N, load_exp(root).description) == (12, "mine")
 
 
+def test_an_orthonormal_teacher_preset_round_trips_through_exp_init(
+    folder, use_folder, tmp_path, capsys
+):
+    use_folder(folder)
+    shutil.copy(folder / "tiny.json", folder / "ortho.json")
+    teacher = json.loads((folder / "tiny.json").read_text(encoding="utf-8"))["linear_teacher"]
+    _edit(folder / "ortho.json", linear_teacher={**teacher, "teacher": "orthonormal"})
+    root = tmp_path / "root"
+    assert _cli(capsys, "init", root, "--preset", "ortho")[0] == 0
+    exp = load_exp(root)
+    assert exp.linear_teacher.teacher == "orthonormal"
+    assert '"teacher": "orthonormal"' in (root / "exp.json").read_text(encoding="utf-8")
+    teachers = {
+        setting_config(exp, s).data.teacher for s in expand(exp) if s.task == "linear_teacher"
+    }
+    assert teachers == {"orthonormal"}
+
+
+def test_a_gaussian_teacher_is_left_out_of_exp_json(tmp_path):
+    save_exp(preset("tiny"), tmp_path)
+    assert '"teacher":' not in (tmp_path / "exp.json").read_text(encoding="utf-8")
+    assert load_exp(tmp_path).linear_teacher.teacher == "gaussian"
+
+
 def test_help_lists_the_presets_of_the_folder(folder, use_folder, capsys):
     use_folder(folder)
     shutil.copy(folder / "tiny.json", folder / "extra.json")

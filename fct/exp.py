@@ -58,6 +58,7 @@ from fct.config import (
     PosFloat,
     PosInt,
     StrictModel,
+    Teacher,
     TrainConfig,
     check_latent_interval,
     load_config,
@@ -156,6 +157,7 @@ class LinearTeacherParams(StrictModel):
     n_latents: PosInt
     latent_min: FiniteFloat
     latent_max: FiniteFloat
+    teacher: Teacher = "gaussian"
 
     @model_validator(mode="before")
     @classmethod
@@ -272,6 +274,7 @@ def _task_fields(exp: ExpConfig, task: str) -> dict:
             "n_latents": params.n_latents,
             "latent_min": params.latent_min,
             "latent_max": params.latent_max,
+            "teacher": params.teacher,
         }
     return params.model_dump()
 
@@ -374,15 +377,17 @@ def exp_path(root: Path) -> Path:
 
 
 def exp_text(exp: ExpConfig) -> str:
-    """The text of exp.json. `description` is left out when None and `B` when it is the library
-    default, so exp.json files written before those fields existed (and the pinned texts in
-    test_phase_transition_preset.py) stay byte-identical; an absent `B` therefore means the
-    default."""
-    exclude = set()
+    """The text of exp.json. `description` is left out when None, `B` when it is the library
+    default and `linear_teacher.teacher` when it is "gaussian", so exp.json files written before
+    those fields existed (and the pinned texts in test_phase_transition_preset.py) stay
+    byte-identical; an absent `B` or `teacher` therefore means the default."""
+    exclude: dict[str, Any] = {}
     if exp.description is None:
-        exclude.add("description")
+        exclude["description"] = True
     if exp.B == NetConfig().B:
-        exclude.add("B")
+        exclude["B"] = True
+    if exp.linear_teacher.teacher == "gaussian":
+        exclude["linear_teacher"] = {"teacher"}
     return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
 
 

@@ -55,6 +55,9 @@ def check_latent_interval(latent_min: float, latent_max: float) -> None:
         )
 
 
+Teacher = Literal["gaussian", "orthonormal"]
+
+
 class DataConfig(StrictModel):
     """Data settings. `task` selects the generator and only that task's fields are read: the
     fields of other tasks are ignored, but they still enter the cache hash, so changing one
@@ -81,6 +84,8 @@ class DataConfig(StrictModel):
     # The latents are iid uniform on [latent_min, latent_max].
     latent_min: FiniteFloat = -1.0
     latent_max: FiniteFloat = 1.0
+    # W_X, W_Y: iid N(0, 1/k) entries, or the orthonormal-column Q factor of those draws.
+    teacher: Teacher = "gaussian"
     # object_action
     grid_size: PosInt = 5
     max_objects: NonNegInt = 3
@@ -427,11 +432,12 @@ class Config(StrictModel):
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
         belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and
         `LOSS_VERSION` when "train" is. `train.optimizer` / `train.beta` are left out of the
-        hash for the adam optimiser, and `net.B` when it is 1. The `spatial` section enters
-        with "train" only when it is set (without its `lambda_max` while that is None), so runs
-        without a spatial prior keep the hashes they had before the section existed. The
-        meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its dump.
-        Canonical JSON (sorted keys) makes the hash independent of field and argument order.
+        hash for the adam optimiser, `net.B` when it is 1 and `data.teacher` when it is
+        "gaussian". The `spatial` section enters with "train" only when it is set (without its
+        `lambda_max` while that is None), so runs without a spatial prior keep the hashes they
+        had before the section existed. The meanfield section enters as
+        `MeanFieldConfig.hash_payload()`, not as its dump. Canonical JSON (sorted keys) makes
+        the hash independent of field and argument order.
         """
         if not sections:
             raise ValueError("section_hash needs at least one section name")
@@ -439,6 +445,8 @@ class Config(StrictModel):
         if unknown:
             raise ValueError(f"unknown config sections {sorted(unknown)}")
         hashed = self.model_dump(include={*sections, "dtype"})
+        if "data" in sections and self.data.teacher == "gaussian":
+            del hashed["data"]["teacher"]  # Gaussian maps hash as before the field existed
         if "meanfield" in sections:
             hashed["meanfield"] = self.meanfield.hash_payload()
         if "net" in sections:  # the forward pass belongs to the net section

@@ -49,7 +49,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 **Tasks** (`fct/tasks.py`, selected with `data.task`; each returns the ground-truth factors used for scoring):
 
 - `linear_teacher`: inputs and targets are generated from latent variables through random linear maps
-  (`W_X`, `W_Y`, i.i.d. N(0, 1/k)); one factor group per latent.
+  (`W_X`, `W_Y`, i.i.d. N(0, 1/k), or with orthonormal columns for `data.teacher = "orthonormal"`); one factor group per latent.
   `fct.data.get_latent_lattice_dataset` gives a structured test set for it: one sample per point of {lo, (lo + hi)/2, hi}^k, the latents being uniform on [lo, hi] = [`latent_min`, `latent_max`].
 - `object_action`: a G x G grid with an agent cell and an object map; the target is the optimal action
   (stay, up, down, left, right) toward the nearest object. Factor groups: agent position, object

@@ -78,11 +78,20 @@ def _check_input_dim(cfg: DataConfig, expected: int) -> None:
         )
 
 
+def _orthonormal_columns(w: Tensor) -> Tensor:
+    """The Q factor of the reduced QR decomposition of `w` (m, k): the same column space, with
+    Q^T Q = I_k. Done on the CPU before the move to the device, like the draws themselves."""
+    return torch.linalg.qr(w, mode="reduced")[0]
+
+
 def linear_teacher(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
     """x = Z W_X^T and y = Z W_Y^T for latents Z (P, k) iid uniform on [latent_min, latent_max].
 
     W_X and W_Y are (m, k) with iid N(0, 1/k) entries, fixed by the seed; m = cfg.D_in is the
-    number of features of both x and y. Every latent is its own factor and its own group.
+    number of features of both x and y. With cfg.teacher = "orthonormal" each map is replaced
+    by the Q factor of its reduced QR decomposition (orthonormal columns); the random stream,
+    and so Z, is the same as for the Gaussian teacher. Every latent is its own factor and its
+    own group.
     """
     _validate_linear_teacher(cfg)
     k, m, lo, hi = cfg.n_latents, cfg.D_in, cfg.latent_min, cfg.latent_max
@@ -91,6 +100,8 @@ def linear_teacher(cfg: DataConfig, device: torch.device, dtype: torch.dtype) ->
     z = lo + (hi - lo) * torch.rand((cfg.P, k), dtype=dtype, generator=gen)
     w_x = torch.randn((m, k), dtype=dtype, generator=gen) / k**0.5
     w_y = torch.randn((m, k), dtype=dtype, generator=gen) / k**0.5
+    if cfg.teacher == "orthonormal":
+        w_x, w_y = _orthonormal_columns(w_x), _orthonormal_columns(w_y)
     z, w_x, w_y = z.to(device), w_x.to(device), w_y.to(device)
     names = [f"z{i}" for i in range(k)]
     return Dataset(

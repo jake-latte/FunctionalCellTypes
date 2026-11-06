@@ -230,6 +230,36 @@ def test_linear_teacher_weights_have_variance_one_over_k():
     assert ds.extras["W_X"].var().item() == pytest.approx(0.25, rel=0.15)
 
 
+def test_the_default_teacher_is_gaussian():
+    assert DataConfig().teacher == "gaussian"
+
+
+@pytest.mark.parametrize("key", ["W_X", "W_Y"])
+def test_orthonormal_teacher_maps_have_orthonormal_columns(key):
+    ds = make_dataset(_cfg("linear_teacher", D_in=10, teacher="orthonormal"), CPU, F64)
+    w = ds.extras[key]
+    assert w.shape == (10, 3)
+    assert (w.T @ w - torch.eye(3, dtype=F64)).abs().max() < 1e-12
+
+
+def test_orthonormal_teacher_orthonormalises_the_gaussian_draws_and_keeps_the_latents():
+    gaussian = make_dataset(_cfg("linear_teacher"), CPU, F64)
+    ortho = make_dataset(_cfg("linear_teacher", teacher="orthonormal"), CPU, F64)
+    for name, z in gaussian.factors.items():
+        assert torch.equal(ortho.factors[name], z)
+    for key in ("W_X", "W_Y"):
+        q = torch.linalg.qr(gaussian.extras[key], mode="reduced")[0]
+        assert torch.equal(ortho.extras[key], q)
+    z = torch.stack([ortho.factors[f"z{i}"] for i in range(3)], dim=1)
+    assert torch.allclose(ortho.x, z @ ortho.extras["W_X"].T)
+    assert torch.allclose(ortho.y, z @ ortho.extras["W_Y"].T)
+
+
+def test_an_unknown_teacher_is_rejected_naming_the_field():
+    with pytest.raises(ValidationError, match="teacher"):
+        _cfg("linear_teacher", teacher="uniform")
+
+
 @pytest.mark.parametrize("m", [3, 2])
 def test_linear_teacher_needs_more_features_than_latents(m):
     with pytest.raises(ValidationError, match="D_in"):
