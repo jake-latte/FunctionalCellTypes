@@ -33,6 +33,12 @@ outcomes change the dictionary and the sampling protocol).
   ($g^2 = 1$ at $\beta = 0.25$ was `rate_lambda = 2.0`; it becomes `1.0`).
 - The analysis module is `fct/spectrum.py` (the plan says `fct/tuning_maps.py`
   at its lines 266 and 429); W7 and W9 import from `fct.spectrum`.
+- The measurement API as merged: `spectrum_summary` returns
+  `Summary(share0, lag1, d0, d_nyq, R)` without $q_{1/2}$ (plan lines ~274,
+  ~340, ~365 read $q_{1/2}$ from it); `half_power_q` applies to averaged
+  spectra only; `record_sem` and `integrated_autocorr_time` return a
+  `reliable` mask and need at least 200 records after burn-in and
+  $n \ge 20\tau$ per element.
 - Prediction 6's frame (PI decision pending). The spectrum-module review
   showed that even on $[0, a]$ the contrast singular values are degenerate in
   expectation ($Pa^2/12$ each), so the SVD contrast frame $(u_2, u_3)$ is a
