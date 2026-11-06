@@ -65,6 +65,20 @@ outcomes change the dictionary and the sampling protocol).
   $d_{N/2}$ are single $\chi^2_1$ draws, so a per-network $q_{1/2}$ needs an
   average over something (PI decision: records within a network are pooling,
   which the PI distrusts; members are the other option).
+- The parametrisation axis as an equivalence test (PI decision pending).
+  Review of `whitened-spatial-prior` showed: (a) the two paths started from
+  different initial laws (penalty W ~ N(0, 1), whitened from the prior); fixed
+  by `net.init = "prior"`, which draws both from their own prior; (b) SGLD in
+  $\xi$ is Langevin preconditioned by $S^2$ in $W$, so one shared `train.lr`
+  gives the two settings different numbers of relaxation times, and under
+  `min_rel_eig = 1e-6` the penalty step check forces lr below about $5\times
+  10^{-6}$. The stationary laws agree (up to the eigenvalue floor); the
+  dynamics do not. The comparison must therefore be of stationary statistics,
+  with each setting at its own admissible lr and run to stationarity, and with
+  `min_rel_eig` small enough that the floor does not separate the posteriors
+  (the `spatial_tiny` preset floors one eigenvalue at N = 8). Options: pair
+  `train.lr` with the parametrisation (two experiments, or a paired axis), or
+  run both at the penalty path's lr. The plan's P1-P3 axes must say which.
 - The summary of conclusions and the order of work list the new item slugs.
 
 ## Acceptance criteria
