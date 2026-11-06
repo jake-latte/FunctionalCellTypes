@@ -79,9 +79,16 @@ def _check_input_dim(cfg: DataConfig, expected: int) -> None:
 
 
 def _orthonormal_columns(w: Tensor) -> Tensor:
-    """The Q factor of the reduced QR decomposition of `w` (m, k): the same column space, with
-    Q^T Q = I_k. Done on the CPU before the move to the device, like the draws themselves."""
-    return torch.linalg.qr(w, mode="reduced")[0]
+    """The Gram-Schmidt basis of the columns of `w` (m, k): the Q factor of its reduced QR
+    decomposition with the sign of each column fixed so that diag(R) >= 0, giving Q^T Q = I_k.
+
+    The sign fix makes Q canonical (column j of Q has a positive overlap with column j of `w`)
+    and so independent of the LAPACK backend and the dtype; Q is a deterministic function of
+    the Gaussian draws, not a Haar-distributed draw of its own.
+    """
+    q, r = torch.linalg.qr(w, mode="reduced")
+    sign = torch.where(r.diagonal() < 0, -1.0, 1.0).to(q.dtype)  # a zero diagonal counts as +1
+    return q * sign
 
 
 def linear_teacher(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
@@ -89,9 +96,10 @@ def linear_teacher(cfg: DataConfig, device: torch.device, dtype: torch.dtype) ->
 
     W_X and W_Y are (m, k) with iid N(0, 1/k) entries, fixed by the seed; m = cfg.D_in is the
     number of features of both x and y. With cfg.teacher = "orthonormal" each map is replaced
-    by the Q factor of its reduced QR decomposition (orthonormal columns); the random stream,
-    and so Z, is the same as for the Gaussian teacher. Every latent is its own factor and its
-    own group.
+    by the Gram-Schmidt basis of its columns (`_orthonormal_columns`); the random stream, and
+    so Z, is the same as for the Gaussian teacher. This changes the scale: a Gaussian column
+    has norm about sqrt(m / k), an orthonormal one norm 1, so the variance of each feature of x
+    and y falls by a factor of about k / m. Every latent is its own factor and its own group.
     """
     _validate_linear_teacher(cfg)
     k, m, lo, hi = cfg.n_latents, cfg.D_in, cfg.latent_min, cfg.latent_max

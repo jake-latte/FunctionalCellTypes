@@ -139,8 +139,9 @@ class DataConfig(BaseModel):      # model_config = ConfigDict(extra="forbid") on
     n_latents: int = 3                              # k latents, iid uniform on [latent_min, latent_max]
     latent_min: float = -1.0; latent_max: float = 1.0   # finite, latent_min < latent_max; a config with the
                                                     # removed latent_range fails naming these two
-    teacher: Literal["gaussian", "orthonormal"] = "gaussian"   # W_X, W_Y: iid N(0, 1/k), or the Q factor of
-                                                    # those same draws (orthonormal columns); hashed only when "orthonormal"
+    teacher: Teacher = "gaussian"                   # Literal["gaussian", "orthonormal"]. W_X, W_Y: iid N(0, 1/k), or the
+                                                    # sign-canonical Q factor of those same draws (orthonormal columns,
+                                                    # feature variance ~k/m lower); hashed only when "orthonormal"
     # object_action
     grid_size: int = 5; max_objects: int = 3        # G x G grid, 0..A objects
     # what_where
@@ -290,8 +291,11 @@ because the config imports `TASK_SPECS`.
 ```python
 def linear_teacher(cfg, device, dtype) -> Dataset   # Q = period = None
     # Z (P,k) iid U[latent_min, latent_max] (lo + (hi - lo) * rand; the default [-1, 1] is 2 * rand - 1 bit for bit); W_X, W_Y (m,k) iid N(0,1/k), m = cfg.D_in; x = Z W_X^T, y = Z W_Y^T, both (P,m)
-    # teacher = "orthonormal": W_X, W_Y replaced by torch.linalg.qr(W, mode="reduced").Q of the same draws
-    # (W^T W = I_k; same random stream, so Z is the Gaussian teacher's)
+    # teacher = "orthonormal": W_X, W_Y replaced by the Q of torch.linalg.qr(W, mode="reduced") of the same draws,
+    # each column's sign fixed so diag(R) >= 0 (a zero diagonal counts as +1): canonical, a function of the Gaussian
+    # draws (column j has positive overlap with W[:, j]) independent of LAPACK backend and dtype, not Haar-distributed.
+    # W^T W = I_k; same random stream, so Z is the Gaussian teacher's. Scale: a Gaussian column has norm ~ sqrt(m/k),
+    # an orthonormal one norm 1, so the variance of each feature of x and y falls by about k/m
     # factors z0..z{k-1} (float); one singleton group per latent; extras W_X, W_Y
 def object_action(cfg, device, dtype) -> Dataset   # Q = period = None
     # G x G grid, cell = row*G + col; agent cell uniform; #objects uniform on 0..A; distinct object cells drawn

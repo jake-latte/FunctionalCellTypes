@@ -248,11 +248,23 @@ def test_orthonormal_teacher_orthonormalises_the_gaussian_draws_and_keeps_the_la
     for name, z in gaussian.factors.items():
         assert torch.equal(ortho.factors[name], z)
     for key in ("W_X", "W_Y"):
-        q = torch.linalg.qr(gaussian.extras[key], mode="reduced")[0]
-        assert torch.equal(ortho.extras[key], q)
+        w, q = gaussian.extras[key], ortho.extras[key]
+        # q is the Gram-Schmidt basis of w's columns: w = q r with r upper triangular, r_jj > 0
+        r = q.T @ w
+        assert torch.allclose(q @ r, w, atol=1e-12)
+        assert torch.allclose(r, r.triu(), atol=1e-12) and (r.diagonal() > 0).all()
     z = torch.stack([ortho.factors[f"z{i}"] for i in range(3)], dim=1)
     assert torch.allclose(ortho.x, z @ ortho.extras["W_X"].T)
     assert torch.allclose(ortho.y, z @ ortho.extras["W_Y"].T)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, F64])
+@pytest.mark.parametrize("key", ["W_X", "W_Y"])
+def test_each_orthonormal_column_points_the_way_of_its_gaussian_column(dtype, key):
+    cfg = _cfg("linear_teacher", D_in=10, n_latents=4)
+    w = make_dataset(cfg, CPU, dtype).extras[key]
+    q = make_dataset(cfg.model_copy(update={"teacher": "orthonormal"}), CPU, dtype).extras[key]
+    assert ((w * q).sum(dim=0) > 0).all()
 
 
 def test_an_unknown_teacher_is_rejected_naming_the_field():
