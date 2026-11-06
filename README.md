@@ -35,7 +35,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `report.py` | read-only loading of an experiment and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
 | `exp_view.py` | from an experiment ROOT to the figures of a `lambda_exp` experiment (the phase-transition notebook): snapping a setting to the axis values, MIR records of one depth and activation, tuning curves of one layer |
 | `spatial_view.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels (the notebook draws its own figures) |
-| `linear_theory.py` | the linear one-hidden-layer theory on a ring as pure functions of a `Config` and a `Dataset`: per-mode spectra and their summaries, the ansatz-free kernel (`latex/notes/linear_solution_limits.tex`, `linear_without_ansatz.tex`) |
+| `linear_theory.py` | the linear one-hidden-layer theory on a ring, trained by SGLD, as pure functions of a `Config` and a `Dataset`: per-mode spectra and their summaries for an orthonormal teacher, the ansatz-free kernel for any teacher (`latex/notes/linear_solution_limits.tex`, `linear_without_ansatz.tex`) |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
