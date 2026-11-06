@@ -312,7 +312,6 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
         raise ValueError(f"min_rel_eig must lie in (0, 1), got {min_rel_eig}")
     eigvals, eigvecs = _psd_eigh(K)
     top, bottom = eigvals[-1].item(), eigvals[0].item()
-    n_negative = int((eigvals < -NEGATIVE_RTOL * top).sum().item())
     floor = min_rel_eig * top
     floored = eigvals.clamp(min=floor)
     M = (eigvecs / floored) @ eigvecs.T
@@ -320,7 +319,7 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
     report = FloorReport(
         n_floored=n_floored,
         fraction_floored=n_floored / len(eigvals),
-        n_negative=n_negative,
+        n_negative=0,  # `_psd_eigh` raises on any clearly negative eigenvalue
         cond_before=top / bottom if bottom > 0 else float("inf"),
         cond_after=top / floored[0].item(),
         floor=floor,
