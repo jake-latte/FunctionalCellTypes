@@ -259,7 +259,9 @@ def _check_sgld_step_resolves_the_loss(
     """Raise if an SGLD step of size lr is unstable on the full loss at the current net: the
     data term adds, along the directions the data spans, a curvature the prior-only bound
     does not see. lr * lambda_max(Hessian) >= 1, half the divergence limit, is refused; the
-    value is logged otherwise (the step-size rule of the experiment plan aims at 0.1)."""
+    value is logged otherwise. A step with lr * lambda_max <= 0.1 inflates the stationary
+    variance of the stiffest mode by at most 5% (1 / (1 - lr c / 2) on a quadratic of
+    curvature c)."""
     coefficient = prior_coefficient(tc)
 
     def loss() -> Tensor:

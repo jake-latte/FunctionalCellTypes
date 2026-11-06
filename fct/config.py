@@ -475,11 +475,11 @@ class Config(StrictModel):
         `LOSS_VERSION` when "train" is. `train.optimizer` / `train.beta` are left out of the
         hash for the adam optimiser, `net.B` when it is 1, `net.init` when it is "standard" and
         `data.teacher` when it is "gaussian". The `spatial` section enters with "train" only
-        when it is set (without its `lambda_max` while that is None, and without
-        `parametrisation` while that is "penalty"), so runs without a spatial prior keep the
-        hashes they had before the section existed and penalty runs those from before the
-        whitened parametrisation did. The
-        meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its dump.
+        when it is set, without its `lambda_max` while that is None and without
+        `parametrisation` while that is "penalty". A field left out at its default leaves the
+        hash of every config that does not set it equal to the hash of the same config without
+        the field. The meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its
+        dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
