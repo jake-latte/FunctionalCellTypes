@@ -8,3 +8,7 @@ $pdf_mode = 1;
 $bibtex_use = 2;
 $out_dir = 'build';
 $pdflatex = 'pdflatex -synctex=1 -interaction=nonstopmode -file-line-error %O %S';
+# Do not hard-wrap log lines at 79 columns, so error lines stay greppable.
+$ENV{'max_print_line'} = 1000;
+# The delegating rc files test this file's value with `do ... or die`.
+1;

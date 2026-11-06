@@ -112,12 +112,15 @@ assert_file sections/build/01_setup.pdf
 run make_note make note NOTE=continuum_limit
 assert_file notes/build/continuum_limit.pdf
 
-echo "== make notes"
-run make_notes make -k notes
+echo "== notes"
+# One note at a time so a failure names the note and shows its own latexmk log.
 for tex in notes/*.tex; do
-  assert_file "notes/build/$(basename "${tex%.tex}").pdf"
+  name="$(basename "${tex%.tex}")"
+  run "note_$name" make note NOTE="$name"
+  assert_file "notes/build/$name.pdf"
 done
 assert_notes_error_free
+run make_notes make notes   # the aggregate target (already up to date here)
 
 echo "== biber"
 assert_biber_resolves

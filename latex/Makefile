@@ -18,24 +18,27 @@ NOTE_TARGETS := $(addprefix note-,$(NOTE_NAMES))
 .PHONY: all sec note notes check clean $(NOTE_TARGETS)
 
 all:
-	cd $(ROOT) && latexmk main.tex
+	cd "$(ROOT)" && latexmk main.tex
 
 # guard-VAR fails with a usage message when VAR is empty.
 guard-%:
 	@test -n "$($*)" || { echo "usage: make $(if $(filter SEC,$*),sec SEC,note NOTE)=<name>" >&2; exit 2; }
 
 sec: guard-SEC
-	cd $(ROOT)sections && latexmk $(SEC).tex
+	cd "$(ROOT)sections" && latexmk $(SEC).tex
 
-note: guard-NOTE note-$(NOTE)
+# Calls latexmk directly (not note-%) so a mistyped name gets latexmk's own
+# "Could not find file" message.
+note: guard-NOTE
+	cd "$(ROOT)notes" && latexmk $(NOTE).tex
 
 notes: $(NOTE_TARGETS)
 
 $(NOTE_TARGETS): note-%:
-	cd $(ROOT)notes && latexmk $*.tex
+	cd "$(ROOT)notes" && latexmk $*.tex
 
 check:
-	$(ROOT)scripts/check_build_dirs.sh
+	"$(ROOT)scripts/check_build_dirs.sh"
 
 clean:
-	cd $(ROOT) && rm -rf build sections/build notes/build
+	cd "$(ROOT)" && rm -rf build sections/build notes/build
