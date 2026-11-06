@@ -1262,28 +1262,37 @@ to visit independent networks.
 latent_basis(factors: Mapping[str, Tensor]) -> LatentBasis(U (P, K), s2 (K,), Z (P, K))
     # Z = [z0 .. z{K-1}] stacked by index (z10 after z9; other keys and colliding names such as z1/z01 raise); thin SVD
     # Z = U S V^T, s descending, columns flipped so 1^T u_k >= 0; s2 = S^2 (measured, finite-P). Precondition: u_1 is the
-    # mean direction, cos(u_1, 1) >= 1/2 * sqrt(3K/(3K+1)) (the [0, a] value); symmetric latents raise (see below)
+    # mean direction, s_1^2 / s_2^2 >= 2 (K >= 2) and cos(u_1, 1) >= 1/2 * sqrt(3K/(3K+1)); symmetric latents raise (below)
 tuning_maps(h (..., P, N), U (P, K)) -> t (..., K, N)          # t = U^T h, t_{k,i} = u_k^T h_i
 power_spectrum(t (..., N)) -> d (..., N)                       # |fft(t, dim=-1) / sqrt(N)|^2, no mean subtracted
 null_power(h (..., P, N), U (P, K)) -> (..., N)                # sum_p |fft(r_p)/sqrt(N)|^2 / (P - K), r = h - U U^T h (U_perp never formed)
 mode_spectra(h (..., P, N), U (P, K)) -> (..., K + 1, N)       # rows 0..K-1 power_spectrum(tuning_maps), row K null_power: one monitor record
 fold_q(d (..., N)) -> (..., N/2 + 1)                           # (d_q + d_{-q}) / 2 at |q| = 0..N/2; N even
 autocorrelation(d (..., N)) -> R (..., N)                      # R(r) = (1/N) sum_q d_q e^{2 pi i q r / N} = ifft(d).real
-half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; raises if d_0 < d_{N/2}
-spectrum_summary(d (..., N)) -> Summary(q_half, share0, lag1, d0, d_nyq, R (..., N))   # share0 = d_0 / sum_q d_q, lag1 = R(1)/R(0)
+half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; of a MEAN spectrum; raises if d_0 < d_{N/2}
+spectrum_summary(d (..., N)) -> Summary(share0, lag1, d0, d_nyq, R (..., N))   # share0 = d_0 / sum_q d_q, lag1 = R(1)/R(0); per record
 gaussian_width(R (..., N), ell) -> float | (...)               # sqrt(-ell^2 / (2 ln(R(ell)/R(0)))); ell an integer lag in 1..N-1
 contrast_angle_statistic(t2 (..., N), t3 (..., N)) -> float | (...)   # <cos 4 theta_i> over neurons, theta_i = atan2(t3_i, t2_i) on (-pi, pi]
 theta_histogram(t2 (..., N), t3 (..., N)) -> (..., 36) int64   # counts on the fixed bins (-pi + j w, -pi + (j+1) w], w = 2 pi / 36
 average_records(records (R, ...), burn_in) -> (...)            # mean over records[burn_in:] of one chain (diagnostic)
-integrated_autocorr_time(records (R, ...), burn_in) -> tau (...)   # 1 + 2 sum_{k=1}^{W} rho_k, Sokal window: first W >= 5 tau(W); tau >= 1
+integrated_autocorr_time(records (R, ...), burn_in) -> tau (...)   # 1 + 2 sum_k rho_k, Geyer's initial monotone sequence of pairs
 record_sem(records (R, ...), burn_in) -> (...)                 # sqrt(C(0) tau / n): the chain mean's error with n_eff = n / tau
 member_mean_sem(values (B, ...)) -> (mean (...), sem (...))   # across independent members: std (ddof 1) / sqrt(B), B >= 2
 ```
 
-The latent basis needs latents on `[0, a]`. Then `u_1` is the mean direction and its cosine with the constant
-pattern vector is `sqrt(3K/(3K+1))` (0.95 at K = 3). For symmetric latents (on `[-a, a]`) the K singular values are
-degenerate up to `O(P^-1/2)` noise, the SVD frame is a random rotation of col(Z) (at P = 256, K = 3: s2 = 93, 82,
-72 and cos(u_1, 1) = 0.07), and `latent_basis` raises, saying the mean direction is undefined.
+The latent basis needs latents on `[0, a]`. Then `u_1` is the mean direction, `s_1^2 / s_2^2 -> 3K + 1` and the
+cosine of `u_1` with the constant pattern vector is `sqrt(3K/(3K+1))` (0.95 at K = 3). For symmetric latents (on
+`[-a, a]`) the K singular values are degenerate up to `O(P^-1/2)` noise, the SVD frame is a random rotation of col(Z)
+(at P = 256, K = 3: s2 = 93, 82, 72 and cos(u_1, 1) = 0.07), and `latent_basis` raises, saying the mean direction is
+undefined. It requires `s_1^2 / s_2^2 >= 2` (K >= 2) and the cosine at half its `[0, a]` value (the only check at
+K = 1). Simulated over 2 x 10^5 draws, these never reject `[0, a]` latents at P >= 16 and accept symmetric ones in
+1.7% of draws at P = 16, K = 2 (0.7% at K = 3), 0.05% at P = 32 and none at P = 64. At P = 16, K <= 3 the two
+distributions overlap, so no threshold reaches zero false rejection with false acceptance below 0.1%.
+
+`half_power_q` is a statistic of a mean spectrum (over records or members). In one record `d_0` and `d_{N/2}` are
+single chi^2 draws whose order is noise: a map with mean `D_0 = 100 D_{N/2}` has `d_0 < d_{N/2}` with probability
+`(2/pi) atan(sqrt(D_{N/2}/D_0)) = 6%`, and `half_power_q` raises on any such spectrum (counting them). So
+`spectrum_summary` leaves it out and returns only what is defined per record.
 
 `null_power` projects out col(Z) before the FFT. Subtracting the latent power from the total would cancel
 catastrophically when the null floor is far below the latent power (at sigma = 0 the floor is 0, and the
@@ -1293,15 +1302,19 @@ The angle statistic needs the orthonormal frame `(u_2, u_3)`: tuning to an obliq
 `(z_2, z_3)` squeezes an isotropic cloud along the bisector and biases it negative (for unit-variance tunings with
 correlation rho, `<cos 4 theta> = -r^2`, `r = (sqrt(1+rho) - sqrt(1-rho)) / (sqrt(1+rho) + sqrt(1-rho))`). `atan2`
 can return `-pi`; it is mapped to `pi`, so `theta_histogram` bins are right-closed on `(-pi, pi]` and histograms of
-records and members sum. A silent neuron (`t2 = t3 = 0`) has `theta = 0` and counts as axis-aligned.
+records and members sum. A silent neuron (`t2 = t3 = 0`) has `theta = 0` and counts as axis-aligned. "Axis-aligned"
+means aligned with the SVD contrast axes `(u_2, u_3)`, not with the latents: at K = 3 the three latents project onto
+the contrast plane 120 degrees apart, so `cos 4 theta` does not detect tuning to individual latents.
 
 `record_sem`: `rho_k = C(k) / C(0)` from the biased autocovariance of the records after burn-in (FFT, zero-padded
-to 2n). The window W is the first lag with `W >= 5 tau(W)` (Sokal 1997; with `tau = 1 + 2 sum rho_k` this 5 is
-Sokal's c = 10 in his `tau_int = 1/2 + sum rho_k` convention, emcee's pairing), searched up to n/4. If it is not
-reached there the chain is too short for its correlation time and the function raises. It needs at least 100
-records after burn-in: shorter chains of even independent records miss the window by sampling noise (19% of
-chains at 20 records, 0.03% at 100). Sokal's window assumes positive correlations; anticorrelated records meet it
-trivially with `tau < 1` (even negative), and `tau` is clamped at 1, which overstates their error. Constant
+to 2n). `tau` is Geyer's initial monotone sequence estimator (Geyer 1992): the pairs `Gamma_m = rho_{2m} +
+rho_{2m+1}` are summed over their initial positive run, made non-increasing, `tau = -1 + 2 sum_m Gamma_m`, over lags
+up to n/2. Pairing cancels the alternation of an anticorrelated component, so a slow component under it is still
+seen (a cut-off window such as Sokal's stops at lag 1 there and reports tau about 1 for a chain with tau = 7.8), and
+`tau < 1` is returned for anticorrelated records. It raises when the pairs stay positive to lag n/2, when the chain
+holds fewer than 20 correlation times (`n < 20 tau`: too short to trust), and when `tau <= 0`. It needs at least
+200 records after burn-in, because one failing element fails the call: with independent records, 2.6e-5 of elements
+and 19% of calls over 8192 elements fail at 100 records, and none of 1.3 x 10^6 elements at 150 or 200. Constant
 records give `tau = 1` and a standard error of 0.
 
 ## tuning.py, exp_report.py and the phase-transition figures
