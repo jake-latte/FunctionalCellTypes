@@ -12,7 +12,9 @@ Ground truths, all synthetic:
     reproduce the quoted numbers through the whole pipeline.
 """
 
+import dataclasses
 import importlib.util
+import inspect
 import math
 from pathlib import Path
 
@@ -274,6 +276,29 @@ def test_smoke_s1_without_input_noise():
     np.testing.assert_allclose(ratio[4:9], 7.0, atol=1e-3)  # sX2 ratio of the two modes, K = 2
 
 
+def test_smoke_s1_without_input_noise_equals_the_reference_script(script):
+    """The S1 recipe of Appendix app:numbers run through the script at sig2 = 0 and through a
+    `Config` and dataset with exactly the formula singular values: the same tau, summaries and
+    spectra, so the module's sigma = 0 path is the script's."""
+    N, ell, P, m, K = SMOKE["N"], SMOKE["ell"], SMOKE["P"], SMOKE["m"], SMOKE["K"]
+    beta = 0.25
+    sx2, sy2, delta = script.latent_modes(P, K, A_LATENT, m, 1.0, 1.0, m, beta)
+    lam = lt.ring_spectrum(script.ring_kernel(N, ell))  # clipped as the module clips
+    reference = [script.spectrum_d(lam, sx2[k], sy2[k], 0.0, 0.0, delta) for k in range(K)]
+    ds = exact_s2_dataset(np.random.default_rng(5), lt.uniform_latent_s2(P, K, A_LATENT), P, m)
+    pred = lt.predicted_spectra(ring_config(**SMOKE, beta=beta), ds)  # sig2 defaults to 0
+    for k, (c_ref, d_ref) in enumerate(reference):
+        assert pred.c[k] == pytest.approx(c_ref, rel=1e-12)
+        np.testing.assert_allclose(pred.d[k], d_ref, rtol=1e-10, atol=1e-300)
+        tau_ref = sy2[k] * script.h_of(lam, sx2[k], 0.0, 0.0).max() / c_ref**2
+        assert pred.tau[k] == pytest.approx(tau_ref, rel=1e-10)
+        s = lt.spectrum_summary(pred.d[k])
+        assert s.q_half == script.half_power_q(d_ref)
+        assert s.share0 == pytest.approx(d_ref[0] / d_ref.sum(), rel=1e-10)
+        assert s.lag1 == pytest.approx(script.autocorr_lag1(d_ref), rel=1e-10)
+    assert pred.null_floor == 0.0
+
+
 # ------------------------------------------------------------------ sigma^2 = 0 as a first-class case
 
 
@@ -306,6 +331,25 @@ def test_sigma_to_zero_limit_is_regular():
     c0, d0 = lt.per_mode_spectrum(lam, 1.0, 2.0, 0.0, 0.2, 0.5)
     assert abs(c_eps - c0) < 1e-7
     assert np.abs(d_eps - d0).max() < 1e-7
+
+
+def test_a_latent_the_data_does_not_span_is_exactly_zero_through_the_pipeline():
+    """A zero latent column gives s_2 = 0, a null mode: at sigma = 0 its spectrum is exactly 0
+    from `predicted_spectra`, and `ansatz_free_kernel` puts c_0 = delta on it."""
+    rng = np.random.default_rng(6)
+    P, m = SMOKE["P"], SMOKE["m"]
+    Z = np.stack([rng.uniform(0, 1, P), np.zeros(P)], axis=1)
+    ds = latent_dataset(Z, orthonormal_columns(rng, m, 2), orthonormal_columns(rng, m, 2))
+    cfg = ring_config(**SMOKE, beta=0.25, r=0.5)
+    pred = lt.predicted_spectra(cfg, ds)
+    assert pred.s2[1] == 0.0 and (pred.d[1] == 0.0).all()
+    assert pred.c[1] == pytest.approx(pred.params.delta, rel=1e-14)
+    assert (pred.d[0] > 0).all() and pred.null_floor == 0.0
+    C = lt.ansatz_free_kernel(cfg, ds)
+    u = pred.U_Z[:, 0]
+    assert u @ C @ u == pytest.approx(pred.c[0], rel=1e-10)
+    complement = np.eye(P) - np.outer(u, u)
+    np.testing.assert_allclose(complement @ C @ complement, pred.params.delta * complement)
 
 
 def test_spectrum_summary_rejects_an_all_zero_spectrum():
@@ -354,6 +398,19 @@ def test_rate_coefficient_and_temperature_follow_the_train_section():
     adam = ring_config(**SMOKE, beta=0.25, r=0.5, optimizer="adam")
     assert lt.inverse_temperature(adam) == 1.0  # Adam has no temperature (prior_coefficient's rule)
     assert lt.rate_coefficient(adam) == pytest.approx(2 * adam.train.rate_lambda)
+
+
+def test_every_signature_names_the_rate_coefficient_r():
+    """The rate coefficient is `r` everywhere; the notes' g^2 never appears as a parameter."""
+    functions = [
+        f for f in vars(lt).values() if inspect.isfunction(f) and f.__module__ == lt.__name__
+    ]
+    params = {p for f in functions for p in inspect.signature(f).parameters}
+    assert "r" in params
+    assert not params & {"g", "g2", "rate", "rate_lambda"}
+    for f in (lt.noise_floor, lt.prior_shrunk_variance, lt.h_of, lt.per_mode_spectrum):
+        assert "r" in inspect.signature(f).parameters, f.__name__
+    assert "r" in {f.name for f in dataclasses.fields(lt.TheoryParameters)}
 
 
 def test_weight_lambda_rescales_both_prior_scales():
@@ -482,6 +539,44 @@ def test_ansatz_free_kernel_reproduces_the_note_and_the_brute_force_master_equat
     A = NOTE_K0 / NOTE_M * X @ X.T
     F = brute_force_kernel_map(C, K, A, Y @ Y.T, NOTE_K1, NOTE_SIG2, NOTE_R, NOTE_DELTA)
     assert np.abs(F - C).max() < 1e-10
+
+
+def brute_force_covariance(C_tilde, K, A, YY, k1, sig2, r):
+    """Cov[h_{mu i}, h_{nu j}] (P, N, P, N): the inverse of the NP x NP precision of eq:precision."""
+    P, N = A.shape[0], K.shape[0]
+    Ci = np.linalg.inv(C_tilde)
+    B = Ci @ YY @ Ci / k1
+    I = np.eye(P * N)
+    precision = np.linalg.inv(np.kron(A, K) + sig2 * I) - (np.kron(B, K) - r * I)
+    return np.linalg.inv(precision).reshape(P, N, P, N)
+
+
+def test_prediction_is_a_fixed_point_of_the_brute_force_master_equation():
+    """Synthetic-data-first, N = 12: the kernel the prediction implies (U diag(c) U^T on the
+    latents, c_0 on the null directions) is a fixed point of the brute-force NP x NP map, and the
+    covariance of the tuning maps t_k = u_k^T h under that law has the predicted spectra d_q
+    (unitary DFT: the eigenvalues of the circulant N x N covariance), no cross-mode covariance,
+    and the flat floor sigma_0^2 on every null direction."""
+    cfg, ds = note_case()
+    pred = lt.predicted_spectra(cfg, ds, sig2=NOTE_SIG2)
+    U = pred.U_Z
+    null = np.linalg.svd(np.eye(NOTE_P) - U @ U.T)[0][:, : NOTE_P - NOTE_K]
+    c0 = NOTE_DELTA + pred.null_floor * pred.lam.mean()
+    C = U @ np.diag(pred.c) @ U.T + c0 * null @ null.T
+    K = lt.hidden_kernel(cfg)
+    X, Y = ds.x.numpy(), ds.y.numpy()
+    A = NOTE_K0 / NOTE_M * X @ X.T
+    F = brute_force_kernel_map(C, K, A, Y @ Y.T, NOTE_K1, NOTE_SIG2, NOTE_R, NOTE_DELTA)
+    assert np.abs(F - C).max() < 1e-10
+    Cov = brute_force_covariance(C, K, A, Y @ Y.T, NOTE_K1, NOTE_SIG2, NOTE_R)
+    basis = np.concatenate([U, null], axis=1)
+    Ct = np.einsum("uk,uivj,vl->kilj", basis, Cov, basis)  # covariance of the projected maps
+    spectra = np.fft.fft(Ct[np.arange(NOTE_P), 0, np.arange(NOTE_P), :], axis=-1).real
+    np.testing.assert_allclose(spectra[:NOTE_K], pred.d, rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(spectra[NOTE_K:], pred.null_floor, rtol=1e-10)
+    off_diagonal = Ct.copy()
+    off_diagonal[np.arange(NOTE_P), :, np.arange(NOTE_P), :] = 0.0
+    assert np.abs(off_diagonal).max() < 1e-12
 
 
 def test_ansatz_free_kernel_equals_the_per_mode_roots_for_the_orthonormal_teacher():
