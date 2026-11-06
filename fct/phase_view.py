@@ -123,7 +123,8 @@ class RandomTestSet(NamedTuple):
 def _check_matches_training(data_cfg: DataConfig, train: Dataset) -> None:
     """ValueError unless `train` is exactly the set `data_cfg` generates: the same inputs and
     targets (the data depend on the config and dtype only, so they are regenerated in memory on
-    the CPU and compared), which fixes P, D_in, n_latents, the latent interval and seed at once."""
+    the CPU and compared), which fixes P, D_in, n_latents, the latent interval, the teacher map
+    type and seed at once."""
     expected = make_dataset(data_cfg, torch.device("cpu"), train.x.dtype)
     same = (
         expected.x.shape == train.x.shape
@@ -136,7 +137,7 @@ def _check_matches_training(data_cfg: DataConfig, train: Dataset) -> None:
             "data_cfg does not match the training set: regenerating it from data_cfg "
             f"(P={data_cfg.P}, D_in={data_cfg.D_in}, n_latents={data_cfg.n_latents}, "
             f"latent_min={data_cfg.latent_min}, latent_max={data_cfg.latent_max}, "
-            f"seed={data_cfg.seed}) gives different data"
+            f"teacher={data_cfg.teacher}, seed={data_cfg.seed}) gives different data"
         )
 
 

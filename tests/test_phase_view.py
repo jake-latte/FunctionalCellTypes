@@ -605,11 +605,14 @@ def test_ensemble_views_refuse_a_single_network(small, sets):
         {"latent_min": -0.5},
         {"latent_max": 2.0},
         {"seed": 5},
+        {"teacher": "orthonormal"},
     ],
 )
 def test_random_test_set_refuses_a_config_that_is_not_the_trainings(small, update):
     data_cfg, train, _, _ = small
-    with pytest.raises(ValueError, match="does not match"):
+    (field,) = update
+    # The message names the field's value in the refused config, so the mismatch can be found.
+    with pytest.raises(ValueError, match=f"does not match.*{field}="):
         random_test_set(data_cfg.model_copy(update=update), train, 10, seed=5)
 
 
