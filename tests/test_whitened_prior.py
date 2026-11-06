@@ -449,6 +449,55 @@ def test_sgld_under_whitening_refuses_a_step_the_loss_curvature_cannot_take(tmp_
     assert any("lambda_max" in line for line in lines)
 
 
+def _smoke_s8_k100(lr: float) -> Config:
+    """Setting S8 of the experiment plan's smoke ring at k = 1 / weight_lambda = 100: N = 16
+    ring of hidden length scale 2 sites (box 16), unstructured input and output kernels,
+    P = 32 linear-teacher patterns with m = n = 4 and 2 latents, phi = id, beta = 10."""
+    flat = {"kernel": {"length_scale": 0.0, "amplitude": 1.0}}
+    return Config.model_validate(
+        {
+            "data": {"task": "linear_teacher", "P": 32, "D_in": 4, "n_latents": 2},
+            "net": {"N": 16, "L": 1, "phi": "id", "g": 1.0},
+            "train": {
+                "optimizer": "sgld",
+                "beta": 10.0,
+                "weight_lambda": 0.01,
+                "rate_lambda": 0.0,
+                "lr": lr,
+                "n_epochs": 1,
+            },
+            "spatial": {
+                "d": 1,
+                "box": 16.0,
+                "parametrisation": "whitened",
+                "input": flat,
+                "output": flat,
+                "hidden": {"kernel": {"length_scale": 2.0, "amplitude": 1.0}},
+            },
+            "device": "cpu",
+            "dtype": "float64",
+        }
+    )
+
+
+def test_the_curvature_check_refuses_the_prior_only_step_on_the_smoke_ring_at_k_100(tmp_path):
+    """At k = 100 the prior alone admits lr = 0.2 (lr * weight_lambda / (2 beta) = 1e-4), but
+    the data term's curvature (lambda_max ~ 40-100 at the prior draw) makes lr * lambda_max
+    ~ 10: the run-start check must refuse it before any checkpoint is written, and accept the
+    plan's step-rule value 0.0005 (lr * lambda_max ~ 0.05)."""
+    too_big = _smoke_s8_k100(0.2)
+    ds, net = _setup(too_big)
+    assert too_big.train.lr * prior_coefficient(too_big.train) < 1  # the prior check passes
+    with pytest.raises(ValueError, match=r"lr=0\.2 .*lambda_max"):
+        train(too_big, ds, net, tmp_path / "big", **QUIET)
+    assert not any((tmp_path / "big").rglob("*.pt"))
+    fine = _smoke_s8_k100(0.0005)
+    _, net = _setup(fine)
+    lines = []
+    train(fine, ds, net, tmp_path / "fine", log=lines.append)
+    assert any(line.startswith("SGLD step check") for line in lines)
+
+
 def test_the_penalty_path_logs_no_curvature_check(tmp_path):
     cfg = _cfg(parametrisation="penalty", n_epochs=1)
     ds, net = _setup(cfg)
