@@ -129,6 +129,8 @@ def frame_accepted(z: torch.Tensor) -> bool:
     return True
 
 
+# [16-2] and [16-3] are the regression cases (the cosine check alone accepts about 6% of
+# symmetric draws there); [32-2] also passed before the gap check and is kept as coverage.
 @pytest.mark.parametrize("P, K", [(16, 2), (16, 3), (32, 2)])
 def test_latent_basis_frame_check_at_small_p(P, K):
     """Never rejects latents on [0, a]; accepts few symmetric draws even at P = 16.
@@ -511,17 +513,25 @@ def ar1_chains(phi: float, n_records: int, n_chains: int, seed: int) -> torch.Te
     return x
 
 
+def reliable_sem(records: torch.Tensor) -> torch.Tensor:
+    """record_sem of records whose every element is reliable (asserted)."""
+    estimate = sp.record_sem(records, burn_in=0)
+    assert bool(estimate.reliable.all())
+    return estimate.sem
+
+
 def test_integrated_autocorr_time_of_ar1_chains():
     phi = 0.8
-    tau = sp.integrated_autocorr_time(ar1_chains(phi, 4000, 200, seed=10), burn_in=0)
-    assert tau.shape == (200,)
-    assert float(tau.mean()) == pytest.approx((1 + phi) / (1 - phi), rel=0.05)
+    estimate = sp.integrated_autocorr_time(ar1_chains(phi, 4000, 200, seed=10), burn_in=0)
+    assert estimate.tau.shape == estimate.reliable.shape == (200,)
+    assert bool(estimate.reliable.all())
+    assert float(estimate.tau.mean()) == pytest.approx((1 + phi) / (1 - phi), rel=0.05)
 
 
 def test_record_sem_is_calibrated_on_correlated_chains():
     """The spread of chain means over independent chains matches the per-chain sem."""
     records = ar1_chains(0.8, 4000, 400, seed=11)
-    sem = sp.record_sem(records, burn_in=0)
+    sem = reliable_sem(records)
     spread = records.mean(dim=0).std()
     assert float(sem.square().mean().sqrt()) == pytest.approx(float(spread), rel=0.1)
     naive = records.std(dim=0) / math.sqrt(4000)  # what ignoring the correlation would give
@@ -530,8 +540,34 @@ def test_record_sem_is_calibrated_on_correlated_chains():
 
 def test_integrated_autocorr_time_of_anticorrelated_chains():
     """AR(1) with phi = -0.5 has tau = (1 + phi) / (1 - phi) = 1/3."""
-    tau = sp.integrated_autocorr_time(ar1_chains(-0.5, 4000, 200, seed=21), burn_in=0)
-    assert float(tau.mean()) == pytest.approx(1 / 3, rel=0.1)
+    estimate = sp.integrated_autocorr_time(ar1_chains(-0.5, 4000, 200, seed=21), burn_in=0)
+    assert bool(estimate.reliable.all())
+    assert float(estimate.tau.mean()) == pytest.approx(1 / 3, rel=0.1)
+
+
+def test_strongly_alternating_records_are_masked_not_raised():
+    """AR(1) at phi = -0.9 (tau = 0.053): Geyer's estimate is often <= 0 there."""
+    estimate = sp.record_sem(ar1_chains(-0.9, 4000, 200, seed=27), burn_in=0)
+    assert not bool(estimate.reliable.all())
+    assert torch.equal(estimate.sem.isnan(), ~estimate.reliable)
+    assert torch.equal(estimate.tau.isnan(), ~estimate.reliable)
+
+
+def test_record_sem_masks_slow_elements_of_a_monitor_sized_batch():
+    """1024 elements at n = 1000: tau = 5 elements are reliable, tau = 80 ones mostly masked.
+
+    n < 20 tau is judged on the estimated tau, which is biased low on so short a chain, so some
+    tau = 80 elements (estimates below 50) pass the gate; none of the batch raises.
+    """
+    fast = ar1_chains(2 / 3, 1000, 512, seed=28)  # tau = (1 + phi) / (1 - phi) = 5
+    slow = ar1_chains(79 / 81, 1000, 512, seed=29)  # tau = 80
+    estimate = sp.record_sem(torch.cat([fast, slow], dim=1), burn_in=0)
+    assert estimate.sem.shape == (1024,)
+    assert bool(estimate.reliable[:512].all())
+    assert bool(torch.isfinite(estimate.sem[:512]).all())
+    assert float(estimate.reliable[512:].double().mean()) < 0.5
+    assert torch.equal(estimate.sem.isnan(), ~estimate.reliable)
+    assert torch.equal(estimate.tau.isnan(), ~estimate.reliable)
 
 
 @pytest.mark.parametrize("b", [0.8, 0.9])
@@ -544,14 +580,14 @@ def test_record_sem_is_calibrated_on_a_slow_plus_alternating_chain(b):
     slow = ar1_chains(0.95, 4000, 200, seed=25)
     alternating = ar1_chains(-0.9, 4000, 200, seed=26)
     records = math.sqrt(1 - b) * slow + math.sqrt(b) * alternating
-    sem = sp.record_sem(records, burn_in=0)
+    sem = reliable_sem(records)
     spread = records.mean(dim=0).std()
     assert float(sem.square().mean().sqrt()) == pytest.approx(float(spread), rel=0.2)
 
 
 def test_record_sem_of_independent_records_is_the_naive_sem():
     records = torch.randn((4000, 200), dtype=F64, generator=torch.Generator().manual_seed(12))
-    ratio = sp.record_sem(records, burn_in=0) / (records.std(dim=0) / math.sqrt(4000))
+    ratio = reliable_sem(records) / (records.std(dim=0) / math.sqrt(4000))
     assert float(ratio.mean()) == pytest.approx(1.0, rel=0.05)
 
 
@@ -561,14 +597,30 @@ def test_records_drop_the_burn_in_and_keep_trailing_shape():
     mean = sp.average_records(records, burn_in=100)
     assert mean.shape == (4, 8)
     torch.testing.assert_close(mean, records[100:].mean(dim=0))
-    sem = sp.record_sem(records, burn_in=100)
-    assert sem.shape == (4, 8)
-    assert float(sem.max()) < 0.5
+    estimate = sp.record_sem(records, burn_in=100)
+    assert estimate.sem.shape == estimate.tau.shape == estimate.reliable.shape == (4, 8)
+    assert bool(estimate.reliable.all())
+    assert float(estimate.sem.max()) < 0.5
 
 
-def test_record_sem_of_constant_records_is_zero():
-    sem = sp.record_sem(torch.ones((200, 3), dtype=F64), burn_in=0)
-    assert torch.equal(sem, torch.zeros(3, dtype=F64))
+@pytest.mark.parametrize("dtype", [torch.float32, F64])
+@pytest.mark.parametrize("value", [1.0, 0.1, 1 / 3, 0.7, 1e-3])
+@pytest.mark.parametrize("n", [200, 4000])
+def test_record_sem_of_constant_records_is_zero(value, dtype, n):
+    """A constant whose mean is inexact in floating point is still constant: tau 1, sem 0."""
+    estimate = sp.record_sem(torch.full((n, 3), value, dtype=dtype), burn_in=0)
+    assert torch.equal(estimate.sem, torch.zeros(3, dtype=dtype))
+    assert torch.equal(estimate.tau, torch.ones(3, dtype=dtype))
+    assert bool(estimate.reliable.all())
+
+
+def test_a_trend_is_masked_as_too_short():
+    """A ramp's pairs stay positive or its tau exceeds n / 20: unreliable, not an error."""
+    ramp = torch.arange(200.0, dtype=F64)
+    estimate = sp.record_sem(torch.stack([ramp, torch.randn(200, dtype=F64)], dim=1), 0)
+    assert estimate.reliable.tolist() == [False, True]
+    assert bool(estimate.sem[0].isnan()) and bool(estimate.tau[0].isnan())
+    assert not bool(sp.integrated_autocorr_time(ramp, 0).reliable)
 
 
 @pytest.mark.parametrize(
@@ -578,7 +630,7 @@ def test_record_sem_of_constant_records_is_zero():
         (lambda r: sp.average_records(r, burn_in=200), "burn_in"),
         (lambda r: sp.record_sem(r[:, 0, 0] * float("nan"), 0), "finite"),
         (lambda r: sp.record_sem(r, burn_in=1), "at least 200"),
-        (lambda r: sp.record_sem(torch.arange(200.0, dtype=F64), 0), "too short"),
+        (lambda r: sp.integrated_autocorr_time(r, burn_in=1), "at least 200"),
     ],
 )
 def test_records_reject_bad_inputs(call, match):
