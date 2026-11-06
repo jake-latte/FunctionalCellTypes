@@ -147,40 +147,32 @@ def spatial_weight_penalty(net: Net, factors: dict[str, tuple[Tensor, Tensor]]) 
     return torch.stack(terms).sum(0)
 
 
-def _check_sgld_step_resolves_the_prior(
-    factors: dict[str, tuple[Tensor, Tensor]] | None, tc: TrainConfig
-) -> None:
-    """Raise if an SGLD step of size lr is unstable on the prior term alone.
-
-    c * tr(M_rows W M_cols W^T), with c = `prior_coefficient(tc)` = weight_lambda / (2 beta),
-    has curvature 2 c lambda_max(M_rows) lambda_max(M_cols) along its stiffest direction, and an
-    Euler step on a quadratic of curvature k diverges once lr * k >= 2. A wide kernel makes
-    lambda_max large (up to 1 / min_rel_eig over the largest eigenvalue of K), so this fails at
-    the start instead of after the run has filled with NaN. Under whitening (`factors` None)
-    the prior is c |xi|^2, curvature 2 c in every direction, and the bound is lr * c < 1.
-    Passing it is necessary, not sufficient: the data and rate terms add curvature of their
-    own (`_check_sgld_step_resolves_the_loss`). Adam rescales its steps and needs no such check.
-    """
-    if factors is None:
-        step = tc.lr * prior_coefficient(tc)
-        if step >= 1:
-            raise ValueError(
-                f"SGLD with lr={tc.lr:g} diverges on the whitened spatial prior alone: lr * "
-                f"weight_lambda / (2 beta) = {step:.3g} must be < 1; lower lr or "
-                "weight_lambda, or raise beta"
-            )
-        return
-    stiffest = max(
+def prior_stiffness(factors: dict[str, tuple[Tensor, Tensor]]) -> float:
+    """lambda_max(M_rows) lambda_max(M_cols) of the stiffest parameter: the prior term
+    c * tr(M_rows W M_cols W^T) has curvature 2 c times this along its stiffest direction. A
+    wide kernel makes it large (up to 1 / min_rel_eig over the largest eigenvalue of K per
+    factor). The whitened prior c |xi|^2 has stiffness 1 in every direction."""
+    return max(
         torch.linalg.eigvalsh(rows)[-1].item() * torch.linalg.eigvalsh(cols)[-1].item()
         for rows, cols in factors.values()
     )
-    step = tc.lr * prior_coefficient(tc) * stiffest
+
+
+def _check_sgld_step_resolves_the_prior(stiffness: float, prior: str, tc: TrainConfig) -> None:
+    """Raise if an SGLD step of size lr is unstable on the prior term alone, whose curvature
+    along its stiffest direction is 2 c `stiffness` (c = `prior_coefficient(tc)` = weight_lambda
+    / (2 beta); `prior_stiffness`): an Euler step on a quadratic of curvature k diverges once
+    lr * k >= 2, so lr * c * stiffness >= 1 fails at the start instead of after the run has
+    filled with NaN. `prior` names the prior in the message. Passing it is necessary, not
+    sufficient: the data and rate terms add curvature of their own
+    (`_check_sgld_step_resolves_the_loss`). Adam rescales its steps and needs no such check.
+    """
+    step = tc.lr * prior_coefficient(tc) * stiffness
     if step >= 1:
         raise ValueError(
-            f"SGLD with lr={tc.lr:g} diverges on the spatial prior alone: lr * weight_lambda / "
-            f"(2 beta) * lambda_max(M) = {step:.3g} must be < 1 (lambda_max(M) = "
-            f"{stiffest:.3g}); lower lr or weight_lambda, raise beta, or widen the floor "
-            "min_rel_eig"
+            f"SGLD with lr={tc.lr:g} diverges on the {prior} alone: lr * weight_lambda / "
+            f"(2 beta) * stiffness = {step:.3g} must be < 1 (stiffness {stiffness:.3g}); lower "
+            "lr or weight_lambda, or raise beta"
         )
 
 
@@ -259,7 +251,7 @@ def make_weight_penalty(cfg: Config, net: Net) -> WeightPenalty:
         return type(net).weight_l2
     if cfg.is_whitened:
         if cfg.train.optimizer == "sgld":
-            _check_sgld_step_resolves_the_prior(None, cfg.train)
+            _check_sgld_step_resolves_the_prior(1.0, "whitened spatial prior", cfg.train)
         return type(net).weight_l2
     spaces = build_spaces(cfg.spatial, m=net.D_in, N=net.N, L=net.L, n_out=net.D_out)
     factors64 = parameter_factors(spaces)
@@ -271,7 +263,12 @@ def make_weight_penalty(cfg: Config, net: Net) -> WeightPenalty:
             f"{sorted(names)}"
         )
     if cfg.train.optimizer == "sgld":
-        _check_sgld_step_resolves_the_prior(factors64, cfg.train)
+        _check_sgld_step_resolves_the_prior(
+            prior_stiffness(factors64),
+            "spatial prior (stiffness lambda_max(M_rows) lambda_max(M_cols), which a wider "
+            "floor min_rel_eig lowers)",
+            cfg.train,
+        )
     factors = {
         name: (rows.to(net.device, net.dtype), cols.to(net.device, net.dtype))
         for name, (rows, cols) in factors64.items()

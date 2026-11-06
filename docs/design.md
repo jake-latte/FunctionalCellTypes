@@ -368,6 +368,7 @@ WeightPenalty = Callable[[Net], Tensor]   # 0-d for an MLP, (B,) for an ensemble
 def per_member(net, t, reduce=torch.sum) -> Tensor   # reduce over every axis but the member axis (all axes for an MLP)
 def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None or its parametrisation is "whitened" (the plain |xi|^2), else the spatial prior for net's sizes, dtype and device
     # for SGLD refuses a step the prior's stiffest curvature cannot take, on either path; ValueError if the net's parametrisation is not the config's
+def prior_stiffness(factors) -> float   # max over parameters of lambda_max(M_rows) lambda_max(M_cols): the prior's curvature is 2 prior_coefficient times it along its stiffest direction (1 under whitening)
 def make_net_from_config(cfg: Config, D_in, D_out, device, dtype) -> Net   # make_net of cfg.net; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) and xi ~ N(0, I / weight_lambda); the one place a Config becomes a net
 def largest_hessian_eigenvalue(loss_fn, params, n_iter=20, seed=0) -> float   # power iteration on Hessian-vector products (double backward); local generator, parameters and .grad untouched
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)

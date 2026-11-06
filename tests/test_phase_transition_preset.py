@@ -26,7 +26,7 @@ from fct.exp import (
     with_axes,
 )
 from fct.spatial import build_spaces, parameter_factors, periodic_gaussian_kernel
-from fct.train import _check_sgld_step_resolves_the_prior, load_trained
+from fct.train import _check_sgld_step_resolves_the_prior, load_trained, prior_stiffness
 
 DS = [1, 2, 3, 4]
 LAMBDAS = [0.1, 0.5, 0.75, 0.9, 0.99]
@@ -152,7 +152,8 @@ def test_sgld_is_stable_at_the_preset_lr_for_all_settings():
     for setting in settings:
         cfg = setting_config(exp, setting)
         # raises ValueError if lr * weight_lambda / (2 beta) * stiffest curvature >= 1
-        _check_sgld_step_resolves_the_prior(parameter_factors(_spaces(cfg)), cfg.train)
+        stiffness = prior_stiffness(parameter_factors(_spaces(cfg)))
+        _check_sgld_step_resolves_the_prior(stiffness, "spatial prior", cfg.train)
 
 
 def _reduced_setting():

@@ -23,6 +23,7 @@ from fct.spatial import (
     whitening_matrix,
 )
 from fct.train import (
+    _check_sgld_step_resolves_the_prior,
     _step,
     compute_loss,
     largest_hessian_eigenvalue,
@@ -31,6 +32,7 @@ from fct.train import (
     make_net_from_config,
     make_weight_penalty,
     prior_coefficient,
+    prior_stiffness,
     train,
     train_from_config,
 )
@@ -414,6 +416,19 @@ def test_the_prior_only_step_bound_under_whitening_is_lr_times_weight_lambda_ove
     adam = _cfg("adam", lr=1.0, weight_lambda=4.0, beta=1.0)  # Adam rescales its steps
     _, net = _setup(adam)
     assert make_weight_penalty(adam, net) is type(net).weight_l2
+
+
+def test_one_prior_step_bound_serves_both_paths():
+    """lr * weight_lambda / (2 beta) * stiffness >= 1 is refused, the message naming the prior,
+    lr and the stiffness; the penalty's stiffness is lambda_max(M_rows) lambda_max(M_cols) of
+    its stiffest parameter, the whitened prior's is 1."""
+    tc = TrainConfig(optimizer="sgld", lr=0.5, weight_lambda=2.0, beta=1.0)  # coefficient 1
+    with pytest.raises(ValueError, match=r"lr=0\.5 diverges on the some prior alone.*= 2\b"):
+        _check_sgld_step_resolves_the_prior(4.0, "some prior", tc)  # 0.5 * 1 * 4 = 2
+    _check_sgld_step_resolves_the_prior(1.9, "some prior", tc)  # 0.95
+    eye, twice = torch.eye(3, dtype=F64), 2 * torch.eye(2, dtype=F64)
+    factors = {"U": (eye, twice), "V": (3 * eye, 5 * twice)}
+    assert prior_stiffness(factors) == pytest.approx(30.0)
 
 
 def test_largest_hessian_eigenvalue_of_a_quadratic_is_its_largest_curvature():
