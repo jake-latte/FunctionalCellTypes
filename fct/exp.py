@@ -378,12 +378,14 @@ def exp_path(root: Path) -> Path:
 
 def exp_text(exp: ExpConfig) -> str:
     """The text of exp.json. `description` is left out when None, `B` when it is the library
-    default and `linear_teacher.teacher` when it is "gaussian", so an exp.json holds only what
-    departs from the defaults and an absent `B` or `teacher` means the default. Leaving out
-    `B` keeps exp.json files written before it existed byte-identical; `teacher` follows the
-    same rule, so a Gaussian-teacher exp.json stays minimal and the pinned texts in
-    test_phase_transition_preset.py moved only by the rename of `latent_range` to
-    `latent_min` / `latent_max` (files that still spell `latent_range` are rejected)."""
+    default, `linear_teacher.teacher` when it is "gaussian" and `spatial.parametrisation`
+    when it is "penalty", so an exp.json holds only what departs from the defaults and an
+    absent `B`, `teacher` or `parametrisation` means the default. Leaving out `B` and
+    `parametrisation` keeps exp.json files written before they existed byte-identical;
+    `teacher` follows the same rule, so a Gaussian-teacher exp.json stays minimal and the
+    pinned texts in test_phase_transition_preset.py moved only by the rename of
+    `latent_range` to `latent_min` / `latent_max` (files that still spell `latent_range` are
+    rejected)."""
     exclude: dict[str, Any] = {}
     if exp.description is None:
         exclude["description"] = True
@@ -391,6 +393,8 @@ def exp_text(exp: ExpConfig) -> str:
         exclude["B"] = True
     if exp.linear_teacher.teacher == "gaussian":
         exclude["linear_teacher"] = {"teacher"}
+    if exp.spatial is not None and exp.spatial.parametrisation == "penalty":
+        exclude["spatial"] = {"parametrisation": True}
     return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
 
 

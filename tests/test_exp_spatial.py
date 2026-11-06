@@ -1,6 +1,8 @@
 """Spatial experiments: the `spatial` section, spatial axes, the two spatial presets, short labels
 for dict-valued axes, and that experiments without a spatial section are unchanged (CPU only)."""
 
+import json
+
 import numpy as np
 import pytest
 import torch
@@ -12,6 +14,7 @@ from fct.exp import (
     ExpConfig,
     _label_part,
     data_config,
+    exp_text,
     expand,
     load_exp,
     preset,
@@ -256,6 +259,18 @@ def test_spatial_tiny_runs_end_to_end_and_resumes(tmp_path, capsys):
     capsys.readouterr()
     assert main(["exp", "status", root]) == 0
     assert "2 done, 0 partial, 0 missing, 0 stale" in capsys.readouterr().out
+
+
+def test_exp_json_names_the_parametrisation_only_when_it_is_whitened():
+    """An exp.json written before the field existed stays byte-identical (the penalty is left
+    out), and a whitened experiment writes the field and loads back to itself."""
+    penalty = preset("spatial_tiny")
+    assert "parametrisation" not in json.loads(exp_text(penalty))["spatial"]
+    assert ExpConfig.model_validate_json(exp_text(penalty)) == penalty
+    spatial = penalty.spatial.model_copy(update={"parametrisation": "whitened"})
+    whitened = penalty.model_copy(update={"spatial": spatial})
+    assert json.loads(exp_text(whitened))["spatial"]["parametrisation"] == "whitened"
+    assert ExpConfig.model_validate_json(exp_text(whitened)) == whitened
 
 
 def test_a_parametrisation_axis_trains_the_penalty_and_the_whitened_prior_side_by_side(
