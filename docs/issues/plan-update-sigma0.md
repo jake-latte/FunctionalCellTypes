@@ -31,6 +31,21 @@ outcomes change the dictionary and the sampling protocol).
 - The rate coefficient is $r$ = `rate_lambda` (after the two rate items);
   the dictionary row and every `--set rate_lambda=` value are restated
   ($g^2 = 1$ at $\beta = 0.25$ was `rate_lambda = 2.0`; it becomes `1.0`).
+- The analysis module is `fct/spectrum.py` (the plan says `fct/tuning_maps.py`
+  at its lines 266 and 429); W7 and W9 import from `fct.spectrum`.
+- Prediction 6's frame (PI decision pending). The spectrum-module review
+  showed that even on $[0, a]$ the contrast singular values are degenerate in
+  expectation ($Pa^2/12$ each), so the SVD contrast frame $(u_2, u_3)$ is a
+  random rotation within the contrast plane and $\langle\cos 4\theta\rangle$,
+  which is not rotation-invariant, is only defined relative to that random
+  frame; histograms from different datasets are not comparable. On symmetric
+  latents ($[-a, a]$) all $K$ singular values are degenerate and the "mean
+  direction" is undefined; `latent_basis` now refuses such data. The plan must
+  state the frame prediction 6 uses; the candidate is the orthonormalised
+  latent axes themselves (Gram--Schmidt on $z_2$ then $z_3$, which keeps the
+  axis of $z_2$ exact and makes the statistic a statement about the latents
+  rather than about a random frame), with the limits note's oblique-frame bias
+  re-derived for that frame.
 - The summary of conclusions and the order of work list the new item slugs.
 
 ## Acceptance criteria
