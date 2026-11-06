@@ -282,6 +282,7 @@ def test_summaries_agree_with_the_script_on_random_spectra(limits):
     for N in (8, 16, 64):
         d = rng.exponential(size=N)
         d = 0.5 * (d + np.roll(d[::-1], 1))  # even in q, as a spectrum of a real map
+        d[0] = max(d[0], d[N // 2])  # q_1/2 needs d_0 >= d_{N/2}
         d_t = torch.from_numpy(d)
         summary = sp.spectrum_summary(d_t)
         np.testing.assert_allclose(sp.autocorrelation(d_t).numpy(), limits.autocorrelation(d))
