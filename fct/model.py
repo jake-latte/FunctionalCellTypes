@@ -121,13 +121,12 @@ class MLP(torch.nn.Module):
         for name, size in {"D_in": D_in, "D_out": D_out, "N": N, "L": L}.items():
             if size < 1:
                 raise ValueError(f"{name} must be >= 1, got {size}")
-        if not init_std > 0:
-            raise ValueError(f"init_std must be positive, got {init_std}")
+        if not 0 < init_std < math.inf:
+            raise ValueError(f"init_std must be positive and finite, got {init_std}")
 
         def init(*shape: int) -> torch.Tensor:
-            w = torch.randn(shape, device=device, dtype=dtype, generator=generator)
-            # Left untouched at 1.0 so the standard draw is reproduced bit for bit.
-            return w if init_std == 1.0 else init_std * w
+            # 1.0 * w is w bit for bit, so the standard draw is reproduced exactly.
+            return init_std * torch.randn(shape, device=device, dtype=dtype, generator=generator)
 
         # Drawn in this order (U, V, then J) so a seed always gives the same weights.
         U, V = init(N, D_in), init(N, D_out)

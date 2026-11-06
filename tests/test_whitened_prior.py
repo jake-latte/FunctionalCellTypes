@@ -234,6 +234,12 @@ def test_init_std_scales_the_standard_normal_draw():
         assert torch.equal(p, 0.25 * q), name
 
 
+@pytest.mark.parametrize("init_std", [0.0, -1.0, float("inf"), float("nan")])
+def test_init_std_must_be_positive_and_finite(init_std):
+    with pytest.raises(ValueError, match="init_std"):
+        make_net(_net_cfg(), D_IN, D_OUT, CPU, F64, init_std=init_std)
+
+
 def test_the_state_dict_holds_xi_under_the_parameter_names_and_nothing_else():
     for net in (_whitened_net(), _whitened_net(B=3)):
         assert set(net.state_dict()) == {"U", "J.0", "V"}
