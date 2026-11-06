@@ -32,22 +32,30 @@ import torch
 from torch import Tensor
 
 N_THETA_BINS = 36
-# u_1 must be the mean direction: its cosine with the constant pattern vector must reach this
-# fraction of sqrt(3K / (3K + 1)), the value for iid latents on [0, a]. Symmetric latents give
-# O(P^-1/2) instead (0.07 at P = 256, K = 3), because their K singular values are degenerate.
+# u_1 is the mean direction only if the top singular value stands clear of the others. For iid
+# latents on [0, a], s_1^2 / s_2^2 -> 3K + 1 (7 at K = 2); for symmetric latents it is
+# 1 + O(P^-1/2). The gap is required to reach MIN_GAP, and the cosine of u_1 with the constant
+# pattern vector to reach MEAN_DIRECTION_FRACTION of its [0, a] value sqrt(3K / (3K + 1)).
+# Simulated rates, 2 x 10^5 draws per cell (false rejection of [0, a] latents / false
+# acceptance of symmetric ones, both checks together):
+#   P = 16: K = 2  0 / 1.7%,  K = 3  0 / 0.7%,  K = 4  0 / 0.4%
+#   P = 32: K = 2  0 / 0.05%, K = 3  0 / 0.02%, K = 4  0 / 0.003%
+#   P = 64: 0 / 0 for K = 2, 3, 4
+# At P = 16, K <= 3 the two distributions overlap, so no threshold has both zero false
+# rejection and false acceptance below 0.1%; MIN_GAP keeps false rejection at zero.
+MIN_GAP = 2.0
 MEAN_DIRECTION_FRACTION = 0.5
-# Sokal's window: sum the autocorrelation up to the first lag W >= SOKAL_C * tau(W). With
-# tau = 1 + 2 sum_k rho_k this C = 5 is Sokal's c = 10 in his tau_int = 1/2 + sum_k rho_k
-# convention (emcee pairs them the same way).
-SOKAL_C = 5.0
-# The window is searched up to a quarter of the chain, where the autocorrelation estimate is
-# still reliable.
-MAX_WINDOW_FRACTION = 0.25
-# Independent records need a window of W >= SOKAL_C lags within n/4, which a short chain can
-# miss by sampling noise alone: of 10^4 simulated chains of independent records, 19% fail at
-# 20 records, 3% at 40, 0.6% at 60 and 0.03% at 100. The minimum keeps such spurious
-# "chain too short" errors rare; a correlated chain needs proportionally more records.
-MIN_SEM_RECORDS = 100
+# Geyer's initial monotone sequence: pairs Gamma_m = rho_{2m} + rho_{2m+1} are summed while
+# positive (made non-increasing), over lags up to half the chain.
+MAX_LAG_FRACTION = 0.5
+# A chain shorter than MIN_EFFECTIVE_RECORDS correlation times (n < 20 tau) is too short for
+# its tau to be trusted, and raises rather than return an underestimate.
+MIN_EFFECTIVE_RECORDS = 20
+# Even independent records can look too short by sampling noise, and one element failing fails
+# the whole call. In simulation (1.3 x 10^6 elements of independent records, calls of 8192
+# elements): at 100 records 2.6e-5 of elements fail and 19% of calls; at 150 and 200 records,
+# no element or call failed. 200 leaves a margin.
+MIN_SEM_RECORDS = 200
 _LATENT_NAME = re.compile(r"z(\d+)")
 
 
@@ -59,11 +67,10 @@ class LatentBasis(NamedTuple):
 
 class Summary(NamedTuple):
     # each field is a Python number for one spectrum (N,) and a tensor (...) for (..., N)
-    q_half: int | Tensor  # half-power |q|
     share0: float | Tensor  # d_0 / sum_q d_q
     lag1: float | Tensor  # R(1) / R(0)
     d0: float | Tensor  # d_0
-    d_nyq: float | Tensor  # d_{N/2}, the floor of q_half
+    d_nyq: float | Tensor  # d_{N/2}, the floor of half_power_q
     R: Tensor  # (..., N) autocorrelation R(r), r = 0..N-1
 
 
@@ -141,16 +148,24 @@ def _number_if_0d(x: Tensor) -> float | int | Tensor:
 
 
 # ------------------------------------------------------------------ basis and maps
-def _check_mean_direction(U: Tensor) -> None:
-    """Raise unless u_1 is the mean direction (see MEAN_DIRECTION_FRACTION)."""
+def _check_mean_direction(U: Tensor, S: Tensor) -> None:
+    """Raise unless u_1 is the mean direction (see MIN_GAP and MEAN_DIRECTION_FRACTION)."""
     P, K = U.shape
+    if K >= 2:
+        gap = float((S[0] / S[1]) ** 2)
+        if gap < MIN_GAP:
+            raise ValueError(
+                f"the latents look symmetric about 0: s_1^2 / s_2^2 = {gap:.2f} < {MIN_GAP}, so "
+                "the top singular values are near-degenerate and the mean direction is "
+                "undefined; latent_basis needs latents on [0, a]"
+            )
     cosine = float(U[:, 0].sum()) / math.sqrt(P)
     threshold = MEAN_DIRECTION_FRACTION * math.sqrt(3 * K / (3 * K + 1))
     if cosine < threshold:
         raise ValueError(
             f"the latents look symmetric about 0: cos(u_1, 1) = {cosine:.3f} < {threshold:.3f}, "
-            "so the top singular values are near-degenerate and the mean direction is undefined; "
-            "latent_basis needs latents on [0, a]"
+            "so u_1 is not along the mean and the mean direction is undefined; latent_basis "
+            "needs latents on [0, a]"
         )
 
 
@@ -159,11 +174,14 @@ def latent_basis(factors: Mapping[str, Tensor]) -> LatentBasis:
 
     `factors` must be exactly z0..z{K-1} (1-D, length P); they are stacked by index, so z10
     follows z9, and names that collide (z1, z01) raise. Raises for K >= P, for rank-deficient
-    Z (its frame would be arbitrary), and unless u_1 is the mean direction: the cosine of u_1
-    with the constant pattern vector must be at least MEAN_DIRECTION_FRACTION (1/2) of
-    sqrt(3K / (3K + 1)), its value for iid latents on [0, a]. Symmetric latents (on [-a, a])
-    fail this: their singular values are degenerate up to O(P^-1/2) noise and the SVD frame is
-    then a random rotation of col(Z).
+    Z (its frame would be arbitrary), and unless u_1 is the mean direction. For K >= 2 that
+    needs a gap s_1^2 / s_2^2 >= MIN_GAP (2; its [0, a] value is 3K + 1), and for every K
+    the cosine of u_1 with the constant pattern vector must be at least
+    MEAN_DIRECTION_FRACTION (1/2) of sqrt(3K / (3K + 1)), its value for iid latents on
+    [0, a]. Symmetric latents (on [-a, a]) fail: their singular values are degenerate up to
+    O(P^-1/2) noise and the SVD frame is then a random rotation of col(Z). In simulation the
+    checks never rejected [0, a] latents (P >= 16) and accepted symmetric ones in 1.7% of
+    draws at P = 16, K = 2, 0.05% at P = 32 and none at P = 64 (rates at MIN_GAP).
     """
     if not factors:
         raise ValueError("factors holds no latents z0..z{K-1}")
@@ -188,7 +206,7 @@ def latent_basis(factors: Mapping[str, Tensor]) -> LatentBasis:
     if S[-1] <= P * torch.finfo(Z.dtype).eps * S[0]:
         raise ValueError(f"Z is rank-deficient: singular values {S.tolist()}")
     U = U * torch.where(U.sum(dim=0) >= 0, 1.0, -1.0).to(U.dtype)
-    _check_mean_direction(U)
+    _check_mean_direction(U, S)
     return LatentBasis(U=U, s2=S.square(), Z=Z)
 
 
@@ -249,48 +267,51 @@ def autocorrelation(d: Tensor) -> Tensor:
     return torch.fft.ifft(d, dim=-1).real
 
 
-def _half_power_q(d: Tensor) -> Tensor:
-    """(..., N) -> (...) int64; d already validated (finite, even N)."""
-    N = d.shape[-1]
-    k = torch.arange(N, device=d.device)
-    q = torch.minimum(k, N - k)  # |q| of each FFT-order index
-    d0, floor = d[..., :1], d[..., N // 2 : N // 2 + 1]
-    if (d0 < floor).any():
-        bad = (d0 < floor).nonzero()[0].tolist()[:-1]
-        where = f" at batch index {bad}" if bad else ""
-        raise ValueError(
-            f"half-power frequency undefined: d_0 < d_N/2{where} (d_0 = "
-            f"{float(d0[..., 0][tuple(bad)])}, d_N/2 = {float(floor[..., 0][tuple(bad)])}); "
-            "the spectrum rises "
-            "with |q|"
-        )
-    above = (d - floor) >= 0.5 * (d0 - floor)  # always true at q = 0
-    return torch.where(above, q, -1).amax(dim=-1)
-
-
 def _check_spectrum(d: Tensor) -> int:
     _check_float("d", d, 1)
+    if d.numel() == 0:
+        raise ValueError(f"d is empty (shape {tuple(d.shape)}): no spectra to summarise")
     return _check_even_last_dim("the spectrum", d)
 
 
 def half_power_q(d: Tensor) -> int | Tensor:
     """Largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2: (..., N) FFT order -> (...).
 
-    Raises if d_0 < d_{N/2} (the spectrum rises to Nyquist and has no half-power point).
+    A statistic of a mean spectrum (averaged over records or members), not of one
+    realisation: in one record d_0 and d_{N/2} are single chi^2 draws, so their order is
+    noise (a map with mean D_0 = 100 D_{N/2} still has d_0 < d_{N/2} with probability
+    (2/pi) atan(sqrt(D_{N/2}/D_0)) = 6%). Raises if d_0 < d_{N/2} anywhere: the spectrum then
+    rises to Nyquist and has no half-power point.
     """
-    _check_spectrum(d)
-    return _number_if_0d(_half_power_q(d))
+    N = _check_spectrum(d)
+    k = torch.arange(N, device=d.device)
+    q = torch.minimum(k, N - k)  # |q| of each FFT-order index
+    d0, floor = d[..., :1], d[..., N // 2 : N // 2 + 1]
+    rising = (d0 < floor)[..., 0]
+    if rising.any():
+        first = rising.nonzero()[0].tolist()
+        where = f"{int(rising.sum())} of {rising.numel()} spectra, first at batch index {first}"
+        raise ValueError(
+            f"half-power frequency undefined: d_0 < d_N/2 in {where} (d_0 = "
+            f"{float(d0[..., 0][tuple(first)])}, d_N/2 = {float(floor[..., 0][tuple(first)])}); "
+            "the spectrum rises with |q|. half_power_q needs a mean spectrum"
+        )
+    above = (d - floor) >= 0.5 * (d0 - floor)  # always true at q = 0
+    return _number_if_0d(torch.where(above, q, -1).amax(dim=-1))
 
 
 def spectrum_summary(d: Tensor) -> Summary:
-    """q_1/2, the q = 0 share, lag-1, d_0, d_{N/2} and R of spectra d (..., N), FFT order."""
+    """The q = 0 share, lag-1, d_0, d_{N/2} and R of spectra d (..., N), FFT order.
+
+    Well defined for one record of one map; the half-power frequency is not, and is a
+    separate call on a mean spectrum (`half_power_q`).
+    """
     N = _check_spectrum(d)
     total = d.sum(dim=-1)
     if (total <= 0).any():
         raise ValueError(f"d must have positive total power, got sums down to {float(total.min())}")
     R = autocorrelation(d)
     return Summary(
-        q_half=_number_if_0d(_half_power_q(d)),
         share0=_number_if_0d(d[..., 0] / total),
         lag1=_number_if_0d(R[..., 1] / R[..., 0]),
         d0=_number_if_0d(d[..., 0]),
@@ -329,10 +350,12 @@ def contrast_angle_statistic(t2: Tensor, t3: Tensor) -> float | Tensor:
     """<cos 4 theta_i> over neurons, theta_i = atan2(t3_i, t2_i): (..., N) -> (...).
 
     t2, t3 are rows 1 and 2 of `tuning_maps` (the contrasts u_2, u_3) of one network each.
-    0 for a rotation-invariant (t2, t3), positive for tuning aligned with the axes, negative
-    along the diagonals. Meaningful only in an orthonormal frame: an oblique pair squeezes an
-    isotropic cloud along its bisector and biases the value negative. A silent neuron
-    (t2 = t3 = 0) has atan2(0, 0) = 0 and counts as axis-aligned.
+    0 for a rotation-invariant (t2, t3), positive for tuning aligned with the SVD contrast axes
+    (u_2, u_3), negative along their diagonals. These are not the latent axes: at K = 3 the
+    three latents project onto the contrast plane 120 degrees apart, so cos 4 theta does not
+    detect tuning to individual latents. Meaningful only in an orthonormal frame: an oblique
+    pair squeezes an isotropic cloud along its bisector and biases the value negative. A
+    silent neuron (t2 = t3 = 0) has atan2(0, 0) = 0 and counts as axis-aligned.
     """
     _check_angle_inputs(t2, t3)
     return _number_if_0d(torch.cos(4 * _theta(t2, t3)).mean(dim=-1))
@@ -366,9 +389,12 @@ def average_records(records: Tensor, burn_in: int) -> Tensor:
 def _c0_and_tau(x: Tensor) -> tuple[Tensor, Tensor]:
     """(C(0) (...), tau (...)) of records x (n, ...), already checked by `_check_sem_records`.
 
-    C(0) is the biased variance; tau = 1 + 2 sum_{k=1}^{W} rho_k with Sokal's window, from the
-    biased autocovariance by FFT (zero-padded to 2n, so the correlation is linear, not
-    circular). Constant elements have rho = 0 and tau = 1.
+    C(0) is the biased variance and rho_k = C(k) / C(0) the autocorrelation, by FFT (zero-padded
+    to 2n, so the correlation is linear, not circular). tau is Geyer's initial monotone
+    sequence estimator: Gamma_m = rho_{2m} + rho_{2m+1} is summed over the initial run of
+    positive pairs, made non-increasing, tau = -1 + 2 sum_m Gamma_m. Pairing cancels the
+    alternation of anticorrelated components, so a slow component under a fast alternating
+    one is still seen. Constant elements have rho = 0 and tau = 1.
     """
     n = x.shape[0]
     centred = x - x.mean(dim=0)
@@ -377,23 +403,32 @@ def _c0_and_tau(x: Tensor) -> tuple[Tensor, Tensor]:
     c0 = acov[0].clamp(min=0)
     constant = c0 <= 0
     rho = torch.where(constant, torch.zeros_like(acov), acov / torch.where(constant, 1.0, c0))
+    rho[0] = 1.0
 
-    max_window = int(MAX_WINDOW_FRACTION * n)
-    tau_of_window = 1 + 2 * rho[1 : max_window + 1].cumsum(dim=0)  # (max_window, ...)
-    windows = torch.arange(1, max_window + 1, dtype=x.dtype, device=x.device)
-    windows = windows.reshape((-1,) + (1,) * (x.ndim - 1))
-    reached = windows >= SOKAL_C * tau_of_window
-    if not reached.any(dim=0).all():
+    n_pairs = int(MAX_LAG_FRACTION * n) // 2
+    gamma = rho[0 : 2 * n_pairs : 2] + rho[1 : 2 * n_pairs : 2]  # (n_pairs, ...)
+    ended = gamma <= 0
+    if not ended.any(dim=0).all():
         raise ValueError(
-            f"chain too short: the autocorrelation window is not reached within {max_window} "
-            f"of {n} records for {int((~reached.any(dim=0)).sum())} element(s)"
+            f"chain too short: the autocorrelation pairs stay positive up to lag {2 * n_pairs} "
+            f"of {n} records for {int((~ended.any(dim=0)).sum())} element(s)"
         )
-    first = reached.to(torch.int8).argmax(dim=0, keepdim=True)
-    tau = tau_of_window.gather(0, first).squeeze(0)
-    # Sokal's window assumes positive correlations: anticorrelated records (tau < 1) meet it
-    # trivially at small W, where tau can even be negative. tau = 1 treats them as independent,
-    # which overstates their standard error: the safe side for a diagnostic.
-    return c0, tau.clamp(min=1.0)
+    run = ended.to(torch.int8).argmax(dim=0, keepdim=True)  # first non-positive pair
+    m = torch.arange(n_pairs, device=x.device).reshape((-1,) + (1,) * (x.ndim - 1))
+    monotone = gamma.cummin(dim=0).values
+    tau = -1 + 2 * torch.where(m < run, monotone, 0.0).sum(dim=0)
+    if (tau <= 0).any():
+        raise ValueError(
+            f"non-positive tau estimate {float(tau.min()):.3g}: the records alternate so strongly "
+            "at lag 1 that their integrated autocorrelation time is not resolved"
+        )
+    if (n < MIN_EFFECTIVE_RECORDS * tau).any():
+        raise ValueError(
+            f"chain too short: tau up to {float(tau.max()):.3g} leaves fewer than "
+            f"{MIN_EFFECTIVE_RECORDS} correlation times in {n} records for "
+            f"{int((n < MIN_EFFECTIVE_RECORDS * tau).sum())} element(s)"
+        )
+    return c0, tau
 
 
 def _check_sem_records(records: Tensor, burn_in: int) -> Tensor:
@@ -401,19 +436,21 @@ def _check_sem_records(records: Tensor, burn_in: int) -> Tensor:
     if x.shape[0] < MIN_SEM_RECORDS:
         raise ValueError(
             f"need at least {MIN_SEM_RECORDS} records after burn-in, got {x.shape[0]}: shorter "
-            "chains miss the autocorrelation window by sampling noise"
+            "chains of even independent records look too short by sampling noise"
         )
     return x
 
 
 def integrated_autocorr_time(records: Tensor, burn_in: int) -> Tensor:
-    """tau = 1 + 2 sum_{k=1}^{W} rho_k per element, (R, ...) -> (...), Sokal's window.
+    """tau = 1 + 2 sum_k rho_k per element, (R, ...) -> (...), Geyer's initial monotone sequence.
 
-    W is the first lag with W >= SOKAL_C * tau(W) (Sokal 1997; SOKAL_C = 5 here is his c = 10,
-    see the constant), searched up to a quarter of the chain; raises if some element's window
-    is not reached there (the chain is too short for its correlation time) and for fewer than
-    MIN_SEM_RECORDS (100) records after burn-in, below which independent records fail by
-    sampling noise. tau is clamped at 1 from below (anticorrelated records; constant ones).
+    The sum runs over the initial positive run of pairs rho_{2m} + rho_{2m+1} (Geyer 1992),
+    up to lag n/2; tau < 1 for anticorrelated records. Raises if some element's pairs stay
+    positive throughout, if tau leaves fewer than MIN_EFFECTIVE_RECORDS (20) correlation times
+    in the chain (it is too short to trust), if tau <= 0, and for fewer than MIN_SEM_RECORDS
+    (200) records after burn-in, below which independent records fail by sampling noise (at
+    100 records about 1 call in 5 over 8192 elements; none seen at 200). Any failing element
+    fails the call.
     """
     _, tau = _c0_and_tau(_check_sem_records(records, burn_in))
     return tau
@@ -424,7 +461,7 @@ def record_sem(records: Tensor, burn_in: int) -> Tensor:
 
     n / tau is the effective number of independent records, C(0) the variance of the records
     and tau their integrated autocorrelation time (`integrated_autocorr_time`, with its
-    window, minimum of 100 records and clamp). A diagnostic: comparing it across burn-in
+    checks and minimum of 200 records). A diagnostic: comparing it across burn-in
     values, or with the spread across members, shows whether the chain has equilibrated; it is
     not the error of a per-network estimator.
     """
