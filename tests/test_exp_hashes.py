@@ -3,15 +3,20 @@
 `fixtures/preset_hashes.json` was computed with the code that defined the presets in Python
 (`lambda_exp` at its 7 log-spaced points per axis): for each preset the
 experiment hash, and for each setting its train hash (`section_hash("data", "net", "train")`),
-its mean-field (solve) hash and its directory. A renamed or restructured experiment must not
-move any of them, or finished runs would be taken for stale.
+its mean-field (solve) hash and its directory. The train and solve hashes were recomputed when
+the data section's `latent_range` became `latent_min` / `latent_max` (a field rename, so every
+hash holding the data section moved); the experiment hashes and directories are the original
+ones. A renamed or restructured experiment must not move any of them, or finished runs would be
+taken for stale.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
+from fct.config import Config, load_config
 from fct.exp import (
     ExpConfig,
     exp_hash,
@@ -25,6 +30,7 @@ from fct.exp import (
     with_axes,
 )
 from fct.meanfield import meanfield_hash
+from tests.pinned_runs import LEGACY_CONFIG_FILE
 
 PINNED = json.loads((Path(__file__).parent / "fixtures" / "preset_hashes.json").read_text())
 
@@ -80,3 +86,51 @@ def test_a_shared_B_and_a_one_value_B_axis_hash_alike_but_name_different_directo
     assert shared_paths != [s.relpath for s in expand(axis)]
     assert exp_hash(shared) != exp_hash(axis)
     assert not same_experiment(shared, axis)
+
+
+# --- the linear teacher's map type (`data.teacher`) -----------------------------------------
+HASHED_SECTIONS = [
+    ("data",),
+    ("data", "net", "train"),
+    ("data", "net", "train", "meanfield"),
+    ("data", "net", "train", "analysis"),
+]
+
+
+def _with_teacher(cfg: Config, teacher: str) -> Config:
+    dump = cfg.model_dump()
+    return Config.model_validate({**dump, "data": {**dump["data"], "teacher": teacher}})
+
+
+def _data_hash_without_teacher(cfg: Config) -> str:
+    """The data hash as computed before `teacher` existed: the canonical dump lacking the key."""
+    hashed = cfg.model_dump(include={"data", "dtype"})
+    del hashed["data"]["teacher"]
+    return hashlib.sha256(json.dumps(hashed, sort_keys=True).encode()).hexdigest()[:12]
+
+
+@pytest.mark.parametrize("name", [*sorted(PINNED), "legacy_config"])
+def test_the_gaussian_teacher_hashes_as_a_data_section_without_the_field(name):
+    # Fails if section_hash keeps `teacher` for the Gaussian teacher. The train, solve and
+    # result hashes that include the data are guarded by the pins (preset_hashes.json,
+    # meanfield_hashes.json), which hold no `teacher`.
+    if name == "legacy_config":
+        configs = [load_config(LEGACY_CONFIG_FILE)]
+    else:
+        configs = [setting_config(preset(name), s) for s in expand(preset(name))]
+    for cfg in configs:
+        assert cfg.data.teacher == "gaussian"
+        assert cfg.section_hash("data") == _data_hash_without_teacher(cfg)
+
+
+@pytest.mark.parametrize("sections", HASHED_SECTIONS)
+def test_an_orthonormal_teacher_moves_every_hash_that_holds_the_data(sections):
+    cfg = load_config(LEGACY_CONFIG_FILE)
+    assert _with_teacher(cfg, "orthonormal").section_hash(*sections) != cfg.section_hash(*sections)
+
+
+def test_the_teacher_does_not_enter_hashes_without_the_data():
+    cfg = load_config(LEGACY_CONFIG_FILE)
+    ortho = _with_teacher(cfg, "orthonormal")
+    for sections in [("net",), ("train",), ("meanfield",), ("net", "train")]:
+        assert ortho.section_hash(*sections) == cfg.section_hash(*sections)

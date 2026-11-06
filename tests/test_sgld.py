@@ -18,11 +18,12 @@ from fct.train import compute_loss, prior_coefficient, train
 CPU, F64 = torch.device("cpu"), torch.float64
 
 # Hashes of the default config (adam), which the SGLD-only fields must not move. They are those
-# of LOSS_VERSION 4, MODEL_VERSION 2 without `meanfield.readout`, the meanfield one with the
+# of LOSS_VERSION 4, MODEL_VERSION 2 without `meanfield.readout` and with the latent interval
+# as `latent_min` / `latent_max`, the meanfield one with the
 # solver's step control (`config.STEP_CONTROL_FIELDS`); at MODEL_VERSION 1 the train hash is
 # the one written before the optimiser fields existed (test_spatial_prior pins it).
-DEFAULT_TRAIN_HASH = "542a8cb8b9da"
-DEFAULT_TRAIN_MEANFIELD_HASH = "7dec609a0877"
+DEFAULT_TRAIN_HASH = "97e1aa717ba3"
+DEFAULT_TRAIN_MEANFIELD_HASH = "feeae8d33c73"
 
 
 # ---------------------------------------------------------------- the optimiser itself

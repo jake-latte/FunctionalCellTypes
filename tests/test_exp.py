@@ -477,3 +477,30 @@ def test_an_unreadable_final_is_stale_not_a_crash(tiny, tmp_path):
 def test_a_B_of_zero_is_rejected():
     with pytest.raises(ValidationError, match="B"):
         ExpConfig.model_validate({**preset("tiny").model_dump(), "B": 0})
+
+
+# --- linear-teacher parameters -------------------------------------------------------------
+
+
+def _with_teacher(exp: ExpConfig, **teacher) -> dict:
+    dump = exp.model_dump()
+    return {**dump, "linear_teacher": {**dump["linear_teacher"], **teacher}}
+
+
+def test_the_latent_interval_reaches_the_data_config(tiny):
+    exp = ExpConfig.model_validate(_with_teacher(tiny, latent_min=0.0, latent_max=2.0))
+    setting = next(s for s in expand(exp) if s.task == "linear_teacher")
+    data = setting_config(exp, setting).data
+    assert (data.latent_min, data.latent_max) == (0.0, 2.0)
+
+
+def test_an_experiment_with_latent_range_names_its_replacements(tiny):
+    teacher = {k: v for k, v in tiny.linear_teacher.model_dump().items() if "latent_m" not in k}
+    dump = {**tiny.model_dump(), "linear_teacher": {**teacher, "latent_range": 1.0}}
+    with pytest.raises(ValueError, match="latent_range.*latent_min.*latent_max"):
+        ExpConfig.model_validate(dump)
+
+
+def test_an_experiment_with_an_empty_latent_interval_is_refused(tiny):
+    with pytest.raises(ValueError, match="latent_min.*latent_max"):
+        ExpConfig.model_validate(_with_teacher(tiny, latent_min=1.0, latent_max=1.0))

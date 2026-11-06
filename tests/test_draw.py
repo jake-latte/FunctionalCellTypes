@@ -350,7 +350,7 @@ def test_fig_example_outputs_title_puts_the_legend_below_the_axes(title):
         y_true=torch.randn(2, 4),
         y_pred=torch.randn(2, 4),
     )
-    cfg = DataConfig(task="linear_teacher", P=8, D_in=4, n_latents=2, latent_range=1.0)
+    cfg = DataConfig(task="linear_teacher", P=8, D_in=4, n_latents=2)
     fig = draw.fig_example_outputs("linear_teacher", outputs, cfg, title=title)
     fig.canvas.draw()
     legend = fig.legends[0].get_window_extent()

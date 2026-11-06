@@ -22,8 +22,9 @@ from fct.config import (
 # Section hashes key cached artefacts, so the dumped JSON of the defaults must not change
 # unintentionally (adding a config field changes every hash that includes its section, so old
 # caches become stale). The data pin is a literal; the sections that include train are rebuilt
-# from canonical JSON, which also holds the loss version.
-DATA_HASH = "37d33c6aae26"
+# from canonical JSON, which also holds the loss version. DATA_HASH moved once deliberately,
+# when `latent_range` was renamed to `latent_min` / `latent_max`.
+DATA_HASH = "292f74b412b0"
 TRAIN_SECTIONS = [
     ("data", "net", "train"),
     ("data", "net", "train", "meanfield"),
@@ -43,7 +44,7 @@ _POSITIVE_INT = {
     AnalysisConfig: ["n_grid", "n_components", "n_cols"],
 }  # fmt: skip
 _POSITIVE_FLOAT = {
-    DataConfig: ["var", "latent_range"],
+    DataConfig: ["var"],
     NetConfig: ["g"],
     TrainConfig: ["lr"],
     MeanFieldConfig: ["beta", "learning_prefactor", "prior_scale", "alpha"],
@@ -141,6 +142,7 @@ def test_train_section_hashes_hold_the_loss_version(sections):
     }
     del payload["train"]["optimizer"], payload["train"]["beta"]  # adam: SGLD fields not hashed
     del payload["net"]["B"]  # a single network (B = 1): the ensemble size is not hashed
+    del payload["data"]["teacher"]  # Gaussian teacher maps: the map type is not hashed
     if "meanfield" in sections:  # hashed in its flat pre-split layout, see hash_payload
         payload["meanfield"] = cfg.meanfield.hash_payload()
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]

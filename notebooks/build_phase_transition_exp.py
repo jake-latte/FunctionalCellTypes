@@ -433,7 +433,8 @@ EXAMPLES_TEXT = r"""## Example outputs
 
 Every member's output $\hat y^{b}_\mu = V_b^\top \phi(h^{(L)}_{b\mu}) / N$ against the target
 $y_\mu = W_Y z_\mu$ for `N_EXAMPLES` points $\mu$ drawn at random from the **lattice test set**: the
-$3^k$ points of the latent lattice $z \in \{-a, 0, a\}^k$, which the nets were not trained on.
+$3^k$ points of the latent lattice $z \in \{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}^k$
+(`latent_min`, the midpoint and `latent_max`), which the nets were not trained on.
 All members are on the same axes, **one palette colour per member** (member $b$ has the $b$-th
 colour of matplotlib's default cycle, the same in both panels, named in the legend); there are at most
 as many members as the palette has colours, and a larger ensemble raises an error rather than repeat

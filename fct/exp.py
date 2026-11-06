@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
 import numpy as np
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, FiniteFloat, ValidationError, model_validator
 
 from fct.cache import (
     CachePaths,
@@ -58,8 +58,11 @@ from fct.config import (
     PosFloat,
     PosInt,
     StrictModel,
+    Teacher,
     TrainConfig,
+    check_latent_interval,
     load_config,
+    reject_latent_range,
     resolve_device,
     resolve_dtype,
     save_config,
@@ -152,7 +155,20 @@ class Setting:
 class LinearTeacherParams(StrictModel):
     n_features: PosInt  # m: dimension of both x and y
     n_latents: PosInt
-    latent_range: PosFloat
+    latent_min: FiniteFloat
+    latent_max: FiniteFloat
+    teacher: Teacher = "gaussian"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _latent_range_was_replaced(cls, data: Any) -> Any:
+        reject_latent_range(data)
+        return data
+
+    @model_validator(mode="after")
+    def _latent_interval_is_nonempty(self) -> Self:
+        check_latent_interval(self.latent_min, self.latent_max)
+        return self
 
 
 class ObjectActionParams(StrictModel):
@@ -256,7 +272,9 @@ def _task_fields(exp: ExpConfig, task: str) -> dict:
         return {
             "D_in": params.n_features,
             "n_latents": params.n_latents,
-            "latent_range": params.latent_range,
+            "latent_min": params.latent_min,
+            "latent_max": params.latent_max,
+            "teacher": params.teacher,
         }
     return params.model_dump()
 
@@ -359,15 +377,20 @@ def exp_path(root: Path) -> Path:
 
 
 def exp_text(exp: ExpConfig) -> str:
-    """The text of exp.json. `description` is left out when None and `B` when it is the library
-    default, so exp.json files written before those fields existed (and the pinned texts in
-    test_phase_transition_preset.py) stay byte-identical; an absent `B` therefore means the
-    default."""
-    exclude = set()
+    """The text of exp.json. `description` is left out when None, `B` when it is the library
+    default and `linear_teacher.teacher` when it is "gaussian", so an exp.json holds only what
+    departs from the defaults and an absent `B` or `teacher` means the default. Leaving out
+    `B` keeps exp.json files written before it existed byte-identical; `teacher` follows the
+    same rule, so a Gaussian-teacher exp.json stays minimal and the pinned texts in
+    test_phase_transition_preset.py moved only by the rename of `latent_range` to
+    `latent_min` / `latent_max` (files that still spell `latent_range` are rejected)."""
+    exclude: dict[str, Any] = {}
     if exp.description is None:
-        exclude.add("description")
+        exclude["description"] = True
     if exp.B == NetConfig().B:
-        exclude.add("B")
+        exclude["B"] = True
+    if exp.linear_teacher.teacher == "gaussian":
+        exclude["linear_teacher"] = {"teacher"}
     return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
 
 

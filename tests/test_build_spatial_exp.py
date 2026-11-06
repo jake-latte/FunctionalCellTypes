@@ -145,16 +145,16 @@ def test_the_guarded_cell_runs_its_body_only_when_trained():
 # ---------------------------------------------------------------- the test-set picks
 
 
-def test_trial_picks_spread_over_the_sign_patterns_sorted_by_the_chosen_latent():
+def test_trial_picks_spread_over_the_lattice_sorted_by_the_chosen_latent():
     """On the 3^k lattice sorted by z0 the picks run from its smallest value to its largest and
-    are distinct sign patterns."""
+    are distinct lattice points."""
     ns: dict = {"np": np, "torch": torch}
     for source in (sp.DATA_KERNEL, sp.TRIALS):
         for node in ast.parse(source).body:
             if isinstance(node, ast.FunctionDef):
                 exec(ast.unparse(node), ns)  # noqa: S102 - the notebook's own function
     k, a = 2, 1.0
-    cfg = DataConfig(task="linear_teacher", P=4, D_in=3, n_latents=k, latent_range=a)
+    cfg = DataConfig(task="linear_teacher", P=4, D_in=3, n_latents=k, latent_min=-a, latent_max=a)
     maps = torch.eye(3, k, dtype=torch.float64)
     reference = Dataset(
         x=torch.zeros(4, 3, dtype=torch.float64),
@@ -169,7 +169,7 @@ def test_trial_picks_spread_over_the_sign_patterns_sorted_by_the_chosen_latent()
     order = ns["sample_order"](test.factors, "z0", len(test.x))
     picks = ns["spread_trials"](order, 4)
     z = torch.stack([test.factors["z0"], test.factors["z1"]], dim=1)[picks]
-    assert len(set(map(tuple, z.tolist()))) == 4  # four different sign patterns
+    assert len(set(map(tuple, z.tolist()))) == 4  # four different lattice points
     assert z[0, 0] == -a and z[-1, 0] == a  # smallest to largest z0
     assert bool((z[1:, 0] >= z[:-1, 0]).all())  # in the order of the sorting latent
 

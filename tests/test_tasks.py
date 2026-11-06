@@ -1,6 +1,7 @@
 """The linear-teacher, object-action and what-where task generators."""
 
 import itertools
+import json
 
 import pytest
 import torch
@@ -19,7 +20,7 @@ MOVES = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
 
 SMALL = {
     "position": {"P": 50, "D_in": 8, "d": 2},
-    "linear_teacher": {"P": 50, "D_in": 6, "n_latents": 3, "latent_range": 2.0},
+    "linear_teacher": {"P": 50, "D_in": 6, "n_latents": 3, "latent_min": -2.0, "latent_max": 2.0},
     "object_action": {"P": 50, "D_in": 18, "grid_size": 3, "max_objects": 2},
     "what_where": {"P": 50, "D_in": 81, "n_motifs": 5},
 }
@@ -155,13 +156,61 @@ def test_embed_is_position_only():
 # --- linear teacher -----------------------------------------------------------------------
 
 
-def test_linear_teacher_latents_are_uniform_on_the_range():
-    cfg = _cfg("linear_teacher", P=20_000, latent_range=2.0)
+def test_linear_teacher_latents_are_uniform_on_a_symmetric_interval():
+    cfg = _cfg("linear_teacher", P=20_000, latent_min=-2.0, latent_max=2.0)
     ds = make_dataset(cfg, CPU, F64)
     z = torch.stack([ds.factors[f"z{i}"] for i in range(3)], dim=1)
     assert z.abs().max() <= 2.0
     assert z.mean(dim=0).abs().max() < 0.05
     assert torch.allclose(z.var(dim=0), torch.full((3,), 4.0 / 3, dtype=F64), rtol=0.05)
+
+
+def test_linear_teacher_default_draws_are_bitwise_the_symmetric_formula():
+    # The default interval [-1, 1] must reproduce `2 * rand - 1` on the same stream, so the
+    # latents and both teacher maps (drawn after them) are unchanged for existing configs.
+    cfg = DataConfig(task="linear_teacher", P=50, D_in=6, n_latents=3)
+    ds = make_dataset(cfg, CPU, F64)
+    gen = torch.Generator().manual_seed(cfg.seed)
+    z = 2 * torch.rand((50, 3), dtype=F64, generator=gen) - 1
+    w_x = torch.randn((6, 3), dtype=F64, generator=gen) / 3**0.5
+    w_y = torch.randn((6, 3), dtype=F64, generator=gen) / 3**0.5
+    assert torch.equal(torch.stack([ds.factors[f"z{i}"] for i in range(3)], dim=1), z)
+    assert torch.equal(ds.extras["W_X"], w_x) and torch.equal(ds.extras["W_Y"], w_y)
+
+
+def test_linear_teacher_latents_on_zero_one_have_mean_one_half():
+    cfg = _cfg("linear_teacher", P=20_000, latent_min=0.0, latent_max=1.0)
+    ds = make_dataset(cfg, CPU, F64)
+    z = torch.stack([ds.factors[f"z{i}"] for i in range(3)], dim=1)
+    assert z.min() >= 0.0 and z.max() <= 1.0
+    assert torch.allclose(z.mean(dim=0), torch.full((3,), 0.5, dtype=F64), atol=0.01)
+
+
+@pytest.mark.parametrize("bounds", [(1.0, 1.0), (1.0, -1.0)])
+def test_latent_min_must_be_below_latent_max(bounds):
+    with pytest.raises(ValueError, match="latent_min.*latent_max"):
+        _cfg("linear_teacher", latent_min=bounds[0], latent_max=bounds[1])
+
+
+@pytest.mark.parametrize("field", ["latent_min", "latent_max"])
+def test_latent_bounds_must_be_finite(field):
+    with pytest.raises(ValidationError, match=field):
+        _cfg("linear_teacher", **{field: float("inf") if field == "latent_max" else -float("inf")})
+
+
+def test_an_interval_whose_width_overflows_is_rejected():
+    # Both bounds are finite but hi - lo is inf, which would make every latent non-finite.
+    with pytest.raises(ValueError, match="latent_max - latent_min"):
+        _cfg("linear_teacher", latent_min=-1e308, latent_max=1e308)
+
+
+def test_latent_range_is_rejected_naming_its_replacements(tmp_path):
+    with pytest.raises(ValueError, match="latent_range.*latent_min.*latent_max"):
+        DataConfig(task="linear_teacher", latent_range=1.0)
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"data": {"task": "linear_teacher", "latent_range": 1.0}}))
+    with pytest.raises(ValueError, match="latent_range.*latent_min.*latent_max"):
+        load_config(path)
 
 
 def test_linear_teacher_x_and_y_are_linear_in_the_latents():
@@ -185,6 +234,48 @@ def test_linear_teacher_latents_are_recoverable_from_x_and_x_to_y_has_rank_k():
 def test_linear_teacher_weights_have_variance_one_over_k():
     ds = make_dataset(_cfg("linear_teacher", D_in=400, n_latents=4), CPU, F64)
     assert ds.extras["W_X"].var().item() == pytest.approx(0.25, rel=0.15)
+
+
+def test_the_default_teacher_is_gaussian():
+    assert DataConfig().teacher == "gaussian"
+
+
+@pytest.mark.parametrize("key", ["W_X", "W_Y"])
+def test_orthonormal_teacher_maps_have_orthonormal_columns(key):
+    ds = make_dataset(_cfg("linear_teacher", D_in=10, teacher="orthonormal"), CPU, F64)
+    w = ds.extras[key]
+    assert w.shape == (10, 3)
+    assert (w.T @ w - torch.eye(3, dtype=F64)).abs().max() < 1e-12
+
+
+def test_orthonormal_teacher_orthonormalises_the_gaussian_draws_and_keeps_the_latents():
+    gaussian = make_dataset(_cfg("linear_teacher"), CPU, F64)
+    ortho = make_dataset(_cfg("linear_teacher", teacher="orthonormal"), CPU, F64)
+    for name, z in gaussian.factors.items():
+        assert torch.equal(ortho.factors[name], z)
+    for key in ("W_X", "W_Y"):
+        w, q = gaussian.extras[key], ortho.extras[key]
+        # q is the Gram-Schmidt basis of w's columns: w = q r with r upper triangular, r_jj > 0
+        r = q.T @ w
+        assert torch.allclose(q @ r, w, atol=1e-12)
+        assert torch.allclose(r, r.triu(), atol=1e-12) and (r.diagonal() > 0).all()
+    z = torch.stack([ortho.factors[f"z{i}"] for i in range(3)], dim=1)
+    assert torch.allclose(ortho.x, z @ ortho.extras["W_X"].T)
+    assert torch.allclose(ortho.y, z @ ortho.extras["W_Y"].T)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, F64])
+@pytest.mark.parametrize("key", ["W_X", "W_Y"])
+def test_each_orthonormal_column_points_the_way_of_its_gaussian_column(dtype, key):
+    cfg = _cfg("linear_teacher", D_in=10, n_latents=4)
+    w = make_dataset(cfg, CPU, dtype).extras[key]
+    q = make_dataset(cfg.model_copy(update={"teacher": "orthonormal"}), CPU, dtype).extras[key]
+    assert ((w * q).sum(dim=0) > 0).all()
+
+
+def test_an_unknown_teacher_is_rejected_naming_the_field():
+    with pytest.raises(ValidationError, match="teacher"):
+        _cfg("linear_teacher", teacher="uniform")
 
 
 @pytest.mark.parametrize("m", [3, 2])

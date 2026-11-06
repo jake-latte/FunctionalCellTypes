@@ -128,6 +128,11 @@ Models are stored as `state_dict` and rebuilt from the config with `make_net`.
 ## config.py
 
 ```python
+Teacher = Literal["gaussian", "orthonormal"]       # the linear teacher's map type (DataConfig, LinearTeacherParams)
+def reject_latent_range(data: Any) -> None        # ValueError naming latent_min / latent_max if a raw mapping
+                                                  # still carries the removed latent_range (a before-validator of both models)
+def check_latent_interval(latent_min, latent_max) -> None   # ValueError unless latent_min < latent_max and
+                                                  # latent_max - latent_min is finite (an after-validator of both models)
 class DataConfig(BaseModel):      # model_config = ConfigDict(extra="forbid") on every model
     task: Literal["position", "linear_teacher", "object_action", "what_where"] = "position"
     P: int = 4096; D_in: int = 64
@@ -136,7 +141,12 @@ class DataConfig(BaseModel):      # model_config = ConfigDict(extra="forbid") on
     cov: list[list[float]] | None = None          # None -> identity
     embedding: Literal["linear", "fourier"] = "fourier"
     # linear_teacher
-    n_latents: int = 3; latent_range: float = 1.0   # k latents, uniform on [-a, a]
+    n_latents: int = 3                              # k latents, iid uniform on [latent_min, latent_max]
+    latent_min: float = -1.0; latent_max: float = 1.0   # finite, latent_min < latent_max with a finite difference; a config with the
+                                                    # removed latent_range fails naming these two
+    teacher: Teacher = "gaussian"                   # Literal["gaussian", "orthonormal"]. W_X, W_Y: iid N(0, 1/k), or the
+                                                    # sign-canonical Q factor of those same draws (orthonormal columns,
+                                                    # feature variance ~k/m lower); hashed only when "orthonormal"
     # object_action
     grid_size: int = 5; max_objects: int = 3        # G x G grid, 0..A objects
     # what_where
@@ -212,6 +222,7 @@ class Config(BaseModel):
     def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `LOSS_VERSION` when `train` is), first 12 hex chars; >=1 section required
         # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
         # with `net`: net.B dropped when it is 1, so every single-network cache keeps its hash
+        # with `data`: data.teacher dropped when it is "gaussian", so every Gaussian-teacher cache keeps its hash
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -220,7 +231,7 @@ def resolve_device(cfg: Config) -> torch.device   # "auto" -> cuda if available 
 def resolve_dtype(name: str) -> torch.dtype
 ```
 
-`task` selects the generator and only that task's fields are read; the fields of other tasks are ignored but still enter the cache hash (changing one makes an existing data cache stale). Fields are range-constrained (sizes and intervals >= 1, rates and scales > 0, `target_accept` in (0,1), `tilt_floor` in [0,1); `D_in` must be even for the position task with `embedding="fourier"`; for `linear_teacher`, `D_in` (the number of features m of both x and y) must exceed `n_latents`; `max_objects` >= 0 while `n_latents`, `grid_size`, `n_motifs` are >= 1 and `latent_range` > 0; `max_objects <= grid_size**2`, `n_motifs <= 511`, and for `object_action` / `what_where` `D_in` must equal the fixed 2*G*G / 81), and `load_config` raises `ValidationError` naming the field.
+`task` selects the generator and only that task's fields are read; the fields of other tasks are ignored but still enter the cache hash (changing one makes an existing data cache stale). Fields are range-constrained (sizes and intervals >= 1, rates and scales > 0, `target_accept` in (0,1), `tilt_floor` in [0,1); `D_in` must be even for the position task with `embedding="fourier"`; for `linear_teacher`, `D_in` (the number of features m of both x and y) must exceed `n_latents`; `max_objects` >= 0 while `n_latents`, `grid_size`, `n_motifs` are >= 1; `latent_min < latent_max`; `max_objects <= grid_size**2`, `n_motifs <= 511`, and for `object_action` / `what_where` `D_in` must equal the fixed 2*G*G / 81), and `load_config` raises `ValidationError` naming the field.
 
 ## activations.py
 
@@ -284,7 +295,12 @@ because the config imports `TASK_SPECS`.
 
 ```python
 def linear_teacher(cfg, device, dtype) -> Dataset   # Q = period = None
-    # Z (P,k) iid U[-a,a]; W_X, W_Y (m,k) iid N(0,1/k), m = cfg.D_in; x = Z W_X^T, y = Z W_Y^T, both (P,m)
+    # Z (P,k) iid U[latent_min, latent_max] (lo + (hi - lo) * rand; the default [-1, 1] is 2 * rand - 1 bit for bit); W_X, W_Y (m,k) iid N(0,1/k), m = cfg.D_in; x = Z W_X^T, y = Z W_Y^T, both (P,m)
+    # teacher = "orthonormal": W_X, W_Y replaced by the Q of torch.linalg.qr(W, mode="reduced") of the same draws,
+    # each column's sign fixed so diag(R) >= 0 (a zero diagonal counts as +1): canonical, a function of the Gaussian
+    # draws (column j has positive overlap with W[:, j]) independent of LAPACK backend and dtype, not Haar-distributed.
+    # W^T W = I_k; same random stream, so Z is the Gaussian teacher's. Scale: a Gaussian column has norm ~ sqrt(m/k),
+    # an orthonormal one norm 1, so the variance of each feature of x and y falls by about k/m
     # factors z0..z{k-1} (float); one singleton group per latent; extras W_X, W_Y
 def object_action(cfg, device, dtype) -> Dataset   # Q = period = None
     # G x G grid, cell = row*G + col; agent cell uniform; #objects uniform on 0..A; distinct object cells drawn
@@ -310,8 +326,8 @@ def resample(cfg, reference: Dataset, seed, device, dtype) -> Dataset
     # definition in reference.extras (object_action has none: the new seed is enough). Generators are unchanged.
 def latent_lattice_dataset(cfg, reference: Dataset) -> Dataset
     # linear_teacher only (ValueError naming the task otherwise; ValueError if reference.extras lacks W_X / W_Y): one
-    # row per point of {-a, 0, a}^k, a = latent_range, 3^k rows, z0 slowest and the last latent fastest, values in
-    # the order (-a, 0, a); x = z W_X^T, y = z W_Y^T with the reference's maps; factors z0..z{k-1}, singleton groups,
+    # row per point of {lo, (lo + hi)/2, hi}^k, lo = latent_min, hi = latent_max, 3^k rows, z0 slowest and the last
+    # latent fastest, values in the order (lo, (lo + hi)/2, hi); x = z W_X^T, y = z W_Y^T with the reference's maps; factors z0..z{k-1}, singleton groups,
     # extras = reference.extras; device and dtype of reference.x
 ```
 
@@ -907,7 +923,7 @@ MODULARITY_EXP_AXES = {"data.task": EXP_TASKS, "net.L": LAYERS, "net.phi": PHIS,
     # consumers read axes explicitly, e.g. setting.axes["net.L"]
 MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda"); EXP_OWNED_AXES: dict[axis, the experiment field to change instead]
 class ExpConfig(StrictModel)   # description: str | None = None (what the experiment is; documentation only: in no hash, directory name, setting.json record or same_experiment check; omitted from exp.json when None), N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
-                             # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
+                             # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_min, latent_max, teacher = "gaussian"), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
     # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, weight_lambda,
@@ -933,7 +949,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
 # [A-Za-z_][A-Za-z0-9_]*. Files are read at call time, so a new file is seen at once with an editable install; a wheel holds the files it was built with.
 def preset(name, directory=None) -> ExpConfig    # the base experiment <directory or fct/presets>/<name>.json, read through importlib.resources (so also from inside a wheel) and validated; PresetError (an ExpError, so a ValueError) naming the full path if the name is unknown (the message lists the presets and the ignored files) or the file is unreadable or invalid
 def preset_names(directory=None) -> list[str]     # sorted, found at call time: regular files `<stem>.json` with stem matching [A-Za-z_][A-Za-z0-9_]*; folders (even `x.json`), dotfiles, a bare `.json`, README and other files are ignored; `*.json` files whose stem breaks the rule are reported by the unknown-preset error
-def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json (UTF-8; every writer goes through write_exp_text, which writes a .tmp sibling and renames it; exp_text(exp) leaves `description` out when it is None and `B` out when it equals `NetConfig().B`, so an experiment without them has the text it had before those fields existed; an absent `B` means the default); load raises FileNotFoundError naming the path
+def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json (UTF-8; every writer goes through write_exp_text, which writes a .tmp sibling and renames it; exp_text(exp) leaves `description` out when it is None, `B` out when it equals `NetConfig().B` and `linear_teacher.teacher` out when it is "gaussian", so an experiment without them has the text it had before those fields existed; an absent `B` or `teacher` means the default); load raises FileNotFoundError naming the path
 def same_experiment(a, b) -> bool                      # every field equal except `description` (model_dump(exclude={"description"})); used wherever two experiments are compared (lrtune's trial root, migrate's resume check)
 def expand(exp) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given exp.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow an experiment in a fresh ROOT)
 def get_setting(exp, index) -> Setting                 # ExpError (a ValueError) "index i is out of range; valid indices are 0..N-1"
@@ -976,7 +992,9 @@ keeps the old (in)consistency instead of judging it: a record left by an earlier
 deletes settings) is renamed too and reported as "kept from an earlier experiment", with ", `exp run` refuses it, as before" when its
 directory belongs to the current experiment under another hash. `plan_migration` reads and checks everything and writes nothing: the
 converted file must validate as `ExpConfig` (a legacy file that does not, say one carrying the removed `meanfield.readout`, is refused
-naming the field: the old code could not load it either, so the folder's results are stale under the current code), every
+naming the field: the old code could not load it either, so the folder's results are stale under the current code; one whose
+linear teacher spells `latent_range` is refused with both readings, [-a, a] and [0, a], and the hand edit to `latent_min` /
+`latent_max` for each, since the file cannot tell which interval drew its latents), every
 setting.json must be readable JSON with exactly one of the two hash keys, and a record with the experiment's own hash must have the
 `index` and `axes` that the experiment gives its directory. `apply_plan` then converts the setting files, writes exp.json, and removes
 sweep.json last, each file by `<name>.tmp` and `os.replace`; a failed write (an `OSError`) leaves a folder that running the command
@@ -1307,7 +1325,7 @@ The computation layer of the phase-transition notebook: one setting of a `phase_
 
 - `load_phase_run(root, values, device="cpu") -> PhaseRun(setting, net, history, epoch, spaces, dataset)`: `select_setting` plus the weights of a done setting (`load_trained`) or the latest checkpoint of a partial one (`load_latest_checkpoint`, `epoch` = epochs reached); a missing or stale setting has `net = history = None`, `epoch = 0`, and its training set is generated in memory (nothing is written into a setting never run). `spaces` come from the config alone. `ValueError` for `net.B < 2`.
 - `unit_order(positions, sort_dim)`: stable argsort of the units by one coordinate; `ValueError` unless `0 <= sort_dim < d`.
-- `random_test_set(data_cfg, train, n_points, seed=None) -> RandomTestSet(dataset, seed)`: `fct.tasks.resample` with `P = n_points`, so the samples are new but the teacher maps are the training set's. Default seed is the data seed + `TEST_SEED_OFFSET`, and the seed used is returned. The 3^k latent-lattice set (`get_latent_lattice_dataset`) stays the test set of the A plots.
+- `random_test_set(data_cfg, train, n_points, seed=None) -> RandomTestSet(dataset, seed)`: `fct.tasks.resample` with `P = n_points`, so the samples are new (latents uniform on [`latent_min`, `latent_max`]) but the teacher maps are the training set's. `ValueError` unless `data_cfg` regenerates the training set exactly, which fixes `P`, `D_in`, `n_latents`, `latent_min`, `latent_max`, `teacher` and `seed`; the message prints them. Default seed is the data seed + `TEST_SEED_OFFSET`, and the seed used is returned. The 3^k latent-lattice set (`get_latent_lattice_dataset`) stays the test set of the A plots.
 - Prior factors, per weight layer (`layer_priors(spaces, weight_lambda, n_eig) -> [LayerPrior]`): `covariance_factors` = K^post / sqrt(lambda_w), K^pre / sqrt(lambda_w), whose Kronecker product is K^post (x) K^pre / lambda_w, the prior as configured (not what training samples: the penalty floors K's small eigenvalues); `effective_covariance_factors` = M^-1 / sqrt(lambda_w) on each side, product (lambda_w M^post (x) M^pre)^-1, which is what the networks were trained under; `penalty_factors` = sqrt(lambda_w) M^post, sqrt(lambda_w) M^pre, product lambda_w M^post (x) M^pre (the loss's quadratic form without 1 / 2 beta). lambda_w multiplies the Kronecker product once, so each factor carries its square root (symmetric in post and pre); under `spatial.lambda_max` weight_lambda is 1 and the split is the identity. Spectra: the covariance and effective covariance keep the `n_eig` LARGEST eigenvalues, descending; the penalty keeps the `n_eig` SMALLEST, ascending, because its largest eigenvalues are all the floor value (a flat line; at N 512, lambda_max 0.1 it covers 27-99% of the hidden eigenvalues for d = 4..1). `LayerPrior.floors` gives, per population, `n_floored`, `fraction_floored`, `covariance_floor` and `penalty_ceiling` (on the plotted scale) for drawing the floor line.
 - `ensemble_statistics(history) -> EnsembleStatistics(epoch, mean, sem)` for `ENSEMBLE_KEYS` (loss, mse, weight_l2, rate_l2; `weight_l2` is the raw quadratic form, before its loss coefficient): sem = std(ddof=1) / sqrt(B), NaN for B = 1.
 - `member_view(net, lattice, test, spaces, n_bins, kind, n_shuffles, seed) -> MemberView(A, info_overlap, rate_overlap, weight_kernels)` for one `MLP`: the notebook's data kernels A^(l) (`spatial_view.data_kernels`, on the lattice set), `information_overlap` and `rate_overlap` of `tuning_view` (on the random test set) and `empirical_kernels` of each weight in (post, pre) orientation. `ensemble_views(net, ...)` maps it over `net.member(b)` with shuffle seed `seed + b`; `average_views` takes the elementwise mean in unit-index space (members share the embedding), after which the units are ordered for display. The averaged overlap is the mean over members of each member's own overlap matrix (a second moment over members; for the corrected MIR the per-member clamping at zero biases it upward), not the overlap of the mean tuning. `random_test_set` raises unless the training set is exactly what `data_cfg` regenerates (compared in memory, so P, D_in, n_latents, latent range and seed all count). `FloorReport.floor` records min_rel_eig times the top eigenvalue of K, the floor the penalty factors report. `load_phase_run` is read-only: a done setting whose dataset file is missing gets its training set generated in memory.

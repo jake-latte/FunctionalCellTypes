@@ -321,7 +321,7 @@ for space in SPACES:
 plt.show()"""
 
 TRAIN = """RUN = train_run(CFG, RUNS_ROOT, log=print)
-# held-out set of the same teacher: one point per sign pattern of the k latents, 3^k in all
+# held-out set of the same teacher: the lattice {lo, mid, hi}^k of the k latents, 3^k points
 TEST_DATASET = get_latent_lattice_dataset(RUN.cache_dir, CFG)
 tc = CFG.train
 sampler = f"SGLD, beta = {tc.beta:g}" if tc.optimizer == "sgld" else "Adam"
@@ -370,8 +370,10 @@ EXAMPLES_TEXT = r"""## Example outputs
 
 The trained network's output $\hat y_\mu = V^\top \phi(h^{(L)}_\mu) / N$ against the target
 $y_\mu = W_Y z_\mu$ for `N_EXAMPLES` points $\mu$ drawn at random from the **test set**: the $3^k$
-points of the latent lattice $z \in \{-a, 0, a\}^k$ ($a$ the latent range, one point per sign pattern
-of the latents, with inputs and targets from the training samples' own $W_X$ and $W_Y$), which the
+points of the latent lattice $z \in \{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}^k$ (the ends
+$z_\mathrm{lo}$ = `latent_min`, $z_\mathrm{hi}$ = `latent_max` of the latents' interval and its
+midpoint $z_\mathrm{mid} = (z_\mathrm{lo} + z_\mathrm{hi}) / 2$, with inputs and targets from the
+training samples' own $W_X$ and $W_Y$), which the
 net was not trained on. Left: one panel per sample
 with $y_{\mu a}$ (ring on a stem) and $\hat y_{\mu a}$ (diamond) for every output $a = 1, \dots, m$.
 Right: every entry $\hat y_{\mu a}$ against $y_{\mu a}$ of **all** $3^k$ test points (the examples
@@ -537,10 +539,11 @@ $(P, N)$, samples by rows, so the same matrix is `psi @ psi.T / n_pre` there). T
 (with $1/m$, over the input units) is not drawn.
 
 The activities $\psi$ are those of the **test set**: the $P_\mathrm{test} = 3^k$ points of the latent
-lattice $z \in \{-a, 0, a\}^k$ (one point per sign pattern of the $k$ latents, inputs from the
-training samples' own teacher map $W_X$; `fct.data.get_latent_lattice_dataset`), so $A^{(l)}$ is
-$(3^k \times 3^k)$ and every pair of sign patterns appears once, instead of whatever pairs the random
-training samples happen to give.
+lattice $z \in \{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}^k$ (each latent at an end of its
+interval [`latent_min`, `latent_max`] or at the midpoint $z_\mathrm{mid}$ between them; inputs from
+the training samples' own teacher map $W_X$; `fct.data.get_latent_lattice_dataset`), so $A^{(l)}$ is
+$(3^k \times 3^k)$ and every pair of lattice points appears once, instead of whatever pairs the
+random training samples happen to give.
 
 One panel per hidden layer: $A^{(l)}$ over the $P_\mathrm{test}$ points, with its own colour scale
 (symmetric about zero, since $A$ is signed) and titled with the kernel scale
@@ -549,11 +552,14 @@ $$B_{\mu\nu} = \frac{1}{k} \sum_{f=1}^{k} z_{f\mu}\, z_{f\nu} = \frac{1}{k}\, z_
 which a layer that is linear in the latents would have as its data kernel up to scale
 ($A \propto B$), so how much each $A^{(l)}$ resembles $B$ shows how far that layer is from linear.
 The points are **sorted** by the latent $z_f$ with $f$ =
-`PHI_SORT_LATENT` (0-based; `None` keeps lattice order), the ties of the three values $-a, 0, a$
-keeping lattice order. How to read it: a first layer that is
-nearly linear in $x = W_X z$ gives a dot-product-like kernel, $A_{\mu\nu} \propto z_\mu \cdot z_\nu$,
-which sorted by $z_0$ shows a rank-one $z_0 z_0^\top$ pattern: the same sign in the top-left and
-bottom-right quadrants, the opposite sign in the two off-diagonal ones. A band along the diagonal
+`PHI_SORT_LATENT` (0-based; `None` keeps lattice order), the ties of the three values
+$z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}$ keeping lattice order. How to read it: a first layer
+that is nearly linear in $x = W_X z$ gives a dot-product-like kernel,
+$A_{\mu\nu} \propto z_\mu \cdot z_\nu$, which sorted by $z_0$ shows a rank-one $z_0 z_0^\top$
+pattern. On an interval symmetric about zero (the default $[-1, 1]$) that is the same sign in the
+top-left and bottom-right quadrants and the opposite sign in the two off-diagonal ones; on an
+interval of one sign, such as $[0, a]$, every entry has the same sign and the pattern is a growth
+from the corner where $z_0$ is smallest. A band along the diagonal
 would instead mean that similarity falls with the distance $|z_{f\mu} - z_{f\nu}|$, as for
 localised tuning. This is the trained net's empirical kernel only: the library's solver has no
 spatial prior, so no theory $\Phi$ is computed here."""
@@ -630,9 +636,9 @@ sorting latent, from its smallest value to its largest:
 $$\mu_s = \pi\big(\mathrm{round}(s\, (P_\mathrm{test} - 1) / (S - 1))\big), \qquad s = 0, \dots, S - 1,$$
 with $\pi$ the sorting order of the figure above ($\mu_0 = \pi(0)$ for $S = 1$). With
 `PHI_SORT_LATENT = None`, $\pi$ is the dataset order, so the picks are evenly spaced dataset
-indices and their latents follow no order from bar group to bar group. Each test point is a sign
-pattern of the latents ($z_f \in \{-a, 0, a\}$), so the picks spread over the sign patterns, ordered by
-the sorting latent. The figure
+indices and their latents follow no order from bar group to bar group. Each test point is a
+lattice point of the latents ($z_f \in \{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}$), so the
+picks spread over the lattice, ordered by the sorting latent. The figure
 shows the latents $z_{f\mu_s}$ of the chosen samples, one group of $k$ bars per sample, labelled
 by its index $\mu_s$."""
 

@@ -9,7 +9,9 @@ the final file (net and optimiser state, history, RNG state). Regenerate them on
 behaviour is meant to change, and say so in the commit.
 
 Provenance: written by the code of `main` before the ensemble dimension (net.B) existed, so
-the pinned test proves B = 1 runs are unchanged by it. "adam" is a monitored L2 run, "sgld" an
+the pinned test proves B = 1 runs are unchanged by it. The config hashes (top level and in every
+file) were later rewritten in place, nothing else touched, when the data section's
+`latent_range` became `latent_min` / `latent_max`. "adam" is a monitored L2 run, "sgld" an
 SGLD run with a dense spatial prior.
 """
 
