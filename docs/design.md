@@ -380,9 +380,12 @@ def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
     # checkpoint every save_int epochs and at the end (final.pt); hash = section_hash("data","net","train")
     # monitor: required exactly when cfg.train.monitor_int > 0 (ValueError otherwise, before anything runs)
+    # ValueError, before anything runs, if the net's parametrisation is not the config's (whitening factors exactly when cfg.is_whitened)
+    # a fresh SGLD run under "whitened" first estimates lambda_max of the loss Hessian at the initial net (largest_hessian_eigenvalue),
+    #   raises (naming lr and lambda_max, before any checkpoint) if lr * lambda_max >= 1, and logs "SGLD step check: ..." otherwise
 def train_from_config(cfg: Config, dataset: Dataset, cache_dir: Path, log=print, monitor=None) -> tuple[MLP, History]
-    # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the experiment
-def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
+    # make_net_from_config(cfg, the dataset's x and y widths, resolve_device(cfg), cfg.dtype), then train(...); shared by `fct train` and the experiment
+def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, History]   # rebuilds the net with make_net_from_config (the config's net section and, under "whitened", its whitening factors; sizes from the saved U and V) and loads final.pt's state dict into it (history incl. monitor_* keys); raises FileNotFoundError if absent
     # an EnsembleMLP and an ensemble history when cfg.net.B > 1 (load_latest_checkpoint likewise)
 def select_member(net: Net, history, member: int | None = None) -> tuple[MLP, History]   # a single net passes through (member None or 0);
     # an ensemble needs member (ValueError if None, IndexError out of range) and gives net.member(member), member_history(history, member)
@@ -1269,6 +1272,9 @@ default, and what every `config.json` written before the field existed loads as)
   not parameters and not checkpointed: a resumed run rebuilds them from the config, so resume is exact.
 - Hash: the `spatial` section enters `section_hash` with `train` only when it is set, so the caches of runs without it keep
   their hashes (pinned in `tests/test_spatial_prior.py`), and a run trained without the prior is stale for a config with it.
+  Within it `lambda_max` is hashed only when set and `parametrisation` only as `"whitened"`, and `net.init` enters the net
+  section only as `"prior"`, so every penalty run started from the standard draw keeps its hash and a whitened run, or a
+  run started from the prior, has a new one.
 - SGLD stability. The prior's stiffest curvature is `(weight_lambda / beta) lambda_max(M^post) lambda_max(M^pre)`, which a wide
   kernel makes large (up to `1 / (min_rel_eig * lambda_max(K))` per factor). An Euler step diverges once
   `lr * weight_lambda / (2 beta) * lambda_max(M^post) lambda_max(M^pre) >= 1`, so `make_weight_penalty` raises for SGLD before the
@@ -1319,6 +1325,23 @@ history keys and checkpoint layout; how their dynamics differ is below ("Dynamic
   magnitude, so when that is negative a second 20 on `H + |lambda_1| I` find the most positive one), refuses `lr * lambda_max >= 1` (half the divergence limit, naming
   `lr` and `lambda_max`) and logs the value otherwise (`SGLD step check: ...`). It runs on a fresh start only; a
   resumed run passed it when it started.
+- Dynamics. The two paths sample the same law by different dynamics, and nothing here fixes how runs on them are
+  compared.
+  - SGLD on `xi` is, in `W`, Langevin dynamics preconditioned by `S^2 = K_post (x) K_pre`: `vec W = (S_post (x) S_pre)
+    vec xi` is linear, so a step `-lr grad_xi L + noise` is `-lr (K_post (x) K_pre) grad_W L` plus noise of covariance
+    `(2 lr / beta) (K_post (x) K_pre)` in `W`. The stationary law is the same `exp(-beta L(W))`, up to the eigenvalue
+    floor of the penalty path; the relaxation times differ. Under the penalty a prior mode of variance `lambda`
+    relaxes in about `beta lambda / (weight_lambda lr)` steps (the soft modes fastest, the stiff ones setting the step
+    bound); under whitening every prior mode relaxes in `beta / (weight_lambda lr)` steps.
+  - The same `train.lr` is therefore a different step in `W` on the two paths (scaled by `K_post (x) K_pre` under
+    whitening). Adam is not invariant under the reparametrisation (its moments are elementwise, in `xi` or in `W`), so
+    its trajectories differ; only its fixed point, the MAP, agrees, up to the floor.
+  - `grad_norm` and `param_msd` are measured in the coordinates trained: `xi` under whitening, `W` under the penalty.
+    `weight_l2` is the same quantity on both paths, the prior's quadratic form `vec W^T (K_post (x) K_pre)^{-1} vec W`
+    (`|xi|^2` under whitening), with the floored kernels under the penalty.
+  - A singular `K` (or one with eigenvalues below round-off) confines `W` to the range of `S` under whitening: that is
+    the exact, degenerate prior. The penalty path instead gives those directions the floor's variance
+    `min_rel_eig lambda_max(K)`, so the two differ there.
 - Hash. `parametrisation` enters the train hash only as `"whitened"` (the `lambda_max` rule), so every penalty hash is
   unchanged and a whitened run has a new hash; `Config` requires `weight_lambda > 0` under whitening (the prior
   `N(0, K / weight_lambda)` and the initial draw need it). `min_rel_eig` is unused under whitening but still hashed.
