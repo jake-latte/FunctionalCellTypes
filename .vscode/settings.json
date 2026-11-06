@@ -1,14 +1,17 @@
 {
   // --- LaTeX Workshop: build whichever file is open ---------------------------
-  // Open a file in sections/ and build (Ctrl+Alt+B) to compile just that section;
-  // open main.tex and build to compile the whole document. No prompt.
+  // Build (Ctrl+Alt+B) whichever root file is open, with no prompt:
+  //   latex/main.tex            the whole document
+  //   latex/sections/<sec>.tex  just that section (standalone subfile build)
+  //   latex/notes/<note>.tex    that note (self-contained article)
   "latex-workshop.latex.rootFile.doNotPrompt": true,
   "latex-workshop.latex.rootFile.useSubFile": true,
 
   // --- Keep intermediate files out of the source tree -------------------------
-  // Everything a build produces (.aux, .bcf, .log, .pdf, ...) goes into build/
-  // at the repo root, for both main.tex and standalone section builds.
-  "latex-workshop.latex.outDir": "%WORKSPACE_FOLDER%/build",
+  // Everything a build produces (.aux, .bcf, .log, .pdf, ...) goes into a build/
+  // beside the root file: latex/build/, latex/sections/build/ or
+  // latex/notes/build/. Matches the Makefile and the .latexmkrc files.
+  "latex-workshop.latex.outDir": "%DIR%/build",
 
   // Optionally also delete the intermediates after every build.
   // Off by default because it forces a full rebuild (including biber) each time.

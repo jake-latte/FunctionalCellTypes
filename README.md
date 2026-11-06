@@ -297,7 +297,7 @@ uv run ruff format --check fct tests   # formatting
 
 ## Paper (LaTeX)
 
-The manuscript lives in `Latex/`; run the commands below from that directory. It is a modular LaTeX document. One file per section under `sections/`; each compiles
+The manuscript lives in `latex/`; run the commands below from that directory. It is a modular LaTeX document. One file per section under `sections/`; each compiles
 on its own (via the `subfiles` package) so sections can be worked on
 independently.
 
@@ -305,15 +305,22 @@ independently.
 
 ```sh
 make                                    # full document -> build/main.pdf
-make sec SEC=02_renormalisation_group   # one section   -> build/02_renormalisation_group.pdf
-make clean                              # removes build/
+make sec SEC=02_renormalisation_group   # one section   -> sections/build/02_renormalisation_group.pdf
+make note NOTE=continuum_limit          # one note      -> notes/build/continuum_limit.pdf
+make notes                              # every notes/*.tex -> notes/build/
+make clean                              # removes build/, sections/build/, notes/build/
 ```
 
-All intermediate files and PDFs go into `build/`, which is gitignored.
+Every build writes to a `build/` directory beside its root `.tex` file
+(`latex/`, `latex/sections/` or `latex/notes/`); these are gitignored. The
+notes in `notes/` are self-contained articles built one at a time. A bare
+`latexmk <file>.tex` run from any of those three directories does the same,
+via the `.latexmkrc` each one carries.
 
 In VS Code with LaTeX Workshop, `.vscode/settings.json` makes Ctrl+Alt+B
-compile whichever file is open (a section on its own, or everything from
-`main.tex`), writes output to `build/`, and hides that folder in the explorer.
+compile whichever file is open (the whole document from `main.tex`, a section,
+or a note), writes output to `build/` beside that file, and hides those
+folders in the explorer.
 
 ### Layout
 
