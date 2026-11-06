@@ -31,9 +31,18 @@ evaluated as S (I + S T S)^{-1} S with S = (lam_q A + sig2 I)^{1/2}, T = r I - l
 finite when lam_q A is singular.
 
 lam_q is by default the spectrum of the prior the run trains with, N(0, M^{-1}) with `post.M` the
-hidden population's penalty matrix, whose eigenvalues are max(lam_q, min_rel_eig lam_0) of the
-kernel K. `exact_kernel=True` uses K's own spectrum instead (the limits note's numbers), which
-matches a run only under a parametrisation that trains with the unfloored prior.
+hidden population's penalty matrix: the eigenvalues of M^{-1} are max(lam_q, floor), lam_q those
+of the kernel K and floor = min_rel_eig times K's top eigenvalue (`fct.spatial.penalty_matrix`,
+after any lambda_max rescaling of K). They are computed from K and the floor, not by inverting M,
+which would lose log10(1 / min_rel_eig) digits on the coarse modes. `exact_kernel=True` uses K's
+own spectrum instead (the limits note's numbers), which matches a run only under a
+parametrisation that trains with the unfloored prior. The run must be float64: a float32 run
+casts M to float32 and trains with a prior whose coarse lam_q are off by 1-2%.
+
+The latent frame is `fct.spectrum.latent_basis`, the one the measurement uses: U (column k - 1 is
+u_k, signed so that 1^T u_k >= 0) and s2 descending. It needs latents on [0, a] (u_1 the mean
+direction), so the per-mode theory refuses symmetric latents and rank-deficient Z, and its
+summaries use `fct.spectrum`'s `half_power_q` and `autocorrelation` (unitary DFT, FFT order).
 
 Dictionary (the plan's Section sec:dictionary): N = net.N; m = data.D_in; n = D_out of the task;
 P = data.P; K latents = data.n_latents, Z from dataset.factors z0..z{K-1}; the hidden prior is
@@ -56,6 +65,7 @@ import torch
 from fct.config import Config
 from fct.data import task_dims
 from fct.spatial import LayerSpace, build_spaces
+from fct.spectrum import autocorrelation, half_power_q, latent_basis
 from fct.tasks import Dataset
 
 ArrayOrTensor = np.ndarray | torch.Tensor
@@ -67,6 +77,7 @@ CIRCULANT_TOL = 1e-10  # relative agreement required between the FFT of row 0 an
 SYMMETRY_TOL = 1e-12  # relative: max |K - K^T| allowed of a kernel
 SCALAR_KERNEL_TOL = 1e-12  # relative: an input/output kernel must be amplitude * I to this
 ORTHONORMAL_TOL = 1e-10  # max |W^T W - I| of an orthonormal teacher map
+TEACHER_TOL = 1e-10  # max |x - Z W_X^T| (and for y) relative to max(1, max |x|)
 # The ansatz-free solver: Newton on the upper triangle of C~ with a finite-difference Jacobian.
 NEWTON_STEPS = 100
 NEWTON_TOL = 1e-13  # on max |F(C~) - C~| relative to max(1, |C~|)
@@ -163,15 +174,6 @@ def ring_spectrum(K: ArrayOrTensor) -> np.ndarray:
     return np.maximum(lam, 0.0)
 
 
-def penalty_spectrum(M: ArrayOrTensor) -> np.ndarray:
-    """lam_q in DFT order of the prior N(0, M^{-1}) of a symmetric circulant penalty matrix M:
-    the reciprocals of M's eigenvalues, which must be positive."""
-    mu = _circulant_spectrum("M", M)
-    if mu.min() <= 0:
-        raise ValueError(f"M has a non-positive eigenvalue {mu.min():.3g}; it is not a precision")
-    return 1.0 / mu
-
-
 def _scalar_kernel_amplitude(name: str, K: np.ndarray) -> float:
     """The a of K = a I; raises naming the population if K is not a multiple of the identity."""
     a = K[0, 0]
@@ -203,14 +205,6 @@ def latent_matrix(factors: dict[str, torch.Tensor] | None, n_latents: int) -> np
     return np.stack([_array(factors[n], f"factor {n}") for n in names], axis=1)
 
 
-def _latent_frame(Z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Thin SVD of Z: (U (P, K), s2 (K,)) with s2 descending, so column 0 is the mean direction
-    of the uniform latent task; each column is signed so that its sum is non-negative."""
-    U, s, _ = np.linalg.svd(Z, full_matrices=False)
-    U = U * np.where(U.sum(axis=0) < 0, -1.0, 1.0)
-    return U, s**2
-
-
 def uniform_latent_s2(P: int, K: int, a: float) -> np.ndarray:
     """The P >> K singular values squared of Z ~ U[0, a]^(P x K) (limits note, prop:svd):
     s_1^2 = P a^2 (3K + 1) / 12 on the mean direction, s_k^2 = P a^2 / 12 on the K - 1 contrasts."""
@@ -234,12 +228,27 @@ def _check_orthonormal_teacher(dataset: Dataset) -> None:
             )
 
 
+def _check_generated_by_teacher(dataset: Dataset, Z: np.ndarray) -> None:
+    """Raise unless x = Z W_X^T and y = Z W_Y^T for the W in dataset.extras, to TEACHER_TOL."""
+    for name, data, key in (("x", dataset.x, "W_X"), ("y", dataset.y, "W_Y")):
+        values = _array(data, f"dataset.{name}")
+        error = np.abs(values - Z @ _array(dataset.extras[key], key).T).max()
+        if error > TEACHER_TOL * max(1.0, np.abs(values).max()):
+            raise ValueError(
+                f"dataset.{name} is not Z {key}^T for the latents and the teacher map in "
+                f"dataset.extras: max deviation {error:.3g}"
+            )
+
+
 # --------------------------------------------------------------------------- parameters
+# Not comparable or hashable by value (eq=False): they hold numpy arrays, whose == is elementwise,
+# so a generated __eq__ would raise; they compare and hash by identity.
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class NetworkParameters:
-    """The network side of the dictionary, which holds for any teacher (see the module docstring)."""
+    """The network side of the dictionary, which holds for any teacher (see the module docstring).
+    Compared and hashed by identity."""
 
     N: int
     m: int
@@ -256,9 +265,10 @@ class NetworkParameters:
     r: float
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class TheoryParameters(NetworkParameters):
-    """`NetworkParameters` plus the per-mode weights of an orthonormal teacher."""
+    """`NetworkParameters` plus the per-mode weights of an orthonormal teacher. Compared and
+    hashed by identity."""
 
     n_latents: int
     U: np.ndarray  # (P, K) left singular vectors of Z
@@ -277,10 +287,19 @@ def network_parameters(
     if cfg.data.task != "linear_teacher":
         raise ValueError(f"the theory is for the linear_teacher task, got {cfg.data.task!r}")
     _check_sgld(cfg)
+    if cfg.dtype != "float64":
+        raise ValueError(
+            f"the linear theory needs a float64 run; dtype is {cfg.dtype!r}, under which the "
+            "trained prior's coarse lam_q are off by 1-2%"
+        )
     _check_nonnegative(sig2=sig2)
     spaces = _ring_spaces(cfg)
     hidden = spaces[0].post
-    lam = ring_spectrum(hidden.K) if exact_kernel else penalty_spectrum(hidden.M)
+    lam = ring_spectrum(hidden.K)
+    if not exact_kernel:
+        # The prior the run trains with, N(0, M^{-1}): `penalty_matrix` raises K's eigenvalues to
+        # report.floor = min_rel_eig * (top eigenvalue of K as built), and M inverts the result.
+        lam = np.maximum(lam, hidden.report.floor)
     # Cov(vec W) = (K_post (x) K_pre) / weight_lambda, so the scalar factors carry 1 / weight_lambda
     # and the hidden kernel enters as built.
     k0 = _scalar_kernel_amplitude("input", _array(spaces[0].pre.K)) / cfg.train.weight_lambda
@@ -315,13 +334,17 @@ def theory_parameters(
     cfg: Config, dataset: Dataset, sig2: float = 0.0, exact_kernel: bool = False
 ) -> TheoryParameters:
     """`network_parameters` plus the per-mode weights from the SVD of Z; raises unless the
-    dataset's teacher is orthonormal, the case in which those weights are the theory."""
+    dataset's teacher is orthonormal and generated x and y from the latents, the case in which
+    those weights are the theory, and unless the latents have a mean direction
+    (`fct.spectrum.latent_basis`: latents on [0, a], Z of full rank)."""
     net = network_parameters(cfg, dataset, sig2, exact_kernel)
     _check_orthonormal_teacher(dataset)
     Z = latent_matrix(dataset.factors, cfg.data.n_latents)
     if Z.shape[0] != net.P:
         raise ValueError(f"the latents have {Z.shape[0]} rows, expected data.P = {net.P}")
-    U, s2 = _latent_frame(Z)
+    _check_generated_by_teacher(dataset, Z)
+    frame = latent_basis({f"z{i}": torch.from_numpy(Z[:, i].copy()) for i in range(Z.shape[1])})
+    U, s2 = frame.U.numpy(), frame.s2.numpy()
     return TheoryParameters(
         **{f.name: getattr(net, f.name) for f in fields(NetworkParameters)},
         n_latents=cfg.data.n_latents,
@@ -361,20 +384,35 @@ def physical_root(h: ArrayOrTensor, sy2: float, delta: float) -> float:
     """The root c of eq:linear-soln on the physical branch c > sqrt(sY2 max_q h_q), by bisection.
 
     The residual rises from -inf at the pole to 1, so the root is unique. Lower bracket: the next
-    float above the pole, where the residual is -inf or very negative however close the root
-    lies, or c = delta / 2 when the pole is below that (the term -delta / c alone gives -1; no
-    target puts the pole at 0, where c -> 0 would underflow). Upper bracket: for c^2 >= 2 sY2 max h
+    float above the pole, or c = delta / 2 when the pole is below that (the term -delta / c alone
+    gives -1; no target puts the pole at 0, where c -> 0 would underflow). At the next float
+    above the pole the residual is negative unless the root itself lies within one ulp of the
+    pole: the pole's term, about sqrt(h_max / sY2) / (2 N pole eps) there, then no longer
+    outweighs the 1, which happens once sqrt(h_max / sY2) is below about 2 N eps pole. Such a
+    root cannot be resolved in float64 and is an error. Upper bracket: for c^2 >= 2 sY2 max h
     every denominator is at least c^2 / 2, so the sum is at most 2 mean(h) / c and the residual is
-    at least 1 - (delta + 2 mean h) / c, which is 1/2 at twice the larger of the two bounds.
+    at least 1 - (delta + 2 mean h) / c, which is 1/2 at twice the larger of the two bounds; a
+    bracket whose c^2 overflows float64 is an error.
     """
     h = _array(h, "h")
     _check_nonnegative(sy2=sy2)
     if not delta > 0:
         raise ValueError(f"delta must be > 0, got {delta}")
     pole = np.sqrt(sy2 * h.max())
-    lo = np.nextafter(pole, np.inf) if pole >= delta / 2 else delta / 2
+    at_pole = pole >= delta / 2
+    lo = np.nextafter(pole, np.inf) if at_pole else delta / 2
     hi = 2.0 * max(np.sqrt(2 * sy2 * h.max()), delta + 2 * h.mean())
+    if not hi < np.sqrt(np.finfo(float).max):  # compared without squaring, which would overflow
+        raise ValueError(
+            f"the root bracket overflows float64: c up to {hi:.3g}, c^2 > "
+            f"{np.finfo(float).max:.3g} (delta = {delta:.3g}, max h = {h.max():.3g})"
+        )
     r_lo, r_hi = _residual(lo, h, sy2, delta), _residual(hi, h, sy2, delta)
+    if at_pole and r_lo >= 0:
+        raise ValueError(
+            f"the root lies within one ulp of the pole c = {pole:.17g} (residual {r_lo:.3g} at "
+            "the next float): it cannot be resolved in float64"
+        )
     if not (r_lo < 0 < r_hi):
         raise ValueError(
             f"root not bracketed: residual {r_lo:.3g} at c = {lo:.6g}, {r_hi:.3g} at c = {hi:.6g}"
@@ -408,7 +446,12 @@ def solve_mode(
     pi = prior_shrunk_variance(lam, sx2, sig2, r)
     h = lam * pi
     c = physical_root(h, sy2, delta)
-    return Mode(c, pi * c**2 / (c**2 - sy2 * h), sy2 * h.max() / c**2)
+    return Mode(c, pi * c**2 / (c**2 - sy2 * h), _tau(h, sy2, c))
+
+
+def _tau(h: np.ndarray, sy2: float, c: float) -> float:
+    """tau = sY2 max_q h_q / c^2 (eq:knobs)."""
+    return sy2 * h.max() / c**2
 
 
 def per_mode_spectrum(
@@ -423,7 +466,7 @@ def target_strength(
     lam: ArrayOrTensor, sx2: float, sy2: float, sig2: float, r: float, c: float
 ) -> float:
     """tau = sY2 max_q h_q / c^2 in [0, 1): how far the mode is from the pole (eq:knobs)."""
-    return sy2 * pi_lam(lam, sx2, sig2, r).max() / c**2
+    return _tau(pi_lam(lam, sx2, sig2, r), sy2, c)
 
 
 @dataclass(frozen=True)
@@ -470,33 +513,18 @@ def predicted_spectra(
 
 
 # --------------------------------------------------------------------------- spectrum summaries
-# `_autocorrelation` and `_half_power_q` are the theory-side copies of the measurement module's
-# functions of the same name (fct/spectrum.py); they go once both modules share a base.
-
-
-def _autocorrelation(d: np.ndarray) -> np.ndarray:
-    """R(r) = (1/N) sum_q d_q e^{2 pi i q r / N}, r = 0..N-1, of a power spectrum in DFT order."""
-    return np.fft.ifft(d).real
-
-
-def _half_power_q(d: np.ndarray) -> float:
-    """Largest |q| at which d_q - d_{N/2} is at least half of d_0 - d_{N/2} (d in DFT order): the
-    Nyquist value is the measurable floor, as in the limits note's definition of q_{1/2}. Well
-    defined for a predicted (mean) spectrum, which is even and decreasing on the ring."""
-    q = np.abs(np.fft.fftfreq(d.size) * d.size)
-    floor = d[d.size // 2]
-    return float(q[(d - floor) >= 0.5 * (d[0] - floor)].max())
 
 
 class PredictedSummary(NamedTuple):
-    q_half: float
+    q_half: int  # fct.spectrum.half_power_q: defined because a prediction is a mean spectrum
     share0: float  # d_0 / sum_q d_q
-    lag1: float  # R(1) / R(0)
+    lag1: float  # R(1) / R(0), R = fct.spectrum.autocorrelation(d)
 
 
 def predicted_summary(d: ArrayOrTensor) -> PredictedSummary:
-    """(q_half, share0, lag1) of one predicted power spectrum in DFT order; an identically zero
-    spectrum (a null mode at sigma = 0) has no summary and is an error."""
+    """(q_half, share0, lag1) of one predicted power spectrum in DFT order (even N), with the
+    measurement's `half_power_q` and `autocorrelation`; an identically zero spectrum (a null mode
+    at sigma = 0) has no summary and is an error."""
     d = _array(d, "d")
     if d.ndim != 1 or d.size < 2:
         raise ValueError(f"d must be a 1-d spectrum with at least 2 entries, got shape {d.shape}")
@@ -504,8 +532,9 @@ def predicted_summary(d: ArrayOrTensor) -> PredictedSummary:
         raise ValueError(f"a power spectrum cannot be negative; min d = {d.min():.3g}")
     if not (d > 0).any():
         raise ValueError("the spectrum is identically zero: no shape to summarise")
-    R = _autocorrelation(d)
-    return PredictedSummary(_half_power_q(d), float(d[0] / d.sum()), float(R[1] / R[0]))
+    d_t = torch.from_numpy(d)
+    R = autocorrelation(d_t)
+    return PredictedSummary(int(half_power_q(d_t)), float(d[0] / d.sum()), float(R[1] / R[0]))
 
 
 # --------------------------------------------------------------------------- the ansatz-free kernel
@@ -632,23 +661,23 @@ def ansatz_free_kernel(
     Solved on the subspace spanned by the data (K-dimensional for the latent task) and set to the
     prior value c_0 = delta + sigma_0^2 lam_bar on its complement, which is exact.
     """
-    tp = network_parameters(cfg, dataset, sig2, exact_kernel)
+    net = network_parameters(cfg, dataset, sig2, exact_kernel)
     X, Y = _array(dataset.x, "dataset.x"), _array(dataset.y, "dataset.y")
     XX, YY = X @ X.T, Y @ Y.T
     Q = _data_subspace(XX, YY)
-    c0 = tp.delta + noise_floor(tp.sig2, tp.r) * tp.lam_bar
-    complement = c0 * (np.eye(tp.P) - Q @ Q.T)
+    c0 = net.delta + noise_floor(net.sig2, net.r) * net.lam_bar
+    complement = c0 * (np.eye(net.P) - Q @ Q.T)
     if Q.shape[1] == 0:
         return complement
-    A = tp.k0 / tp.m * (Q.T @ XX @ Q)
+    A = net.k0 / net.m * (Q.T @ XX @ Q)
     YY_q = Q.T @ YY @ Q
-    S = _per_q_roots(A, tp.lam, tp.sig2)
+    S = _per_q_roots(A, net.lam, net.sig2)
     n = A.shape[0]
     iu = np.triu_indices(n)
 
     def residual(v: np.ndarray) -> np.ndarray:
         Ct = _sym_from_upper(v, n)
-        return (Ct - _kernel_map(Ct, S, tp.lam, YY_q, tp.k1, tp.r, tp.delta))[iu]
+        return (Ct - _kernel_map(Ct, S, net.lam, YY_q, net.k1, net.r, net.delta))[iu]
 
-    v = _newton(residual, _physical_start(residual, n, tp.delta + tp.lam_bar * np.trace(A) / n))
+    v = _newton(residual, _physical_start(residual, n, net.delta + net.lam_bar * np.trace(A) / n))
     return Q @ _sym_from_upper(v, n) @ Q.T + complement

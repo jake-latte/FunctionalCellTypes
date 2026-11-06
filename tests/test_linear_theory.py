@@ -10,9 +10,9 @@ Ground truths, all synthetic:
     per-mode prediction against a brute-force evaluation of the NP x NP master equation;
   * the training loss itself, for the rate coefficient r.
 
-The quoted numbers are for Z ~ U[0, 1] and an orthonormal teacher. `make_dataset` draws neither
-on this branch (it needs the latent-bounds and orthonormal-teacher branches), so the numbers use
-`exact_s2_dataset`, and `make_dataset` output is used only for the refusal of a Gaussian teacher.
+The quoted numbers are for the formula singular values of Z ~ U[0, 1] and an orthonormal teacher,
+so they use `exact_s2_dataset`; `make_dataset` with `data.teacher = "orthonormal"` on [0, 1] is
+checked end to end, and its Gaussian teacher is refused.
 """
 
 import dataclasses
@@ -26,6 +26,7 @@ import pytest
 import torch
 
 from fct import linear_theory as lt
+from fct import spectrum
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset, task_dims
 from fct.model import make_net
@@ -77,9 +78,18 @@ def ring_config(
     k1: float = 1.0,
     weight_lambda: float = 1.0,
 ) -> Config:
-    """The `linear_ring` preset of the plan (Section sec:presets) in the fields `Config` has."""
+    """The `linear_ring` preset of the plan (Section sec:presets): orthonormal teacher, latents on
+    [0, 1], SGLD, float64; k0, k1 are the input and output kernel amplitudes."""
     return Config(
-        data=DataConfig(task="linear_teacher", P=P, D_in=m, n_latents=K),
+        data=DataConfig(
+            task="linear_teacher",
+            P=P,
+            D_in=m,
+            n_latents=K,
+            latent_min=0.0,
+            latent_max=1.0,
+            teacher="orthonormal",
+        ),
         net=NetConfig(N=N, L=1, phi="id"),
         train=TrainConfig(
             optimizer="sgld",
@@ -108,6 +118,17 @@ def hidden_population(cfg: Config):
     """The hidden population of `build_spaces` for the configured one-layer network."""
     m, n = task_dims(cfg.data)
     return build_spaces(cfg.spatial, m=m, N=cfg.net.N, L=1, n_out=n)[0].post
+
+
+def trainer_loss(cfg: Config, ds: Dataset, **train_fields):
+    """(parts, net) of one `fct.train._step` at lr = 0 (the loss the trainer builds, before the
+    step), for the config's net and the train section with `train_fields` overridden."""
+    train = cfg.train.model_copy(update=train_fields)
+    m, n = task_dims(cfg.data)
+    net = make_net(cfg.net, m, n, torch.device("cpu"), torch.float64)
+    optim = torch.optim.SGD(net.parameters(), lr=0.0)
+    penalty = make_weight_penalty(cfg.model_copy(update={"train": train}), net)
+    return _step(net, optim, ds, train, penalty), net
 
 
 def circulant_kernel(lam: np.ndarray) -> np.ndarray:
@@ -147,9 +168,11 @@ def uniform_latent_dataset(rng: np.random.Generator, P: int, K: int, m: int, a: 
 
 
 def exact_s2_dataset(rng: np.random.Generator, s2: np.ndarray, P: int, m: int) -> Dataset:
-    """Latents whose singular values are exactly sqrt(s2): Z = U diag(sqrt s2), U orthonormal (P x K)."""
+    """Latents whose singular values are exactly sqrt(s2): Z = U diag(sqrt s2) with U orthonormal
+    (P x K) and u_1 = 1 / sqrt(P), the mean direction of latents on [0, a]."""
     K = s2.size
-    Z = orthonormal_columns(rng, P, K) * np.sqrt(s2)
+    U = np.linalg.qr(np.column_stack([np.ones(P), rng.normal(size=(P, K - 1))]))[0]
+    Z = U * np.where(U.sum(axis=0) < 0, -1.0, 1.0) * np.sqrt(s2)
     return latent_dataset(Z, orthonormal_columns(rng, m, K), orthonormal_columns(rng, m, K))
 
 
@@ -197,7 +220,8 @@ def test_predicted_summary_matches_the_reference_script(script):
     assert s.q_half == script.half_power_q(d)
     assert s.share0 == pytest.approx(d[0] / d.sum(), rel=1e-12)
     assert s.lag1 == pytest.approx(script.autocorr_lag1(d), rel=1e-12)
-    np.testing.assert_allclose(lt._autocorrelation(d), script.autocorrelation(d), rtol=1e-12)
+    R = spectrum.autocorrelation(torch.as_tensor(d)).numpy()  # the module uses fct.spectrum's
+    np.testing.assert_allclose(R, script.autocorrelation(d), rtol=1e-12, atol=1e-15)
 
 
 def test_uniform_latent_s2_is_the_formula_of_the_limits_note(script):
@@ -224,6 +248,18 @@ def test_physical_root_resolves_a_root_next_to_the_pole():
 def test_physical_root_names_the_bracket_when_it_fails():
     with pytest.raises(ValueError, match="delta"):
         lt.physical_root(np.ones(4), 1.0, 0.0)
+
+
+def test_physical_root_refuses_a_root_within_one_ulp_of_the_pole():
+    """p = 1e-17: the root is p (1 + 5e-18), closer to the pole than one ulp (1.1e-16)."""
+    p = 1e-17
+    with pytest.raises(ValueError, match="one ulp"):
+        lt.physical_root(np.array([p**2]), 1.0, 1e-60)
+
+
+def test_physical_root_refuses_an_overflowing_bracket():
+    with pytest.raises(ValueError, match="overflow"):
+        lt.physical_root(np.ones(4), 1.0, 1e300)
 
 
 # ------------------------------------------------------------------ the quoted numbers, via a Config
@@ -339,7 +375,7 @@ def test_smoke_s1_without_input_noise_equals_the_reference_script(script):
 # ------------------------------------------------------------------ the floored prior
 
 
-def test_default_spectrum_is_the_floored_prior_the_run_trainswith_field():
+def test_default_spectrum_is_the_floored_prior_the_run_trains_with():
     """The run's prior is N(0, M^{-1}) with M's eigenvalues 1 / max(lam_q, min_rel_eig lam_0):
     by default the theory uses exactly that, and `exact_kernel=True` the unfloored K."""
     cfg = ring_config(**FULL, beta=0.25)
@@ -398,23 +434,99 @@ def test_sigma_to_zero_limit_is_regular():
     assert np.abs(d_eps - d0).max() < 1e-7
 
 
-def test_a_latent_the_data_does_not_span_is_exactly_zero_through_the_pipeline():
-    """A zero latent column gives s_2 = 0, a null mode: at sigma = 0 its spectrum is exactly 0
-    from `predicted_spectra`, and `ansatz_free_kernel` puts c_0 = delta on it."""
+def test_a_latent_the_data_does_not_span():
+    """A zero latent column has no frame (`fct.spectrum.latent_basis` refuses a rank-deficient
+    Z), so the per-mode theory refuses it; at sigma = 0 `ansatz_free_kernel` puts c_0 = delta on
+    every direction the data does not span, and the per-mode root on the one it does."""
     rng = np.random.default_rng(6)
     P, m = SMOKE["P"], SMOKE["m"]
-    Z = np.stack([rng.uniform(0, 1, P), np.zeros(P)], axis=1)
+    z = rng.uniform(0, 1, P)
+    Z = np.stack([z, np.zeros(P)], axis=1)
     ds = latent_dataset(Z, orthonormal_columns(rng, m, 2), orthonormal_columns(rng, m, 2))
     cfg = ring_config(**SMOKE, beta=0.25, r=0.5)
-    pred = lt.predicted_spectra(cfg, ds)
-    assert pred.s2[1] == 0.0 and (pred.d[1] == 0.0).all()
-    assert pred.c[1] == pytest.approx(pred.params.delta, rel=1e-14)
-    assert (pred.d[0] > 0).all() and pred.null_floor == 0.0
+    with pytest.raises(ValueError, match="rank-deficient"):
+        lt.predicted_spectra(cfg, ds)
+    net_params = lt.network_parameters(cfg, ds)
     C = lt.ansatz_free_kernel(cfg, ds)
-    u = pred.U[:, 0]
-    assert u @ C @ u == pytest.approx(pred.c[0], rel=1e-10)
+    u = z / np.linalg.norm(z)
+    s2 = z @ z
+    c, _ = lt.per_mode_spectrum(
+        net_params.lam, net_params.k0 * s2 / m, s2 / net_params.k1, 0.0, 0.5, net_params.delta
+    )
+    assert u @ C @ u == pytest.approx(c, rel=1e-10)
     complement = np.eye(P) - np.outer(u, u)
-    np.testing.assert_allclose(complement @ C @ complement, pred.params.delta * complement)
+    np.testing.assert_allclose(complement @ C @ complement, net_params.delta * complement)
+
+
+def test_floored_spectrum_survives_a_tiny_min_rel_eig():
+    """At min_rel_eig = 1e-12 inverting M would lose 12 digits on the coarse modes; lam is the
+    floor rule of `penalty_matrix` applied to K's spectrum, so it is exact and runs."""
+    cfg = ring_config(**FULL, beta=0.25)
+    cfg = cfg.model_copy(update={"spatial": cfg.spatial.model_copy(update={"min_rel_eig": 1e-12})})
+    ds = exact_s2_dataset(np.random.default_rng(0), lt.uniform_latent_s2(256, 3, 1.0), 256, 8)
+    hidden = hidden_population(cfg)
+    exact = lt.ring_spectrum(hidden.K)
+    lam = lt.theory_parameters(cfg, ds).lam
+    np.testing.assert_array_equal(lam, np.maximum(exact, hidden.report.floor))
+    assert hidden.report.floor == pytest.approx(1e-12 * exact.max(), rel=1e-12)
+    assert np.isfinite(lt.predicted_spectra(cfg, ds).d).all()
+
+
+def test_a_float32_run_is_refused():
+    """A float32 run casts M to float32 and trains with a prior whose coarse lam_q differ by
+    1-2%, so the theory refuses it, naming the field."""
+    cfg = ring_config(**SMOKE, beta=0.25).model_copy(update={"dtype": "float32"})
+    ds = uniform_latent_dataset(np.random.default_rng(0), SMOKE["P"], SMOKE["K"], SMOKE["m"], 1.0)
+    for f in (lt.theory_parameters, lt.predicted_spectra, lt.ansatz_free_kernel):
+        with pytest.raises(ValueError, match="dtype"):
+            f(cfg, ds)
+
+
+def test_orthonormal_teacher_from_make_dataset_end_to_end():
+    """`make_dataset` of the preset's data section (orthonormal teacher, latents on [0, 1]):
+    x = Z W_X^T, y = Z W_Y^T, and theory_parameters' s2 is the SVD of Z."""
+    cfg = ring_config(**SMOKE, beta=0.25, r=0.5)
+    ds = make_dataset(cfg.data, torch.device("cpu"), torch.float64)
+    Z = np.stack([ds.factors[f"z{i}"].numpy() for i in range(SMOKE["K"])], axis=1)
+    assert Z.min() >= 0 and Z.max() <= 1
+    W_X, W_Y = ds.extras["W_X"].numpy(), ds.extras["W_Y"].numpy()
+    np.testing.assert_allclose(ds.x.numpy(), Z @ W_X.T, atol=1e-14)
+    np.testing.assert_allclose(ds.y.numpy(), Z @ W_Y.T, atol=1e-14)
+    tp = lt.theory_parameters(cfg, ds)
+    np.testing.assert_allclose(tp.s2, np.linalg.svd(Z, compute_uv=False) ** 2, rtol=1e-12)
+    pred = lt.predicted_spectra(cfg, ds)
+    assert pred.d.shape == (SMOKE["K"], SMOKE["N"]) and (pred.d > 0).all()
+
+
+def test_data_not_generated_by_the_teacher_is_refused():
+    """x and y must be Z W_X^T and Z W_Y^T for the W in extras: a rescaled x is refused."""
+    cfg = ring_config(**SMOKE, beta=0.25)
+    ds = uniform_latent_dataset(np.random.default_rng(0), SMOKE["P"], SMOKE["K"], SMOKE["m"], 1.0)
+    with pytest.raises(ValueError, match=r"dataset.x is not Z W_X\^T.*\d"):
+        lt.theory_parameters(cfg, dataclasses.replace(ds, x=1.5 * ds.x))
+    with pytest.raises(ValueError, match=r"dataset.y is not Z W_Y\^T"):
+        lt.predicted_spectra(cfg, dataclasses.replace(ds, y=ds.y + 1e-3))
+
+
+def test_symmetric_latents_are_refused():
+    """Latents on [-1, 1] have no mean direction (`fct.spectrum.latent_basis`)."""
+    cfg = ring_config(**SMOKE, beta=0.25)
+    rng = np.random.default_rng(0)
+    Z = rng.uniform(-1, 1, (SMOKE["P"], SMOKE["K"]))
+    ds = latent_dataset(Z, orthonormal_columns(rng, 4, 2), orthonormal_columns(rng, 4, 2))
+    with pytest.raises(ValueError, match="symmetric"):
+        lt.theory_parameters(cfg, ds)
+
+
+def test_parameters_compare_by_identity_and_hash():
+    ds = uniform_latent_dataset(np.random.default_rng(0), SMOKE["P"], SMOKE["K"], SMOKE["m"], 1.0)
+    tp = lt.theory_parameters(ring_config(**SMOKE, beta=0.25), ds)
+    same = tp
+    assert tp == same and tp != dataclasses.replace(tp)  # identity, not value
+    assert {tp: 1}[tp] == 1
+    net_params = lt.network_parameters(ring_config(**SMOKE, beta=0.25), ds)
+    alias = net_params
+    assert net_params == alias and hash(net_params) == hash(alias)
 
 
 def test_predicted_summary_rejects_an_all_zero_spectrum():
@@ -470,20 +582,10 @@ def test_theory_rate_is_the_rate_part_of_the_training_loss():
     """beta times the rate part of the loss the run minimises equals (r/2) sum phi^2 with
     r = theory_rate(cfg): taken from `fct.train._step`, the call the trainer makes, so a change
     to how the loss scales the rate penalty fails here."""
-    cfg = with_field(
-        ring_config(**SMOKE, beta=0.25, r=0.5), "train.lr", 1e-6
-    )  # passes the step check
+    cfg = with_field(ring_config(**SMOKE, beta=0.25, r=0.5), "train.lr", 1e-6)  # step check
     ds = make_dataset(cfg.data, torch.device("cpu"), torch.float64)
-    m, n = task_dims(cfg.data)
-
-    def losswith_field(train):
-        net = make_net(cfg.net, m, n, torch.device("cpu"), torch.float64)
-        c = cfg.model_copy(update={"train": train})
-        optim = torch.optim.SGD(net.parameters(), lr=0.0)
-        return _step(net, optim, ds, train, make_weight_penalty(c, net)), net
-
-    parts, net = losswith_field(cfg.train)
-    without, _ = losswith_field(cfg.train.model_copy(update={"rate_lambda": 0.0}))
+    parts, net = trainer_loss(cfg, ds)
+    without, _ = trainer_loss(cfg, ds, rate_lambda=0.0)
     rate_part = (parts["loss"] - without["loss"]).item()
     h, _ = net(ds.x)
     sum_phi2 = net.phi(h).square().sum().item()
@@ -491,6 +593,50 @@ def test_theory_rate_is_the_rate_part_of_the_training_loss():
     r = lt.theory_rate(cfg)
     assert r == pytest.approx(0.5)
     assert cfg.train.beta * rate_part == pytest.approx(r / 2 * sum_phi2, rel=1e-10)
+
+
+@pytest.mark.parametrize("beta", [0.25, 4.0])
+def test_prior_and_data_parts_of_the_training_loss_match_the_theory(beta):
+    """With k0, k1 != 1 and weight_lambda != 1, beta times the trainer's prior part is
+    (1/2) tr(M_h U U^T) / k0 + (1/2) tr(V^T M_h V) / k1, with M_h the inverse of the circulant of
+    the module's lam (so the floor, k0 and k1 are the trainer's), and beta times its data part is
+    N ||y - f||^2 / (2 delta k1), which is what fixes delta = P n / (beta k1)."""
+    cfg = ring_config(**SMOKE, beta=beta, k0=2.0, k1=0.5, weight_lambda=4.0)
+    cfg = with_field(cfg, "train.lr", 1e-10)  # passes the SGLD step check
+    ds = make_dataset(cfg.data, torch.device("cpu"), torch.float64)
+    net_params = lt.network_parameters(cfg, ds)
+    assert (net_params.k0, net_params.k1) == pytest.approx((0.5, 0.125))
+    parts, net = trainer_loss(cfg, ds)
+    doubled, _ = trainer_loss(cfg, ds, weight_lambda=2 * cfg.train.weight_lambda)
+    prior_part = (doubled["loss"] - parts["loss"]).item()  # the prior term is linear in it
+    U, V = net.U.detach().numpy(), net.V.detach().numpy()
+    M_h = circulant_kernel(1.0 / net_params.lam)
+    expected_prior = 0.5 * (
+        np.trace(M_h @ U @ U.T) / net_params.k0 + np.trace(V.T @ M_h @ V) / net_params.k1
+    )
+    assert beta * prior_part == pytest.approx(expected_prior, rel=1e-8)
+    data_part = parts["loss"].item() - prior_part  # rate_lambda = 0
+    _, f = net(ds.x)
+    sq_error = (ds.y - f).square().sum().item()
+    expected_data = net_params.N * sq_error / (2 * net_params.delta * net_params.k1)
+    assert beta * data_part == pytest.approx(expected_data, rel=1e-8)
+
+
+def test_config_path_carries_k0_k1_and_weight_lambda(script):
+    """Amplitudes 2 and 0.5 over weight_lambda = 4 are k0 = 0.5, k1 = 0.125: the Config path
+    equals the reference script at those values (exact kernel, as the script)."""
+    P, K, m = SMOKE["P"], SMOKE["K"], SMOKE["m"]
+    beta, r = 0.25, 0.1
+    cfg = ring_config(**SMOKE, beta=beta, r=r, k0=2.0, k1=0.5, weight_lambda=4.0)
+    ds = exact_s2_dataset(np.random.default_rng(0), lt.uniform_latent_s2(P, K, 1.0), P, m)
+    pred = lt.predicted_spectra(cfg, ds, sig2=SIG2, exact_kernel=True)
+    sx2, sy2, delta = script.latent_modes(P, K, 1.0, m, 0.5, 0.125, m, beta)
+    assert pred.params.delta == pytest.approx(delta, rel=1e-12)
+    lam = lt.ring_spectrum(script.ring_kernel(SMOKE["N"], SMOKE["ell"]))
+    for k in range(K):
+        c_ref, d_ref = script.spectrum_d(lam, sx2[k], sy2[k], SIG2, r, delta)
+        assert pred.c[k] == pytest.approx(c_ref, rel=1e-10)
+        np.testing.assert_allclose(pred.d[k], d_ref, rtol=1e-8)
 
 
 def test_weight_lambda_rescales_both_prior_scales():
@@ -614,7 +760,7 @@ def test_per_mode_spectrum_rejects_nan_and_negative_inputs():
 def test_a_gaussian_teacher_is_refused_by_the_per_mode_theory():
     """The per-mode weights from the SVD of Z are the theory only when W_X, W_Y have orthonormal
     columns; `make_dataset`'s Gaussian teacher does not, and the per-mode functions refuse it."""
-    cfg = ring_config(**SMOKE, beta=0.25)
+    cfg = with_field(ring_config(**SMOKE, beta=0.25), "data.teacher", "gaussian")
     ds = make_dataset(cfg.data, torch.device("cpu"), torch.float64)
     with pytest.raises(ValueError, match=r'data.teacher="orthonormal".*deviates by \d'):
         lt.theory_parameters(cfg, ds)
@@ -632,7 +778,7 @@ def test_a_dataset_without_the_teacher_maps_is_refused():
 def test_ansatz_free_kernel_is_exact_for_a_gaussian_teacher():
     """`ansatz_free_kernel` needs no orthonormal teacher: on `make_dataset`'s Gaussian teacher it
     is a fixed point of the brute-force master equation."""
-    cfg = ring_config(**SMOKE, beta=0.25, r=0.5)
+    cfg = with_field(ring_config(**SMOKE, beta=0.25, r=0.5), "data.teacher", "gaussian")
     ds = make_dataset(cfg.data, torch.device("cpu"), torch.float64)
     tp = lt.network_parameters(cfg, ds, sig2=SIG2)
     C = lt.ansatz_free_kernel(cfg, ds, sig2=SIG2)
