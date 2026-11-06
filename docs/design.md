@@ -137,7 +137,7 @@ class DataConfig(BaseModel):      # model_config = ConfigDict(extra="forbid") on
     embedding: Literal["linear", "fourier"] = "fourier"
     # linear_teacher
     n_latents: int = 3                              # k latents, iid uniform on [latent_min, latent_max]
-    latent_min: float = -1.0; latent_max: float = 1.0   # finite, latent_min < latent_max; a config with the
+    latent_min: float = -1.0; latent_max: float = 1.0   # finite, latent_min < latent_max with a finite difference; a config with the
                                                     # removed latent_range fails naming these two
     teacher: Teacher = "gaussian"                   # Literal["gaussian", "orthonormal"]. W_X, W_Y: iid N(0, 1/k), or the
                                                     # sign-canonical Q factor of those same draws (orthonormal columns,

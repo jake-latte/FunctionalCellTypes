@@ -198,6 +198,12 @@ def test_latent_bounds_must_be_finite(field):
         _cfg("linear_teacher", **{field: float("inf") if field == "latent_max" else -float("inf")})
 
 
+def test_an_interval_whose_width_overflows_is_rejected():
+    # Both bounds are finite but hi - lo is inf, which would make every latent non-finite.
+    with pytest.raises(ValueError, match="latent_max - latent_min"):
+        _cfg("linear_teacher", latent_min=-1e308, latent_max=1e308)
+
+
 def test_latent_range_is_rejected_naming_its_replacements(tmp_path):
     with pytest.raises(ValueError, match="latent_range.*latent_min.*latent_max"):
         DataConfig(task="linear_teacher", latent_range=1.0)

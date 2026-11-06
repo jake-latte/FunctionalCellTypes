@@ -8,6 +8,7 @@ Fields are range-constrained too, so impossible values fail at load time naming 
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
@@ -47,11 +48,18 @@ def reject_latent_range(data: Any) -> None:
 
 
 def check_latent_interval(latent_min: float, latent_max: float) -> None:
-    """ValueError unless latent_min < latent_max, so the latents' interval is not empty."""
+    """ValueError unless latent_min < latent_max, so the latents' interval is not empty, and
+    unless its width is finite: the latents are latent_min + width * rand, so an overflowing
+    width (finite bounds near +-1e308) would make them non-finite without any other error."""
     if not latent_min < latent_max:
         raise ValueError(
             f"latent_min must be below latent_max; got latent_min={latent_min}, "
             f"latent_max={latent_max}"
+        )
+    if not math.isfinite(latent_max - latent_min):
+        raise ValueError(
+            f"latent_max - latent_min must be finite; got latent_min={latent_min}, "
+            f"latent_max={latent_max}, whose difference overflows"
         )
 
 
