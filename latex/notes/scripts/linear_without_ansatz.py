@@ -65,8 +65,8 @@ class NotPositiveDefiniteError(ValueError):
 # --- spatial kernel -----------------------------------------------------------------
 def ring_kernel(n_sites: int, width: float) -> np.ndarray:
     """Translation-invariant Gaussian kernel on a periodic ring, shape (N, N)."""
-    r = np.minimum(np.arange(n_sites), n_sites - np.arange(n_sites))
-    row = np.exp(-(r**2) / (2 * width**2))
+    dist = np.minimum(np.arange(n_sites), n_sites - np.arange(n_sites))
+    row = np.exp(-(dist**2) / (2 * width**2))
     return np.array([np.roll(row, i) for i in range(n_sites)])
 
 
