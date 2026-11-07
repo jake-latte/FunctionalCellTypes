@@ -67,7 +67,13 @@ from fct.exp import (
 )
 from fct.model import MLP
 from fct.monitor import require_mir_monitor
-from fct.train import History, load_latest_checkpoint, load_trained, select_member
+from fct.train import (
+    History,
+    load_latest_checkpoint,
+    load_trained,
+    load_trained_members,
+    select_member,
+)
 
 ROOT_ENV = "FCT_EXP_ROOT"
 N_EXAMPLES = 6  # examples loaded per setting; fig_example_outputs draws up to its per-task default
@@ -285,6 +291,25 @@ def _dataset_missing(directory: Path, relative: Path, setting: Setting, what: st
     return _not_shown(setting, relative, note)
 
 
+def _load_pending_extension(
+    directory: Path, relative: Path, setting: Setting, cfg: Config
+) -> SettingResult:
+    """A partial setting whose train/final.pt holds fewer members than net.B (the experiment
+    was extended and the new members are not trained yet), from the members final.pt holds,
+    with a note saying so. Like a checkpoint, it is shown as provisional."""
+    missing = _dataset_missing(directory, relative, setting, "train/final.pt")
+    if missing:
+        return missing
+    cpu, dtype = torch.device("cpu"), resolve_dtype(cfg.dtype)
+    net, history = select_member(*load_trained_members(directory, cfg, cpu, dtype))
+    dataset = get_dataset(directory, cfg)
+    result = _with_data(
+        setting, "partial", relative, cfg, net, history, dataset, cfg.train.n_epochs
+    )
+    note = f"the extension to net.B={cfg.net.B} members is pending; showing train/final.pt's net"
+    return dataclasses.replace(result, note=note)
+
+
 def _load_partial(directory: Path, relative: Path, setting: Setting, cfg: Config) -> SettingResult:
     """A setting with a checkpoint but no final.pt, from its latest checkpoint. A dataset file
     or checkpoint that is unreadable, or from another config, is reported in `note` instead of
@@ -328,6 +353,8 @@ def load_setting_result(root: Path, exp: ExpConfig, setting: Setting) -> Setting
     if status == "stale":
         return SettingResult(setting, status, relative, note=STALE_NOTE)
     cfg = _cpu_config(exp, setting)
+    if status == "partial" and (cache_paths(directory).train / "final.pt").exists():
+        return _load_pending_extension(directory, relative, setting, cfg)
     if status == "partial":
         return _load_partial(directory, relative, setting, cfg)
     missing = _dataset_missing(directory, relative, setting, "train/final.pt")

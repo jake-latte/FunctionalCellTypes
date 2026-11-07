@@ -493,7 +493,9 @@ def cmd_exp_run(args: argparse.Namespace) -> int:
 
 def cmd_exp_extend(args: argparse.Namespace) -> int:
     """Rewrite exp.json with B + K; `exp run` (or the array job) then trains the new members."""
-    before = _load_exp(args.root).B  # a missing or invalid exp.json: one line, as elsewhere
+    # Read here as well as in extend_experiment: for the B before, and so a missing or invalid
+    # exp.json is the one-line error every exp action gives.
+    before = _load_exp(args.root).B
     try:
         exp = extend_experiment(args.root, args.by)
     except ExpError as err:

@@ -37,7 +37,7 @@ from fct.spatial import LayerSpace
 from fct.spatial_exp import ExpSetting, select_setting
 from fct.spatial_view import data_kernels, empirical_kernels, layer_spaces
 from fct.tasks import resample
-from fct.train import History, load_weights
+from fct.train import History, load_trained_members, load_weights
 
 # History entries with a member axis that the notebook shows as mean +- sem.
 ENSEMBLE_KEYS = ("loss", "mse", "weight_l2", "rate_l2")
@@ -51,7 +51,8 @@ TEST_SEED_OFFSET = 1_000_003
 class PhaseRun(NamedTuple):
     """One setting of the experiment. `net` and `history` are None for a setting with no weights
     (status "missing" or "stale"); a "partial" one holds the latest checkpoint, `epoch` epochs
-    in. `dataset` is the training set (generated in memory, never written, when no usable file
+    in, or, when its extension is pending (train/final.pt holds fewer members than net.B), the
+    members final.pt holds, all n_epochs in. `dataset` is the training set (generated in memory, never written, when no usable file
     is cached)."""
 
     setting: ExpSetting
@@ -67,6 +68,15 @@ def _load_weights(chosen: ExpSetting) -> tuple[EnsembleMLP | None, History | Non
         return None, None, 0
     cfg = chosen.cfg
     device, dtype = resolve_device(cfg), resolve_dtype(cfg.dtype)
+    if chosen.status == "partial" and (cache_paths(chosen.directory).train / "final.pt").exists():
+        # An extension is pending: final.pt holds the members trained so far, all n_epochs.
+        net, history = load_trained_members(chosen.directory, cfg, device, dtype)
+        if not isinstance(net, EnsembleMLP):
+            raise ValueError(
+                f"{chosen.directory}/train/final.pt holds a single network awaiting its extension "
+                f"to net.B={cfg.net.B}; phase_view reads ensembles, so run the extension first"
+            )
+        return net, history, cfg.train.n_epochs
     return load_weights(chosen.directory, cfg, device, dtype, chosen.status == "done")
 
 
