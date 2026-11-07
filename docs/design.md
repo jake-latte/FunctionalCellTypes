@@ -366,11 +366,11 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype, whitening=Non
 ## train.py
 
 ```python
-def compute_loss(net, x, y, prior_coefficient, rate_coefficient, weight_penalty=None) -> tuple[Tensor, dict[str, Tensor]]   # None: the net's own weight_l2
+def compute_loss(net, x, y, coefficients: LossCoefficients, weight_penalty=None) -> tuple[Tensor, dict[str, Tensor]]   # None: the net's own weight_l2
     # ensemble: every part is (B,), member b's own, and the returned loss is the SUM over members (so member b's gradient is its own loss's)
-    # loss = 0.5*N*mse + prior_coefficient*weight_l2 + rate_coefficient*rate_l2; callers pass the functions
-    #   prior_coefficient(cfg.train) = train.weight_lambda / (2 beta) and rate_coefficient(cfg.train) = train.rate_lambda / (2 beta)
-    #   (beta = train.beta under SGLD, 1 under Adam), never the raw train.weight_lambda or train.rate_lambda
+    # loss = 0.5*N*mse + coefficients.prior*weight_l2 + coefficients.rate*rate_l2; callers pass
+    #   loss_coefficients(cfg.train) = (train.weight_lambda / (2 beta), train.rate_lambda / (2 beta))
+    #   (beta = law_beta(optimizer, beta): train.beta under SGLD, 1 under Adam); anything but a LossCoefficients raises TypeError
     # weight_l2 = weight_penalty(net): the sum of squares of every parameter by default, the spatial prior
     #   sum_l tr(M_post W_l M_pre W_l^T) from make_weight_penalty when cfg.spatial is set (see "Spatial weight prior in training")
     # rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
