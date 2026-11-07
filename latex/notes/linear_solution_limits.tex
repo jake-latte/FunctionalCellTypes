@@ -258,19 +258,19 @@ With $\sigma, r > 0$, $k$ also sets $\rho\propto k$ and $\gamma\propto k$, so a 
 Sites $i = 0,\dots,N-1$ at unit spacing. The kernel is the wrapped (image-summed) Gaussian of \path{fct/spatial.py},
 \begin{equation}
 \begin{gathered}
-  K_{i,j} = \frac{W(i-j)}{W(0)},\qquad W(r) = \sum_{k\in\mathbb Z}\exp\!\Big(-\frac{(r+kN)^2}{2\ell^2}\Big),\\
-  \lambda_q = \sum_{r=0}^{N-1}K(r)e^{-2\pi\mathrm iqr/N} = \frac{\sqrt{2\pi}\,\ell}{W(0)}\sum_{j\in\mathbb Z}\exp\!\Big(-2\pi^2\ell^2\Big(\frac qN + j\Big)^2\Big),
+  K_{i,j} = \frac{W(i-j)}{W(0)},\qquad W(\Delta) = \sum_{k\in\mathbb Z}\exp\!\Big(-\frac{(\Delta+kN)^2}{2\ell^2}\Big),\\
+  \lambda_q = \sum_{\Delta=0}^{N-1}K(\Delta)e^{-2\pi\mathrm iq\Delta/N} = \frac{\sqrt{2\pi}\,\ell}{W(0)}\sum_{j\in\mathbb Z}\exp\!\Big(-2\pi^2\ell^2\Big(\frac qN + j\Big)^2\Big),
 \end{gathered}
   \label{eq:ring}
 \end{equation}
-the last equality by Poisson summation (the DFT of the periodised Gaussian is the sampled continuous transform plus its aliases). The $j = 0$ term is the continuum formula $\sqrt{2\pi}\,\ell\,e^{-2\pi^2\ell^2q^2/N^2}$; the aliases are positive and at most $e^{-\pi^2\ell^2/2}$ of it (at $|q| = N/2$), and $W(0) = 1 + O(e^{-N^2/2\ell^2})$. Every term is positive, so $\lambda_q > 0$ for every $q$ and every $\ell$: the wrapped kernel is positive definite, as Section~\ref{sec:start} and Lemma~\ref{lem:mono} require. The Gaussian of the minimum-image distance $\min(|i-j|, N-|i-j|)$ differs from it by the dropped images, a tail of size $e^{-N^2/8\ell^2}$ at the antipode $r = N/2$, and that tail is exactly what makes it \emph{not} positive definite once $\ell\gtrsim N/8$: at $N = 64$ its smallest eigenvalue is $-4.3\times10^{-4}$ at $\ell = 8$ and $-6.8\times10^{-2}$ at $\ell = 12$, where the wrapped kernel's is zero to round-off ($-2\times10^{-15}$; script B4). At $\ell = 4$ the two kernels agree to $10^{-14}$.
-\emph{Normalisation.} $K_{i,i} = 1$ (unit prior variance per synapse, the \texttt{amplitude = 1} convention of \path{fct/spatial.py}), so $\bar\lambda = \frac1N\sum_q\lambda_q = 1$ for every $\ell$, while $\lambda_0 = \sqrt{2\pi}\ell/W(0)\approx\sqrt{2\pi}\ell$ and, by Parseval, $\bar\lambda_2 = \frac1N\sum_q\lambda_q^2 = \sum_rK(r)^2 = \sqrt\pi\,\ell$ (for $1\ll\ell\ll N$). The alternative normalisation $\lambda_0 = 1$ (the \texttt{lambda\_max} option) divides every $\lambda_q$, hence $\Theta$, $c_*$ and $h_q$, by $\sqrt{2\pi}\ell$. $F$ is the unitary DFT with wavenumber $2\pi q/N$; $\lambda_q$ falls to half its peak at $|q| = (N/\pi\ell)\sqrt{\ln2/2}\approx0.19N/\ell$, i.e.\ at wavelength $\approx5\ell$. Checked for $N = 64$, $\ell = 4$: $\lambda_0 = 10.026513 = \sqrt{2\pi}\cdot4$, the $j = 0$ term of \eqref{eq:ring} alone reproduces $\lambda_q$ to $2\times10^{-15}$, $\bar\lambda = 1.000000$, $\bar\lambda_2 = 7.089815 = \sqrt\pi\cdot4$ (script B4).
+the last equality by Poisson summation (the DFT of the periodised Gaussian is the sampled continuous transform plus its aliases). The $j = 0$ term is the continuum formula $\sqrt{2\pi}\,\ell\,e^{-2\pi^2\ell^2q^2/N^2}$; the aliases are positive and at most $e^{-\pi^2\ell^2/2}$ of it (at $|q| = N/2$), and $W(0) = 1 + O(e^{-N^2/2\ell^2})$. Every term is positive, so $\lambda_q > 0$ for every $q$ and every $\ell$: the wrapped kernel is positive definite, as Section~\ref{sec:start} and Lemma~\ref{lem:mono} require. The Gaussian of the minimum-image distance $\min(|i-j|, N-|i-j|)$ differs from it by the dropped images, a tail of size $e^{-N^2/8\ell^2}$ at the antipode $\Delta = N/2$, and that tail is exactly what makes it \emph{not} positive definite once $\ell\gtrsim N/8$: at $N = 64$ its smallest eigenvalue is $-4.3\times10^{-4}$ at $\ell = 8$ and $-6.8\times10^{-2}$ at $\ell = 12$, where the wrapped kernel's is zero to round-off ($-2\times10^{-15}$; script B4). At $\ell = 4$ the two kernels agree to $10^{-14}$.
+\emph{Normalisation.} $K_{i,i} = 1$ (unit prior variance per synapse, the \texttt{amplitude = 1} convention of \path{fct/spatial.py}), so $\bar\lambda = \frac1N\sum_q\lambda_q = 1$ for every $\ell$, while $\lambda_0 = \sqrt{2\pi}\ell/W(0)\approx\sqrt{2\pi}\ell$ and, by Parseval, $\bar\lambda_2 = \frac1N\sum_q\lambda_q^2 = \sum_\Delta K(\Delta)^2 = \sqrt\pi\,\ell$ (for $1\ll\ell\ll N$). The alternative normalisation $\lambda_0 = 1$ (the \texttt{lambda\_max} option) divides every $\lambda_q$, hence $\Theta$, $c_*$ and $h_q$, by $\sqrt{2\pi}\ell$. $F$ is the unitary DFT with wavenumber $2\pi q/N$; $\lambda_q$ falls to half its peak at $|q| = (N/\pi\ell)\sqrt{\ln2/2}\approx0.19N/\ell$, i.e.\ at wavelength $\approx5\ell$. Checked for $N = 64$, $\ell = 4$: $\lambda_0 = 10.026513 = \sqrt{2\pi}\cdot4$, the $j = 0$ term of \eqref{eq:ring} alone reproduces $\lambda_q$ to $2\times10^{-15}$, $\bar\lambda = 1.000000$, $\bar\lambda_2 = 7.089815 = \sqrt\pi\cdot4$ (script B4).
 
 \paragraph{Weak target, no penalty.} $d_q = \lambda_q\sX + \sigma^2$, so the tuning map of the mode (Section~\ref{sec:measure}) has autocorrelation
 \begin{equation}
-  R(r) = \frac1N\sum_q d_qe^{2\pi\mathrm iqr/N} = \sX K(r) + \sigma^2\delta_{r,0}:
+  R(\Delta) = \frac1N\sum_q d_qe^{2\pi\mathrm iq\Delta/N} = \sX K(\Delta) + \sigma^2\delta_{\Delta,0}:
 \end{equation}
-the wrapped Gaussian $K(r)$ of width $\ell$ plus a white spike, with $R(0) = \sX + \sigma^2$ independent of $\ell$, and $c = \delta + \sqrt\pi\ell\,\sX + \sigma^2$ growing linearly with $\ell$.
+the wrapped Gaussian $K(\Delta)$ of width $\ell$ plus a white spike, with $R(0) = \sX + \sigma^2$ independent of $\ell$, and $c = \delta + \sqrt\pi\ell\,\sX + \sigma^2$ growing linearly with $\ell$.
 
 \paragraph{Strong target: Lorentzian amplification and the correlation length.}
 Near $q = 0$, $h(\nu)\approx h_{\max} - \tfrac12|h''(0)|\nu^2$ in $\nu = q/N$, with $|h''(0)| = 4\pi^2\ell^2\lambda_0\,h'(\lambda_0)$ (chain rule through \eqref{eq:ring}; $h'(\lambda) = \mathrm dh/\mathrm d\lambda = \alpha/(1+r\alpha) + \lambda\sX/(1+r\alpha)^2$). Hence
@@ -279,7 +279,7 @@ Near $q = 0$, $h(\nu)\approx h_{\max} - \tfrac12|h''(0)|\nu^2$ in $\nu = q/N$, w
   a = c^2 - \sY h_{\max},\qquad b = \tfrac12\sY|h''(0)|,
   \label{eq:lorentz}
 \end{equation}
-a Lorentzian of half-width $\nu_c = \sqrt{a/b}$ whose inverse transform is $e^{-2\pi\nu_c|r|}$: the target adds to the tuning map an exponentially correlated component of correlation length
+a Lorentzian of half-width $\nu_c = \sqrt{a/b}$ whose inverse transform is $e^{-2\pi\nu_c|\Delta|}$: the target adds to the tuning map an exponentially correlated component of correlation length
 \begin{equation}
   \xi = \frac1{2\pi\nu_c} = \frac1{2\pi}\sqrt{\frac ba}\ \text{sites}.
 \end{equation}
@@ -344,7 +344,7 @@ Four remarks on what this means for the analysis.
 Let $h_i\in\R^P$ be neuron $i$'s activity over patterns and $t_{i,k} = u_k^\top h_i$ its tuning to data mode $k$ (for the latent task $u_1$ is the mean direction and $u_2,\dots,u_K$ the centred latent subspace; $t_{i,k}$ is, up to normalisation, the regression coefficient of $h_i$ on the latent combination $u_k$). By Lemma~\ref{lem:fourier} and the ansatz,
 \begin{equation}
   \langle t_{i,k}t_{j,k'}\rangle = \delta_{k,k'}\,R_k(i-j),\qquad
-  R_k(r) = \frac1N\sum_qd_q^{(k)}e^{2\pi\mathrm iqr/N},
+  R_k(\Delta) = \frac1N\sum_qd_q^{(k)}e^{2\pi\mathrm iq\Delta/N},
   \label{eq:tuning-map}
 \end{equation}
 so the \emph{tuning map} $i\mapsto t_{i,k}$ is a stationary zero-mean Gaussian field on the lattice with power spectrum $d_q^{(k)}$, independent across data modes. Its correlation length $\xi_k$ is the spatial scale at which cells tuned to mode $k$ cluster: a ``functional cell type at scale $\xi_k$''. There is no deterministic assignment of cells to types; the structure is entirely in the covariance, and every neuron has the same expected tuning variance $R_k(0) = \frac1N\sum_qd_q^{(k)}$. Experimentally, $d_q^{(k)}$ is the sample-averaged $|\tilde t_k(q)|^2$ over posterior (SGLD) samples, and $R_k$ its autocorrelation.
@@ -380,7 +380,7 @@ Table~\ref{tab:regimes} lists the conditions. Each is tagged \task{} if it is se
     Regime & & Condition & Driver & Section \\
     \midrule
     \multicolumn{5}{@{}l}{\emph{(a) All latents share the same spatial profile}}\\
-    (a1) & weak target, no penalty & $r = 0$, $\tau_k\ll1$ for all $k$: $d_q^{(k)} = \lambda_q\hat s_{X,k}^2 + \sigma^2$, the shape $\lambda_q$ above a common floor; $R_k(r)/R_k(0)\to K(r)$ for $r\ge1$ when $\rho_k\gg1$ & \prior{} ($r$, $\beta$ small) & \ref{sec:r0} \\
+    (a1) & weak target, no penalty & $r = 0$, $\tau_k\ll1$ for all $k$: $d_q^{(k)} = \lambda_q\hat s_{X,k}^2 + \sigma^2$, the shape $\lambda_q$ above a common floor; $R_k(\Delta)/R_k(0)\to K(\Delta)$ for $\Delta\ge1$ when $\rho_k\gg1$ & \prior{} ($r$, $\beta$ small) & \ref{sec:r0} \\
     (a2) & zero temperature & $\sigma = r = 0$, $\Delta_k\ll1$ for all $k$: every mode has the same $\Theta$, hence the same $\tau(\Theta)$ and profile $\lambda_q/(1-\tau\ell_q^2)$, however strong the amplification & \prior{} ($\beta\to\infty$) given \task{} ($XX^\top\propto YY^\top$) & \eqref{eq:reduced} \\
     (a3) & equal singular values & the $K-1$ contrast modes always share a profile because their $s_k$ coincide; a statement about symmetry & \task{} (isotropic latents) & \ref{sec:latent} \\
     \addlinespace
@@ -421,9 +421,9 @@ Common setting unless stated: linear activation, one hidden layer on a ring of $
 \begin{enumerate}[leftmargin=2em,itemsep=4pt]
   \item \textbf{Prior-shaped maps (regime a1).}\\
   \emph{Setting:} $\sigma^2 = 0.01$, $r = 0$, $\beta = 0.25$.\\
-  \emph{Measure:} $\hat d_q^{(1)}$, $\hat d_q^{(2)}$ and their ratio versus $q$; $q_{1/2}$; the $q = 0$ shares; $R_k(r)/R_k(0)$ for $r\le6$.\\
+  \emph{Measure:} $\hat d_q^{(1)}$, $\hat d_q^{(2)}$ and their ratio versus $q$; $q_{1/2}$; the $q = 0$ shares; $R_k(\Delta)/R_k(0)$ for $\Delta\le6$.\\
   \emph{Predict:} $\tau_1 = 0.008$, $\tau_2<10^{-3}$; $\hat d_q^{(k)} = \lambda_q\hat s_{X,k}^2 + \sigma^2$ with $\hat s_{X,1}^2 = 26.7$, $\hat s_{X,2}^2 = 2.67$; $q_{1/2} = 2$ for both modes, but only by a hair ($\lambda_3/\lambda_0 = 0.4996$), so a measured $q_{1/2} = 3$ is equally consistent; $q = 0$ share $0.157$ and $0.156$; $R_k(1)/R_k(0) = 0.969$ and $0.966$ ($\approx e^{-1/32}$); the ratio $\hat d_q^{(1)}/\hat d_q^{(2)}$ is about $10$ for $|q|\le8$, within $5\%$ ($10.08, 10.07, 10.04, 10.01, 10.00, 9.98, 9.95, 9.86, 9.56$ at $|q| = 0,\dots,8$), and then drops to the floor ratio $1.35$ by $|q| = 12$ ($8.54, 5.91, 2.73, 1.35$ at $|q| = 9,\dots,12$) as the contrast mode reaches its floor first.\\
-  \emph{Falsified if} the two normalised spectra differ ($q_{1/2}$ by more than $1$, or the $q = 0$ shares by more than $0.03$), or the ratio varies by more than $20\%$ over $|q|\le8$, or $R_k(r)/R_k(0)$ deviates from $e^{-r^2/32}$ by more than $0.05$ for $r\le6$.
+  \emph{Falsified if} the two normalised spectra differ ($q_{1/2}$ by more than $1$, or the $q = 0$ shares by more than $0.03$), or the ratio varies by more than $20\%$ over $|q|\le8$, or $R_k(\Delta)/R_k(0)$ deviates from $e^{-\Delta^2/32}$ by more than $0.05$ for $\Delta\le6$.
 
   \item \textbf{Rate-penalty whitening (regime b1).}\\
   \emph{Setting:} as 1 but $r = 0.1$.\\
@@ -439,9 +439,9 @@ Common setting unless stated: linear activation, one hidden layer on a ring of $
 
   \item \textbf{White null modes (regime c4) and the floor level.}\\
   \emph{Setting:} $\sigma^2 = 1$, $r = 1$, $\beta = 0.25$, so $\sigma_0^2 = \sigma^2/(1+r\sigma^2) = 0.5$, a factor $2$ below the bare $\sigma^2$. Requires the activity noise $\eta$ (closing paragraph): without it the hidden activity of a linear network lies exactly in $\col(Z)$, every null direction has identically zero power, and the floor does not exist; that zero is the $\sigma\to0$ statement (i) of Section~\ref{sec:sigma0} and checks the projection, not the theory.\\
-  \emph{Measure:} $\hat d_q$ of the $253$ null directions and of the two latent modes; $R(r)/R(0)$.\\
-  \emph{Predict:} every null direction has a flat spectrum at $0.5$ and $|R(r)/R(0)|<0.05$ for $r\ge1$; the latent modes sit above it with $\hat d_0/\sigma_0^2 = 2.0$ and $1.9$ and $R(1)/R(0) = 0.18$ and $0.14$.\\
-  \emph{Falsified if} the null-direction autocorrelation at $r = 1$ exceeds $0.1$, or its level differs from $0.5$ by more than a factor $1.5$ (which excludes the bare $\sigma^2 = 1$).
+  \emph{Measure:} $\hat d_q$ of the $253$ null directions and of the two latent modes; $R(\Delta)/R(0)$.\\
+  \emph{Predict:} every null direction has a flat spectrum at $0.5$ and $|R(\Delta)/R(0)|<0.05$ for $\Delta\ge1$; the latent modes sit above it with $\hat d_0/\sigma_0^2 = 2.0$ and $1.9$ and $R(1)/R(0) = 0.18$ and $0.14$.\\
+  \emph{Falsified if} the null-direction autocorrelation at $\Delta = 1$ exceeds $0.1$, or its level differs from $0.5$ by more than a factor $1.5$ (which excludes the bare $\sigma^2 = 1$).
 
   \item \textbf{Noise-dominated (regime c1).}\\
   \emph{Setting:} $k_0 = 0.001$, $\sigma^2 = 1$, $r = 0$, $\beta = 0.25$ ($\rho_1 = 0.3$). Requires $\eta$, as 4.\\
@@ -457,8 +457,8 @@ Common setting unless stated: linear activation, one hidden layer on a ring of $
 
   \item \textbf{Correlation length tracks the prior.}\\
   \emph{Setting:} 1 with $\ell\in\{2,4,8\}$.\\
-  \emph{Measure:} $R_k(r)/R_k(0)$ for $1\le r\le2\ell$ and $R_k(0)$, both modes.\\
-  \emph{Predict:} $R_k(r)/R_k(0) = K(r)$, the wrapped Gaussian of \eqref{eq:ring} (indistinguishable from $e^{-r^2/2\ell^2}$ at these $\ell$), to within $7\times10^{-3}$ for $r\le2\ell$ (the small deviations are the floor and the target amplification); the Gaussian width read off at $r = \ell$ is $2.00, 4.01, 8.06$ for mode 1 and $1.99, 3.99, 7.97$ for mode 2. $R_k(0) = \hat s_{X,k}^2 + \sigma^2$ is nearly independent of $\ell$ because $\bar\lambda = 1$: $26.7, 26.8, 27.2$ for mode 1 (the $1.7\%$ rise at $\ell = 8$ is the growing target amplification, $\tau_1\propto\lambda_0\propto\ell$) and $2.677$ for mode 2 at every $\ell$ (script E, P7).\\
+  \emph{Measure:} $R_k(\Delta)/R_k(0)$ for $1\le \Delta\le2\ell$ and $R_k(0)$, both modes.\\
+  \emph{Predict:} $R_k(\Delta)/R_k(0) = K(\Delta)$, the wrapped Gaussian of \eqref{eq:ring} (indistinguishable from $e^{-\Delta^2/2\ell^2}$ at these $\ell$), to within $7\times10^{-3}$ for $\Delta\le2\ell$ (the small deviations are the floor and the target amplification); the Gaussian width read off at $\Delta = \ell$ is $2.00, 4.01, 8.06$ for mode 1 and $1.99, 3.99, 7.97$ for mode 2. $R_k(0) = \hat s_{X,k}^2 + \sigma^2$ is nearly independent of $\ell$ because $\bar\lambda = 1$: $26.7, 26.8, 27.2$ for mode 1 (the $1.7\%$ rise at $\ell = 8$ is the growing target amplification, $\tau_1\propto\lambda_0\propto\ell$) and $2.677$ for mode 2 at every $\ell$ (script E, P7).\\
   \emph{Falsified if} the fitted Gaussian width differs from $\ell$ by more than $20\%$, or $R_k(0)$ changes by more than $15\%$ across $\ell$.
 
   \item \textbf{A common prior scale is non-monotone (Section~\ref{sec:k}).}\\
