@@ -18,7 +18,7 @@ import numpy as np
 # --- parameters quoted in latex/notes/rg_*.tex ------------------------------
 SEED = 0
 N, P, M_IN, N_OUT, N_LATENT = 12, 4, 6, 5, 3   # sites, patterns, m, n, latents
-KERNEL_WIDTH = np.sqrt(2.0)                    # K_ij = exp(-r_ij^2 / (2 w^2)), ring distance r
+KERNEL_WIDTH = np.sqrt(2.0)                    # K_ij = exp(-Delta_ij^2 / (2 w^2)), ring distance Delta
 Z_MAX = 1.0                                    # Z_{mu,k} ~ U[0, Z_MAX]
 WY_SCALE = 0.6                                 # W_Y = 0.6 * (orthonormal columns)
 K0, K1, SIG2, R, DELTA = 0.7, 1.3, 0.2, 0.3, 0.5  # R: the rate-penalty coefficient r (the notes' G = r I)
@@ -28,8 +28,8 @@ C_START = 5.0                                  # iterate from C = C_START * I (l
 
 def ring_kernel(n_sites, width):
     """Translation-invariant Gaussian kernel on a periodic ring."""
-    r = np.minimum(np.arange(n_sites), n_sites - np.arange(n_sites))
-    row = np.exp(-r**2 / (2 * width**2))
+    dist = np.minimum(np.arange(n_sites), n_sites - np.arange(n_sites))
+    row = np.exp(-dist**2 / (2 * width**2))
     return np.array([np.roll(row, i) for i in range(n_sites)])
 
 
