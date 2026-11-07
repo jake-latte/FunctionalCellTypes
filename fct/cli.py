@@ -72,7 +72,7 @@ from fct.meanfield import (
 )
 from fct.model import MLP
 from fct.monitor import make_monitor
-from fct.train import History, load_trained, select_member, train_from_config
+from fct.train import History, Monitor, load_trained, select_member, train_from_config
 
 FIGURE_DPI = 150
 
@@ -170,13 +170,13 @@ def _load_net(cache_dir: Path, cfg: Config) -> tuple[MLP, History]:
         raise CliError(f"{cache_dir}: {err}; this command does not support ensembles") from err
 
 
-def _lazy_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]:
+def _lazy_monitor(dataset: Dataset, cfg: Config) -> Monitor:
     """The monitor of `train.monitor_kind`, built on its first call, so a finished run (which
     `train` returns without monitoring) loads even when the dataset has no factors (or, for the
     spectrum monitor, no mean direction); a fresh run still fails at once, at epoch 0."""
 
     @functools.cache
-    def build() -> Callable[[MLP], dict[str, list]]:
+    def build() -> Monitor:
         return make_monitor(dataset, cfg)
 
     def monitor(net: MLP) -> dict[str, list]:

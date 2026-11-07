@@ -37,6 +37,7 @@ from fct.monitor import (
 from fct.report import load_results, load_setting_result
 from fct.tasks import Dataset
 from fct.train import MONITOR_EPOCH, MONITOR_PREFIX, train
+from tests.spectrum_helpers import uniform_factors
 
 CPU, F64 = torch.device("cpu"), torch.float64
 QUIET = {"log": lambda s: None}
@@ -57,11 +58,6 @@ def _cfg(data: DataConfig, N=8, L=2, B=1, monitor_int=1, **train_kw) -> Config:
         dtype="float64",
         device="cpu",
     )
-
-
-def _uniform_factors(P: int, K: int, seed: int = 0) -> dict[str, torch.Tensor]:
-    z = torch.rand((P, K), dtype=F64, generator=torch.Generator().manual_seed(seed))
-    return {f"z{k}": z[:, k] for k in range(K)}
 
 
 def _cosine_map(N: int, q: int, amplitude: float) -> torch.Tensor:
@@ -98,7 +94,7 @@ def test_one_record_recovers_a_known_spectrum_and_null_floor():
     """h = sum_k u_k (x) t_k + w (x) c, t_k a cosine at q_k, w a unit vector orthogonal to
     col(Z): the latent rows are the cosines' power and the null row is |c~(q)|^2 / (P - K)."""
     P, K, N = 64, 3, 32
-    factors = _uniform_factors(P, K)
+    factors = uniform_factors(P, K)
     U = sp.latent_basis(factors).U
     modes = [(2, 3.0), (5, 1.5), (7, 0.5)]  # (q_k, amplitude_k)
     t = torch.stack([_cosine_map(N, q, a) for q, a in modes])  # (K, N)
@@ -115,15 +111,16 @@ def test_one_record_recovers_a_known_spectrum_and_null_floor():
     expected_null = _cosine_power(N, 11, 0.2)
     expected_null[0] = N * 0.1**2
     expected = torch.stack([*(_cosine_power(N, q, a) for q, a in modes), expected_null / (P - K)])
-    # float32 storage keeps each power to relative 6e-8; the null row is ~5e-3, so atol 1e-8
-    # still resolves it, and the zeros are float64 round-off of order 1e-14 x 72
+    # float32 storage keeps each power to relative 6e-8, and the null row (~5e-3) is far above
+    # atol. Entries that are exactly 0 in `expected` come out as float64 round-off relative to
+    # the largest power, 3^2 x 32 / 4 = 72, so about 1e-14 x 72 << atol.
     torch.testing.assert_close(spectrum.double(), expected, atol=1e-8, rtol=1e-6)
 
 
 def test_angle_keys_match_direct_calls_and_are_stored_compactly():
     """hex is (Re, Im) of hexatic_moment and theta_hist the 36 counts, of rows 1 and 2 of t."""
     P, K, N = 64, 3, 48
-    factors = _uniform_factors(P, K, seed=4)
+    factors = uniform_factors(P, K, seed=4)
     h = torch.randn((P, N), dtype=F64, generator=torch.Generator().manual_seed(5))
     dataset, cfg, net = _identity_input_net(h, factors)
     record = make_spectrum_monitor(dataset, cfg)(net)
@@ -155,7 +152,7 @@ def test_every_layer_is_recorded_and_the_angle_keys_need_three_latents(K, keys):
     torch.testing.assert_close(torch.stack(record["spectrum"]), direct)
 
 
-def test_a_record_is_deterministic_and_leaves_the_rng_alone():
+def test_a_record_is_deterministic_and_leaves_the_rng_and_autograd_alone():
     cfg = _cfg(_teacher())
     dataset = make_dataset(cfg.data, CPU, F64)
     net = make_net(cfg.net, dataset.x.shape[1], dataset.y.shape[1], CPU, F64)
@@ -163,10 +160,13 @@ def test_a_record_is_deterministic_and_leaves_the_rng_alone():
     state = torch.get_rng_state()
     first, second = monitor(net), monitor(net)
     assert torch.equal(torch.get_rng_state(), state)
+    records = [x for key in first for x in first[key]]
     assert all(
         torch.equal(a, b) for key in first for a, b in zip(first[key], second[key], strict=True)
     )
-    assert all(p.grad is None for p in net.parameters())
+    # run under no_grad, a record holds no graph back to the parameters (it would keep every
+    # forward pass of the run alive in the history)
+    assert not any(x.requires_grad or x.grad_fn is not None for x in records)
 
 
 # ------------------------------------------------------------------ failing at the start
@@ -220,6 +220,7 @@ def test_mir_hashes_are_those_written_before_monitor_kind_existed():
 
 def test_bins_and_shuffles_do_not_enter_a_spectrum_hash():
     """They configure the MIR monitor only, so they cannot change a spectrum run's history."""
+
     def hashed(**train_kw) -> str:
         return Config(train=TrainConfig(monitor_int=1, **train_kw)).section_hash(*TRAIN)
 
@@ -276,6 +277,35 @@ def test_an_ensemble_run_records_a_member_axis(tmp_path):
     assert not torch.equal(spectrum[-1, 0], spectrum[-1, 1])  # the members differ
 
 
+def test_the_spectrum_monitor_leaves_training_unchanged(tmp_path):
+    """A 20-epoch monitored run of one network records (records, layers, ...) per key and ends
+    at exactly the weights and losses of the same run without a monitor."""
+    L, N, K = 2, 8, 3
+    cfg = _cfg(_teacher(K=K), N=N, L=L, n_epochs=20, monitor_int=5, log_int=5, save_int=5)
+    unmonitored_train = {**cfg.train.model_dump(), "monitor_int": 0, "monitor_kind": "mir"}
+    plain = cfg.model_copy(update={"train": TrainConfig(**unmonitored_train)})
+    dataset = make_dataset(cfg.data, CPU, F64)
+
+    def run(config: Config, directory, monitor):
+        net = make_net(config.net, dataset.x.shape[1], dataset.y.shape[1], CPU, F64)
+        return train(config, dataset, net, directory, monitor=monitor, **QUIET)
+
+    monitored, history = run(cfg, tmp_path / "monitored", make_monitor(dataset, cfg))
+    unmonitored, plain_history = run(plain, tmp_path / "plain", None)
+
+    def stacked(key: str) -> torch.Tensor:
+        return torch.stack([torch.stack(layers) for layers in history[MONITOR_PREFIX + key]])
+
+    n_records = len(history[MONITOR_EPOCH])
+    assert history[MONITOR_EPOCH] == [0, 5, 10, 15, 20]
+    assert stacked("spectrum").shape == (n_records, L, K + 1, N)
+    assert stacked("hex").shape == (n_records, L, 2)
+    assert stacked("theta_hist").shape == (n_records, L, 36)
+    for name, value in unmonitored.state_dict().items():
+        assert torch.equal(monitored.state_dict()[name], value), name
+    assert history["loss"] == plain_history["loss"]
+
+
 def test_run_setting_uses_the_spectrum_monitor_of_the_experiment(tmp_path):
     tiny = preset("tiny")
     exp = with_axes(
@@ -292,9 +322,8 @@ def test_run_setting_uses_the_spectrum_monitor_of_the_experiment(tmp_path):
     directory = setting_dir(tmp_path, expand(exp)[0])
     history = torch.load(cache_paths(directory).train / "final.pt", weights_only=True)["history"]
     spectrum = _spectrum_history(history, f"{MONITOR_PREFIX}spectrum")
-    n_records = len([*range(0, exp.n_epochs, exp.monitor_int)]) + 1
     K = exp.linear_teacher.n_latents
-    assert spectrum.shape == (n_records, 2, 2, K + 1, exp.N)
+    assert spectrum.shape == (len(history[MONITOR_EPOCH]), 2, 2, K + 1, exp.N)
     assert f"{MONITOR_PREFIX}mir" not in history
 
 
@@ -319,7 +348,8 @@ def test_an_experiment_with_symmetric_latents_is_rejected_when_built():
 
 
 @pytest.mark.parametrize(
-    "axes", [{"data.task": ["linear_teacher", "what_where"]}, None]  # None: the built-in axes
+    "axes",
+    [{"data.task": ["linear_teacher", "what_where"]}, None],  # None: the built-in axes
 )
 def test_an_experiment_with_a_task_without_latents_is_rejected_when_built(axes):
     exp = _spectrum_tiny().model_copy(update={"axes": axes})

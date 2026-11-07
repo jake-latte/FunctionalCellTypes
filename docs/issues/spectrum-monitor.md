@@ -10,8 +10,22 @@ status: in review
 # The spectrum monitor and its wiring (`train.monitor_kind`)
 
 W7 of `latex/notes/fct_experiment_plan.tex`, confirmed 2026-11-06. Depends on
-`spectrum-module`. Amendment: there is no `noise=True` forward (no $\eta$ in
-the code); the monitor calls `net(dataset.x)`.
+`spectrum-module`. Amendments to the text quoted below:
+
+- There is no `noise=True` forward (no $\eta$ in the code); the monitor calls
+  `net(dataset.x)`.
+- `monitor_hex` replaces `monitor_cos4` (PI decision 2026-11-07). The monitor
+  records the complex hexatic moment $\langle e^{6i\theta}\rangle$ as (Re, Im),
+  whose modulus is frame-free: it does not depend on where the SVD puts $u_2$
+  in the contrast plane, whereas $\langle\cos 4\theta\rangle$ is measured
+  against the SVD axes and averages to zero for neurons each tuned to one of
+  the three latents (they sit $120^\circ$ apart). `hex` and `theta_hist` are
+  recorded only for $K \ge 3$ and mean something only at $K = 3$.
+- The 20-step criterion is met by
+  `test_the_spectrum_monitor_leaves_training_unchanged`: a 20-epoch monitored
+  run of one network writes `monitor_spectrum` of shape (records, layers,
+  $K+1$, $N$), `monitor_hex` and `monitor_theta_hist`, and ends at weights
+  identical to the unmonitored run's.
 
   \item \textbf{W7. The spectrum monitor and its wiring.} Type infrastructure; complexity simple.\\
   \emph{Description:} a training monitor that records the spectra and the angle statistics every \code{monitor\_int} steps, selected by a config field, so that an experiment produces the measurement as part of its history.\\

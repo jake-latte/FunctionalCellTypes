@@ -15,6 +15,7 @@ import pytest
 import torch
 
 from fct import spectrum as sp
+from tests.spectrum_helpers import uniform_factors
 
 # The script that produced the limits note's numbers is the reference implementation of
 # half_power_q, autocorrelation and lag-1; it is a standalone check outside the fct package,
@@ -35,13 +36,6 @@ def limits():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def uniform_factors(P: int, K: int, a: float = 1.0, seed: int = 0) -> dict[str, torch.Tensor]:
-    """Latents z0..z{K-1} iid uniform on [0, a], as the linear-teacher task draws them."""
-    gen = torch.Generator().manual_seed(seed)
-    z = a * torch.rand((P, K), dtype=F64, generator=gen)
-    return {f"z{k}": z[:, k] for k in range(K)}
 
 
 def gaussian_field(d: torch.Tensor, n_draws: int, gen: torch.Generator) -> torch.Tensor:
@@ -493,8 +487,10 @@ def test_hexatic_moment_is_near_one_for_neurons_tuned_to_single_latents():
     """Each neuron is one latent, h_i = z_{k(i)}: in the contrast plane the three latents sit
     120 degrees apart, 6 theta is the same angle for all three, and |<e^{6 i theta}>| -> 1.
 
-    At P = 4096 the projections deviate from 120 degrees by O(P^-1/2); over 50 frames the
-    modulus was 0.995 to 1, so 0.95 is a loose bound.
+    The sample latents are isotropic in the contrast plane only up to O(P^-1/2) fluctuations
+    of their covariance, so their projections deviate from 120 degrees by O(P^-1/2) ~ 0.02 rad
+    at P = 4096. Under 6 theta that is ~0.1 rad, and the modulus, at least the cosine of the
+    largest deviation, stays near 0.99: 0.95 is a loose bound.
     """
     P, K, N = 4096, 3, 99
     factors = uniform_factors(P, K, seed=31)
@@ -533,11 +529,16 @@ def test_hexatic_moment_turns_by_six_phi_when_the_tunings_rotate_by_phi():
 
 
 def test_hexatic_moment_keeps_the_precision_and_counts_a_silent_neuron_at_theta_zero():
-    t2 = torch.tensor([0.0, 0.0], dtype=torch.float32)
-    t3 = torch.tensor([0.0, 1.0], dtype=torch.float32)  # theta = 0 and pi / 2
+    """A silent neuron contributes e^0 = 1. The other neuron is at theta = pi/12, contributing
+    e^{i pi/2} = i, so the mean (1 + i)/2 pins both parts: a silent neuron at any other
+    angle (or dropped) would move the real part."""
+    t2 = torch.tensor([0.0, math.cos(math.pi / 12)], dtype=torch.float32)
+    t3 = torch.tensor([0.0, math.sin(math.pi / 12)], dtype=torch.float32)
     moment = sp.hexatic_moment(t2, t3)
     assert moment.dtype == torch.complex64
-    torch.testing.assert_close(moment, torch.tensor(0.0 + 0.0j, dtype=torch.complex64))
+    torch.testing.assert_close(moment, torch.tensor(0.5 + 0.5j, dtype=torch.complex64))
+    alone = sp.hexatic_moment(torch.zeros(1), torch.zeros(1))
+    torch.testing.assert_close(alone, torch.tensor(1.0 + 0.0j, dtype=torch.complex64))
 
 
 @pytest.mark.parametrize("fn", [sp.contrast_angle_statistic, sp.theta_histogram, sp.hexatic_moment])
