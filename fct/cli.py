@@ -71,7 +71,7 @@ from fct.meanfield import (
     run_meanfield,
 )
 from fct.model import MLP
-from fct.monitor import make_mir_monitor
+from fct.monitor import make_monitor
 from fct.train import History, load_trained, select_member, train_from_config
 
 FIGURE_DPI = 150
@@ -170,13 +170,14 @@ def _load_net(cache_dir: Path, cfg: Config) -> tuple[MLP, History]:
         raise CliError(f"{cache_dir}: {err}; this command does not support ensembles") from err
 
 
-def _lazy_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]:
-    """A MIR monitor built on its first call, so a finished run (which `train` returns without
-    monitoring) loads even when the dataset has no factors; a fresh run still fails at once."""
+def _lazy_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]:
+    """The monitor of `train.monitor_kind`, built on its first call, so a finished run (which
+    `train` returns without monitoring) loads even when the dataset has no factors (or, for the
+    spectrum monitor, no mean direction); a fresh run still fails at once, at epoch 0."""
 
     @functools.cache
     def build() -> Callable[[MLP], dict[str, list]]:
-        return make_mir_monitor(dataset, cfg)
+        return make_monitor(dataset, cfg)
 
     def monitor(net: MLP) -> dict[str, list]:
         return build()(net)
@@ -189,7 +190,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     final = cache_paths(args.cache_dir).train / "final.pt"
     if final.exists():
         print(f"loaded trained model from {final}")
-    monitor = _lazy_mir_monitor(dataset, cfg) if cfg.train.monitor_int > 0 else None
+    monitor = _lazy_monitor(dataset, cfg) if cfg.train.monitor_int > 0 else None
     train_from_config(cfg, dataset, args.cache_dir, log=print, monitor=monitor)
     return 0
 

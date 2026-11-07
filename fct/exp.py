@@ -6,7 +6,7 @@ that vary: each axis is a dotted `Config` path (`net.L`, `train.rate_lambda`, ..
 list of values. `expand` lists the Cartesian product in a stable order, so a SLURM array index
 and a local check name the same setting. Each setting is a normal fct cache directory that
 `run_setting` fills by the same path as `python -m fct train`: config.json, dataset, training
-with the MIR monitor.
+with the monitor `monitor_kind` picks (the MIR by default).
 `run_setting(..., stage="solve")` instead solves the mean-field saddle point of the same
 setting into its `meanfield/` directory, with the experiment's `meanfield` section (problem fields
 plus the `solver` group; it never enters a training hash, so the same exp.json defines both
@@ -51,6 +51,7 @@ from fct.config import (
     DataConfig,
     InitLaw,
     MeanFieldConfig,
+    MonitorKind,
     NetConfig,
     NonNegFloat,
     NonNegInt,
@@ -70,7 +71,7 @@ from fct.config import (
 )
 from fct.data import Dataset, get_dataset, task_dims
 from fct.meanfield import meanfield_hash, run_meanfield
-from fct.monitor import make_mir_monitor
+from fct.monitor import make_monitor
 from fct.schema import exclude_at_default
 from fct.spatial import SpatialConfig
 from fct.train import load_trained, train_from_config
@@ -119,6 +120,7 @@ EXP_OWNED_AXES = {
     "train.monitor_int": "monitor_int",
     "train.monitor_bins": "monitor_bins",
     "train.monitor_shuffles": "monitor_shuffles",
+    "train.monitor_kind": "monitor_kind",
 }
 
 Status = Literal["done", "partial", "missing", "stale"]
@@ -226,6 +228,9 @@ class ExpConfig(StrictModel):
     monitor_int: PosInt  # the experiment always monitors: MIR over training is its point
     monitor_bins: Annotated[int, Field(ge=2)]
     monitor_shuffles: PosInt
+    # The monitor every setting runs (`TrainConfig.monitor_kind`): "mir", or "spectrum", which
+    # needs the latents z0..z{K-1} on [0, a] (`fct.spectrum.latent_basis`).
+    monitor_kind: MonitorKind = TrainConfig().monitor_kind
     linear_teacher: LinearTeacherParams
     object_action: ObjectActionParams
     what_where: WhatWhereParams
@@ -390,6 +395,7 @@ EXP_JSON_OMITTED_AT_DEFAULT: dict[str, Any] = {
     "init": NetConfig().init,
     "linear_teacher.teacher": LinearTeacherParams.model_fields["teacher"].default,
     "spatial.parametrisation": SpatialConfig().parametrisation,
+    "monitor_kind": TrainConfig().monitor_kind,
 }
 
 
@@ -527,6 +533,7 @@ def _base_config(exp: ExpConfig, task: str) -> Config:
             monitor_int=exp.monitor_int,
             monitor_bins=exp.monitor_bins,
             monitor_shuffles=exp.monitor_shuffles,
+            monitor_kind=exp.monitor_kind,
         ),
         meanfield=exp.meanfield,
         spatial=exp.spatial,
@@ -906,7 +913,7 @@ def run_setting(
     log(f"setting {index}: {directory} ({stage})")
     dataset = get_dataset(directory, cfg)
     if stage == "train":
-        train_from_config(cfg, dataset, directory, log=log, monitor=make_mir_monitor(dataset, cfg))
+        train_from_config(cfg, dataset, directory, log=log, monitor=make_monitor(dataset, cfg))
     else:
         _solve_setting(cfg, dataset, directory, log)
 
