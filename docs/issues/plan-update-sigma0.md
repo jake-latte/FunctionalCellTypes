@@ -79,6 +79,14 @@ outcomes change the dictionary and the sampling protocol).
   (the `spatial_tiny` preset floors one eigenvalue at N = 8). Options: pair
   `train.lr` with the parametrisation (two experiments, or a paired axis), or
   run both at the penalty path's lr. The plan's P1-P3 axes must say which.
+- After the $g^2\to r$ rename the plan's naming-clash entries (D5 at line ~39,
+  the "name clash D5" cell at ~137, item (a) at ~205) describe a clash that no
+  longer exists between `net.g` and the notes' symbol: rewrite them.
+- Notation (PI decision pending): $r$ is now the rate coefficient and also the
+  ring distance in $R(r)$, $K(r)$ (limits note, plan), a mode index in
+  `linear_without_ansatz.tex`, `r_{i,j}` in `continuum_limit.tex:398` and a rank
+  in `A1_comments.tex:224-228`; the limits note's table row (a1) uses both
+  meanings in one cell.
 - The summary of conclusions and the order of work list the new item slugs.
 
 ## Acceptance criteria
