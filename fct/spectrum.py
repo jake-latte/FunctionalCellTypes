@@ -20,14 +20,15 @@ The maths, with h (P, N) the activity of N neurons over P patterns (neuron i at 
                  independently of where the SVD puts u_2 in the contrast plane (K = 3 only)
 
 Every estimator is per network: one trained network (or one ensemble member) gives one sample
-of each spectrum and summary, and the spread is taken across members (`member_mean_sem`).
+of each spectrum and summary, and the spread is taken across members (`member_mean_sem`, or
+`bootstrap_members` for a statistic of the member-averaged spectrum such as q_1/2).
 `average_records` and `record_sem` pool records along one chain: a diagnostic of burn-in and
 mixing, not an estimator, because one chain is not trusted to visit independent networks.
 """
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import NamedTuple
 
 import torch
@@ -516,3 +517,41 @@ def member_mean_sem(values: Tensor) -> tuple[Tensor, Tensor]:
     if B < 2:
         raise ValueError(f"need at least 2 members for a spread, got {B}")
     return values.mean(dim=0), values.std(dim=0) / math.sqrt(B)
+
+
+def bootstrap_members(
+    values: Tensor,
+    statistic: Callable[[Tensor], Tensor | float | int],
+    n_boot: int = 1000,
+    seed: int = 0,
+) -> tuple[Tensor, Tensor]:
+    """A statistic of the member mean and its bootstrap standard error across members.
+
+    `values` (B, ...) holds one sample per independent network (its final-state spectrum, say).
+    The estimate is `statistic(values.mean(0))`: the statistic of the member-averaged sample,
+    which is what a nonlinear statistic needs (q_1/2 is defined only on a mean spectrum, and a
+    share of the mean spectrum is not the mean of the members' shares). The standard error is
+    the std (ddof 1) of the statistic over `n_boot` resamples of the B members with
+    replacement. `statistic` must batch over leading dims ((n_boot, ...) means in, (n_boot, ...)
+    out), as every summary of this module does. Resampling draws from a generator seeded with
+    `seed`, never from the global RNG. The resampled means take n_boot * B * prod(...) entries.
+    """
+    _check_float("values", values, 1)
+    B = values.shape[0]
+    if B < 2:
+        raise ValueError(f"need at least 2 members to resample, got {B}")
+    if n_boot < 2:
+        raise ValueError(f"n_boot must be at least 2 for a standard error, got {n_boot}")
+    estimate = torch.as_tensor(statistic(values.mean(dim=0)), device=values.device)
+    gen = torch.Generator().manual_seed(seed)
+    index = torch.randint(B, (n_boot, B), generator=gen).to(values.device)
+    resampled = torch.as_tensor(statistic(values[index].mean(dim=1)), device=values.device)
+    if resampled.shape != (n_boot, *estimate.shape):
+        raise ValueError(
+            f"the statistic must batch over leading dims: it maps a mean of shape "
+            f"{tuple(values.shape[1:])} to {tuple(estimate.shape)} but {n_boot} resampled means "
+            f"to {tuple(resampled.shape)}, not {(n_boot, *estimate.shape)}"
+        )
+    if not resampled.is_floating_point():
+        resampled = resampled.to(values.dtype)
+    return estimate, resampled.std(dim=0)
