@@ -72,6 +72,11 @@ BAND_FRACTION = 3 / 64
 _LATENT_NAME = re.compile(r"z(\d+)")
 
 
+class HalfPowerUndefinedError(ValueError):
+    """`half_power_q` of a spectrum rising to Nyquist (d_0 < d_N/2), which has no half-power
+    point: a property of the data, unlike the ValueErrors of bad input."""
+
+
 class LatentBasis(NamedTuple):
     U: Tensor  # (P, K) orthonormal columns, column 0 the mean direction u_1
     s2: Tensor  # (K,) squared singular values of Z, descending
@@ -308,7 +313,7 @@ def half_power_q(d: Tensor) -> int | Tensor:
     realisation: in one record d_0 and d_{N/2} are single chi^2 draws, so their order is
     noise (a map with mean D_0 = 100 D_{N/2} still has d_0 < d_{N/2} with probability
     (2/pi) atan(sqrt(D_{N/2}/D_0)) = 6%). Raises if d_0 < d_{N/2} anywhere: the spectrum then
-    rises to Nyquist and has no half-power point.
+    rises to Nyquist and has no half-power point (`HalfPowerUndefinedError`).
     """
     N = _check_spectrum(d)
     k = torch.arange(N, device=d.device)
@@ -318,7 +323,7 @@ def half_power_q(d: Tensor) -> int | Tensor:
     if rising.any():
         first = rising.nonzero()[0].tolist()
         where = f"{int(rising.sum())} of {rising.numel()} spectra, first at batch index {first}"
-        raise ValueError(
+        raise HalfPowerUndefinedError(
             f"half-power frequency undefined: d_0 < d_N/2 in {where} (d_0 = "
             f"{float(d0[..., 0][tuple(first)])}, d_N/2 = {float(floor[..., 0][tuple(first)])}); "
             "the spectrum rises with |q|. half_power_q needs a mean spectrum"

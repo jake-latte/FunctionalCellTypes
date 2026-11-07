@@ -74,7 +74,7 @@ def test_every_figure_cell_is_introduced_by_an_equation():
 
 # Statements a cell may hold: assignments and calls, and the angle cell's one branch. Loops,
 # comprehensions, lambdas and definitions are logic, which belongs in the library.
-LOGIC = (ast.For, ast.While, ast.FunctionDef, ast.Lambda, ast.ListComp, ast.DictComp,
+LOGIC = (ast.For, ast.While, ast.AsyncFunctionDef, ast.ClassDef, ast.FunctionDef, ast.Lambda, ast.ListComp, ast.DictComp,
          ast.SetComp, ast.GeneratorExp)  # fmt: skip
 
 
@@ -99,6 +99,8 @@ def test_the_text_states_the_thresholds_of_the_library():
     assert f"within {lr.EQUIVALENCE_N_SE:g} combined SEs" in text
     assert r"q_b = \mathrm{round}(3N/64)" in text
     assert f"(K = {lr.ANGLE_K} only)" in text
+    assert rf"N B \ge {lr.HEXATIC_MIN_SAMPLES}$" in text
+    assert rf"$\pm {lr.RELAXATION_BAND:g}$ budget" in text
 
 
 def test_the_text_follows_a_changed_threshold(monkeypatch):

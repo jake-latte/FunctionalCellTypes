@@ -48,6 +48,8 @@ def thresholds() -> dict[str, str]:
         "<EQUIVALENCE_N_SE>": f"{lr.EQUIVALENCE_N_SE:g}",
         "<Q_HALF_TOLERANCE>": f"{lr.Q_HALF_TOLERANCE:g}",
         "<HEXATIC_MAX>": f"{lr.HEXATIC_MAX:g}",
+        "<HEXATIC_MIN_SAMPLES>": f"{lr.HEXATIC_MIN_SAMPLES}",
+        "<RELAXATION_BAND>": f"{lr.RELAXATION_BAND:g}",
         "<ANGLE_K>": f"{lr.ANGLE_K}",
         "<BAND_RULE>": rf"\mathrm{{round}}({band.numerator}N/{band.denominator})",
     }
@@ -106,7 +108,7 @@ SETTING = {"spatial.parametrisation": "penalty", "train.lr": 0.0006}  # axis val
 TWIN_ROOT = None  # the ROOT of the setting shown beside it; None: ROOT
 TWIN_SETTING = {"spatial.parametrisation": "whitened", "train.lr": 0.005}  # its axis values; None: SETTING alone
 BURN_IN = None  # epoch from which the relaxation fit tests the end of each run; None: the second half
-BASE_B = None  # the B before any exp extend, for the budget; None: from the preset each ROOT was made from
+BASE_B = None  # {"setting": B0, "twin": B0}, the B before any exp extend, for the budget; None: as each ROOT recorded it
 SWEEP_AXIS = None  # a numeric axis to draw the band share against (train.beta, say); None: the setting index
 EXACT = None  # the exact posterior's statistics of SETTING, in statistic_list order; None: regime not assessed
 TWIN_EXACT = None  # the same for TWIN_SETTING
@@ -185,8 +187,9 @@ MEASURE_TEXT = r"""## The measurement
 For each shown setting: the final states of its $B$ members (the last record, taken after the
 last step) give the member-averaged spectrum and everything read off it, with the bootstrap over
 members (`lr.measure_final`); the records before the last give the relaxation diagnostic
-(`lr.measure_relaxation`), judged against the budget at the base $B_0$ (`BASE_B`, by default the
-$B$ of the preset the ROOT was made from, never exp.json's $B$, which `exp extend` grows)."""
+(`lr.measure_relaxation`), judged against the budget at the base $B_0$: the $B$ before the
+first `exp extend`, which records it in exp.json (`base_B`), never the extended $B$; a setting's
+own $B$ where $B$ is an axis. `BASE_B` overrides it per shown setting."""
 
 MEASURE = """MEASURED = measure_runs(SHOWN, BURN_IN, BASE_B, SEED)
 display(Markdown(measurement_note(SHOWN, MEASURED)))"""
@@ -207,7 +210,7 @@ Each statistic $y(t)$ of the member-averaged record at epoch $t$, relative to th
 the relaxation fitted from `BURN_IN` on (default: the second half of the run),
 $$y(t) = A - C\,e^{-(t - t_0)/\tau},$$
 in units of its accuracy budget (one delta-method SE at $<FOLLOW_UP_FACTOR>B_0$ members,
-`budget_se`). The fit is dashed and the grey band is $\pm 1$ budget. The run is stationary on a
+`budget_se`). The fit is dashed and the grey band is $\pm <RELAXATION_BAND>$ budget. The run is stationary on a
 statistic when the deficit still to relax at the last record, $C e^{-(t_\mathrm{end} - t_0)/\tau}$,
 and its bootstrap SE are both below the budget (`is_stationary`). Chains started from the prior
 show no relaxation in the directions the data does not touch whether or not they mix, so this
@@ -289,7 +292,8 @@ SE over members against the prediction at the run's $N$, floor and parametrisati
 is the experiments' rule for the primary statistics ($> <FALSIFY_N_SE>$ SE; a candidate
 falsification until it persists at $<FOLLOW_UP_FACTOR>B$ members), $|\Delta q_{1/2}| >
 <Q_HALF_TOLERANCE>$ for $q_{1/2}$, $> <FALSIFY_N_SE>$ SE for the $q = 0$ shares and, at
-$K = <ANGLE_K>$, $|\bar m| > <HEXATIC_MAX>$ for the hexatic modulus; a secondary statistic that
+$K = <ANGLE_K>$, $|\bar m| > <HEXATIC_MAX>$ for the hexatic modulus, applied only with
+$N B \ge <HEXATIC_MIN_SAMPLES>$ neuron-samples (below, it reads "below N·B threshold"); a secondary statistic that
 cannot be formed (a $q_{1/2}$ of a spectrum rising to Nyquist) is listed as unavailable with the
 reason. `regime accurate` is `regime_accurate` of the exact posterior's statistics (`EXACT`,
 `TWIN_EXACT`, from the preset's description) when they are given: the prediction is trusted on a

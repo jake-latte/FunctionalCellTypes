@@ -47,6 +47,7 @@ from fct.exp import ExpConfig, expand, setting_config
 from fct.linear_theory import network_parameters, predicted_spectra
 from fct.spectrum import (
     N_THETA_BINS,
+    HalfPowerUndefinedError,
     autocorrelation,
     band_mask,
     bootstrap_members,
@@ -386,6 +387,9 @@ Q_HALF_TOLERANCE = 1
 # 1 / sqrt(N B) (0.03 at N B = 10^3, less with B, but more when neighbours are correlated),
 # well below it.
 HEXATIC_MAX = 0.1
+# The plan applies HEXATIC_MAX only with at least this many neuron-samples N B: below it the
+# uniform-angle |m| of order 1 / sqrt(N B) is too close to the threshold to call.
+HEXATIC_MIN_SAMPLES = 1000
 # The angle statistics exist only at K = 3: then (u_2, u_3) is the whole contrast space and the
 # three latents project onto it 120 degrees apart; at K > 3 the plane is an arbitrary one of a
 # near-degenerate contrast space (`fct.spectrum.hexatic_moment`).
@@ -580,7 +584,8 @@ class Angles(NamedTuple):
 
     hexatic: Tensor  # |mean_b m_b|
     hexatic_se: Tensor
-    flagged: bool  # above HEXATIC_MAX
+    flagged: bool | None  # above HEXATIC_MAX; None below HEXATIC_MIN_SAMPLES neuron-samples
+    n_samples: int  # N B
     histogram: AngleHistogram
 
 
@@ -651,7 +656,7 @@ def measure_secondary(law: Law, latent: Tensor, seed: int = 0) -> Secondary:
         parts.append(
             ("q_half", values, se, predicted, (values - predicted).abs() > Q_HALF_TOLERANCE)
         )
-    except ValueError as err:  # `half_power_q`'s refusal of a rising spectrum
+    except HalfPowerUndefinedError as err:
         unavailable["q_half"] = str(err)
     statistic = share0_statistic(law.keep)
     values, se = bootstrap_members(latent, statistic, N_BOOT, seed)
@@ -668,11 +673,12 @@ def measure_secondary(law: Law, latent: Tensor, seed: int = 0) -> Secondary:
 
 
 def measure_angles(
-    law: Law, hex_moments: Tensor | None, theta_counts: Tensor | None, seed: int = 0
+    law: Law, B: int, hex_moments: Tensor | None, theta_counts: Tensor | None, seed: int = 0
 ) -> Angles | None:
-    """At K = 3, the hexatic modulus of the members' moments (B, 2) and their summed angle
+    """At K = 3, the hexatic modulus of the B members' moments (B, 2) and their summed angle
     histograms (B, N_THETA_BINS), both required; None at any other K, where the angle is not
-    defined (`ANGLE_K`)."""
+    defined (`ANGLE_K`). The modulus is flagged against HEXATIC_MAX only with N B >=
+    HEXATIC_MIN_SAMPLES neuron-samples."""
     if law.D.shape[0] != ANGLE_K:
         return None
     if hex_moments is None or theta_counts is None:
@@ -680,13 +686,20 @@ def measure_angles(
             f"at K = {ANGLE_K} the measurement needs the members' final hexatic moments and "
             "angle histograms (the spectrum monitor's hex and theta_hist)"
         )
-    if theta_counts.shape[-1] != N_THETA_BINS:
+    if tuple(hex_moments.shape) != (B, 2):
         raise ValueError(
-            f"angle histograms must have {N_THETA_BINS} bins, got {theta_counts.shape}"
+            f"hexatic moments must be (B, 2) = ({B}, 2), got {tuple(hex_moments.shape)}"
+        )
+    if tuple(theta_counts.shape) != (B, N_THETA_BINS):
+        raise ValueError(
+            f"angle histograms must be (B, {N_THETA_BINS}) = ({B}, {N_THETA_BINS}), got "
+            f"{tuple(theta_counts.shape)}"
         )
     value, se = hexatic_estimate(hex_moments.to(F64), seed)
     histogram = AngleHistogram(theta_counts.sum(0).to(F64), angle_marks(law))
-    return Angles(value, se, bool(value > HEXATIC_MAX), histogram)
+    n_samples = law.cfg.net.N * B
+    flagged = bool(value > HEXATIC_MAX) if n_samples >= HEXATIC_MIN_SAMPLES else None
+    return Angles(value, se, flagged, n_samples, histogram)
 
 
 def measure_final(
@@ -709,7 +722,7 @@ def measure_final(
         ratio=measure_ratio(law, latent, seed),
         profile=measure_profile(law, latent, seed),
         secondary=measure_secondary(law, latent, seed),
-        angles=measure_angles(law, hex_moments, theta_counts, seed),
+        angles=measure_angles(law, final.shape[0], hex_moments, theta_counts, seed),
         B=final.shape[0],
     )
 

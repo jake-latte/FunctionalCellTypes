@@ -247,6 +247,20 @@ def test_an_undefined_q_half_is_reported_without_stopping_the_measurement(law):
     assert m.primary.values.isfinite().all()
 
 
+def test_only_the_rising_spectrum_refusal_is_reported_as_unavailable(law, monkeypatch):
+    """Any other error of the q_1/2 statistic is a bug and propagates."""
+
+    def broken(keep=None):
+        def statistic(D):
+            raise ValueError("a bug, not a rising spectrum")
+
+        return statistic
+
+    monkeypatch.setattr(lr, "q_half_statistic", broken)
+    with pytest.raises(ValueError, match="a bug"):
+        lr.measure_final(law, _members(law, 8, seed=0))
+
+
 def test_a_wrong_spectrum_is_flagged(law):
     """Both modes drawn at mode 1's predicted spectrum: the ratio is 1, not about 7."""
     wrong = law._replace(D=law.D[[0, 0]])
@@ -284,6 +298,7 @@ def test_at_k_3_the_angles_are_measured_from_the_members(law3):
     assert m.angles is not None
     assert float(m.angles.hexatic) == pytest.approx(0.2)
     assert float(m.angles.hexatic_se) == pytest.approx(0.0, abs=1e-12)
+    assert m.angles.n_samples == law3.cfg.net.N * n >= lr.HEXATIC_MIN_SAMPLES
     assert m.angles.flagged == (0.2 > lr.HEXATIC_MAX)
     torch.testing.assert_close(m.angles.histogram.counts, counts.sum(0).to(F64))
     assert float(m.angles.histogram.counts.sum()) == n * law3.cfg.net.N
@@ -296,8 +311,22 @@ def test_at_k_3_the_angle_inputs_are_required(law3):
         lr.measure_final(law3, final)
     with pytest.raises(ValueError, match="hexatic moments and angle histograms"):
         lr.measure_final(law3, final, hex_moments=torch.zeros(8, 2))
-    with pytest.raises(ValueError, match=f"{N_THETA_BINS} bins"):
+    with pytest.raises(ValueError, match=f"\\(B, {N_THETA_BINS}\\)"):
         lr.measure_final(law3, final, torch.zeros(8, 2), torch.ones(8, N_THETA_BINS - 1))
+    with pytest.raises(ValueError, match="hexatic moments must be \\(B, 2\\) = \\(8, 2\\)"):
+        lr.measure_final(law3, final, torch.zeros(7, 2), torch.ones(8, N_THETA_BINS))
+    with pytest.raises(ValueError, match="angle histograms must be"):
+        lr.measure_final(law3, final, torch.zeros(8, 2), torch.ones(9, N_THETA_BINS))
+
+
+def test_below_the_neuron_sample_threshold_the_hexatic_is_not_flagged(law3):
+    """N B = 16 x 8 = 128 < HEXATIC_MIN_SAMPLES: |mean m| = 0.5 is reported, not called."""
+    t = _maps(law3, 8, seed=5)
+    moments = torch.tensor([[0.5, 0.0]] * 8, dtype=F64)
+    m = lr.measure_final(law3, mode_spectra(law3.U @ t, law3.U), moments,
+                         theta_histogram(t[:, 1], t[:, 2]))  # fmt: skip
+    assert m.angles.n_samples == 128 < lr.HEXATIC_MIN_SAMPLES
+    assert m.angles.flagged is None and float(m.angles.hexatic) == pytest.approx(0.5)
 
 
 # ------------------------------------------------------------------ the relaxation view

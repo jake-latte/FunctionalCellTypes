@@ -19,6 +19,7 @@ from fct.exp import (
     parse_derived_description,
     preset,
     save_exp,
+    with_axes,
 )
 from fct.spectrum import N_THETA_BINS, mode_spectra, theta_histogram
 from tests.spectrum_helpers import gaussian_field
@@ -106,19 +107,26 @@ def test_summary_table_reports_an_unavailable_q_half_with_its_reason(law):
     assert row[4] == "unavailable" and "half-power frequency undefined" in row[7]
 
 
-def test_summary_table_adds_the_hexatic_row_at_k_3():
+@pytest.mark.parametrize(
+    "members, verdict",
+    [
+        (16, f"below N·B threshold (256 < {lr.HEXATIC_MIN_SAMPLES})"),  # N = 16: 16 x 16
+        (64, "**yes**"),  # 16 x 64 = 1024 neuron-samples: 0.3 > HEXATIC_MAX is flagged
+    ],
+)
+def test_summary_table_adds_the_hexatic_row_at_k_3(members, verdict):
     tree = preset(PRESET).model_dump()
     tree["linear_teacher"]["n_latents"] = 3
     law3 = lr.predicted_law(ExpConfig.model_validate(tree), WHITENED)
-    t = _maps(law3, 16, seed=3)
-    moments = torch.tensor([[0.3, 0.0]] * 16, dtype=F64)
+    t = _maps(law3, members, seed=3)
+    moments = torch.tensor([[0.3, 0.0]] * members, dtype=F64)
     counts = theta_histogram(t[:, 1], t[:, 2])
     assert counts.shape[-1] == N_THETA_BINS
     m = lr.measure_final(law3, mode_spectra(law3.U @ t, law3.U), moments, counts)
     row = _rows(rv.summary_table(m, law3, law3.B))[-1]
     assert row[0] == "|mean m| (hexatic)" and row[1] == "2, 3"
     assert float(row[4]) == pytest.approx(0.3)
-    assert row[7] == "**yes**"  # 0.3 > HEXATIC_MAX
+    assert row[7] == verdict
 
 
 def test_summary_table_has_no_hexatic_row_below_k_3(measured, law):
@@ -210,35 +218,49 @@ def _untrained_root(tmp_path: Path, description: str | None = "unchanged") -> Pa
     return tmp_path
 
 
-@pytest.mark.parametrize(
-    "description, given, expected",
-    [
-        ("unchanged", None, preset(PRESET).B),  # the preset's own description
-        (derived_description(PRESET, ["lr=0.1"], []), None, preset(PRESET).B),
-        (derived_description(PRESET, ["B=32", "lr=0.1"], []), None, 32),  # --set B= wins
-        ("my own words", 48, 48),  # given wins
-        (derived_description(PRESET, ["B=32"], []), 16, 16),
-    ],
-)
-def test_the_base_b_is_the_presets_unless_set_or_given(tmp_path, description, given, expected):
-    run = rv.load_ring_setting(_untrained_root(tmp_path, description), {"train.lr": 0.005,
-                               "spatial.parametrisation": "whitened"})  # fmt: skip
-    assert rv.base_B_of(run, given) == expected
+def _init(root: Path, *sets: str) -> Path:
+    args = ["exp", "init", str(root), "--preset", PRESET]
+    assert main(args + [x for item in sets for x in ("--set", item)]) == 0
+    return root
 
 
-def test_an_unknown_base_b_is_refused(tmp_path):
-    run = rv.load_ring_settings(_untrained_root(tmp_path, "my own words"))[0]
-    with pytest.raises(ValueError, match="give BASE_B"):
-        rv.base_B_of(run)
+def test_an_unextended_experiments_base_b_is_its_b(tmp_path, capsys):
+    run = rv.load_ring_settings(_init(tmp_path))[0]
+    assert run.base_B == preset(PRESET).B == rv.base_B_of(run)
 
 
-def test_the_base_b_ignores_an_extension(tmp_path, capsys):
-    root = tmp_path
-    assert main(["exp", "init", str(root), "--preset", PRESET, "--set", "B=32"]) == 0
+def test_the_base_b_is_the_b_before_the_first_extension(tmp_path, capsys):
+    root = _init(tmp_path, "B=32")
     assert main(["exp", "extend", str(root), "--by", "96"]) == 0
+    assert main(["exp", "extend", str(root), "--by", "128"]) == 0
     capsys.readouterr()
     run = rv.load_ring_settings(root)[0]
-    assert run.law.B == 128 and rv.base_B_of(run) == 32
+    assert run.law.B == 256 and rv.base_B_of(run) == 32
+
+
+def test_the_last_of_repeated_b_overrides_is_the_base(tmp_path, capsys):
+    run = rv.load_ring_settings(_init(tmp_path, "B=16", "B=32"))[0]
+    assert rv.base_B_of(run) == 32
+
+
+def test_a_b_axis_gives_each_setting_its_own_base(tmp_path):
+    save_exp(with_axes(preset(PRESET), {"net.B": [16, 48]}), tmp_path)
+    assert [rv.base_B_of(r) for r in rv.load_ring_settings(tmp_path)] == [16, 48]
+
+
+def test_a_given_base_b_wins_and_must_be_a_positive_int(tmp_path, capsys):
+    run = rv.load_ring_settings(_init(tmp_path, "B=32"))[0]
+    assert rv.base_B_of(run, 8) == 8
+    for bad in (8.5, 8.0, True, "8"):
+        with pytest.raises(TypeError, match="must be an int"):
+            rv.base_B_of(run, bad)
+    with pytest.raises(ValueError, match="positive"):
+        rv.base_B_of(run, 0)
+
+
+def test_base_b_names_must_be_shown_settings():
+    with pytest.raises(KeyError, match="'twn'"):
+        rv.measure_runs({}, None, {"twn": 16})
 
 
 # ------------------------------------------------------------------ the loader

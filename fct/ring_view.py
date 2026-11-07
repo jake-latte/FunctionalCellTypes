@@ -8,7 +8,6 @@ A setting that is not trained is a status, not an error (`RingRun.trained`). The
 nothing here calls them.
 """
 
-import ast
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -19,13 +18,13 @@ from torch import Tensor
 
 from fct import linear_ring as lr
 from fct.exp import (
+    B_AXIS,
     ExpConfig,
     axes_of,
     expand,
     load_exp,
     parse_derived_description,
     preset,
-    preset_names,
     same_value,
 )
 from fct.monitor import spectrum_records
@@ -56,6 +55,7 @@ class RingRun(NamedTuple):
     records: Tensor | None  # (R, B, K + 1, N)
     hex_final: Tensor | None  # (B, 2) final hexatic moments, recorded at K >= 3
     theta_final: Tensor | None  # (B, N_THETA_BINS) final angle histograms, recorded at K >= 3
+    base_B: int  # `recorded_base_B`: the B before any `exp extend`
 
     @property
     def trained(self) -> bool:
@@ -108,8 +108,9 @@ def final_member_values(history: Mapping[str, Any], key: str, ensemble: bool) ->
 def _load(root: Path, exp: ExpConfig, index: int, values: Mapping[str, Any]) -> RingRun:
     chosen = select_setting(root, values, "cpu")
     law = lr.predicted_law(exp, index)
+    base_B = recorded_base_B(exp, chosen.cfg.net.B, B_AXIS in axes_of(exp))
     if chosen.status != "done":
-        return RingRun(root, chosen, law, exp.description, None, None, None, None, None)
+        return RingRun(root, chosen, law, exp.description, None, None, None, None, None, base_B)
     if chosen.cfg.net.L != 1:
         raise ValueError(
             f"the linear ring has one hidden layer, the setting has {chosen.cfg.net.L}"
@@ -127,6 +128,7 @@ def _load(root: Path, exp: ExpConfig, index: int, values: Mapping[str, Any]) -> 
         records=spectrum_records(history)[:, :, 0].to(F64),
         hex_final=final_member_values(history, _HEX, ensemble) if angles else None,
         theta_final=final_member_values(history, _THETA, ensemble) if angles else None,
+        base_B=base_B,
     )
 
 
@@ -178,33 +180,29 @@ def trained(runs: Mapping[str, RingRun]) -> dict[str, RingRun]:
 
 
 # ------------------------------------------------------------------ the base B
-def _preset_named_by(description: str | None) -> tuple[str | None, list[str]]:
-    """The packaged preset an experiment was made from, and the --set overrides given: read
-    off a derived description, or the preset whose own description it is."""
-    overrides = parse_derived_description(description)
-    if overrides is not None:
-        return overrides.preset, overrides.sets
-    named = [name for name in preset_names() if preset(name).description == description]
-    return (named[0] if description and len(named) == 1 else None), []
+def recorded_base_B(exp: ExpConfig, cfg_B: int, B_is_axis: bool) -> int:
+    """The B a setting was designed with: its own net.B when B is an axis (`exp extend` refuses
+    such experiments, so it never grew), else the base_B `exp extend` recorded, else the
+    experiment's B (it was never extended)."""
+    if B_is_axis:
+        return cfg_B
+    return exp.B if exp.base_B is None else exp.base_B
+
+
+def check_base_B(value: Any) -> int:
+    """A base B given by hand: a positive int (not a float, which would truncate silently, nor
+    a bool)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"a base B must be an int, got {value!r}")
+    if value < 1:
+        raise ValueError(f"a base B must be a positive number of members, got {value}")
+    return value
 
 
 def base_B_of(run: RingRun, given: int | None = None) -> int:
-    """The B the experiment was designed with, for `lr.budget_se`: `given` if not None, else a
-    `--set B=` override of the preset it was made from, else that preset's B. ValueError when
-    neither is known: exp.json's B is not it once `exp extend` has grown it."""
-    if given is not None:
-        return int(given)
-    name, sets = _preset_named_by(run.description)
-    if name is None:
-        raise ValueError(
-            f"cannot tell the base B of {run.root}: its description names no packaged preset; "
-            "give BASE_B (the B before any `exp extend`)"
-        )
-    for item in sets:
-        key, _, value = item.partition("=")
-        if key == "B":
-            return int(ast.literal_eval(value))
-    return preset(name).B
+    """The B the accuracy budget of `run` is computed at (`lr.budget_se`): `given` (checked by
+    `check_base_B`) if not None, else the one recorded with the experiment (`run.base_B`)."""
+    return run.base_B if given is None else check_base_B(given)
 
 
 # ------------------------------------------------------------------ measuring
@@ -228,7 +226,8 @@ def measure_run(
 ) -> RunMeasurement:
     """Everything the notebook shows of one trained setting: its final states, the relaxation
     of its records from `burn_in` (default the second half), judged against the budget at its
-    base B (`base_B_of`), and its loss curves."""
+    base B (`base_B_of`: `base_B` if given, else the one its experiment recorded), and its loss
+    curves."""
     B0 = base_B_of(run, base_B)
     stats = ensemble_statistics(run.history)
     return RunMeasurement(
@@ -242,9 +241,18 @@ def measure_run(
 
 
 def measure_runs(
-    runs: Mapping[str, RingRun], burn_in: float | None, base_B: int | None, seed: int = 0
+    runs: Mapping[str, RingRun],
+    burn_in: float | None,
+    base_B: Mapping[str, int] | None = None,
+    seed: int = 0,
 ) -> dict[str, RunMeasurement]:
-    return {name: measure_run(run, burn_in, base_B, seed) for name, run in runs.items()}
+    """`measure_run` of each of `runs`, with `base_B[name]` where given (the setting and its
+    twin may be different experiments with different base Bs); a name not in `runs` is an
+    error, so a typo cannot silently fall back to the recorded B."""
+    given = dict(base_B or {})
+    if unknown := sorted(set(given) - set(runs)):
+        raise KeyError(f"BASE_B names {unknown}, which are not among {sorted(runs)}")
+    return {name: measure_run(run, burn_in, given.get(name), seed) for name, run in runs.items()}
 
 
 def panels(measured: Mapping[str, Any], part: str) -> list[dict]:
@@ -496,8 +504,13 @@ def _angle_rows(a: lr.Angles | None, ell: int) -> list[list[str]]:
     if a is None:
         return []
     stat = lr.Statistic("hexatic", None)
+    verdict = (
+        f"below N·B threshold ({a.n_samples} < {lr.HEXATIC_MIN_SAMPLES})"
+        if a.flagged is None
+        else _flag(a.flagged)
+    )
     return [[lr.statistic_name(stat, ell), lr.statistic_mode(stat), "secondary", "0",
-             f"{float(a.hexatic):.6g}", f"{float(a.hexatic_se):.4g}", "n/a", _flag(a.flagged),
+             f"{float(a.hexatic):.6g}", f"{float(a.hexatic_se):.4g}", "n/a", verdict,
              "-"]]  # fmt: skip
 
 

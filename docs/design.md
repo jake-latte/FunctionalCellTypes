@@ -110,7 +110,7 @@ byte-identical and an absent field means its default; at any other value it ente
 are listed once, in two tables of dotted paths: `config.HASH_OMITTED_AT_DEFAULT` for `section_hash` (`net.B`,
 `net.init`, `data.teacher`, `spatial.lambda_max`, `spatial.parametrisation`, `train.monitor_kind`) and
 `exp.EXP_JSON_OMITTED_AT_DEFAULT` for exp.json (`description`, `B`, `init`, `linear_teacher.teacher`,
-`spatial.parametrisation`, `monitor_kind`). Both go through one helper,
+`spatial.parametrisation`, `monitor_kind`, `base_B`). Both go through one helper,
 `schema.exclude_at_default(model, table) -> exclude`, which builds the nested pydantic `exclude` and skips a path whose
 parent is None (an unset `spatial` section). A new field of this kind is a new table entry, nothing else.
 
@@ -1056,6 +1056,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_min, latent_max, teacher = "gaussian"), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
+    # base_B: int | None = None: the B before the first `exp extend`, recorded by it and never changed after (below B; refused beside a net.B axis and by `exp init --set`); omitted from exp.json while None, in no hash; read by fct.ring_view for the accuracy budget
     # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, init, weight_lambda,
     # rate_lambda, optimizer, beta; an axis of the same name wins (init is shared so that `--set init=prior` makes a whitened axis value valid
     # against the base, which every axis value is checked against alone). spatial: SpatialConfig | None = None, the spatial weight prior of every setting
@@ -1094,7 +1095,7 @@ def built_values(exp) -> {axis: [values as the built Config holds them]}   # use
 def find_setting_dir(root, exp, values) -> Path         # the one run setting of `exp` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
                                                           # a subset of the axes is enough if unambiguous); only the experiment's own directories are considered; LookupError if none, several, or an unknown axis
 def setting_members(root, exp, setting) -> int | None   # members of train/final.pt (1 for a single network); None without a readable one
-def extend_experiment(root, by) -> ExpConfig            # rewrite exp.json with B + by and return it; trains nothing (run_setting does); ExpError, exp.json unchanged, for by < 1, a net.B axis, or any partial setting (train)
+def extend_experiment(root, by) -> ExpConfig            # rewrite exp.json with B + by (and, on the first extension only, base_B = the B before it) and return it; trains nothing (run_setting does); ExpError, exp.json unchanged, for by < 1, a net.B axis, or any partial setting (train)
 def has_settings(root) -> bool                            # ROOT already holds a setting directory; `exp init` refuses to write a new exp.json there without --force
 def run_setting(exp, index, root, log=print, stage="train") -> None
     # first validates/writes config.json and setting.json (ExpError if an existing one differs in data, net, train or the like: the experiment changed
@@ -1189,8 +1190,9 @@ The analysis is `fct/linear_ring.py`.
   predictions differ by more than EQUIVALENCE_N_SE combined SEs. A regime is accurate when |exact - predicted| is at
   most one SE at B_max = FOLLOW_UP_FACTOR x the base B, the largest B run, the follow-up extension included
   (`budget_se(law, base_B)`), which is also the bound a run's remaining relaxation must stay under. The base B is
-  given explicitly (the notebook takes the B of the preset the ROOT was made from, or its `--set B=`): exp.json's B
-  grows with `exp extend`, and the follow-up must not shrink its own budget. The pipeline test deliberately uses a fixed rule instead
+  given explicitly: exp.json's B grows with `exp extend`, and the follow-up must not shrink its own budget. The
+  notebook reads it from the experiment (`ring_view.recorded_base_B`: a setting's own B where net.B is an axis, else
+  the `base_B` the first extension recorded, else B). The pipeline test deliberately uses a fixed rule instead
   (`pipeline_bounds`: tolerance and largest accepted bootstrap SE in delta-method SEs), so that it needs no
   follow-up run.
 - `predicted_spectra` is the N -> infinity mean-field limit: it leaves out the readout's (n/2) log det C~ term, an
@@ -1229,7 +1231,7 @@ band_share_estimate(law, final (B, K, N), seed) -> (values, se, predicted) (K,)
 kept(D, keep); normalised_autocorrelation(D); lag_profile(D, keep); folded_mode_ratio(D); exact_eigenvalues(cfg, dataset); prior_profile(law)
 q_half_statistic(keep); share0_statistic(keep); hexatic_estimate(moments); latent_angles(Z, U) -> (6,); angle_marks(law); relaxation_curve(fit, t, t0)
 statistic_name(stat, ell), statistic_mode(stat), statistic_label(stat, ell)   # one naming for every table and legend
-Q_HALF_TOLERANCE = 1 (one frequency step), HEXATIC_MAX = 0.1 (the plan's P6 threshold), ANGLE_K = 3
+Q_HALF_TOLERANCE = 1 (one frequency step), HEXATIC_MAX = 0.1 (the plan's P6 threshold, applied only at N B >= HEXATIC_MIN_SAMPLES = 1000), ANGLE_K = 3; q_1/2 is unavailable only on fct.spectrum.HalfPowerUndefinedError
 ```
 
 The pipeline test (`tests/test_linear_ring_smoke.py`, marked slow, about a minute on one CPU thread) runs both
@@ -1585,7 +1587,7 @@ null_power(h (..., P, N), U (P, K)) -> (..., N)                # sum_p |fft(r_p)
 mode_spectra(h (..., P, N), U (P, K)) -> (..., K + 1, N)       # rows 0..K-1 power_spectrum(tuning_maps), row K null_power: one monitor record
 fold_q(d (..., N)) -> (..., N/2 + 1)                           # (d_q + d_{-q}) / 2 at |q| = 0..N/2; N even
 autocorrelation(d (..., N)) -> R (..., N)                      # R(Delta) = (1/N) sum_q d_q e^{2 pi i q Delta / N} = ifft(d).real
-half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; of a MEAN spectrum; raises if d_0 < d_{N/2}
+half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; of a MEAN spectrum; raises HalfPowerUndefinedError (a ValueError) if d_0 < d_{N/2}
 spectrum_summary(d (..., N)) -> Summary(share0, lag1, d0, d_nyq, R (..., N))   # share0 = d_0 / sum_q d_q, lag1 = R(1)/R(0); per record
 gaussian_width(R (..., N), ell) -> float | (...)               # sqrt(-ell^2 / (2 ln(R(ell)/R(0)))); ell an integer lag in 1..N-1
 contrast_angle_statistic(t2 (..., N), t3 (..., N)) -> float | (...)   # <cos 4 theta_i> over neurons, theta_i = atan2(t3_i, t2_i) on (-pi, pi]
@@ -1793,7 +1795,7 @@ The computation layer of the phase-transition notebook: one setting of a `phase_
 
 ## linear_ring.ipynb (a linear-ring setting against the theory)
 
-`notebooks/build_linear_ring.py` builds `linear_ring.ipynb` (source only; executed copies go to the ignored `tmp/`): one setting of a linear-ring experiment (`ROOT`, `SETTING`) and, beside it, `TWIN_SETTING` in `TWIN_ROOT` (default `ROOT`), normally the same point under the other parametrisation. The defaults are `linear_ring_tiny`'s diagonal (settings 0 and 3); for `linear_ring` against `linear_ring_equivalence` give the two ROOTs. Other parameters: `BURN_IN` (start of the relaxation fit, default half the run), `BASE_B` (the B the budget is computed at; default the B of the preset each ROOT was made from, or its `--set B=`, and an error when neither is known), `SWEEP_AXIS` (a numeric axis for the band-share figure, default the setting index), `EXACT` / `TWIN_EXACT` (the exact posterior's statistics, in `statistic_list` order, for `regime_accurate`), `SEED` (the bootstrap's).
+`notebooks/build_linear_ring.py` builds `linear_ring.ipynb` (source only; executed copies go to the ignored `tmp/`): one setting of a linear-ring experiment (`ROOT`, `SETTING`) and, beside it, `TWIN_SETTING` in `TWIN_ROOT` (default `ROOT`), normally the same point under the other parametrisation. The defaults are `linear_ring_tiny`'s diagonal (settings 0 and 3); for `linear_ring` against `linear_ring_equivalence` give the two ROOTs. Other parameters: `BURN_IN` (start of the relaxation fit, default half the run), `BASE_B` (`{"setting": B0, "twin": B0}`, ints, overriding the base B the budget is computed at; None reads each from its experiment, `recorded_base_B`), `SWEEP_AXIS` (a numeric axis for the band-share figure, default the setting index), `EXACT` / `TWIN_EXACT` (the exact posterior's statistics, in `statistic_list` order, for `regime_accurate`), `SEED` (the bootstrap's).
 
 - The analysis is `fct.linear_ring` (`measure_final`, `measure_relaxation`, `band_share_estimate`); `fct.ring_view` loads (`load_ring_settings`, `load_shown`; `RingRun`'s `final_spectra`, `final_latent`, `relaxation_records` give the record layout), joins (`measure_run`), builds the sweeps (grouped by ROOT and the axes they hold fixed, so a twin in the same ROOT gets its own) and writes the tables; every figure is a `fct.draw` `plot_*` (`plot_ensemble_loss`, `plot_relaxation`, `plot_spectrum`, `plot_share_sweep`, `plot_spectrum_ratio`, `plot_autocorrelation`, `plot_angle_histogram`), drawn one panel per shown setting by `draw.fig_panels`. Code cells hold library calls only (a test refuses loops, comprehensions and definitions), and the markdown's thresholds are filled in from the library's constants at build time.
 - One sample per member: everything is read off the member-averaged final-state spectrum (the last record) with the bootstrap over members; the records before it feed only the relaxation diagnostic. Per-member values are not shown.
