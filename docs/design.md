@@ -1193,9 +1193,11 @@ The analysis is `fct/linear_ring.py`.
   `linear_ring` is sized so that the exact posterior and the prediction differ on every falsifier by at most one SE
   at its B_max, while the data term moves each statistic from the prior by several SEs.
 - Stationarity (`linear_ring.relaxation_fit`, `is_stationary`): A - C exp(-t / tau) is fitted to the member-averaged
-  statistics of the records (tau on a log grid up to the span of the records, A and C by least squares), and the
-  deficit C exp(-t_end / tau) still to relax at the last record, with its bootstrap-over-members SE, must be below one
-  SE at B_max. A relaxation slower than the span shows as a drift at tau = span.
+  statistics of the records (tau on a log grid up to the span of the records, A and C by least squares). Over all
+  records it measures the main relaxation; over a late window (`start`) it tests the end of the run: the deficit
+  C exp(-t_end / tau) still to relax at the last record, with its bootstrap-over-members SE (floored at the SE of the
+  window's mean, so a fit with tau inside the first record spacing cannot report 0 +- 0), must be below one SE at
+  B_max, and so must that SE. A relaxation slower than the window shows as a drift at tau = span.
 
 ```python
 Law(cfg, dataset, D (K, N), U (P, K), ell, B, keep (N,) bool)    # predicted_law(exp, index): one setting's prediction
@@ -1205,8 +1207,8 @@ ring_statistics(N, ell, keep=None) -> f((..., K, N)) -> (..., 3K + 1);  law_stat
 member_covariance(D) -> (K, N, N); delta_method_se(law, B=None) -> (3K + 1,)
 estimate(member_spectra (B, K, N), law, seed=0) -> (values, bootstrap SE)
 map_correlation(first (B, K, N), last) -> (B,)                    # 1 for a frozen sampler, 0 for independent maps
-relaxation_fit(epochs (R,), records (R, B, K, N), statistics, n_boot=200) -> RelaxationFit(asymptote, amplitude, tau, deficit, deficit_se)
-is_stationary(fit, se_max_b) -> (S,) bool; disagrees(values, se, predicted) -> (S,) bool; pipeline_bounds(law)
+relaxation_fit(epochs (R,), records (R, B, K, N), statistics, start=None, n_boot=200) -> RelaxationFit(asymptote, amplitude, tau, deficit, deficit_se)
+is_stationary(fit, se_max_b) -> (S,) bool  # |deficit| and its SE both below se_max_b; disagrees(values, se, predicted) -> (S,) bool; pipeline_bounds(law)
 ```
 
 The pipeline test (`tests/test_linear_ring_smoke.py`, marked slow, about a minute on one CPU thread) runs both
