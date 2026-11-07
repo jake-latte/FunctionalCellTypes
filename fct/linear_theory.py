@@ -30,13 +30,14 @@ null mode (sX2 = sY2 = 0) and every frequency with lam_q = 0 get d_q = 0 exactly
 evaluated as S (I + S T S)^{-1} S with S = (lam_q A + sig2 I)^{1/2}, T = r I - lam_q B, which is
 finite when lam_q A is singular.
 
-lam_q is by default the spectrum of the prior the run trains with, N(0, M^{-1}) with `post.M` the
-hidden population's penalty matrix: the eigenvalues of M^{-1} are max(lam_q, floor), lam_q those
-of the kernel K and floor = min_rel_eig times K's top eigenvalue (`fct.spatial.penalty_matrix`,
-after any lambda_max rescaling of K). They are computed from K and the floor, not by inverting M,
-which would lose log10(1 / min_rel_eig) digits on the coarse modes. `exact_kernel=True` uses K's
-own spectrum instead (the limits note's numbers), which matches a run only under a
-parametrisation that trains with the unfloored prior. The run must be float64: a float32 run
+lam_q is by default the spectrum of the prior the run trains with. Under the penalty that is
+N(0, M^{-1}) with `post.M` the hidden population's penalty matrix: the eigenvalues of M^{-1} are
+max(lam_q, floor), lam_q those of the kernel K and floor = min_rel_eig times K's top eigenvalue
+(`fct.spatial.penalty_matrix`, after any lambda_max rescaling of K). They are computed from K and
+the floor, not by inverting M, which would lose log10(1 / min_rel_eig) digits on the coarse
+modes. Under `spatial.parametrisation = "whitened"` the run trains with N(0, K) itself, so the
+default is K's own spectrum, which `exact_kernel=True` also gives on the penalty path (the limits
+note's numbers). The run must be float64: a float32 run
 casts M to float32 and trains with a prior whose coarse lam_q are off by 1-2%.
 
 The latent frame is `fct.spectrum.latent_basis`, the one the measurement uses: U (column k - 1 is
@@ -296,9 +297,9 @@ def network_parameters(
     spaces = _ring_spaces(cfg)
     hidden = spaces[0].post
     lam = ring_spectrum(hidden.K)
-    if not exact_kernel:
-        # The prior the run trains with, N(0, M^{-1}): `penalty_matrix` raises K's eigenvalues to
-        # report.floor = min_rel_eig * (top eigenvalue of K as built), and M inverts the result.
+    if not (exact_kernel or cfg.is_whitened):
+        # The prior the penalty trains with, N(0, M^{-1}): `penalty_matrix` raises K's eigenvalues
+        # to report.floor = min_rel_eig * (top eigenvalue of K as built), and M inverts the result.
         lam = np.maximum(lam, hidden.report.floor)
     # Cov(vec W) = (K_post (x) K_pre) / weight_lambda, so the scalar factors carry 1 / weight_lambda
     # and the hidden kernel enters as built.

@@ -1481,8 +1481,8 @@ float32 run casts M to float32 and trains with a prior whose coarse lam_q are of
 spectrum of the prior the run trains with, N(0, M^{-1}) with M = `post.M`: max(lam_q of K, `report.floor`), the floor rule
 of `penalty_matrix` (`min_rel_eig` times K's top eigenvalue, after any `lambda_max` rescaling), computed from K rather
 than by inverting M, which would lose log10(1 / min_rel_eig) digits on the coarse modes (37 of 64 frequencies are
-floored in the common setting); `exact_kernel=True` uses K itself, which matches a run only under a parametrisation that
-trains with the unfloored prior. `tests/test_linear_theory.py` ties k0, k1, delta, r and the floor to the loss that
+floored in the common setting). Under `spatial.parametrisation = "whitened"` the run trains with N(0, K) itself, so the
+default is K's spectrum; `exact_kernel=True` gives K's spectrum on the penalty path too. `tests/test_linear_theory.py` ties k0, k1, delta, r and the floor to the loss that
 `fct.train._step` builds, so a change to how the trainer scales a term fails there. `sig2` is an explicit argument because no config field
 holds the input noise: sigma -> 0 is the default, and at `sig2 = 0` a null mode and every frequency with lam_q = 0 get
 d_q = 0 exactly (nothing divides by sigma).

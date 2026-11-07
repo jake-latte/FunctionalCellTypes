@@ -400,6 +400,25 @@ def test_default_spectrum_is_the_floored_prior_the_run_trains_with():
     np.testing.assert_allclose(pred.d[0][~tail], unfloored.d[0][~tail], rtol=1e-6)
 
 
+def test_default_spectrum_of_a_whitened_run_is_the_unfloored_kernel():
+    """Under spatial.parametrisation "whitened" the run trains with N(0, K) itself, so the
+    default spectrum is K's, as `exact_kernel=True` gives on the penalty path."""
+    penalty = ring_config(**FULL, beta=0.25)
+    dump = penalty.model_dump()
+    whitened = Config.model_validate(
+        {
+            **dump,
+            "spatial": {**dump["spatial"], "parametrisation": "whitened"},
+            "net": {**dump["net"], "init": "prior"},
+        }
+    )
+    ds = exact_s2_dataset(np.random.default_rng(0), lt.uniform_latent_s2(256, 3, 1.0), 256, 8)
+    exact = lt.ring_spectrum(hidden_population(penalty).K)
+    np.testing.assert_array_equal(lt.theory_parameters(whitened, ds).lam, exact)
+    np.testing.assert_array_equal(lt.theory_parameters(penalty, ds, exact_kernel=True).lam, exact)
+    assert not np.array_equal(lt.theory_parameters(penalty, ds).lam, exact)
+
+
 # ------------------------------------------------------------------ sigma^2 = 0 as a first-class case
 
 
