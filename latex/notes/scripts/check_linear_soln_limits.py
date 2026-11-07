@@ -34,7 +34,7 @@ FIGURE = Path(__file__).resolve().parents[1] / "figures" / "linear_solution_limi
 
 # --- section A: ansatz-free fixed point (small, so the NP x NP inverse is cheap) --------------
 A_N, A_P, A_M, A_NOUT, A_K = 12, 5, 6, 6, 2  # sites, patterns, m, n, latents
-A_ELL = np.sqrt(2.0)  # K_ij = exp(-r^2 / (2 ell^2)), ring distance r
+A_ELL = np.sqrt(2.0)  # K_ij = exp(-Delta^2 / (2 ell^2)), ring distance Delta
 A_K0, A_K1, A_SIG2, A_R, A_DELTA = 0.7, 1.3, 0.2, 0.3, 0.5
 A_C_START, A_NEWTON_STEPS, A_TOL = 30.0, 100, 1e-12  # Newton from C = 30 I, well above the pole
 A_WY_SKEW = np.diag([1.0, 0.7])  # non-orthonormal W_Y for the approximate case
@@ -81,20 +81,20 @@ FIGURE_PANELS = [
 
 # ============================================================ building blocks
 def ring_distance(n_sites):
-    """Ring distance min(r, N - r) from site 0 to sites r = 0, ..., N-1."""
-    r = np.arange(n_sites)
-    return np.minimum(r, n_sites - r)
+    """Ring distance min(Delta, N - Delta) from site 0 to sites Delta = 0, ..., N-1."""
+    dist = np.arange(n_sites)
+    return np.minimum(dist, n_sites - dist)
 
 
 def wrapped_gaussian(n_sites, ell):
     """Row 0 of the wrapped (image-summed) Gaussian on the ring, normalised to K_ii = 1:
-    K(r) = sum_k exp(-(r + kN)^2 / 2 ell^2) / sum_k exp(-(kN)^2 / 2 ell^2), the kernel of
+    K(Delta) = sum_k exp(-(Delta + kN)^2 / 2 ell^2) / sum_k exp(-(kN)^2 / 2 ell^2), the kernel of
     fct/spatial.py. It is positive definite at every ell (its spectrum is a sampled Gaussian
     plus positive aliases), unlike the Gaussian of the minimum-image distance."""
     n_images = math.ceil(N_IMAGE_SIGMAS * ell / n_sites) + 1
     shifts = n_sites * np.arange(-n_images, n_images + 1)
-    r = np.arange(n_sites)
-    row = np.exp(-((r[:, None] + shifts) ** 2) / (2 * ell**2)).sum(axis=1)
+    dist = np.arange(n_sites)
+    row = np.exp(-((dist[:, None] + shifts) ** 2) / (2 * ell**2)).sum(axis=1)
     return row / row[0]
 
 
@@ -169,7 +169,7 @@ def tau_of(lam, sx2, sy2, sig2, r, delta):
 
 
 def autocorrelation(d):
-    """R(r) = (1/N) sum_q d_q e^{2 pi i q r / N}, r = 0, ..., N-1, of the power spectrum d_q."""
+    """R(Delta) = (1/N) sum_q d_q e^{2 pi i q Delta / N}, Delta = 0, ..., N-1, of the power spectrum d_q."""
     return np.fft.ifft(d).real
 
 
@@ -323,14 +323,14 @@ def section_a():
 
 def report_a(res):
     print("=== A: re-derivation against the ansatz-free NP x NP fixed point ===")
-    for label, r in res.items():
+    for label, case in res.items():
         print(f"  [{label}]")
-        print(f"    max |[XX^T, YY^T]|               : {r['commutator']:.2e}")
-        print(f"    min eig of precision             : {r['min_eig_precision']:.4f}")
-        print(f"    max off-diag |U^T Ct U|          : {r['off_diagonal']:.2e}")
-        print(f"    eig(C + delta I), fixed point    : {np.round(r['eig_fixed_point'], 8)}")
-        print(f"    roots of the scalar equation     : {np.round(r['scalar_roots'], 8)}")
-        print(f"    max relative difference          : {r['max_rel_diff']:.2e}")
+        print(f"    max |[XX^T, YY^T]|               : {case['commutator']:.2e}")
+        print(f"    min eig of precision             : {case['min_eig_precision']:.4f}")
+        print(f"    max off-diag |U^T Ct U|          : {case['off_diagonal']:.2e}")
+        print(f"    eig(C + delta I), fixed point    : {np.round(case['eig_fixed_point'], 8)}")
+        print(f"    roots of the scalar equation     : {np.round(case['scalar_roots'], 8)}")
+        print(f"    max relative difference          : {case['max_rel_diff']:.2e}")
 
 
 # ============================================================ B: limiting cases
@@ -439,17 +439,17 @@ def section_b():
 
 def report_b(res):
     print("=== B: limiting cases ===")
-    r = res["ring"]
+    ring = res["ring"]
     print(
-        f"  Gaussian ring N={N}, ell={ELL}: lam_0 = {r['lam_0']:.6f}, "
-        f"sqrt(2 pi) ell = {r['sqrt_2pi_ell']:.6f}"
+        f"  Gaussian ring N={N}, ell={ELL}: lam_0 = {ring['lam_0']:.6f}, "
+        f"sqrt(2 pi) ell = {ring['sqrt_2pi_ell']:.6f}"
     )
-    print(f"    max |lam_q - continuum formula| = {r['max_dev_formula']:.1e}")
+    print(f"    max |lam_q - continuum formula| = {ring['max_dev_formula']:.1e}")
     print(
-        f"    (1/N) sum lam_q = {r['mean_lam']:.6f} (= K_ii = 1);  "
-        f"(1/N) sum lam_q^2 = {r['mean_lam2']:.6f}, sqrt(pi) ell = {r['sqrt_pi_ell']:.6f}"
+        f"    (1/N) sum lam_q = {ring['mean_lam']:.6f} (= K_ii = 1);  "
+        f"(1/N) sum lam_q^2 = {ring['mean_lam2']:.6f}, sqrt(pi) ell = {ring['sqrt_pi_ell']:.6f}"
     )
-    for ell, wrapped, truncated in r["min_eig"]:
+    for ell, wrapped, truncated in ring["min_eig"]:
         print(
             f"    min_q lam_q at ell = {ell:4.1f}: wrapped Gaussian {wrapped:9.2e}, "
             f"minimum-image Gaussian {truncated:9.2e}"
@@ -640,11 +640,11 @@ def report_d(res):
             f"half-power |q| = {w['half_power_q']:.0f}"
         )
     print(f"  condensation (N = {N}, {BASE}):")
-    for r in res["condensation"]:
+    for row in res["condensation"]:
         print(
-            f"    sY = {r['sy']:6.0f}: tau = {r['tau']:.4f}, gap = {r['gap']:9.3f} "
-            f"(asymptote {r['gap_asymptote']:9.3f}), d_0 = {r['d0']:10.1f} "
-            f"(asymptote {r['d0_asymptote']:10.1f}), q = 0 share of c - delta = {r['share0']:.3f}"
+            f"    sY = {row['sy']:6.0f}: tau = {row['tau']:.4f}, gap = {row['gap']:9.3f} "
+            f"(asymptote {row['gap_asymptote']:9.3f}), d_0 = {row['d0']:10.1f} "
+            f"(asymptote {row['d0_asymptote']:10.1f}), q = 0 share of c - delta = {row['share0']:.3f}"
         )
     c = res["continuum"]
     print(
@@ -652,12 +652,12 @@ def report_d(res):
         f"(closed form {c['h_curv_closed']:.2f}), "
         f"a_inf = {c['a_inf']:.3f}, predicted sY nu_c = {c['sy_nu_c_asymptote']:.4f}"
     )
-    for r in c["rows"]:
+    for row in c["rows"]:
         print(
-            f"    sY = {r['sy']:4.0f}: tau = {r['tau']:.4f}, gap a = {r['gap']:7.3f}, "
-            f"nu_c = {r['nu_c']:.5f} (N nu_c = {BIG_N * r['nu_c']:.1f}), "
-            f"sY nu_c = {r['sy'] * r['nu_c']:.4f} (interpolated half-power crossing), "
-            f"sY sqrt(a/b) = {r['sy'] * r['nu_c_lorentz']:.4f}"
+            f"    sY = {row['sy']:4.0f}: tau = {row['tau']:.4f}, gap a = {row['gap']:7.3f}, "
+            f"nu_c = {row['nu_c']:.5f} (N nu_c = {BIG_N * row['nu_c']:.1f}), "
+            f"sY nu_c = {row['sy'] * row['nu_c']:.4f} (interpolated half-power crossing), "
+            f"sY sqrt(a/b) = {row['sy'] * row['nu_c_lorentz']:.4f}"
         )
 
 
@@ -711,8 +711,8 @@ def share0_sweep(settings):
 
 def correlation_length_check(ell):
     """P7: setting P1 at length scale `ell`. For each mode, R(0) and the largest deviation
-    of R(r)/R(0) from the kernel K(r) over 1 <= r <= 2 ell, plus the Gaussian width read off
-    at r = ell, sqrt(-ell^2 / (2 ln(R(ell)/R(0))))."""
+    of R(Delta)/R(0) from the kernel K(Delta) over 1 <= Delta <= 2 ell, plus the Gaussian
+    width read off at Delta = ell, sqrt(-ell^2 / (2 ln(R(ell)/R(0))))."""
     _, k0, k1, sig2, rate, beta = PREDICTIONS["P1 prior-shaped (weak target, no rate penalty)"]
     kernel = wrapped_gaussian(PRED_N, ell)
     lags = np.arange(1, int(2 * ell) + 1)
@@ -773,8 +773,8 @@ def report_e(res):
         for mode, m in enumerate(rows, start=1):
             print(
                 f"    ell = {ell7:g}, mode {mode}: R(0) = {m['R0']:7.3f}, "
-                f"max |R(r)/R(0) - K(r)| (1 <= r <= 2 ell) = {m['max_dev']:.1e}, "
-                f"Gaussian width at r = ell: {m['width']:.3f}"
+                f"max |R(Delta)/R(0) - K(Delta)| (1 <= Delta <= 2 ell) = {m['max_dev']:.1e}, "
+                f"Gaussian width at Delta = ell: {m['width']:.3f}"
             )
     print(
         f"  P8 common k sweep at sig2 = {sig2}, rate r = {rate}, beta = {beta}: "
