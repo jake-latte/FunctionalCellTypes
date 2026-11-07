@@ -66,6 +66,7 @@ from fct.exp import (
     setting_status,
 )
 from fct.model import MLP
+from fct.monitor import require_mir_monitor
 from fct.train import History, load_latest_checkpoint, load_trained, select_member
 
 ROOT_ENV = "FCT_EXP_ROOT"
@@ -316,7 +317,9 @@ def load_setting_result(root: Path, exp: ExpConfig, setting: Setting) -> Setting
     partial one an unreadable or stale dataset or checkpoint file is reported in `note` instead,
     since its checkpoint may be replaced by a running job at any moment. Other exceptions (from the
     model code) propagate: they are bugs, not bad files. An ensemble run (net.B > 1) raises
-    ValueError (`fct.train.select_member`): the report shows one network per setting."""
+    ValueError (`fct.train.select_member`): the report shows one network per setting. So does an
+    experiment whose monitor is not the MIR (`fct.monitor.require_mir_monitor`)."""
+    require_mir_monitor(exp.monitor_kind, "the report")
     directory = setting_dir(root, setting)
     relative = directory.relative_to(root)
     status = setting_status(root, exp, setting)
@@ -342,9 +345,10 @@ def load_results(root: Path | str) -> list[SettingResult]:
     exp.json: with no experiment there is nothing to report. UnmigratedExpError (an ExpError)
     if it holds only a legacy sweep.json: run `fct exp migrate ROOT`. ValueError if the
     experiment's axes lack net.L, net.phi or train.rate_lambda (the report supports the
-    modularity experiment)."""
+    modularity experiment), or if it runs another monitor than the MIR (its history has no MIR)."""
     root = Path(root)
     exp = load_exp(root)
+    require_mir_monitor(exp.monitor_kind, "the report")
     missing = [a for a in MODULARITY_AXES if a not in axes_of(exp)]
     if missing:
         raise ValueError(

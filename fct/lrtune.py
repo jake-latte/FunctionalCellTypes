@@ -53,6 +53,7 @@ from fct.exp import (
     write_exp_text,
 )
 from fct.model import MLP
+from fct.monitor import require_mir_monitor
 from fct.tasks import Dataset, resample
 from fct.train import (
     compute_loss,
@@ -398,8 +399,10 @@ def evaluate_setting(root: Path, exp: ExpConfig, setting: Setting, held_out_seed
     Read-only on ROOT: the training dataset is loaded from its cache (never generated), and
     the held-out data is built in memory. FileNotFoundError if the setting is not finished;
     ValueError if its history lacks the loss curve or the MIR monitor entries, or if the run
-    is an ensemble (net.B > 1; learning rates are tuned on single networks).
+    is an ensemble (net.B > 1; learning rates are tuned on single networks). ValueError first
+    of all if the experiment's monitor is not the MIR (`fct.monitor.require_mir_monitor`).
     """
+    require_mir_monitor(exp.monitor_kind, "lrtune")
     directory = setting_dir(root, setting)
     status = setting_status(root, exp, setting)
     if status == "stale":

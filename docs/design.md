@@ -515,7 +515,9 @@ records and members; |<e^{6 i theta}>| of a mean moment is prediction 6's statis
 full-size run holds (K+1) N L floats per record per member over thousands of records (4 x 64 x 4 x 4000 = 4.1 x 10^6,
 16 MB per member as float32); the powers are computed in the run's dtype and only stored in float32. The records
 along one run are a diagnostic of burn-in and mixing (`record_sem` with its `reliable` mask), not an estimator; the
-monitor only records. A call draws nothing from any RNG.
+monitor only records. A call draws nothing from any RNG. The readers of the MIR history (`report.load_results`,
+`report.load_setting_result`, `lrtune.evaluate_setting`) refuse a spectrum experiment through
+`monitor.require_mir_monitor`, saying that it records spectra, not MIR.
 
 ## hmc.py
 

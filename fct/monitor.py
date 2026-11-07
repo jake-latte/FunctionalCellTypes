@@ -128,3 +128,16 @@ _MONITOR_MAKERS: dict[str, Callable[[Dataset, Config], Monitor]] = {
 def make_monitor(dataset: Dataset, cfg: Config) -> Monitor:
     """The monitor `cfg.train.monitor_kind` names, built on `dataset`."""
     return _MONITOR_MAKERS[cfg.train.monitor_kind](dataset, cfg)
+
+
+_RECORDS = {"mir": "MIR", "spectrum": "spectra"}  # what each monitor kind's history holds
+
+
+def require_mir_monitor(monitor_kind: str, reader: str) -> None:
+    """ValueError unless `monitor_kind` is "mir": `reader` (a sentence subject, such as "the
+    report") reads the MIR monitor's history keys, which no other monitor writes."""
+    if monitor_kind != "mir":
+        raise ValueError(
+            f"{reader} reads the MIR monitor's history, but this experiment records "
+            f"{_RECORDS[monitor_kind]}, not MIR (monitor_kind={monitor_kind!r})"
+        )

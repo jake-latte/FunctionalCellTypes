@@ -26,6 +26,7 @@ from fct.exp import (
     setting_dir,
     with_axes,
 )
+from fct.lrtune import evaluate_setting
 from fct.model import make_net
 from fct.monitor import (
     SPECTRUM_MONITOR_KEYS,
@@ -33,6 +34,7 @@ from fct.monitor import (
     make_monitor,
     make_spectrum_monitor,
 )
+from fct.report import load_results, load_setting_result
 from fct.tasks import Dataset
 from fct.train import MONITOR_EPOCH, MONITOR_PREFIX, train
 
@@ -323,6 +325,22 @@ def test_an_experiment_with_a_task_without_latents_is_rejected_when_built(axes):
     exp = _spectrum_tiny().model_copy(update={"axes": axes})
     with pytest.raises(ValueError, match=r"needs the latents of the linear_teacher task"):
         ExpConfig.model_validate(exp.model_dump())
+
+
+def test_the_mir_readers_refuse_a_spectrum_experiment(tmp_path):
+    """The report and lrtune read the MIR monitor's history; on a spectrum experiment they
+    name that cause instead of reporting a missing MIR."""
+    modularity_axes = {"net.L": [1], "net.phi": ["tanh"], "train.rate_lambda": [0.0]}
+    exp = with_axes(_spectrum_tiny(), modularity_axes)
+    (tmp_path / "exp.json").write_text(exp_text(exp))
+    setting = expand(exp)[0]
+    cause = "records spectra, not MIR"
+    with pytest.raises(ValueError, match=cause):
+        load_results(tmp_path)
+    with pytest.raises(ValueError, match=cause):
+        load_setting_result(tmp_path, exp, setting)
+    with pytest.raises(ValueError, match=cause):
+        evaluate_setting(tmp_path, exp, setting, held_out_seed=1000)
 
 
 def test_a_spectrum_experiment_is_checked_when_loaded(tmp_path):
