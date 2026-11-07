@@ -406,7 +406,7 @@ def non_commuting_solution(inst: Instance, p: Params, eps: float = 1.0) -> NonCo
 
 @dataclass(frozen=True)
 class FirstOrder:
-    """First-order theory in the basis U. Index layout [q, r, p] per frequency, [p, r] otherwise.
+    """First-order theory in the basis U. Index layout [q, t, p] per frequency, [p, t] otherwise.
 
     c, d: zeroth-order diagonals of Ct (P,) and Sigma_q (N, P).
     B1, C1: eq:first-order, (P, P).  Sigma1: eq:Sigma1, (N, P, P).
@@ -426,20 +426,20 @@ def first_order(inst: Instance, p: Params) -> FirstOrder:
 
     In the basis U: c and d from the scalar reduction (eq:linear-soln), T from eq:T, B1 and C1
     from eq:first-order, Sigma1 from eq:Sigma1, Theta from eq:theta. Index layout: B1, C1, T
-    are [p, r]; d is [q, p]; Sigma1 and Theta are [q, r, p], so Theta[q, r, p] is the
-    coefficient of e_r in column p of the eigenbasis of Sigma_q (zero on the diagonal).
+    are [p, t]; d is [q, p]; Sigma1 and Theta are [q, t, p], so Theta[q, t, p] is the
+    coefficient of e_t in column p of the eigenbasis of Sigma_q (zero on the diagonal).
     """
     lam, P = inst.lam, len(inst.sx2)
     sx2hat, sy2hat, Ehat = inst.sx2hat(p), inst.sy2hat(p), inst.E / p.k1
     c = scalar_roots(lam, sx2hat, sy2hat, p)
     hl = np.array([h_over_lam(lam, sx, p) for sx in sx2hat]).T  # (N, P)
     d = c**2 * hl / (c**2 - sy2hat * lam[:, None] * hl)
-    T = np.einsum("q,qp,qr->pr", lam**2, d, d) / len(lam)
-    cp, cr = c[:, None], c[None, :]
-    B1 = Ehat * cp * cr / (cp**2 * cr**2 + T * (sy2hat[None, :] * cp + sy2hat[:, None] * cr))
+    T = np.einsum("q,qp,qt->pt", lam**2, d, d) / len(lam)
+    cp, ct = c[:, None], c[None, :]
+    B1 = Ehat * cp * ct / (cp**2 * ct**2 + T * (sy2hat[None, :] * cp + sy2hat[:, None] * ct))
     C1 = T * B1
     Sigma1 = lam[:, None, None] * d[:, :, None] * d[:, None, :] * B1
-    gap = d[:, None, :] - d[:, :, None]  # [q, r, p] = d_qp - d_qr
+    gap = d[:, None, :] - d[:, :, None]  # [q, t, p] = d_qp - d_qt
     off = ~np.eye(P, dtype=bool)
     Theta = np.zeros_like(Sigma1)
     Theta[:, off] = (Sigma1 / np.where(off, gap, 1.0))[:, off]
@@ -473,7 +473,7 @@ def first_order_residuals(
 def theta_denominator(
     inst: Instance, p: Params, c: np.ndarray, pair: tuple[int, int], lam: float
 ) -> float:
-    """Denominator of eq:theta for the modes (p, r) = pair as a function of lam_q."""
+    """Denominator of eq:theta for the modes (p, t) = pair as a function of lam_q."""
     sx, sy = inst.sx2hat(p), inst.sy2hat(p)
     i, j = pair
     input_term = (sx[i] - sx[j]) / ((lam * sx[i] + p.sig2) * (lam * sx[j] + p.sig2))
@@ -661,19 +661,19 @@ def report_perturbative_check(inst: Instance, p: Params) -> None:
     )
     row("residual ratio eps -> eps/2", ratios)
     scale_dependence = np.abs(theory.Theta[q_lo] - theory.Theta[q_hi])
-    r_idx, p_idx = (
+    t_idx, p_idx = (
         int(i) for i in np.unravel_index(scale_dependence.argmax(), scale_dependence.shape)
     )
     thetas = (
-        f"Theta[q=0]={theory.Theta[q_lo, r_idx, p_idx]:.4f}, "
-        f"Theta[q=N/2]={theory.Theta[q_hi, r_idx, p_idx]:.4f}"
+        f"Theta[q=0]={theory.Theta[q_lo, t_idx, p_idx]:.4f}, "
+        f"Theta[q=N/2]={theory.Theta[q_hi, t_idx, p_idx]:.4f}"
     )
-    row(f"largest scale dependence: (Theta_q)_(r,p), (r,p)=({r_idx + 1},{p_idx + 1})", thetas)
-    # the denominator of eq:theta for the pair (p, r) is odd under p <-> r, so lam* is the same
-    lam_star = resonance_lambda(inst, p, theory.c, (p_idx, r_idx))
+    row(f"largest scale dependence: (Theta_q)_(t,p), (t,p)=({t_idx + 1},{p_idx + 1})", thetas)
+    # the denominator of eq:theta for the pair (p, t) is odd under p <-> t, so lam* is the same
+    lam_star = resonance_lambda(inst, p, theory.c, (p_idx, t_idx))
     where = "none above lam_max" if lam_star is None else f"{lam_star:.2f}"
     row(
-        f"eq:theta denominator for modes ({r_idx + 1},{p_idx + 1}) vanishes at lam*",
+        f"eq:theta denominator for modes ({t_idx + 1},{p_idx + 1}) vanishes at lam*",
         f"{where} (lam_max = {inst.lam.max():.2f})",
     )
 
