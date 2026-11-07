@@ -12,7 +12,7 @@ import torch
 
 from fct.cache import cache_paths, save_artefact
 from fct.cli import main
-from fct.config import load_config
+from fct.config import NetConfig, load_config
 from fct.exp import (
     ExpConfig,
     ExpError,
@@ -28,6 +28,7 @@ from fct.exp import (
     setting_status,
     with_axes,
 )
+from fct.model import make_net
 from fct.train import (
     MONITOR_EPOCH,
     MONITOR_PREFIX,
@@ -434,3 +435,21 @@ def test_the_slurm_array_task_trains_the_new_members_unchanged(tmp_path):
     assert run.returncode == 0, run.stderr
     assert _status(tmp_path) == "done"
     assert trained_member_count(_train_dir(tmp_path) / "final.pt") == 4
+
+
+# ---------------------------------------------------------------------------- building members
+def test_make_net_builds_a_block_of_members_exactly_as_in_the_whole_ensemble():
+    cfg = NetConfig(N=5, L=2, B=5, seed=3)
+    whole = make_net(cfg, 4, 2, torch.device("cpu"), torch.float64)
+    block = make_net(cfg, 4, 2, torch.device("cpu"), torch.float64, members=range(2, 5))
+    single = make_net(cfg, 4, 2, torch.device("cpu"), torch.float64, members=range(4, 5))
+    assert block.B == 3 and single.B == 1
+    for name, p in block.named_parameters():
+        assert torch.equal(p, dict(whole.named_parameters())[name][2:5]), name
+    assert torch.equal(single.U, whole.U[4])
+
+
+@pytest.mark.parametrize("members", [range(3, 3), range(6), range(0, 4, 2), range(-1, 2)])
+def test_make_net_refuses_members_outside_the_ensemble(members):
+    with pytest.raises(ValueError, match="members"):
+        make_net(NetConfig(N=5, B=5), 4, 2, torch.device("cpu"), torch.float64, members=members)

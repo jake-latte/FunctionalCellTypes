@@ -371,8 +371,11 @@ def make_net(
     state_dict (nothing unpicklable is stored).
     """
     members = range(cfg.B) if members is None else members
-    if len(members) == 0 or members.step != 1 or members.start < 0:
-        raise ValueError(f"members must be a non-empty range of member indices, got {members}")
+    if len(members) == 0 or members.step != 1 or members.start < 0 or members.stop > cfg.B:
+        raise ValueError(
+            f"members must be a non-empty range of consecutive members of the B={cfg.B} "
+            f"ensemble, got {members}"
+        )
     nets = [_make_member(cfg, b, D_in, D_out, dtype, whitening, init_std) for b in members]
     net = nets[0] if len(nets) == 1 else EnsembleMLP(nets)
     return net.to(device)
