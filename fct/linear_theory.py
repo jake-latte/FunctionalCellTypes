@@ -30,13 +30,14 @@ null mode (sX2 = sY2 = 0) and every frequency with lam_q = 0 get d_q = 0 exactly
 evaluated as S (I + S T S)^{-1} S with S = (lam_q A + sig2 I)^{1/2}, T = r I - lam_q B, which is
 finite when lam_q A is singular.
 
-lam_q is by default the spectrum of the prior the run trains with, N(0, M^{-1}) with `post.M` the
-hidden population's penalty matrix: the eigenvalues of M^{-1} are max(lam_q, floor), lam_q those
-of the kernel K and floor = min_rel_eig times K's top eigenvalue (`fct.spatial.penalty_matrix`,
-after any lambda_max rescaling of K). They are computed from K and the floor, not by inverting M,
-which would lose log10(1 / min_rel_eig) digits on the coarse modes. `exact_kernel=True` uses K's
-own spectrum instead (the limits note's numbers), which matches a run only under a
-parametrisation that trains with the unfloored prior. The run must be float64: a float32 run
+lam_q is by default the spectrum of the prior the run trains with. Under the penalty that is
+N(0, M^{-1}) with `post.M` the hidden population's penalty matrix: the eigenvalues of M^{-1} are
+max(lam_q, floor), lam_q those of the kernel K and floor = min_rel_eig times K's top eigenvalue
+(`fct.spatial.penalty_matrix`, after any lambda_max rescaling of K). They are computed from K and
+the floor, not by inverting M, which would lose log10(1 / min_rel_eig) digits on the coarse
+modes. Under `spatial.parametrisation = "whitened"` the run trains with N(0, K) itself, so the
+default is K's own spectrum, which `exact_kernel=True` also gives on the penalty path (the limits
+note's numbers). The run must be float64: a float32 run
 casts M to float32 and trains with a prior whose coarse lam_q are off by 1-2%.
 
 The latent frame is `fct.spectrum.latent_basis`, the one the measurement uses: U (column k - 1 is
@@ -64,14 +65,16 @@ import torch
 
 from fct.config import Config
 from fct.data import task_dims
-from fct.spatial import LayerSpace, build_spaces
+from fct.spatial import NEGATIVE_RTOL, LayerSpace, build_spaces
 from fct.spectrum import autocorrelation, half_power_q, latent_basis
 from fct.tasks import Dataset
 
 ArrayOrTensor = np.ndarray | torch.Tensor
 
 BISECT_STEPS = 200  # halvings of the root bracket: far below double precision at any scale
-# Eigenvalues of a kernel below -NEGATIVE_EIG_TOL * lam_max are an error; above, round-off set to 0.
+# Eigenvalues of the theory's own PSD matrices below -NEGATIVE_EIG_TOL * the largest are an
+# error; above, round-off set to 0. A prior kernel is checked with `fct.spatial.NEGATIVE_RTOL`,
+# the tolerance the run trains with, so the theory never refuses a kernel the run accepted.
 NEGATIVE_EIG_TOL = 1e-12
 CIRCULANT_TOL = 1e-10  # relative agreement required between the FFT of row 0 and eigvalsh
 SYMMETRY_TOL = 1e-12  # relative: max |K - K^T| allowed of a kernel
@@ -164,11 +167,12 @@ def _circulant_spectrum(name: str, A: ArrayOrTensor) -> np.ndarray:
 
 
 def ring_spectrum(K: ArrayOrTensor) -> np.ndarray:
-    """lam_q, q = 0..N-1 in DFT order, of a symmetric circulant kernel. Round-off negatives are
-    set to 0; a clearly negative eigenvalue is an error."""
+    """lam_q, q = 0..N-1 in DFT order, of a symmetric circulant kernel. Negatives above
+    -`fct.spatial.NEGATIVE_RTOL` times the largest magnitude are round-off and set to 0, as
+    `fct.spatial` treats them when it builds the run's prior; a more negative one is an error."""
     lam = _circulant_spectrum("K", K)
     scale = max(np.abs(lam).max(), np.finfo(float).tiny)
-    if lam.min() < -NEGATIVE_EIG_TOL * scale:
+    if lam.min() < -NEGATIVE_RTOL * scale:
         raise ValueError(f"K has a negative eigenvalue {lam.min():.3g}; it is not a covariance")
     # -1e-16 lam_0 at the Nyquist tail of a wrapped Gaussian is FFT round-off, not structure.
     return np.maximum(lam, 0.0)
@@ -296,9 +300,9 @@ def network_parameters(
     spaces = _ring_spaces(cfg)
     hidden = spaces[0].post
     lam = ring_spectrum(hidden.K)
-    if not exact_kernel:
-        # The prior the run trains with, N(0, M^{-1}): `penalty_matrix` raises K's eigenvalues to
-        # report.floor = min_rel_eig * (top eigenvalue of K as built), and M inverts the result.
+    if not (exact_kernel or cfg.is_whitened):
+        # The prior the penalty trains with, N(0, M^{-1}): `penalty_matrix` raises K's eigenvalues
+        # to report.floor = min_rel_eig * (top eigenvalue of K as built), and M inverts the result.
         lam = np.maximum(lam, hidden.report.floor)
     # Cov(vec W) = (K_post (x) K_pre) / weight_lambda, so the scalar factors carry 1 / weight_lambda
     # and the hidden kernel enters as built.

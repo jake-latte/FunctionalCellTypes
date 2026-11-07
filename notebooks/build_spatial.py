@@ -121,6 +121,7 @@ from IPython.display import Markdown, display
 from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.exp_view import tuning_view
 from fct.meanfield import readout_activities
+from fct.model import effective_weights
 from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import (
     data_kernel,
@@ -176,13 +177,22 @@ from fct.spatial_view import population_spec
 D = 1  # embedding dimension: a ring for 1, a torus for 2 (a grid then needs a shape, d <= 2)
 BOX = 1.0  # side of the torus; length scales are in the same units
 MIN_REL_EIG = 1e-2  # eigenvalue floor of the penalty matrices, relative to the largest
+# "penalty" (M = floored K^{-1}) or "whitened" (W = S xi S with S = K^{1/2}: the exact prior)
+PARAMETRISATION = "penalty"
+INIT = "standard"  # initial law: "standard" N(0, 1), or "prior" (W from its prior; "whitened" needs it)
 # one embedding and kernel per population: "grid" (evenly spaced) or "random" (uniform)
 INPUT = population_spec("grid", length_scale=0.15, amplitude=1.0)
 HIDDEN = population_spec("grid", length_scale=0.15, amplitude=1.0)  # shared by all hidden layers
 OUTPUT = population_spec("grid", length_scale=0.15, amplitude=1.0)
 
 SPATIAL = SpatialConfig(
-    d=D, box=BOX, input=INPUT, hidden=HIDDEN, output=OUTPUT, min_rel_eig=MIN_REL_EIG
+    d=D,
+    box=BOX,
+    input=INPUT,
+    hidden=HIDDEN,
+    output=OUTPUT,
+    min_rel_eig=MIN_REL_EIG,
+    parametrisation=PARAMETRISATION,
 )
 CFG = make_config(
     P=P,
@@ -203,6 +213,7 @@ CFG = make_config(
     train_seed=TRAIN_SEED,
     spatial=SPATIAL,
     device=DEVICE,
+    init=INIT,
 )
 SPACES = layer_spaces(CFG)  # weight layer l = 1 .. L + 1 is SPACES[l - 1]"""
 
@@ -223,15 +234,34 @@ $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 10^{-2} \c
 both optimisers are stable and 2000 epochs take seconds on a CPU. The library default
 $\epsilon = 10^{-6}$ would make both $10^8$ times larger ($\lambda_{\max}(M_l) \approx 3.7 \cdot 10^{10}$,
 $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 1.1 \cdot 10^6$); a larger network or a lower floor needs a
-smaller `LR` or `PRIOR_COEFF`. The tables give the numbers for the current settings."""
+smaller `LR` or `PRIOR_COEFF`. The tables give the numbers for the current settings.
+
+Under the whitened parametrisation (`PARAMETRISATION = "whitened"`) none of this applies: the
+trained parameters are $\xi_l$ with $W_l = S^{\mathrm{post}}_l \xi_l S^{\mathrm{pre}}_l$, $S = K^{1/2}$,
+nothing is floored (the prior is $K$ itself), the penalty is $\|\xi_l\|^2$ with stiffness 1 in
+every direction, and the bound is $\mathrm{lr}\, \lambda_w / (2\beta) < 1$ for every layer; the
+loss curvature is checked when training starts."""
 
 FLOOR = r"""def top_eigenvalue(matrix):
     return torch.linalg.eigvalsh(matrix)[-1].item()
 
 
 def stiffness(space):
-    # lambda_max(M_l): the Kronecker product's largest eigenvalue is the product of its factors'
+    # lambda_max(M_l): the Kronecker product's largest eigenvalue is the product of its factors'.
+    # The whitened prior |xi|^2 has stiffness 1 in every direction.
+    if CFG.is_whitened:
+        return 1.0
     return top_eigenvalue(space.M_post) * top_eigenvalue(space.M_pre)
+
+
+def floored(p):
+    if CFG.is_whitened:
+        return "not floored: exact prior"
+    return f"{p.report.n_floored} of {len(p.K)}"
+
+
+def penalty_top(p):
+    return "unused (whitened)" if CFG.is_whitened else f"{top_eigenvalue(p.M):.3g}"
 
 
 populations = [SPACES[0].pre, *(space.post for space in SPACES)]
@@ -239,15 +269,14 @@ population_table = [
     r"| population | eigenvalues floored | $\lambda_{\max}(K^p)$ | $\lambda_{\max}(M^p)$ |",
     "|---|---|---|---|",
     *(
-        f"| {p.name} | {p.report.n_floored} of {len(p.K)} | {top_eigenvalue(p.K):.3g} "
-        f"| {top_eigenvalue(p.M):.3g} |"
+        f"| {p.name} | {floored(p)} | {top_eigenvalue(p.K):.3g} | {penalty_top(p)} |"
         for p in populations
     ),
 ]
 layer_table = [
     (
-        r"| layer $l$ | $\lambda_{\max}(M_l)$ "
-        r"| $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l)$ (SGLD needs < 1) |"
+        r"| layer $l$ | stiffness: $\lambda_{\max}(M_l)$, or 1 whitened "
+        r"| $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\,$ stiffness (SGLD needs < 1) |"
     ),
     "|---|---|---|",
     *(
@@ -450,7 +479,12 @@ A smooth prior shows as a band along the diagonal; one weight matrix is a single
 $\hat K$ is noisy, and the data term pulls it away from the prior. Drawn for $d = 1$ only, since
 sorting by position needs a ring."""
 
-EMPIRICAL = r"""def plot_kernel_comparison(comparison, space):
+EMPIRICAL = r"""def first_layer_weights(net):
+    # The weight U the forward pass uses: under the whitened parametrisation net.U is xi.
+    return effective_weights(net)["U"].detach()
+
+
+def plot_kernel_comparison(comparison, space):
     # Prior K_post and K_pre beside the second moments of the weights, all sorted around the
     # ring; each panel has its own colour scale.
     panels = [
@@ -469,7 +503,7 @@ EMPIRICAL = r"""def plot_kernel_comparison(comparison, space):
 
 
 if D == 1:
-    plot_kernel_comparison(ordered_kernel_comparison(SPACES[0], RUN.net.U), SPACES[0])
+    plot_kernel_comparison(ordered_kernel_comparison(SPACES[0], first_layer_weights(RUN.net)), SPACES[0])
     plt.show()
 else:
     display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""
@@ -512,7 +546,7 @@ def plot_weights_by_position(W, space):
 
 
 if D == 1:
-    plot_weights_by_position(RUN.net.U, SPACES[0])
+    plot_weights_by_position(first_layer_weights(RUN.net), SPACES[0])
     plt.show()
 else:
     display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""

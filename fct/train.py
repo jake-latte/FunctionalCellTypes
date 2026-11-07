@@ -2,11 +2,14 @@
 
 Layout under `cache_dir/train/`: `ckpt_<epoch>.pt` (only the latest kept) and `final.pt`.
 Both share one payload shape; resuming and `load_trained` read them through the same
-validating loader (`_load_payload`) and write the net with `load_state_dict`.
+validating loader (`_load_payload`) and write the net with `load_state_dict`. The state dict
+holds the trained parameters under the same names in both parametrisations of the spatial
+prior: the weights under "penalty", xi under "whitened" (`make_net_from_config` rebuilds the
+whitening factors from the config, as `make_weight_penalty` rebuilds the penalty matrices).
 """
 
 import pickle
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from functools import partial
 from pathlib import Path
 
@@ -25,7 +28,13 @@ from fct.config import Config, TrainConfig, resolve_device, resolve_dtype
 from fct.data import Dataset
 from fct.model import MLP, EnsembleMLP, Net, make_net
 from fct.sgld import SGLD
-from fct.spatial import build_spaces, parameter_factors, weight_quadratic_form
+from fct.spatial import (
+    build_spaces,
+    floored_whitening_factors,
+    parameter_factors,
+    weight_quadratic_form,
+    whitening_factors,
+)
 
 # Monitor entries are lists over layers, the rest numbers; for an ensemble every entry but
 # `epoch` and `monitor_epoch` has a member axis first (see `train`).
@@ -40,6 +49,62 @@ _HISTORY_KEYS = ("epoch", "mse", "weight_l2", "rate_l2", "loss")
 # displacement per step (see `SGLD.last_msd`), both of the step taken at the logged epoch.
 _SGLD_KEYS = ("grad_norm", "param_msd")
 _REQUIRED_KEYS = ("epoch", "net_state_dict", "optim_state_dict", "history", "rng_state")
+# Lanczos for the run-start curvature check under whitening (`largest_hessian_eigenvalue`): at
+# most this many Hessian-vector products, and convergence once the top Ritz pair's residual is
+# below this fraction of the largest Ritz value's magnitude (or 64 machine epsilons of the
+# parameters' dtype, if larger).
+HESSIAN_MAX_ITERATIONS = 300
+HESSIAN_RTOL = 1e-8
+
+
+def make_net_from_config(
+    cfg: Config, D_in: int, D_out: int, device: torch.device, dtype: torch.dtype
+) -> Net:
+    """The net `cfg` describes for `D_in` inputs and `D_out` outputs. The one place a config
+    turns into a net, for training and for loading alike.
+
+    Every path starts from the same standard-normal draw z of `make_net(cfg.net)`. Under
+    `net.init = "standard"` the parameters are z (the only start before `net.init` existed).
+    Under "prior" W is drawn from the prior the loss encodes, so every direction the data does
+    not touch starts in equilibrium: whitened, xi = z / sqrt(weight_lambda) with the factors
+    S = K^{1/2}; under the penalty, W = S_fl,rows z S_fl,cols / sqrt(weight_lambda) with the
+    square roots of the floored kernels M^{-1} (`floored_whitening_factors`), which is the
+    whitened start's W bit for bit when nothing is floored; without a spatial prior, W =
+    z / sqrt(weight_lambda)."""
+    prior = cfg.net.init == "prior"
+    init_std = cfg.train.weight_lambda**-0.5 if prior else 1.0  # > 0: `Config` checks it
+    if cfg.spatial is None or not prior:
+        return make_net(cfg.net, D_in, D_out, device, dtype, init_std=init_std)
+    spaces = build_spaces(cfg.spatial, m=D_in, N=cfg.net.N, L=cfg.net.L, n_out=D_out)
+    if cfg.is_whitened:
+        factors = whitening_factors(spaces)
+        return make_net(cfg.net, D_in, D_out, device, dtype, whitening=factors, init_std=init_std)
+    net = make_net(cfg.net, D_in, D_out, device, dtype, init_std=init_std)
+    return _correlate(net, floored_whitening_factors(spaces))
+
+
+def _correlate(net: Net, factors: dict[str, tuple[Tensor, Tensor]]) -> Net:
+    """`net` with every parameter p replaced, in place, by S_rows p S_cols: the product
+    `Whitening.whiten` forms, so the same factors give the same weights."""
+    with torch.no_grad():
+        for name, p in net.named_parameters():
+            rows, cols = (S.to(p.device, p.dtype) for S in factors[name])
+            p.copy_(rows @ p @ cols)
+    return net
+
+
+def _check_parametrisation_matches(cfg: Config, net: Net) -> None:
+    """A net with whitening factors is trained only under "whitened" and a net without only
+    under the penalty (or no prior): the loss and the readers would otherwise silently take
+    xi for W or W for xi."""
+    has = net.whitening is not None
+    if has != cfg.is_whitened:
+        parametrisation = None if cfg.spatial is None else cfg.spatial.parametrisation
+        raise ValueError(
+            f"the net {'has' if has else 'has no'} whitening factors but the config's "
+            f"spatial.parametrisation is {parametrisation!r}; build the net with "
+            "make_net_from_config"
+        )
 
 
 def prior_coefficient(tc: TrainConfig) -> float:
@@ -110,41 +175,162 @@ def spatial_weight_penalty(net: Net, factors: dict[str, tuple[Tensor, Tensor]]) 
     return torch.stack(terms).sum(0)
 
 
-def _check_sgld_step_resolves_the_prior(
-    factors: dict[str, tuple[Tensor, Tensor]], tc: TrainConfig
-) -> None:
-    """Raise if an SGLD step of size lr is unstable on the prior term alone.
-
-    c * tr(M_rows W M_cols W^T), with c = `prior_coefficient(tc)` = weight_lambda / (2 beta),
-    has curvature 2 c lambda_max(M_rows) lambda_max(M_cols) along its stiffest direction, and an
-    Euler step on a quadratic of curvature k diverges once lr * k >= 2. A wide kernel makes lambda_max large (up to
-    1 / min_rel_eig over the largest eigenvalue of K), so this fails at the start instead of
-    after the run has filled with NaN. Passing it is necessary, not sufficient: the data and
-    rate terms add curvature of their own. Adam rescales its steps and needs no such check.
-    """
-    stiffest = max(
+def prior_stiffness(factors: dict[str, tuple[Tensor, Tensor]]) -> float:
+    """lambda_max(M_rows) lambda_max(M_cols) of the stiffest parameter: the prior term
+    c * tr(M_rows W M_cols W^T) has curvature 2 c times this along its stiffest direction. A
+    wide kernel makes it large (up to 1 / min_rel_eig over the largest eigenvalue of K per
+    factor). The whitened prior c |xi|^2 has stiffness 1 in every direction."""
+    return max(
         torch.linalg.eigvalsh(rows)[-1].item() * torch.linalg.eigvalsh(cols)[-1].item()
         for rows, cols in factors.values()
     )
-    step = tc.lr * prior_coefficient(tc) * stiffest
+
+
+def _check_sgld_step_resolves_the_prior(stiffness: float, prior: str, tc: TrainConfig) -> None:
+    """Raise if an SGLD step of size lr is unstable on the prior term alone, whose curvature
+    along its stiffest direction is 2 c `stiffness` (c = `prior_coefficient(tc)` = weight_lambda
+    / (2 beta); `prior_stiffness`): an Euler step on a quadratic of curvature k diverges once
+    lr * k >= 2, so lr * c * stiffness >= 1 fails at the start instead of after the run has
+    filled with NaN. `prior` names the prior in the message. Passing it is necessary, not
+    sufficient: the data and rate terms add curvature of their own
+    (`_check_sgld_step_resolves_the_loss`). Adam rescales its steps and needs no such check.
+    """
+    step = tc.lr * prior_coefficient(tc) * stiffness
     if step >= 1:
         raise ValueError(
-            f"SGLD with lr={tc.lr:g} diverges on the spatial prior alone: lr * weight_lambda / "
-            f"(2 beta) * lambda_max(M) = {step:.3g} must be < 1 (lambda_max(M) = "
-            f"{stiffest:.3g}); lower lr or weight_lambda, raise beta, or widen the floor "
-            "min_rel_eig"
+            f"SGLD with lr={tc.lr:g} diverges on the {prior} alone: lr * weight_lambda / "
+            f"(2 beta) * stiffness = {step:.3g} must be < 1 (stiffness {stiffness:.3g}); lower "
+            "lr or weight_lambda, or raise beta"
         )
+
+
+def largest_hessian_eigenvalue(
+    loss_fn: Callable[[], Tensor],
+    params: Iterable[Tensor],
+    max_iter: int = HESSIAN_MAX_ITERATIONS,
+    seed: int = 0,
+) -> float:
+    """The largest (most positive) eigenvalue of the Hessian H of `loss_fn()` with respect to
+    `params`, by Lanczos with full reorthogonalisation on Hessian-vector products (double
+    backward through the gradient of one evaluation), in float64.
+
+    Lanczos builds the Krylov space of a random start vector and takes the top eigenvalue of
+    the projected tridiagonal matrix (the top Ritz value). It stops when the top Ritz pair's
+    residual |beta_k s_k| falls below `HESSIAN_RTOL` (or 64 epsilons of the parameters' dtype)
+    times the largest Ritz value's magnitude, or when the Krylov space is invariant (beta_k ~ 0,
+    at the latest after as many steps as there are parameters); the Ritz value is then within
+    that residual of an eigenvalue of H and, from a random start, it is the top one. A run that
+    has not converged after `max_iter` products raises ValueError instead of returning an
+    estimate. For an ensemble the loss is the sum of the members' and H is block-diagonal, so
+    this is the largest of the members' top eigenvalues. The start vector comes from a local
+    generator, so the global RNG is untouched; the parameters and their `.grad` are left as
+    they were."""
+    params = list(params)
+    grads = torch.autograd.grad(loss_fn(), params, create_graph=True)
+    sizes = [p.numel() for p in params]
+    n = sum(sizes)
+    rtol = max(HESSIAN_RTOL, 64 * torch.finfo(params[0].dtype).eps)
+
+    def hvp(v: Tensor) -> Tensor:
+        """H v for v (n,) float64, through the parameters' own dtype and device."""
+        parts = [
+            x.reshape(p.shape).to(p.device, p.dtype)
+            for x, p in zip(v.split(sizes), params, strict=True)
+        ]
+        dot = sum((g * x).sum() for g, x in zip(grads, parts, strict=True))
+        hv = torch.autograd.grad(dot, params, retain_graph=True)
+        out = torch.cat([h.detach().reshape(-1).to("cpu", torch.float64) for h in hv])
+        if not torch.isfinite(out).all():
+            raise ValueError("the loss Hessian has non-finite entries at the current net")
+        return out
+
+    start = torch.randn(n, generator=torch.Generator().manual_seed(seed), dtype=torch.float64)
+    return _lanczos_top_eigenvalue(hvp, start, min(max_iter, n), rtol)
+
+
+def _lanczos_top_eigenvalue(
+    matvec: Callable[[Tensor], Tensor], start: Tensor, max_iter: int, rtol: float
+) -> float:
+    """The top eigenvalue of the symmetric operator `matvec` (n,) -> (n,), by `max_iter` or
+    fewer Lanczos steps from `start`, with full reorthogonalisation (each new vector is
+    orthogonalised twice against all previous ones, so the basis stays orthonormal and no
+    spurious copies of converged Ritz values appear). See `largest_hessian_eigenvalue`."""
+    basis = [start / torch.linalg.norm(start)]
+    alphas: list[float] = []
+    betas: list[float] = []
+    for _ in range(max_iter):
+        q = basis[-1]
+        w = matvec(q)
+        alphas.append(torch.dot(w, q).item())
+        Q = torch.stack(basis)
+        for _ in range(2):
+            w = w - Q.T @ (Q @ w)
+        beta = torch.linalg.norm(w).item()
+        T = torch.diag(torch.tensor(alphas, dtype=torch.float64))
+        if betas:
+            off = torch.tensor(betas, dtype=torch.float64)
+            T = T + torch.diag(off, 1) + torch.diag(off, -1)
+        ritz, vectors = torch.linalg.eigh(T)
+        scale = ritz.abs().max().item()
+        residual = beta * abs(vectors[-1, -1].item())
+        if residual <= rtol * scale or beta <= rtol * scale or scale == 0.0:
+            return ritz[-1].item()
+        betas.append(beta)
+        basis.append(w / beta)
+    raise ValueError(
+        f"Lanczos for the largest Hessian eigenvalue did not converge in {max_iter} "
+        f"Hessian-vector products (top Ritz value {ritz[-1].item():.6g}, residual "
+        f"{residual:.3g} against a tolerance of {rtol * scale:.3g})"
+    )
+
+
+def _check_sgld_step_resolves_the_loss(
+    net: Net,
+    dataset: Dataset,
+    tc: TrainConfig,
+    weight_penalty: WeightPenalty,
+    log: Callable[[str], None],
+) -> None:
+    """Raise if an SGLD step of size lr is unstable on the full loss at the current net: the
+    data term adds, along the directions the data spans, a curvature the prior-only bound
+    does not see. lr * lambda_max(Hessian) >= 1, half the divergence limit, is refused; the
+    value is logged otherwise. A step with lr * lambda_max <= 0.1 inflates the stationary
+    variance of the stiffest mode by at most 5% (1 / (1 - lr c / 2) on a quadratic of
+    curvature c)."""
+    coefficient = prior_coefficient(tc)
+
+    def loss() -> Tensor:
+        x, y = dataset.x, dataset.y
+        return compute_loss(net, x, y, coefficient, tc.rate_lambda, weight_penalty)[0]
+
+    lam = largest_hessian_eigenvalue(loss, net.parameters())
+    step = tc.lr * lam
+    if step >= 1:
+        raise ValueError(
+            f"SGLD with lr={tc.lr:g} is unstable on the loss at the initial net: lr * "
+            f"lambda_max(loss Hessian) = {step:.3g} must be < 1 (lambda_max = {lam:.3g} from "
+            "Lanczos); lower lr"
+        )
+    log(f"SGLD step check: lr * lambda_max(loss Hessian) = {step:.3g} (lambda_max = {lam:.3g})")
 
 
 def make_weight_penalty(cfg: Config, net: Net) -> WeightPenalty:
     """The weight term `cfg` asks for: the net's `weight_l2` (`MLP.weight_l2`, or
-    `EnsembleMLP.weight_l2` per member) without a spatial prior, else the spatial prior
-    (per member for an ensemble) with the penalty matrices built for `net`'s sizes (float64
-    on the CPU) and then cast to its dtype and device. They are built here, once per run, and
-    are not parameters: a resumed run rebuilds the same matrices from the config. For SGLD it
-    raises if `train.lr` cannot resolve the prior (`_check_sgld_step_resolves_the_prior`).
+    `EnsembleMLP.weight_l2` per member) without a spatial prior and under its whitened
+    parametrisation (where the parameters are xi and the prior is the plain |xi|^2), else the
+    spatial prior (per member for an ensemble) with the penalty matrices built for `net`'s
+    sizes (float64 on the CPU) and then cast to its dtype and device. They are built here, once
+    per run, and are not parameters: a resumed run rebuilds the same matrices from the config.
+    For SGLD it raises if `train.lr` cannot resolve the prior
+    (`_check_sgld_step_resolves_the_prior`), on either path. ValueError if the net's
+    parametrisation is not the config's.
     """
+    _check_parametrisation_matches(cfg, net)
     if cfg.spatial is None:
+        return type(net).weight_l2
+    if cfg.is_whitened:
+        if cfg.train.optimizer == "sgld":
+            _check_sgld_step_resolves_the_prior(1.0, "whitened spatial prior", cfg.train)
         return type(net).weight_l2
     spaces = build_spaces(cfg.spatial, m=net.D_in, N=net.N, L=net.L, n_out=net.D_out)
     factors64 = parameter_factors(spaces)
@@ -156,7 +342,12 @@ def make_weight_penalty(cfg: Config, net: Net) -> WeightPenalty:
             f"{sorted(names)}"
         )
     if cfg.train.optimizer == "sgld":
-        _check_sgld_step_resolves_the_prior(factors64, cfg.train)
+        _check_sgld_step_resolves_the_prior(
+            prior_stiffness(factors64),
+            "spatial prior (stiffness lambda_max(M_rows) lambda_max(M_cols), which a wider "
+            "floor min_rel_eig lowers)",
+            cfg.train,
+        )
     factors = {
         name: (rows.to(net.device, net.dtype), cols.to(net.device, net.dtype))
         for name, (rows, cols) in factors64.items()
@@ -364,6 +555,7 @@ def _check_net_matches_config(net: Net, cfg: Config) -> None:
         raise ValueError(
             f"the net is an ensemble of B={net.B} but the config has net.B={cfg.net.B}"
         )
+    _check_parametrisation_matches(cfg, net)
 
 
 def train(
@@ -378,7 +570,9 @@ def train(
     weight penalty of `make_weight_penalty`; resume from the latest checkpoint if any.
 
     If `final.pt` exists the net is loaded from it and nothing else happens (no optimiser,
-    no RNG change). A checkpoint with `epoch=s` is written before the step of epoch s; the
+    no RNG change). A fresh SGLD run under the whitened spatial prior first checks that `lr`
+    resolves the loss's curvature at the initial net (`_check_sgld_step_resolves_the_loss`,
+    which logs the value). A checkpoint with `epoch=s` is written before the step of epoch s; the
     step, history entry and log line follow. An interruption at epoch t therefore resumes at
     the last multiple of `save_int` at or before t, repeating the deterministic steps since.
 
@@ -414,6 +608,9 @@ def train(
         # why the RNG state is checkpointed.
         torch.manual_seed(tc.seed)
         start, history = 0, _new_history(monitor is not None, tc.optimizer)
+        if tc.optimizer == "sgld" and cfg.is_whitened:
+            # At the initial net only: a resumed run passed this when it started.
+            _check_sgld_step_resolves_the_loss(net, dataset, tc, weight_penalty, log)
     else:
         start, history, note = _restore(ckpt, cfg, net, optim)
         log(f"resumed from {ckpt} at epoch {start}" + (f" ({note})" if note else ""))
@@ -447,11 +644,11 @@ def train_from_config(
 ) -> tuple[Net, History]:
     """Build the net the config describes for `dataset` and `train` it (see `train`).
 
-    The one place that turns a config and a dataset into a net, so the CLI and the experiment
-    start every run identically.
+    The one place that turns a config and a dataset into a net (`make_net_from_config`), so
+    the CLI and the experiment start every run identically.
     """
-    net = make_net(
-        cfg.net,
+    net = make_net_from_config(
+        cfg,
         dataset.x.shape[1],
         dataset.y.shape[1],
         resolve_device(cfg),
@@ -461,9 +658,11 @@ def train_from_config(
 
 
 def _net_from_payload(payload: dict, cfg: Config, device: torch.device, dtype: torch.dtype) -> Net:
+    """The net of a saved payload: built from the config (which also gives a whitened net its
+    factors) at the sizes of the saved parameters, then loaded with them."""
     state = payload["net_state_dict"]
     # The last axis is D_in / D_out for a single net (N, D) and an ensemble (B, N, D) alike.
-    net = make_net(cfg.net, state["U"].shape[-1], state["V"].shape[-1], device, dtype)
+    net = make_net_from_config(cfg, state["U"].shape[-1], state["V"].shape[-1], device, dtype)
     net.load_state_dict(state)
     return net
 

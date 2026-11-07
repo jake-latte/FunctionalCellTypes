@@ -101,6 +101,15 @@ version of the forward pass of `MLP`. Version 2 reads the output from the post-a
 hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
 enters the hash by value.
 
+Fields added after artefacts existed. A field added to a hashed section or to exp.json is left out of it while it holds
+its default, the value every artefact written before the field existed implies, so those hashes and exp.json texts stay
+byte-identical and an absent field means its default; at any other value it enters, and the artefact is new. The fields
+are listed once, in two tables of dotted paths: `config.HASH_OMITTED_AT_DEFAULT` for `section_hash` (`net.B`,
+`net.init`, `data.teacher`, `spatial.lambda_max`, `spatial.parametrisation`) and `exp.EXP_JSON_OMITTED_AT_DEFAULT` for
+exp.json (`description`, `B`, `init`, `linear_teacher.teacher`, `spatial.parametrisation`). Both go through one helper,
+`schema.exclude_at_default(model, table) -> exclude`, which builds the nested pydantic `exclude` and skips a path whose
+parent is None (an unset `spatial` section). A new field of this kind is a new table entry, nothing else.
+
 The meanfield section enters every hash as `MeanFieldConfig.hash_payload()`, not as its nested dump: the problem fields
 and the solver fields that existed before the sampler choice (`config.LEGACY_SOLVER_FIELDS`, `log_int` and `save_int`
 included) in one flat dict, which is how the section was hashed before it was split. The step-control fields
@@ -125,7 +134,9 @@ cache stale.
 Every `.pt` file must be loadable with `torch.load(path, weights_only=True)`:
 only tensors, Python scalars/str/None, lists, dicts. No pickled modules,
 functions or numpy arrays (convert numpy to lists / tensors before saving).
-Models are stored as `state_dict` and rebuilt from the config with `make_net`.
+Models are stored as `state_dict` (the parameters `U`, `J.<k>`, `V`: the weights, or `xi`
+under the whitened spatial prior, whose factors are not stored) and rebuilt from the config
+with `train.make_net_from_config`.
 
 ## config.py
 
@@ -159,6 +170,7 @@ class NetConfig(BaseModel):
     phi: Literal["relu", "tanh", "sigmoid", "id"] = "relu"   # "id": phi(h) = h, a linear net
     seed: int = 0
     B: int = 1                          # ensemble size (>= 1): B > 1 trains B non-interacting nets in one run (see "Ensembles" below); hashed only when != 1
+    init: Literal["standard", "prior"] = "standard"   # initial law: every parameter N(0, 1), or W from the prior the loss encodes (see "Spatial weight prior in training"); hashed only as "prior"; required by the whitened parametrisation
 class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
     weight_lambda: float = 2e-4; rate_lambda: float = 1e-3
@@ -221,10 +233,10 @@ class Config(BaseModel):
     spatial: SpatialConfig | None = None   # the spatial weight prior (fct.spatial); None -> weight L2 norm
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
+    is_whitened: bool   # property: spatial is set and its parametrisation is "whitened"; the one test of the parametrisation
     def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `LOSS_VERSION` when `train` is), first 12 hex chars; >=1 section required
         # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
-        # with `net`: net.B dropped when it is 1, so every single-network cache keeps its hash
-        # with `data`: data.teacher dropped when it is "gaussian", so every Gaussian-teacher cache keeps its hash
+        # every field of HASH_OMITTED_AT_DEFAULT dropped while at its default ("Fields added after artefacts existed")
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -336,16 +348,19 @@ def latent_lattice_dataset(cfg, reference: Dataset) -> Dataset
 ## model.py
 
 ```python
-class MLP(nn.Module)   # the notebook's net: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None); forward(x) -> (H (P,L,N), Z (P,D_out)) with Z = phi(H[:, -1]) @ V / N, a linear readout of the last layer's post-activations (MODEL_VERSION 2); weight_l2()
+class MLP(nn.Module)   # the notebook's net: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None, whitening=None, init_std=1.0); forward(x) -> (H (P,L,N), Z (P,D_out)) with Z = phi(H[:, -1]) @ V / N, a linear readout of the last layer's post-activations (MODEL_VERSION 2); weight_l2()
 class EnsembleMLP(nn.Module)   # B MLPs batched over a leading member axis: U (B,N,D_in), J_k (B,N,N), V (B,N,D_out); __init__(members: Sequence[MLP]) copies and stacks them
     # forward(x (P,D_in)) -> (H (B,P,L,N), Z (B,P,D_out)); weight_l2() -> (B,); member(b) -> MLP (a copy of member b's weights); B, device, dtype properties
     # forward: batched matmuls with contiguous (B,P,.) results, each scale factor on the smaller of weight and result
 Net = MLP | EnsembleMLP                                  # MLP.B = 1 (class attribute), so `net.B` works for both;
     # member_axes: leading axes indexing members (MLP 0, EnsembleMLP 1), which train.per_member reduces around
-MLP.from_weights(U, J, V, g, phi) -> MLP                 # an MLP holding the given weights (no copy, no random draw); member() uses it
+class Whitening(nn.Module)                               # net.whitening: (S_rows, S_cols) per parameter name as NON-persistent buffers (follow .to(device, dtype), not in the state dict); whiten(name, xi) = S_rows xi S_cols; None for a plain net
+def effective_weights(net) -> {"U" | "J.k" | "V": W}    # the weights the forward pass uses: the parameters themselves (same tensors) for a plain net, S_rows xi S_cols under whitening; what every reader of trained weights reads
+MLP.from_weights(U, J, V, g, phi, whitening=None) -> MLP   # an MLP holding the given parameters (no copy, no random draw); member() uses it
 def member_seed(seed: int, b: int) -> int                # member 0: seed itself; b > 0: first 8 bytes (little-endian) of sha256("fct.model.member:<seed>:<b>")
-def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> Net   # cfg.B = 1: an MLP, weights drawn on CPU from a local torch.Generator seeded with cfg.seed;
+def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype, whitening=None, init_std=1.0) -> Net   # cfg.B = 1: an MLP, parameters N(0, init_std^2) drawn on CPU from a local torch.Generator seeded with cfg.seed;
     # cfg.B > 1: an EnsembleMLP whose member b is drawn from a generator seeded with member_seed(cfg.seed, b); then moved to device (no global RNG touched); phi = get_phi(cfg.phi)
+    # whitening: the factors of fct.spatial.whitening_factors; train.make_net_from_config passes them with init_std = weight_lambda ** -0.5 under spatial.parametrisation == "whitened"
 ```
 
 ## train.py
@@ -360,7 +375,11 @@ def compute_loss(net, x, y, prior_coefficient, rate_lambda, weight_penalty=None)
     # rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
 WeightPenalty = Callable[[Net], Tensor]   # 0-d for an MLP, (B,) for an ensemble
 def per_member(net, t, reduce=torch.sum) -> Tensor   # reduce over every axis but the member axis (all axes for an MLP)
-def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None, else the spatial prior for net's sizes, dtype and device
+def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None or its parametrisation is "whitened" (the plain |xi|^2), else the spatial prior for net's sizes, dtype and device
+    # for SGLD refuses a step the prior's stiffest curvature cannot take, on either path; ValueError if the net's parametrisation is not the config's
+def prior_stiffness(factors) -> float   # max over parameters of lambda_max(M_rows) lambda_max(M_cols): the prior's curvature is 2 prior_coefficient times it along its stiffest direction (1 under whitening)
+def make_net_from_config(cfg: Config, D_in, D_out, device, dtype) -> Net   # the one place a Config becomes a net: make_net of cfg.net (standard-normal z), under net.init "prior" scaled by weight_lambda ** -0.5 and, under the penalty, correlated by floored_whitening_factors; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) as the net's factors
+def largest_hessian_eigenvalue(loss_fn, params, max_iter=300, seed=0) -> float   # the most positive Hessian eigenvalue, by Lanczos with full reorthogonalisation on Hessian-vector products (double backward), in float64; converged when the top Ritz pair's residual is below HESSIAN_RTOL (1e-8, or 64 eps of the dtype) of the largest Ritz value, else ValueError ("did not converge"); an ensemble's block-diagonal Hessian gives the largest over members; local generator, parameters and .grad untouched
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
 History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus grad_norm, param_msd for SGLD; plus the monitor_* keys below when monitored
@@ -369,9 +388,12 @@ def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
     # checkpoint every save_int epochs and at the end (final.pt); hash = section_hash("data","net","train")
     # monitor: required exactly when cfg.train.monitor_int > 0 (ValueError otherwise, before anything runs)
+    # ValueError, before anything runs, if the net's parametrisation is not the config's (whitening factors exactly when cfg.is_whitened)
+    # a fresh SGLD run under "whitened" first estimates lambda_max of the loss Hessian at the initial net (largest_hessian_eigenvalue),
+    #   raises (naming lr and lambda_max, before any checkpoint) if lr * lambda_max >= 1, and logs "SGLD step check: ..." otherwise
 def train_from_config(cfg: Config, dataset: Dataset, cache_dir: Path, log=print, monitor=None) -> tuple[MLP, History]
-    # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the experiment
-def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
+    # make_net_from_config(cfg, the dataset's x and y widths, resolve_device(cfg), cfg.dtype), then train(...); shared by `fct train` and the experiment
+def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, History]   # rebuilds the net with make_net_from_config (the config's net section and, under "whitened", its whitening factors; sizes from the saved U and V) and loads final.pt's state dict into it (history incl. monitor_* keys); raises FileNotFoundError if absent
     # an EnsembleMLP and an ensemble history when cfg.net.B > 1 (load_latest_checkpoint likewise)
 def select_member(net: Net, history, member: int | None = None) -> tuple[MLP, History]   # a single net passes through (member None or 0);
     # an ensemble needs member (ValueError if None, IndexError out of range) and gives net.member(member), member_history(history, member)
@@ -928,8 +950,9 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_min, latent_max, teacher = "gaussian"), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
-    # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, weight_lambda,
-    # rate_lambda, optimizer, beta; an axis of the same name wins. spatial: SpatialConfig | None = None, the spatial weight prior of every setting
+    # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, init, weight_lambda,
+    # rate_lambda, optimizer, beta; an axis of the same name wins (init is shared so that `--set init=prior` makes a whitened axis value valid
+    # against the base, which every axis value is checked against alone). spatial: SpatialConfig | None = None, the spatial weight prior of every setting
     # (written to Config.spatial; training hashes change with it, exp_hash does not). A `spatial.<path>` axis varies a field of the section and
     # is rejected at load ("set the experiment's spatial section first") when the experiment has none; `spatial` itself is a valid axis only while the
     # section is None (its values are whole dumps, or None). A dict- or list-valued axis value (or one whose text exceeds MAX_LABEL_VALUE = 24 characters) is labelled in directory names as `<axis>-<6 hex of the
@@ -951,7 +974,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
 # [A-Za-z_][A-Za-z0-9_]*. Files are read at call time, so a new file is seen at once with an editable install; a wheel holds the files it was built with.
 def preset(name, directory=None) -> ExpConfig    # the base experiment <directory or fct/presets>/<name>.json, read through importlib.resources (so also from inside a wheel) and validated; PresetError (an ExpError, so a ValueError) naming the full path if the name is unknown (the message lists the presets and the ignored files) or the file is unreadable or invalid
 def preset_names(directory=None) -> list[str]     # sorted, found at call time: regular files `<stem>.json` with stem matching [A-Za-z_][A-Za-z0-9_]*; folders (even `x.json`), dotfiles, a bare `.json`, README and other files are ignored; `*.json` files whose stem breaks the rule are reported by the unknown-preset error
-def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json (UTF-8; every writer goes through write_exp_text, which writes a .tmp sibling and renames it; exp_text(exp) leaves `description` out when it is None, `B` out when it equals `NetConfig().B` and `linear_teacher.teacher` out when it is "gaussian", so an experiment without them has the text it had before those fields existed; an absent `B` or `teacher` means the default); load raises FileNotFoundError naming the path
+def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json (UTF-8; every writer goes through write_exp_text, which writes a .tmp sibling and renames it; exp_text(exp) leaves out every field of EXP_JSON_OMITTED_AT_DEFAULT at its default ("Fields added after artefacts existed")); load raises FileNotFoundError naming the path
 def same_experiment(a, b) -> bool                      # every field equal except `description` (model_dump(exclude={"description"})); used wherever two experiments are compared (lrtune's trial root, migrate's resume check)
 def expand(exp) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given exp.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow an experiment in a fresh ROOT)
 def get_setting(exp, index) -> Setting                 # ExpError (a ValueError) "index i is out of range; valid indices are 0..N-1"
@@ -1194,7 +1217,7 @@ is stated once, in the module docstring of `fct/spatial.py`.
 EmbeddingSpec(kind="grid"|"random", shape=None, seed=0)   # grid shape must multiply to n, None -> n points for d = 1; random takes no shape
 KernelSpec(length_scale=0.1, amplitude=1.0)               # length_scale in the same units as box
 PopulationSpec(embedding, kernel)
-SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6, lambda_max=None)   # hidden 1..L share `hidden`; grid in d > 1 needs a shape; lambda_max > 0 or None (see "lambda_max")
+SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6, lambda_max=None, parametrisation="penalty")   # hidden 1..L share `hidden`; grid in d > 1 needs a shape; lambda_max > 0 or None (see "lambda_max"); parametrisation "penalty" | "whitened"
 
 # pure computation (float64, CPU)
 make_embedding(spec, n, d, box, index=0) -> Embedding(positions (n, d), box)   # local generator: global RNG untouched
@@ -1202,9 +1225,13 @@ torus_distance(x, y, box) -> (n, m)                       # Euclidean norm of pe
 periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post, n_pre)   # wrapped Gaussian, diagonal = amplitude
 wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
 penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, fraction_floored, n_negative, cond_before, cond_after))
-build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
+whitening_matrix(K) -> S                                  # K^{1/2}, symmetric PSD, eigenvalues clamped at 0 (no floor); raises on a clearly negative one
+floored_square_root(K, min_rel_eig) -> S_floored          # (M^{-1})^{1/2}: the square root of the floored kernel the penalty encodes; whitening_matrix(K) bit for bit when nothing is floored
+build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties; each Population has K, M, report, S, S_floored
 weight_quadratic_form(W, M_rows, M_cols) -> Tensor        # tr(M_rows W M_cols W^T), any dtype/device; identity factors give W.square().sum() exactly; W (..., r, c) gives one value per matrix
 parameter_factors(spaces) -> {"U" | "J.k" | "V": (M_rows, M_cols)}   # factors of each MLP weight in its STORED orientation (V: (M_pre, M_post))
+whitening_factors(spaces) -> {"U" | "J.k" | "V": (S_rows, S_cols)}   # the same, with S: W = S_rows xi S_cols (see "Spatial weight prior in training")
+floored_whitening_factors(spaces) -> {"U" | "J.k" | "V": (S_fl_rows, S_fl_cols)}   # the same, with S_floored: the penalty path's prior draw
 data_kernel(psi (P, n_pre), K_pre (n_pre, n_pre)) -> (P, P)           # A = psi K_pre psi^T / n_pre: the data factor of the paper's Phi^{mu nu}_ij = K^post_ij A_{mu nu} (eq. phi-diagonalised); K_pre = I gives psi psi^T / n_pre
 spatial_kernel_pairs(A (P, P), K_post (n, n), trials) -> (S, S, n, n)   # block [s, t] = A[trials[s], trials[t]] * K_post; ValueError on non-square inputs and on trials empty or outside 0..P-1
 ```
@@ -1253,13 +1280,83 @@ default, and what every `config.json` written before the field existed loads as)
   not parameters and not checkpointed: a resumed run rebuilds them from the config, so resume is exact.
 - Hash: the `spatial` section enters `section_hash` with `train` only when it is set, so the caches of runs without it keep
   their hashes (pinned in `tests/test_spatial_prior.py`), and a run trained without the prior is stale for a config with it.
+  Within it `lambda_max` and `parametrisation`, and `net.init` in the net section, follow "Fields added after artefacts
+  existed": every penalty run started from the standard draw keeps its hash, and a whitened run, or a run started from
+  the prior, has a new one.
 - SGLD stability. The prior's stiffest curvature is `(weight_lambda / beta) lambda_max(M^post) lambda_max(M^pre)`, which a wide
   kernel makes large (up to `1 / (min_rel_eig * lambda_max(K))` per factor). An Euler step diverges once
   `lr * weight_lambda / (2 beta) * lambda_max(M^post) lambda_max(M^pre) >= 1`, so `make_weight_penalty` raises for SGLD before the
   first step. The check is necessary, not sufficient (the data and rate terms add curvature). Adam rescales its steps and
   is not checked.
-- Not covered: the initial weights are still iid `N(0, 1)` rather than drawn from the prior, so the prior term starts
-  large for a wide kernel; the mean-field solver still assumes the L2 prior.
+- Initial law (`net.init`). Under `"standard"` (the default, and the only start before the field existed) every
+  parameter is iid `N(0, 1)`, far from the prior for a wide kernel. Under `"prior"` W is drawn from the prior the loss
+  encodes, from the same standard-normal draw `z`: `W0 = S_fl,post z S_fl,pre / sqrt(weight_lambda)` with `S_fl` the
+  square root of the floored kernel `M^{-1}` (`floored_square_root`); without a spatial prior `z / sqrt(weight_lambda)`.
+  It needs `weight_lambda > 0` and enters the net hash only as `"prior"`.
+- Not covered: the mean-field solver still assumes the L2 prior.
+
+The whitened parametrisation (`spatial.parametrisation = "whitened"`; the default `"penalty"` is everything above).
+The floor caps the prior's soft modes (`lambda_q^eff = max(lambda_q, min_rel_eig * lambda_0)`) and makes SGLD stiff
+(the bound above scales as `1 / min_rel_eig`). Under `"whitened"` the trained parameters are `xi`, one per weight, with
+`W = S_post xi S_pre`, `S = K^{1/2}` the symmetric PSD square root (`spatial.whitening_matrix`: eigenvalues clamped at
+0, no inversion, no floor; `Population.S`, `whitening_factors(spaces)` per parameter in its stored orientation like
+`parameter_factors`), and the penalty is the plain `|xi|^2` with the unchanged coefficient `weight_lambda / (2 beta)`, so
+`Cov(vec W) = (K^post (x) K^pre) / weight_lambda` exactly for every spectrum and the prior curvature is
+`weight_lambda / beta` in every direction of `xi`. The two paths share data, seeds, loss coefficients, monitor,
+history keys and checkpoint layout; how their dynamics differ is below ("Dynamics").
+
+- How the net applies it. `Config` requires `net.init = "prior"` under `"whitened"` (a start away from the prior
+  would contradict the reason for the parametrisation), and `make_net_from_config` (train.py) builds the net with
+  `whitening=whitening_factors(spaces)` and `init_std = weight_lambda ** -0.5`, so `xi ~ N(0, I / weight_lambda)` is a
+  draw from its prior and every direction the data does not touch starts in equilibrium. With nothing floored the
+  penalty path's `"prior"` start is the same `W0` bit for bit (same `z`, and `S_floored` is then `S`). The net holds `xi` as its parameters under the unchanged
+  names `U`, `J.<k>`, `V` and the factors in a `Whitening` submodule of non-persistent buffers; `forward` materialises
+  `W = S_rows xi S_cols` each call (two extra small matmuls per weight per step) through `effective_weights(net)`,
+  which for a plain net returns the parameters themselves (the same tensors, so the penalty path is bit for bit what it
+  was). SGLD and Adam iterate `net.parameters()`, i.e. `xi`, unchanged. Ensembles share one set of factors between
+  members (`EnsembleMLP` refuses members whose factors differ) and `member(b)` hands a copy to the member.
+- Readers. Everything that calls the net (`net_kernels`, the monitors, `tuning_view`, `example_outputs`) sees `W`
+  through the forward pass. Anything that reads a weight matrix reads `effective_weights(net)[name]`, never `net.U`
+  (which is `xi` under whitening): `phase_view.weight_kernels` and the spatial notebook's `order_weights` /
+  `ordered_kernel_comparison` calls do. `select_member` / `member(b)` carry the factors, so a member is read like any net.
+- Checkpoints. `net_state_dict` holds `xi` under the parameter names and nothing else (the factors are not in the
+  state dict, like the penalty matrices); `_net_from_payload` rebuilds the net through `make_net_from_config`, which
+  recomputes the factors from the config, so `load_trained`, `load_latest_checkpoint` and resume restore the net exactly.
+  `train` and `make_weight_penalty` raise if the net's parametrisation is not the config's (a plain net under
+  `"whitened"` or a whitened net under `"penalty"`), since the loss would otherwise silently take `xi` for `W`.
+- Run-start checks (SGLD only; Adam rescales its steps). Both paths refuse a step the prior's stiffest curvature cannot
+  take, with the curvature of the parameters actually trained: `lr * weight_lambda / (2 beta) * lambda_max(M_post)
+  lambda_max(M_pre) >= 1` under the penalty, `lr * weight_lambda / (2 beta) >= 1` under whitening. That bound misses
+  the data term's curvature, so a whitened run additionally estimates `lambda_max` of the loss Hessian at the initial
+  net on the dataset (`largest_hessian_eigenvalue`: Lanczos on Hessian-vector products from a local generator, so the
+  training RNG stream is untouched, which raises rather than return an unconverged value; power iteration would find
+  the eigenvalue of largest magnitude, which may be negative, and converges slowly when two are close), refuses `lr * lambda_max >= 1` (half the divergence limit, naming
+  `lr` and `lambda_max`) and logs the value otherwise (`SGLD step check: ...`). It runs on a fresh start only; a
+  resumed run passed it when it started.
+- Dynamics. The two paths sample the same law by different dynamics, and nothing here fixes how runs on them are
+  compared.
+  - SGLD on `xi` is, in `W`, Langevin dynamics preconditioned by `S^2 = K_post (x) K_pre`: `vec W = (S_post (x) S_pre)
+    vec xi` is linear, so a step `-lr grad_xi L + noise` is `-lr (K_post (x) K_pre) grad_W L` plus noise of covariance
+    `(2 lr / beta) (K_post (x) K_pre)` in `W`. The stationary law is the same `exp(-beta L(W))`, up to the eigenvalue
+    floor of the penalty path; the relaxation times differ. Under the penalty a prior mode of variance `lambda`
+    relaxes in about `beta lambda / (weight_lambda lr)` steps: the fine modes (small `lambda_q`, the largest prior
+    curvature `weight_lambda / (beta lambda_q)`) relax fastest and set the step bound, and the coarse modes (large
+    `lambda_q`) relax slowest. Under whitening every prior mode relaxes in `beta / (weight_lambda lr)` steps.
+  - The same `train.lr` is therefore a different step in `W` on the two paths (scaled by `K_post (x) K_pre` under
+    whitening). Adam is not invariant under the reparametrisation (its moments are elementwise, in `xi` or in `W`), so
+    its trajectories differ; only its fixed point, the MAP, agrees, up to the floor.
+  - `grad_norm` and `param_msd` are measured in the coordinates trained: `xi` under whitening, `W` under the penalty.
+    `weight_l2` is the same quantity on both paths, the prior's quadratic form `vec W^T (K_post (x) K_pre)^{-1} vec W`
+    (`|xi|^2` under whitening), with the floored kernels under the penalty.
+  - A singular `K` (or one with eigenvalues below round-off) confines `W` to the range of `S` under whitening: that is
+    the exact, degenerate prior. The penalty path instead gives those directions the floor's variance
+    `min_rel_eig lambda_max(K)`, so the two differ there.
+- Hash. `parametrisation` enters the train hash only as `"whitened"` ("Fields added after artefacts existed"), so every
+  penalty hash is unchanged and a whitened run has a new hash; `Config` requires `weight_lambda > 0` under whitening (the prior
+  `N(0, K / weight_lambda)` and the initial draw need it). `min_rel_eig` is unused under whitening but still hashed.
+  An experiment may run `spatial.parametrisation` as an axis (`--axis 'spatial.parametrisation=["penalty","whitened"]'`,
+  with `--set init=prior`, since every axis value is validated against the experiment's base) to train the two side by
+  side.
 
 ## spectrum.py (tuning-map spectra on the ring)
 
@@ -1385,8 +1482,8 @@ float32 run casts M to float32 and trains with a prior whose coarse lam_q are of
 spectrum of the prior the run trains with, N(0, M^{-1}) with M = `post.M`: max(lam_q of K, `report.floor`), the floor rule
 of `penalty_matrix` (`min_rel_eig` times K's top eigenvalue, after any `lambda_max` rescaling), computed from K rather
 than by inverting M, which would lose log10(1 / min_rel_eig) digits on the coarse modes (37 of 64 frequencies are
-floored in the common setting); `exact_kernel=True` uses K itself, which matches a run only under a parametrisation that
-trains with the unfloored prior. `tests/test_linear_theory.py` ties k0, k1, delta, r and the floor to the loss that
+floored in the common setting). Under `spatial.parametrisation = "whitened"` the run trains with N(0, K) itself, so the
+default is K's spectrum; `exact_kernel=True` gives K's spectrum on the penalty path too. `tests/test_linear_theory.py` ties k0, k1, delta, r and the floor to the loss that
 `fct.train._step` builds, so a change to how the trainer scales a term fails there. `sig2` is an explicit argument because no config field
 holds the input noise: sigma -> 0 is the default, and at `sig2 = 0` a null mode and every frequency with lam_q = 0 get
 d_q = 0 exactly (nothing divides by sigma).
@@ -1448,11 +1545,11 @@ Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD
 
 `notebooks/build_spatial.py` builds `spatial.ipynb` (source only; an executed copy goes to the ignored `tmp/`): one linear-teacher run under the spatial weight prior, trained through the normal cache, with the tuning of every neuron laid out by position. The library computes and the notebook draws: `fct/spatial_view.py` has the config, the run and the layout helpers (no plotting), `fct.spatial` the kernels and penalty matrices, `fct.exp_view.tuning_view` the tuning curves and per-neuron MIR, `fct.analyse` the example outputs. Every figure is drawn by a plotting function written out in full (plain matplotlib) in the code cell that shows it, and each such cell is preceded by a markdown cell defining the plotted quantity with an equation; the notebook does not import `fct.draw`. So the figure code exists once, in the notebook, where the reader sees it; its tests (`tests/test_build_spatial.py`) run those functions on synthetic inputs by executing the imports and function definitions of the generated cells. A new figure is one more markdown + code pair in `build_notebook`: settings, then the plotting function, then the call and `plt.show()`.
 
-- Config and run: `population_spec(kind, length_scale, amplitude=1, shape=None, seed=0) -> PopulationSpec`; `make_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed, spatial, device) -> Config` (task `linear_teacher`, `D_in = m`, `n_latents = k`; `log_int = n_epochs // 50`, `save_int = n_epochs // 4`); `layer_spaces(cfg)` (the L + 1 `LayerSpace`s, `n_out = D_in`); `cache_dir_for(cfg, root) = root / "spatial_<section_hash(data, net, train)>"` (the hash includes the spatial section, so any change of setting is a new directory); `train_run(cfg, root, log) -> TrainRun(cache_dir, dataset, net, history)` writes `config.json`, loads or generates the dataset and calls `train_from_config`, so a finished run is loaded and an interrupted one resumes; `cache_root_from_env()` reads `$FCT_CACHE_ROOT`.
+- Config and run: `population_spec(kind, length_scale, amplitude=1, shape=None, seed=0) -> PopulationSpec`; `make_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed, spatial, device, init="standard") -> Config` (task `linear_teacher`, `D_in = m`, `n_latents = k`; `log_int = n_epochs // 50`, `save_int = n_epochs // 4`); `layer_spaces(cfg)` (the L + 1 `LayerSpace`s, `n_out = D_in`); `cache_dir_for(cfg, root) = root / "spatial_<section_hash(data, net, train)>"` (the hash includes the spatial section, so any change of setting is a new directory); `train_run(cfg, root, log) -> TrainRun(cache_dir, dataset, net, history)` writes `config.json`, loads or generates the dataset and calls `train_from_config`, so a finished run is loaded and an interrupted one resumes; `cache_root_from_env()` reads `$FCT_CACHE_ROOT`.
 - Layout (pure): `position_order(positions)` argsort around a ring (d = 1 only); `order_weights(W, pos_post, pos_pre) -> OrderedWeights(W, post_order, pre_order)` (rows by post position, columns by pre position; W is (post, pre), so `MLP.U` is (hidden, input)); `panel_grid(positions, n_cols) -> PanelGrid(n_rows, n_cols, cells)` with `cells[u] = (row, col)`: ring order along wrapped rows of `n_cols` for d = 1, the unit's lattice cell for d = 2 (column from x, row from y with y up; positions that do not form a full lattice, such as a random 2-D embedding, raise), d > 2 raises. `empirical_kernels(W) = (W W^T / n_pre, W^T W / n_post)`; `ordered_kernel_comparison(space, W) -> KernelComparison` has the prior and empirical kernels of one layer indexed in the same ring order.
 - Figures, each with its plotting function defined in its cell: `plot_layer_prior(space)` per weight layer (K_pre, K_post, every K_ij against torus distance with the profile `wrapped_gaussian_profile`, unit positions; d <= 2), `plot_loss_curves(history, title)` (loss and raw terms, log y), `plot_example_outputs(outputs, title)` (true and predicted output vectors and the pooled R^2 scatter), `plot_kernel_comparison(comparison, space)` (prior K_post / K_pre beside U U^T / m and U^T U / N, ring-sorted; d = 1), `plot_weights_by_position(W, space)` (U sorted by position; d = 1), `plot_tuning_by_position(view, positions, n_cols, bar_width)` (`view` a `TuningView`; bars drawn by the unlisted helper `_draw_information_bars`) (a curve panel and an information bar panel per neuron, placed by `panel_grid`, one curve and one bar per latent, from `exp_view.tuning_view`, so tuning and MIR are computed as in the phase-transition notebook). The kernels shown are weight-prior and weight second-moment kernels over units, not the mean-field Phi over samples of `meanfield.py` (the spatially indexed Phi is the next bullet); the markdown says so.
 - Spatially indexed kernels (the paper's eq. kernel-def under the factorised prior): hidden layer l (0-based) is the pre population of `SPACES[l + 1]`, so K^pre = `SPACES[l + 1].pre.K` and K^post = `SPACES[l + 1].post.K` (the next hidden layer, or the output for the last one); psi is `meanfield.readout_activities` (phi(h) on every layer, the paper's eq. kernel-def), computed on the training device and moved to the CPU in float64 where the K live. Helpers defined in the cells and tested: `data_kernels(H, phi, spaces) -> (L, P, P)` and `layer_kernel_pairs(A, spaces, layer, trials) -> (post population, (S, S, n, n) blocks)`. Figures: `plot_data_kernels(A, order, sorted_by)` (one panel per hidden layer, A^(l) (P, P) sorted by `sample_order` on the latent `PHI_SORT_LATENT`, own symmetric scale, title with psi and tr A / P), `plot_trial_latents(factors, trials)` (bars of z_{f mu} of the `PHI_TRIALS` samples `spread_trials(order, S)` picks at evenly spaced ranks of the sorted order), and per hidden layer `plot_spatial_kernel_pairs(pairs, trials, unit_order, title)` (the S x S grid of (n_post, n_post) blocks Phi^{mu nu}_ij, units in `position_order` for d = 1 and index order otherwise, one symmetric colour scale for the grid, an all-zero grid shown on -1..1). The activities psi are those of the held-out test set (`fct.data.get_latent_lattice_dataset`, the 3^k lattice points, so A^(l) is (3^k, 3^k)): the cell's `TEST_DATASET` is made in the train cell, and `sample_order`, the trial picks and the pair grids all read it; the example outputs are drawn from it too: `plot_example_outputs(outputs, title, everything=None)` shows `N_EXAMPLES` test points as panels and, in the scatter, every entry of all 3^k test points with their pooled R^2 (`everything`; the shown examples only if omitted). `plot_data_kernels(A, order, sorted_by, B=None)` draws `fct.spatial.latent_kernel(factors)` = B = Z Z^T / k (P, P) first when given, in the same sample order, so each A^(l) is read against the kernel of a layer linear in the latents. The input kernel Phi^(0) is not drawn.
-- Notebook cells: task and network (the `parameters`-tagged cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `N`, `L`, `PHI`, `G`, seeds, `PRIOR_COEFF`, `RATE_LAMBDA`, `DEVICE`), training (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup (imports), spatial (`D`, `BOX`, `MIN_REL_EIG`, `INPUT`, `HIDDEN`, `OUTPUT`), the eigenvalue-floor and step-size tables, the prior kernels, train, loss curves, example outputs (`N_EXAMPLES`), first-layer kernels, first-layer weights, the data kernels A (`PHI_SORT_LATENT`), the chosen trials (`PHI_TRIALS`), the Phi grids, tuning (`N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). `build_spatial.set_parameters(nb, values)` rewrites the one-line `NAME = value` assignments (a name not assigned exactly once raises); `execute_notebook(nb, cache_root, overrides)` runs a copy with them set, and the CLI takes them as `--set NAME=literal`.
+- Notebook cells: task and network (the `parameters`-tagged cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `N`, `L`, `PHI`, `G`, seeds, `PRIOR_COEFF`, `RATE_LAMBDA`, `DEVICE`), training (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup (imports), spatial (`D`, `BOX`, `MIN_REL_EIG`, `PARAMETRISATION`, `INIT`, `INPUT`, `HIDDEN`, `OUTPUT`), the eigenvalue-floor and step-size tables (under `PARAMETRISATION = "whitened"`: "not floored: exact prior", stiffness 1, the bound `lr * weight_lambda / (2 beta) < 1`), the prior kernels, train, loss curves, example outputs (`N_EXAMPLES`), first-layer kernels, first-layer weights (both read `first_layer_weights(net)`, the effective `U`, which is `S xi S` under whitening), the data kernels A (`PHI_SORT_LATENT`), the chosen trials (`PHI_TRIALS`), the Phi grids, tuning (`N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). `build_spatial.set_parameters(nb, values)` rewrites the one-line `NAME = value` assignments (a name not assigned exactly once raises); `execute_notebook(nb, cache_root, overrides)` runs a copy with them set, and the CLI takes them as `--set NAME=literal`.
 - Default sizes: 16 hidden units on a ring, 12 inputs, kernel length scale 0.15, `MIN_REL_EIG = 1e-2`, `LR = 1e-2`, `PRIOR_COEFF = 3e-3`, the coefficient of the penalty in the loss; the config cell derives `weight_lambda = 2 * PRIOR_COEFF * beta (beta = 1 for Adam)`, so both optimisers train the same loss). SGLD is rejected unless `lr * weight_lambda / (2 beta) * lambda_max(M_l) < 1` for every layer, with `lambda_max(M_l) = lambda_max(M_post) lambda_max(M_pre)` and `lambda_max(M^p) = 1 / (min_rel_eig * lambda_max(K^p))` (here about 368, so the product is about 0.011), and the library default floor of 1e-6 starts even Adam with a prior term of order 1e9; both optimisers run 2000 epochs in a few seconds on a CPU. SGLD fits the teacher less closely than Adam in the same number of epochs (executed: final train mse 0.198 under SGLD, 0.124 under Adam).
 - Limits: kernels and tuning panels cover d <= 2; the weight image and the ring-sorted empirical kernels need d = 1. A hidden-layer panel per neuron gets large for N in the hundreds (the figure height grows with the rows).
 
@@ -1473,7 +1570,7 @@ The computation layer of the phase-transition notebook: one setting of a `phase_
 - `load_phase_run(root, values, device="cpu") -> PhaseRun(setting, net, history, epoch, spaces, dataset)`: `select_setting` plus the weights of a done setting (`load_trained`) or the latest checkpoint of a partial one (`load_latest_checkpoint`, `epoch` = epochs reached); a missing or stale setting has `net = history = None`, `epoch = 0`, and its training set is generated in memory (nothing is written into a setting never run). `spaces` come from the config alone. `ValueError` for `net.B < 2`.
 - `unit_order(positions, sort_dim)`: stable argsort of the units by one coordinate; `ValueError` unless `0 <= sort_dim < d`.
 - `random_test_set(data_cfg, train, n_points, seed=None) -> RandomTestSet(dataset, seed)`: `fct.tasks.resample` with `P = n_points`, so the samples are new (latents uniform on [`latent_min`, `latent_max`]) but the teacher maps are the training set's. `ValueError` unless `data_cfg` regenerates the training set exactly, which fixes `P`, `D_in`, `n_latents`, `latent_min`, `latent_max`, `teacher` and `seed`; the message prints them. Default seed is the data seed + `TEST_SEED_OFFSET`, and the seed used is returned. The 3^k latent-lattice set (`get_latent_lattice_dataset`) stays the test set of the A plots.
-- Prior factors, per weight layer (`layer_priors(spaces, weight_lambda, n_eig) -> [LayerPrior]`): `covariance_factors` = K^post / sqrt(lambda_w), K^pre / sqrt(lambda_w), whose Kronecker product is K^post (x) K^pre / lambda_w, the prior as configured (not what training samples: the penalty floors K's small eigenvalues); `effective_covariance_factors` = M^-1 / sqrt(lambda_w) on each side, product (lambda_w M^post (x) M^pre)^-1, which is what the networks were trained under; `penalty_factors` = sqrt(lambda_w) M^post, sqrt(lambda_w) M^pre, product lambda_w M^post (x) M^pre (the loss's quadratic form without 1 / 2 beta). lambda_w multiplies the Kronecker product once, so each factor carries its square root (symmetric in post and pre); under `spatial.lambda_max` weight_lambda is 1 and the split is the identity. Spectra: the covariance and effective covariance keep the `n_eig` LARGEST eigenvalues, descending; the penalty keeps the `n_eig` SMALLEST, ascending, because its largest eigenvalues are all the floor value (a flat line; at N 512, lambda_max 0.1 it covers 27-99% of the hidden eigenvalues for d = 4..1). `LayerPrior.floors` gives, per population, `n_floored`, `fraction_floored`, `covariance_floor` and `penalty_ceiling` (on the plotted scale) for drawing the floor line.
+- Prior factors, per weight layer (`layer_priors(spaces, weight_lambda, n_eig, *, whitened) -> [LayerPrior]`, `whitened` required: the run's `Config.is_whitened`, recorded as `LayerPrior.whitened`): `covariance_factors` = K^post / sqrt(lambda_w), K^pre / sqrt(lambda_w), whose Kronecker product is K^post (x) K^pre / lambda_w, the prior as configured (not what training samples: the penalty floors K's small eigenvalues); `effective_covariance_factors(space, weight_lambda, *, whitened)` = what the networks were trained under: M^-1 / sqrt(lambda_w) on each side under the penalty, product (lambda_w M^post (x) M^pre)^-1 (K floored), and K / sqrt(lambda_w) (S^2, nothing floored) under the whitened parametrisation; the phase-transition notebook labels it floored or exact accordingly; `penalty_factors` = sqrt(lambda_w) M^post, sqrt(lambda_w) M^pre, product lambda_w M^post (x) M^pre (the loss's quadratic form without 1 / 2 beta). lambda_w multiplies the Kronecker product once, so each factor carries its square root (symmetric in post and pre); under `spatial.lambda_max` weight_lambda is 1 and the split is the identity. Spectra: the covariance and effective covariance keep the `n_eig` LARGEST eigenvalues, descending; the penalty keeps the `n_eig` SMALLEST, ascending, because its largest eigenvalues are all the floor value (a flat line; at N 512, lambda_max 0.1 it covers 27-99% of the hidden eigenvalues for d = 4..1). `LayerPrior.floors` gives, per population, `n_floored`, `fraction_floored`, `covariance_floor` and `penalty_ceiling` (on the plotted scale) for drawing the floor line.
 - `ensemble_statistics(history) -> EnsembleStatistics(epoch, mean, sem)` for `ENSEMBLE_KEYS` (loss, mse, weight_l2, rate_l2; `weight_l2` is the raw quadratic form, before its loss coefficient): sem = std(ddof=1) / sqrt(B), NaN for B = 1.
 - `member_view(net, lattice, test, spaces, n_bins, kind, n_shuffles, seed) -> MemberView(A, info_overlap, rate_overlap, weight_kernels)` for one `MLP`: the notebook's data kernels A^(l) (`spatial_view.data_kernels`, on the lattice set), `information_overlap` and `rate_overlap` of `tuning_view` (on the random test set) and `empirical_kernels` of each weight in (post, pre) orientation. `ensemble_views(net, ...)` maps it over `net.member(b)` with shuffle seed `seed + b`; `average_views` takes the elementwise mean in unit-index space (members share the embedding), after which the units are ordered for display. The averaged overlap is the mean over members of each member's own overlap matrix (a second moment over members; for the corrected MIR the per-member clamping at zero biases it upward), not the overlap of the mean tuning. `random_test_set` raises unless the training set is exactly what `data_cfg` regenerates (compared in memory, so P, D_in, n_latents, latent range and seed all count). `FloorReport.floor` records min_rel_eig times the top eigenvalue of K, the floor the penalty factors report. `load_phase_run` is read-only: a done setting whose dataset file is missing gets its training set generated in memory.
 - `ensemble_example_outputs(net, dataset, indices) -> EnsembleExamples`: `y_pred` is (B, n_examples, D_out), one colour per member; `y_true` and `x` are the dataset rows.

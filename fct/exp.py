@@ -49,6 +49,7 @@ from fct.cache import (
 from fct.config import (
     Config,
     DataConfig,
+    InitLaw,
     MeanFieldConfig,
     NetConfig,
     NonNegFloat,
@@ -70,6 +71,7 @@ from fct.config import (
 from fct.data import Dataset, get_dataset, task_dims
 from fct.meanfield import meanfield_hash, run_meanfield
 from fct.monitor import make_mir_monitor
+from fct.schema import exclude_at_default
 from fct.spatial import SpatialConfig
 from fct.train import load_trained, train_from_config
 
@@ -191,8 +193,8 @@ class ExpConfig(StrictModel):
 
     `description` is free text saying what the experiment is. It is documentation only: it never
     enters a hash or a directory name, `same_experiment` ignores it, and exp.json omits it when
-    it is None. exp.json also omits `B` (the ensemble size) at its default, so an absent `B`
-    means the default.
+    it is None. exp.json also omits the other fields of `EXP_JSON_OMITTED_AT_DEFAULT` (`B`,
+    `init`, ...) at their defaults, so an absent one means the default.
 
     The same data, net and training seeds are used for every setting, so settings differ only
     in the axes. Everything else is the base `Config` a setting starts from (the shared
@@ -236,6 +238,10 @@ class ExpConfig(StrictModel):
     L: PosInt = NetConfig().L
     g: PosFloat = NetConfig().g
     B: PosInt = NetConfig().B
+    # The initial law (`NetConfig.init`); "prior" is required by the whitened parametrisation,
+    # and a shared field (`--set init=prior`) because a `spatial.parametrisation` axis value is
+    # validated against the experiment's base, which must already start from the prior.
+    init: InitLaw = NetConfig().init
     phi: Phi = NetConfig().phi
     weight_lambda: NonNegFloat = TrainConfig().weight_lambda
     rate_lambda: NonNegFloat = TrainConfig().rate_lambda
@@ -376,21 +382,24 @@ def exp_path(root: Path) -> Path:
     return Path(root) / EXP_FILE
 
 
+# Fields left out of exp.json while they hold the value every exp.json written before they
+# existed implies, so an absent field means that value: dotted path -> that value.
+EXP_JSON_OMITTED_AT_DEFAULT: dict[str, Any] = {
+    "description": None,
+    "B": NetConfig().B,
+    "init": NetConfig().init,
+    "linear_teacher.teacher": LinearTeacherParams.model_fields["teacher"].default,
+    "spatial.parametrisation": SpatialConfig().parametrisation,
+}
+
+
 def exp_text(exp: ExpConfig) -> str:
-    """The text of exp.json. `description` is left out when None, `B` when it is the library
-    default and `linear_teacher.teacher` when it is "gaussian", so an exp.json holds only what
-    departs from the defaults and an absent `B` or `teacher` means the default. Leaving out
-    `B` keeps exp.json files written before it existed byte-identical; `teacher` follows the
-    same rule, so a Gaussian-teacher exp.json stays minimal and the pinned texts in
-    test_phase_transition_preset.py moved only by the rename of `latent_range` to
-    `latent_min` / `latent_max` (files that still spell `latent_range` are rejected)."""
-    exclude: dict[str, Any] = {}
-    if exp.description is None:
-        exclude["description"] = True
-    if exp.B == NetConfig().B:
-        exclude["B"] = True
-    if exp.linear_teacher.teacher == "gaussian":
-        exclude["linear_teacher"] = {"teacher"}
+    """The text of exp.json, without the fields of `EXP_JSON_OMITTED_AT_DEFAULT` that hold
+    their defaults (`fct.schema.exclude_at_default`): an exp.json holds only what departs from
+    them, files written before those fields existed (and the pinned texts in
+    test_phase_transition_preset.py) stay byte-identical, and an absent field means its
+    default."""
+    exclude = exclude_at_default(exp, EXP_JSON_OMITTED_AT_DEFAULT)
     return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
 
 
@@ -502,7 +511,9 @@ def _base_config(exp: ExpConfig, task: str) -> Config:
     """The shared part of every setting's `Config`; the axes are written over it."""
     return Config(
         data=data_config(exp, task),
-        net=NetConfig(N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, B=exp.B, seed=exp.seeds.net),
+        net=NetConfig(
+            N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, B=exp.B, init=exp.init, seed=exp.seeds.net
+        ),
         train=TrainConfig(
             n_epochs=exp.n_epochs,
             lr=exp.lr,

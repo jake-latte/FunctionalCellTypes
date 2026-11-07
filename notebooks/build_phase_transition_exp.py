@@ -166,7 +166,7 @@ if not 0 <= MEMBER < N_MEMBERS:
 POPULATIONS = [SPACES[0].pre, *(space.post for space in SPACES)]
 ORDERS = [unit_order(pop.embedding.positions, SORT_DIM) for pop in POPULATIONS]
 print(f"units sorted by coordinate {SORT_DIM} of d = {D}")
-PRIORS = layer_priors(SPACES, WEIGHT_LAMBDA, N_EIG)
+PRIORS = layer_priors(SPACES, WEIGHT_LAMBDA, N_EIG, whitened=CFG.is_whitened)
 TRAINED = NET is not None
 # appended to every figure title of a setting that is still running
 STATUS_TAG = (
@@ -279,16 +279,17 @@ def draw_sorted_matrix(fig, ax, matrix, order, coordinate, sort_dim, what, bound
 
 def plot_prior_matrices(prior, space, order_post, order_pre, sort_dim, tag=""):
     # One weight layer's prior: rows are the pre and the post factor, columns the covariance, the
-    # effective covariance (the floored one the nets were trained under) and the penalty. The
-    # covariance and the effective covariance share one colour scale per row; the penalty has
-    # its own. Units are in the given orders.
+    # effective covariance (the one the nets were trained under: floored under the penalty, K
+    # itself under the whitened parametrisation) and the penalty. The covariance and the
+    # effective covariance share one colour scale per row; the penalty has its own. Units are
+    # in the given orders.
+    if prior.whitened:
+        effective = ("exact, as trained", r"$K^{{\rm {w}}} / \sqrt{{\lambda_w}}$")
+    else:
+        effective = ("floored, as trained", r"$(M^{{\rm {w}}})^{{-1}} / \sqrt{{\lambda_w}}$")
     columns = [
         ("covariance", prior.covariance, r"$K^{{\rm {w}}} / \sqrt{{\lambda_w}}$"),
-        (
-            "effective covariance (floored, as trained)",
-            prior.effective_covariance,
-            r"$(M^{{\rm {w}}})^{{-1}} / \sqrt{{\lambda_w}}$",
-        ),
+        (f"effective covariance ({effective[0]})", prior.effective_covariance, effective[1]),
         ("penalty", prior.penalty, r"$\sqrt{{\lambda_w}}\, M^{{\rm {w}}}$"),
     ]
     rows = [("pre", space.pre, order_pre), ("post", space.post, order_post)]
@@ -348,7 +349,12 @@ PRIOR_SPECTRA = r"""def plot_prior_spectra(prior, space, tag=""):
         top, bottom = axes[0, col], axes[1, col]
         j = np.arange(1, len(cov) + 1)
         top.plot(j, cov.numpy(), "o-", label=r"covariance $K / \sqrt{\lambda_w}$")
-        top.plot(j, eff.numpy(), "s--", label=r"effective covariance $M^{-1} / \sqrt{\lambda_w}$")
+        effective = (
+            r"effective covariance (exact) $K / \sqrt{\lambda_w}$"
+            if prior.whitened
+            else r"effective covariance (floored) $M^{-1} / \sqrt{\lambda_w}$"
+        )
+        top.plot(j, eff.numpy(), "s--", label=effective)
         top.axhline(floor.covariance_floor, color="C3", ls=":", label="floor")
         top.set(
             yscale="log",
@@ -564,7 +570,7 @@ KERNELS = r"""def plot_weight_kernels(panels, space, order_post, order_pre, sort
 
 for space, prior in zip(SPACES, PRIORS):
     panels = [
-        ("effective prior", prior.effective_covariance),
+        (f"effective prior ({'exact' if prior.whitened else 'floored'})", prior.effective_covariance),
         (f"member {MEMBER}", MEMBER_VIEW.weight_kernels[space.layer]),
         (f"average of {N_MEMBERS} members", MEAN_VIEW.weight_kernels[space.layer]),
     ]

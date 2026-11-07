@@ -45,13 +45,21 @@ prior's near-zero-variance directions, and so it defines M on that subspace. `Fl
 gives the floored fraction. A kernel with a clearly negative eigenvalue is an error, not
 something to floor (`penalty_matrix` raises).
 
+The whitened parametrisation (`SpatialConfig.parametrisation = "whitened"`). Instead of
+penalising W with M, the net trains xi with W = S^post xi S^pre, S = K^{1/2} the symmetric PSD
+square root (`whitening_matrix`: eigenvalues clamped at 0, no inversion, no floor), and the
+penalty is the plain |xi|_F^2. Then Cov(vec W) = (K^post (x) K^pre) / weight_lambda exactly, for
+every spectrum, where the penalty path only has it above the floor; and the prior's curvature is
+the same in every direction of xi, so SGLD is not stiff. `Population.S` and `whitening_factors`
+carry the factors; `fct.model` applies them.
+
 Everything is pure float64 on the CPU, so inversions are accurate and independent of the
 training device.
 """
 
 import math
 import numbers
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Literal, Self
 
@@ -119,6 +127,11 @@ class SpatialConfig(StrictModel):
     # When set, every population kernel is rescaled to this top eigenvalue (see `_make_population`)
     # and `kernel.amplitude` is not used, so it must stay 1; `Config` also requires weight_lambda = 1.
     lambda_max: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+    # "penalty": the weights are the parameters and the loss carries tr(M W M W^T) (`min_rel_eig`
+    # floors M). "whitened": the parameters are xi, W = S xi S with S = K^{1/2}, and the loss
+    # carries |xi|^2 (see the module docstring); `min_rel_eig` is then unused. The field enters
+    # the hash only as "whitened", so every penalty hash is unchanged.
+    parametrisation: Literal["penalty", "whitened"] = "penalty"
 
     @model_validator(mode="after")
     def _amplitude_is_one_under_lambda_max(self) -> Self:
@@ -266,30 +279,63 @@ def _check_kernel(K: torch.Tensor) -> None:
         raise ValueError("K must be symmetric")
 
 
-def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, FloorReport]:
-    """M ~ K^{-1} from the symmetric eigendecomposition with eigenvalues floored at
-    min_rel_eig * (largest eigenvalue); returns M and the `FloorReport`."""
-    if not 0 < min_rel_eig < 1:
-        raise ValueError(f"min_rel_eig must lie in (0, 1), got {min_rel_eig}")
+def _psd_eigh(K: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """The symmetric eigendecomposition of a kernel, checked to be a covariance: finite,
+    square, symmetric, with a positive top eigenvalue and none clearly negative (below
+    -NEGATIVE_RTOL times the largest; smaller negatives are round-off)."""
     _check_kernel(K)
     eigvals, eigvecs = torch.linalg.eigh(K)
-    top, bottom = eigvals[-1].item(), eigvals[0].item()
+    top = eigvals[-1].item()
     if top <= 0:
         raise ValueError("K needs a positive largest eigenvalue")
     n_negative = int((eigvals < -NEGATIVE_RTOL * top).sum().item())
     if n_negative:
         raise ValueError(
             f"K has {n_negative} clearly negative eigenvalues (below -{NEGATIVE_RTOL:g} times "
-            "the largest); it is not a covariance and must not be floored"
+            "the largest); it is not a covariance"
         )
-    floor = min_rel_eig * top
-    floored = eigvals.clamp(min=floor)
+    return eigvals, eigvecs
+
+
+def whitening_matrix(K: torch.Tensor) -> torch.Tensor:
+    """S = K^{1/2}, the symmetric PSD square root from the eigendecomposition with eigenvalues
+    clamped at 0 (round-off negatives of a smooth kernel; a clearly negative one raises). No
+    inversion and no floor: S S = K to round-off, however small K's eigenvalues."""
+    eigvals, eigvecs = _psd_eigh(K)
+    return (eigvecs * eigvals.clamp(min=0).sqrt()) @ eigvecs.T
+
+
+def _floored_eigh(
+    K: torch.Tensor, min_rel_eig: float
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """K's eigenvalues, eigenvectors, the eigenvalues floored at min_rel_eig * (largest), and
+    that floor: the spectrum of the kernel the penalty encodes, M^{-1}."""
+    if not 0 < min_rel_eig < 1:
+        raise ValueError(f"min_rel_eig must lie in (0, 1), got {min_rel_eig}")
+    eigvals, eigvecs = _psd_eigh(K)
+    floor = min_rel_eig * eigvals[-1].item()
+    return eigvals, eigvecs, eigvals.clamp(min=floor), floor
+
+
+def floored_square_root(K: torch.Tensor, min_rel_eig: float) -> torch.Tensor:
+    """(M^{-1})^{1/2}, M = `penalty_matrix(K, min_rel_eig)`: the symmetric square root of the
+    floored kernel the penalty encodes, which draws the penalty's prior. With nothing floored
+    it is `whitening_matrix(K)` bit for bit (the same decomposition and the same eigenvalues)."""
+    _, eigvecs, floored, _ = _floored_eigh(K, min_rel_eig)
+    return (eigvecs * floored.sqrt()) @ eigvecs.T
+
+
+def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, FloorReport]:
+    """M ~ K^{-1} from the symmetric eigendecomposition with eigenvalues floored at
+    min_rel_eig * (largest eigenvalue); returns M and the `FloorReport`."""
+    eigvals, eigvecs, floored, floor = _floored_eigh(K, min_rel_eig)
+    top, bottom = eigvals[-1].item(), eigvals[0].item()
     M = (eigvecs / floored) @ eigvecs.T
     n_floored = int((eigvals < floor).sum().item())
     report = FloorReport(
         n_floored=n_floored,
         fraction_floored=n_floored / len(eigvals),
-        n_negative=n_negative,
+        n_negative=0,  # `_psd_eigh` raises on any clearly negative eigenvalue
         cond_before=top / bottom if bottom > 0 else float("inf"),
         cond_after=top / floored[0].item(),
         floor=floor,
@@ -302,10 +348,11 @@ def penalty_matrix(K: torch.Tensor, min_rel_eig: float) -> tuple[torch.Tensor, F
 
 @dataclass(frozen=True)
 class Population:
-    """One population's embedding, kernel K (n, n), penalty M (n, n) and floor report.
-    `scale` is the factor applied to the unit-amplitude kernel G under `lambda_max`
-    (lambda_max / top eigenvalue of G); it is 1.0 when `lambda_max` is unset, where K carries the
-    spec's amplitude instead."""
+    """One population's embedding, kernel K (n, n), penalty M (n, n) with its floor report,
+    square root S = K^{1/2} (n, n) for the whitened parametrisation, and S_floored, the square
+    root of the floored kernel M^{-1} that draws the penalty's prior. `scale` is the factor
+    applied to the unit-amplitude kernel G under `lambda_max` (lambda_max / top eigenvalue of
+    G); it is 1.0 when `lambda_max` is unset, where K carries the spec's amplitude instead."""
 
     name: str
     embedding: Embedding
@@ -313,6 +360,8 @@ class Population:
     K: torch.Tensor
     M: torch.Tensor
     report: FloorReport
+    S: torch.Tensor
+    S_floored: torch.Tensor
     scale: float = 1.0
 
 
@@ -348,7 +397,8 @@ def _make_population(
         scale = cfg.lambda_max / torch.linalg.eigvalsh(K)[-1].item()
         K = scale * K
     M, report = penalty_matrix(K, cfg.min_rel_eig)
-    return Population(name, emb, spec.kernel, K, M, report, scale)
+    S, S_floored = whitening_matrix(K), floored_square_root(K, cfg.min_rel_eig)
+    return Population(name, emb, spec.kernel, K, M, report, S, S_floored, scale)
 
 
 def build_spaces(cfg: SpatialConfig, m: int, N: int, L: int, n_out: int) -> list[LayerSpace]:
@@ -440,8 +490,33 @@ def parameter_factors(spaces: list[LayerSpace]) -> dict[str, tuple[torch.Tensor,
     (pre, post), so its rows take M_pre. `weight_quadratic_form(param, *factors[name])` is
     then the layer's tr(M_post W M_pre W^T) with W in (post, pre) orientation.
     """
+    return _factors_by_parameter(spaces, lambda pop: pop.M)
+
+
+def whitening_factors(spaces: list[LayerSpace]) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    """(S_rows, S_cols) of every `fct.model.MLP` weight in its stored orientation, keyed like
+    `parameter_factors`: W = S_rows xi S_cols is the layer's S^post xi S^pre for U and J, and
+    for V (stored (pre, post)) its transpose, rows S^pre and columns S^post."""
+    return _factors_by_parameter(spaces, lambda pop: pop.S)
+
+
+def floored_whitening_factors(
+    spaces: list[LayerSpace],
+) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    """(S_floored_rows, S_floored_cols) of every parameter, keyed and oriented like
+    `whitening_factors`: S_floored_rows z S_floored_cols / sqrt(weight_lambda), z standard
+    normal, is a draw from the penalty's (floored) prior."""
+    return _factors_by_parameter(spaces, lambda pop: pop.S_floored)
+
+
+def _factors_by_parameter(
+    spaces: list[LayerSpace], of: Callable[[Population], torch.Tensor]
+) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    """`of(population)` for the (rows, cols) populations of every parameter, by name."""
     L = len(spaces) - 1
     names = ["U", *[f"J.{k}" for k in range(L - 1)], "V"]
-    factors = {name: (s.M_post, s.M_pre) for name, s in zip(names[:-1], spaces[:-1], strict=True)}
-    factors["V"] = (spaces[L].M_pre, spaces[L].M_post)
+    factors = {
+        name: (of(s.post), of(s.pre)) for name, s in zip(names[:-1], spaces[:-1], strict=True)
+    }
+    factors["V"] = (of(spaces[L].pre), of(spaces[L].post))
     return factors

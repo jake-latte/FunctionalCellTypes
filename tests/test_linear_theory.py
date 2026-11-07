@@ -30,7 +30,15 @@ from fct import spectrum
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset, task_dims
 from fct.model import make_net
-from fct.spatial import EmbeddingSpec, KernelSpec, PopulationSpec, SpatialConfig, build_spaces
+from fct.spatial import (
+    NEGATIVE_RTOL,
+    EmbeddingSpec,
+    KernelSpec,
+    PopulationSpec,
+    SpatialConfig,
+    build_spaces,
+    whitening_matrix,
+)
 from fct.tasks import Dataset
 from fct.train import _step, make_weight_penalty
 
@@ -398,6 +406,25 @@ def test_default_spectrum_is_the_floored_prior_the_run_trains_with():
     assert (pred.d[0][tail] > unfloored.d[0][tail]).all()  # the floor raises the whole tail
     assert pred.d[0][32] > 1e3 * unfloored.d[0][32]  # and dominates it at the Nyquist frequency
     np.testing.assert_allclose(pred.d[0][~tail], unfloored.d[0][~tail], rtol=1e-6)
+
+
+def test_default_spectrum_of_a_whitened_run_is_the_unfloored_kernel():
+    """Under spatial.parametrisation "whitened" the run trains with N(0, K) itself, so the
+    default spectrum is K's, as `exact_kernel=True` gives on the penalty path."""
+    penalty = ring_config(**FULL, beta=0.25)
+    dump = penalty.model_dump()
+    whitened = Config.model_validate(
+        {
+            **dump,
+            "spatial": {**dump["spatial"], "parametrisation": "whitened"},
+            "net": {**dump["net"], "init": "prior"},
+        }
+    )
+    ds = exact_s2_dataset(np.random.default_rng(0), lt.uniform_latent_s2(256, 3, 1.0), 256, 8)
+    exact = lt.ring_spectrum(hidden_population(penalty).K)
+    np.testing.assert_array_equal(lt.theory_parameters(whitened, ds).lam, exact)
+    np.testing.assert_array_equal(lt.theory_parameters(penalty, ds, exact_kernel=True).lam, exact)
+    assert not np.array_equal(lt.theory_parameters(penalty, ds).lam, exact)
 
 
 # ------------------------------------------------------------------ sigma^2 = 0 as a first-class case
@@ -984,3 +1011,28 @@ def test_ansatz_free_kernel_sees_the_skew_of_a_non_orthonormal_teacher():
     assert np.abs(rot - np.diag(np.diag(rot))).max() > 1e-2  # the ansatz is only approximate
     rel = np.abs(np.sort(np.linalg.eigvalsh(C)) / roots - 1).max()
     assert 1e-4 < rel < 1e-2  # off by up to 0.2% in the note
+
+
+def _circulant_with_spectrum(lam: np.ndarray) -> torch.Tensor:
+    """The real symmetric circulant kernel whose DFT spectrum is `lam` (lam_q = lam_{N-q})."""
+    n = len(lam)
+    k = np.arange(n)
+    row = (lam[None, :] * np.cos(2 * np.pi * np.outer(k, k) / n)).sum(1) / n
+    return torch.tensor(row[(k[:, None] - k[None, :]) % n], dtype=torch.float64)
+
+
+@pytest.mark.parametrize(("ratio", "accepted"), [(0.5, True), (5.0, False)])
+def test_the_theory_accepts_exactly_the_kernels_the_run_accepts(ratio, accepted):
+    """One tolerance for a negative eigenvalue: a kernel whose Nyquist eigenvalue is just above
+    -NEGATIVE_RTOL times the top trains (whitening_matrix) and has a theory; just below, both
+    refuse it."""
+    lam = np.array([1.0, 0.5, 0.2, 0.05, -ratio * NEGATIVE_RTOL, 0.05, 0.2, 0.5])
+    K = _circulant_with_spectrum(lam)
+    if accepted:
+        whitening_matrix(K)
+        assert lt.ring_spectrum(K)[4] == 0.0
+    else:
+        with pytest.raises(ValueError, match="negative"):
+            whitening_matrix(K)
+        with pytest.raises(ValueError, match="negative"):
+            lt.ring_spectrum(K)
