@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: awaiting your confirmation
+status: in progress
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -13,7 +13,7 @@ PI request (2026-11-06): the notes' rate-penalty scale $g$ clashes with the
 code's hidden-layer gain `g` (`fct/model.py:92`, `NetConfig.g`); rename it so
 that, after `rate-penalty-code`, `train.rate_lambda == r` exactly.
 
-**Reading to confirm.** The code's penalty will be $\frac{\text{rate\_lambda}}{2\beta}\sum\phi^2$
+**Reading (confirmed by the PI 2026-11-07).** The code's penalty will be $\frac{\text{rate\_lambda}}{2\beta}\sum\phi^2$
 in $\mathcal L$, i.e. $\frac{\text{rate\_lambda}}{2}\sum\phi^2$ in $\beta\mathcal L$,
 against the notes' $\frac{g^2}{2}\sum\phi^2$. For `rate_lambda == r` the notes
 must write the penalty as $\frac r2\sum\phi^2$, so the rename is $g^2 \to r$
@@ -35,6 +35,13 @@ Also the scripts under `latex/notes/scripts/` and their tests under `tests/`
 ("$g^2 = 2\beta\,$`rate_lambda`" becomes "$r = $ `rate_lambda`").
 The hidden-layer gain `g` of the code (`NetConfig.g`) is not the same symbol
 and stays.
+
+Also: `fct/linear_theory.py` and `tests/test_linear_theory.py` (merged into
+`sigma0`) load `latex/notes/scripts/check_linear_soln_limits.py` by path and
+call its functions; rename their `g2` arguments to `r` in the script and update
+every caller in `tests/` so the suite stays green. The input-noise note
+`notes/input_noise_average.tex` already writes $r$; remove its footnote about
+the pending rename.
 
 ## Acceptance criteria
 - `grep -n 'g\^' latex` finds no rate-penalty use (the only remaining `g^`

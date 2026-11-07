@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: todo
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -35,7 +35,7 @@ notes' $r$ (after `rate-penalty-latex-r`).
   `solve` directly: keep the pinned solves bit for bit by passing the value
   that gives the same `rate_tilt`, or re-pin and say why in the commit).
 
-## Decision needed: the hash rule
+## Hash rule (PI confirmed the recommendation 2026-11-07)
 `LOSS_VERSION` is folded into every hash that includes `train`, so version 5
 would mark every existing train/meanfield cache stale, including the PI's
 running `phase_transition` sweeps (`pt_sweep*`, `sweep_cache`; Adam,
@@ -45,6 +45,14 @@ run do not change. **Recommended:** fold version 5 into the hash only when
 `rate_lambda = 0` caches stay valid and only runs whose loss really changed
 (by a factor $1/(2\beta)$, i.e. $1/2$ under Adam) become stale. The
 alternative is the plain bump, which invalidates the whole sweep.
+
+Also: `fct/linear_theory.py` (`theory_rate`) carries today's relation
+$r = 2\beta\,$`rate_lambda`; it becomes `rate_lambda`, and the drift-guard test
+`test_theory_rate_is_the_rate_part_of_the_training_loss` must pass unchanged
+(it compares the theory against the trainer's own loss). Starts after
+`whitened-spatial-prior` merges (both edit `fct/train.py` and `fct/config.py`'s
+hash rule); fold version 5 into the shared omission/hash table that branch
+introduces.
 
 ## Acceptance criteria
 - For every optimiser and $\beta$: `beta * loss` at fixed weights equals
