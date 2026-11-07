@@ -39,6 +39,8 @@ from fct.meanfield import meanfield_hash
 from tests.pinned_runs import LEGACY_CONFIG_FILE
 
 PINS_FILE = Path(__file__).parent / "fixtures" / "preset_hashes.json"
+
+
 @pytest.fixture(scope="module")
 def pins() -> dict:
     return json.loads(PINS_FILE.read_text())
