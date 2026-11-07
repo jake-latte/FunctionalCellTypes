@@ -743,3 +743,43 @@ def test_bootstrap_is_seeded_and_leaves_the_global_rng_alone():
 def test_bootstrap_rejects_bad_inputs(values, statistic, n_boot, match):
     with pytest.raises(ValueError, match=match):
         sp.bootstrap_members(values, statistic, n_boot=n_boot)
+
+
+# ------------------------------------------------------------------ band share
+def test_band_share_is_the_power_within_q_b_over_the_total():
+    d = torch.arange(1.0, 9.0, dtype=F64)  # N = 8, FFT order q = 0, 1, 2, 3, 4, -3, -2, -1
+    # q_b = round(3 * 8 / 64) = 0 for N = 8, so give q_b explicitly here
+    assert sp.band_share(d, q_band=1) == pytest.approx((1 + 2 + 8) / 36)
+    assert sp.band_share(d, q_band=0) == pytest.approx(1 / 36)
+    assert sp.band_share(d, q_band=4) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(("N", "q_band"), [(16, 1), (64, 3), (128, 6), (256, 12), (512, 24)])
+def test_band_share_scales_its_band_with_the_ring(N, q_band):
+    """q_b = round(3 N / 64): |q| <= 3 at N = 64, the same fraction of the ring at every N."""
+    assert sp.band_half_width(N) == q_band
+    d = smooth_spectrum(N, 2.0, 0.0)
+    assert sp.band_share(d) == pytest.approx(sp.band_share(d, q_band=q_band))
+
+
+def test_band_share_batches_over_leading_dims_and_keeps_the_dtype():
+    gen = torch.Generator().manual_seed(4)
+    d = torch.rand((3, 2, 64), dtype=torch.float32, generator=gen)
+    shares = sp.band_share(d)
+    assert shares.shape == (3, 2) and shares.dtype == torch.float32
+    torch.testing.assert_close(shares[1, 0], torch.as_tensor(sp.band_share(d[1, 0])))
+
+
+@pytest.mark.parametrize(
+    ("d", "q_band", "match"),
+    [
+        (torch.ones(7, dtype=F64), None, "even"),
+        (torch.zeros(8, dtype=F64), None, "positive total"),
+        (torch.ones(8, dtype=F64), -1, "q_band"),
+        (torch.ones(8, dtype=F64), 5, "q_band"),
+    ],
+    ids=["odd-N", "zero-power", "negative-band", "band-past-nyquist"],
+)
+def test_band_share_rejects_bad_inputs(d, q_band, match):
+    with pytest.raises(ValueError, match=match):
+        sp.band_share(d, q_band=q_band)

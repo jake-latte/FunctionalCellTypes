@@ -14,6 +14,7 @@ The maths, with h (P, N) the activity of N neurons over P patterns (neuron i at 
   null mean      sum_p |r~_p(q)|^2 / (P - K) with r = h - U U^T h: the mean spectrum of the
                  P - K directions orthogonal to col(Z), by Parseval over any basis of col(Z)^perp
   R(Delta)       (1/N) sum_q d_q e^{2 pi i q Delta / N} = ifft(d).real; lag-1 = R(1)/R(0)
+  band share     sum_{|q| <= q_b} d_q / sum_q d_q, q_b = round(3 N / 64)
   q_1/2          the largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2 (Nyquist as floor)
   angle          theta_i = atan2(t_{3,i}, t_{2,i}) in the orthonormal frame (u_2, u_3)
   hexatic        m = <e^{6 i theta_i}> over neurons; |m| measures tuning to single latents
@@ -66,6 +67,8 @@ MIN_SEM_RECORDS = 200
 # leaves |x - mean| of a constant x below 3 eps |mean| (measured up to 10^5 records in float32
 # and float64), so 8 eps leaves a margin while staying far below any real fluctuation.
 CONSTANT_EPS = 8.0
+# The band of `band_share` is |q| <= round(BAND_FRACTION * N): |q| <= 3 at N = 64.
+BAND_FRACTION = 3 / 64
 _LATENT_NAME = re.compile(r"z(\d+)")
 
 
@@ -342,6 +345,31 @@ def spectrum_summary(d: Tensor) -> Summary:
         d_nyq=_number_if_0d(d[..., N // 2]),
         R=R,
     )
+
+
+def band_half_width(N: int) -> int:
+    """q_b = round(3 N / 64), the half-width of `band_share`'s band: |q| <= 3 at N = 64, and
+    the same fraction of the ring at every N, so a kernel of fixed width in sites keeps the
+    same share as the ring grows."""
+    return round(BAND_FRACTION * N)
+
+
+def band_share(d: Tensor, q_band: int | None = None) -> float | Tensor:
+    """sum_{|q| <= q_b} d_q / sum_q d_q over the unfolded spectrum: (..., N) FFT order -> (...).
+
+    q_b is `band_half_width(N)` unless `q_band` is given (0 <= q_band <= N/2); q = 0 counts once
+    and every other |q| <= q_b twice, through q and -q.
+    """
+    N = _check_spectrum(d)
+    q_b = band_half_width(N) if q_band is None else q_band
+    if not 0 <= q_b <= N // 2:
+        raise ValueError(f"q_band must be in [0, {N // 2}] for N = {N}, got {q_b}")
+    total = d.sum(dim=-1)
+    if (total <= 0).any():
+        raise ValueError(f"d must have positive total power, got sums down to {float(total.min())}")
+    k = torch.arange(N, device=d.device)
+    in_band = torch.minimum(k, N - k) <= q_b
+    return _number_if_0d(d[..., in_band].sum(dim=-1) / total)
 
 
 def gaussian_width(R: Tensor, ell: float) -> float | Tensor:
