@@ -485,7 +485,13 @@ holds b0 < B members, adding K = B - b0. The contract:
   B: set B back, let the run finish, then `exp extend`), final.pt is unreadable, or it holds more members than the new
   B. So an extension can be backed out: once the extension job has stopped (crashed, or been cancelled), B set back to
   b0 in exp.json takes config.json back with it, the setting is done again, and its abandoned staging directory is
-  removed (logged). Backing out while the job still runs would let it append to final.pt afterwards.
+  removed (logged). Backing out while the job still runs would let it append to final.pt afterwards. Only the "B"
+  value need be edited: the base_B the first extension recorded stays, and base_B == B reads as not extended.
+- The first extension records `base_B`, the B before it, in exp.json; later extensions keep it. An experiment
+  extended before `base_B` existed has none, so its extended B passes for the base; so does one re-initialised with
+  `exp init --force`, which writes a new experiment and drops `base_B` (deliberately: the new experiment may be
+  another preset or B, and an old base_B would not describe it). For either, set the base by hand in the
+  linear-ring notebook (`BASE_B`).
 - `extend_experiment` refuses (ExpError, exp.json unchanged) `K < 1`, an experiment with a `net.B` axis (even one of a
   single value, as in the `phase_transition` preset: the value is in every directory name and in the exp hash), and
   any partial setting: a run part-way wrote its checkpoints for the old B, and a pending extension would no longer
@@ -1056,7 +1062,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_min, latent_max, teacher = "gaussian"), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
-    # base_B: int | None = None: the B before the first `exp extend`, recorded by it and never changed after (below B; refused beside a net.B axis and by `exp init --set`); omitted from exp.json while None, in no hash; read by fct.ring_view for the accuracy budget
+    # base_B: int | None = None: the B before the first `exp extend`, recorded by it and never changed after (at most B, equal once an extension is backed out by setting B back; refused beside a net.B axis and by `exp init --set`; compared by same_experiment); omitted from exp.json while None, in no hash; read by fct.ring_view for the accuracy budget
     # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, init, weight_lambda,
     # rate_lambda, optimizer, beta; an axis of the same name wins (init is shared so that `--set init=prior` makes a whitened axis value valid
     # against the base, which every axis value is checked against alone). spatial: SpatialConfig | None = None, the spatial weight prior of every setting
@@ -1231,7 +1237,7 @@ band_share_estimate(law, final (B, K, N), seed) -> (values, se, predicted) (K,)
 kept(D, keep); normalised_autocorrelation(D); lag_profile(D, keep); folded_mode_ratio(D); exact_eigenvalues(cfg, dataset); prior_profile(law)
 q_half_statistic(keep); share0_statistic(keep); hexatic_estimate(moments); latent_angles(Z, U) -> (6,); angle_marks(law); relaxation_curve(fit, t, t0)
 statistic_name(stat, ell), statistic_mode(stat), statistic_label(stat, ell)   # one naming for every table and legend
-Q_HALF_TOLERANCE = 1 (one frequency step), HEXATIC_MAX = 0.1 (the plan's P6 threshold, applied only at N B >= HEXATIC_MIN_SAMPLES = 1000), ANGLE_K = 3; q_1/2 is unavailable only on fct.spectrum.HalfPowerUndefinedError
+Q_HALF_TOLERANCE = 1 (one frequency step), HEXATIC_MAX = 0.1 (the plan's P6 threshold; applied only at N B >= HEXATIC_MIN_SAMPLES = 1000, since uniform angles give |m| of order 1/sqrt(N B), 0.03 at 10^3, too close to the threshold below it), ANGLE_K = 3; q_1/2 is unavailable only on fct.spectrum.HalfPowerUndefinedError
 ```
 
 The pipeline test (`tests/test_linear_ring_smoke.py`, marked slow, about a minute on one CPU thread) runs both

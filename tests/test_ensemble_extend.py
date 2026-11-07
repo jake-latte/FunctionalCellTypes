@@ -615,6 +615,27 @@ def test_an_interrupted_extension_can_be_backed_out(tmp_path, monkeypatch):
     )
 
 
+def test_an_extension_backed_out_by_editing_b_in_exp_json_loads_and_runs(tmp_path, monkeypatch):
+    """The first extension records base_B = b0; setting only "B" back to b0 in the exp.json text
+    (base_B left as it was, so base_B == B) loads, the status is done again and `exp run`
+    finds nothing to do."""
+    _run(tmp_path, _exp(2))
+    extend_experiment(tmp_path, 3)
+    with interrupted_after_checkpoint(monkeypatch, epoch=2):
+        run_setting(load_exp(tmp_path), 0, tmp_path, **QUIET)
+    path = tmp_path / "exp.json"
+    text = path.read_text()
+    assert '"base_B": 2' in text and text.count('"B": 5') == 1
+    path.write_text(text.replace('"B": 5', '"B": 2'))
+    backed_out = load_exp(tmp_path)
+    assert (backed_out.B, backed_out.base_B) == (2, 2)
+    assert _status(tmp_path) == "done"
+    lines: list[str] = []
+    run_setting(backed_out, 0, tmp_path, log=lines.append)
+    assert any("already done" in line for line in lines)
+    assert _status(tmp_path) == "done"
+
+
 def test_a_leftover_staging_directory_of_a_done_setting_is_removed(tmp_path):
     _run_extended(tmp_path, B=2, by=1)
     leftover = staging_dir(_train_dir(tmp_path), 2, 3)
@@ -828,12 +849,15 @@ def test_an_unextended_exp_json_omits_base_b_and_keeps_its_text(tmp_path):
     assert (tmp_path / "exp.json").read_text() == text
 
 
-def test_a_base_b_must_be_below_b_and_not_beside_a_b_axis():
-    with pytest.raises(ValueError, match="must be below"):
-        ExpConfig.model_validate({**preset("tiny").model_dump(), "B": 4, "base_B": 4})
+def test_a_base_b_is_at_most_b_and_not_beside_a_b_axis():
+    tiny = preset("tiny").model_dump()
+    assert ExpConfig.model_validate({**tiny, "B": 4, "base_B": 4}).base_B == 4  # backed out
+    with pytest.raises(ValueError, match="cannot exceed"):
+        ExpConfig.model_validate({**tiny, "B": 4, "base_B": 5})
     exp = with_axes(preset("tiny"), {"net.B": [2, 3]})
+    # the axis refusal comes first, whatever base_B is
     with pytest.raises(ValueError, match="base_B is recorded only by extending"):
-        ExpConfig.model_validate({**exp.model_dump(), "B": 4, "base_B": 2})
+        ExpConfig.model_validate({**exp.model_dump(), "B": 4, "base_B": 9})
 
 
 def test_exp_init_refuses_a_base_b(tmp_path, capsys):

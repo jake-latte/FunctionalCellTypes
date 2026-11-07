@@ -263,6 +263,21 @@ def test_base_b_names_must_be_shown_settings():
         rv.measure_runs({}, None, {"twn": 16})
 
 
+def test_a_bare_int_base_b_is_refused_naming_the_mapping_it_should_be():
+    with pytest.raises(TypeError, match='"setting": B0, "twin": B0'):
+        rv.measure_runs({}, None, 16)
+
+
+def test_a_backed_out_extension_has_its_b_as_base(tmp_path, capsys):
+    root = _init(tmp_path, "B=32")
+    assert main(["exp", "extend", str(root), "--by", "96"]) == 0
+    capsys.readouterr()
+    path = root / "exp.json"
+    path.write_text(path.read_text().replace('"B": 128', '"B": 32'))
+    run = rv.load_ring_settings(root)[0]
+    assert run.law.B == 32 and rv.base_B_of(run) == 32
+
+
 # ------------------------------------------------------------------ the loader
 def test_the_loader_reads_every_matching_setting_and_reports_untrained_ones(tmp_path):
     root = _untrained_root(tmp_path)

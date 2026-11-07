@@ -260,7 +260,9 @@ class ExpConfig(StrictModel):
     # The B before the first `exp extend`, written by `extend_experiment` when it first grows B
     # and never changed after: the size a setting was designed with, at which its accuracy
     # budget is computed (`fct.linear_ring.budget_se`). None (omitted from exp.json) until the
-    # experiment is extended, when B is still the base. Not an axis, never set by hand.
+    # experiment is extended, when B is still the base. At most B: equal once an extension is
+    # backed out by setting B back by hand in exp.json, which leaves base_B as it was. Not an
+    # axis, and not given to `exp init`.
     base_B: PosInt | None = None
     # The initial law (`NetConfig.init`); "prior" is required by the whitened parametrisation,
     # and a shared field (`--set init=prior`) because a `spatial.parametrisation` axis value is
@@ -295,16 +297,17 @@ class ExpConfig(StrictModel):
         return self
 
     @model_validator(mode="after")
-    def _base_B_is_below_B(self) -> Self:
+    def _base_B_is_at_most_B(self) -> Self:
         if self.base_B is not None:
-            if self.base_B >= self.B:
-                raise ValueError(
-                    f"base_B ({self.base_B}) is the B before an extension, so it must be below "
-                    f"B ({self.B})"
-                )
             if B_AXIS in (self.axes or {}):
                 raise ValueError(
                     f"base_B is recorded only by extending B, which {B_AXIS} as an axis forbids"
+                )
+            # base_B == B is an extension backed out (B set back by hand): not extended now
+            if self.base_B > self.B:
+                raise ValueError(
+                    f"base_B ({self.base_B}) is the B before an extension, so it cannot exceed "
+                    f"B ({self.B})"
                 )
         return self
 
@@ -510,7 +513,9 @@ def save_exp(exp: ExpConfig, root: Path) -> None:
 
 def same_experiment(a: ExpConfig, b: ExpConfig) -> bool:
     """Whether two experiments are the same one: every field equal except the description,
-    which is documentation and may be edited without changing what runs."""
+    which is documentation and may be edited without changing what runs. base_B is compared:
+    it is the size the settings were designed with, which sets their accuracy budget, so two
+    experiments that run the same B but were designed at different sizes are not the same."""
     return a.model_dump(exclude={"description"}) == b.model_dump(exclude={"description"})
 
 
@@ -1036,8 +1041,9 @@ def find_setting_dir(root: Path, exp: ExpConfig, values: Mapping[str, Any]) -> P
 
 def extend_experiment(root: Path, by: int) -> ExpConfig:
     """Grow every setting's ensemble by `by` members: rewrite ROOT/exp.json with B + by (and,
-    on the first extension, base_B = the B before it) and return the new experiment. Nothing is trained here: `run_setting` (`exp run`, the SLURM
-    array) then trains each done setting's missing members and appends them to its final.pt;
+    on the first extension, base_B = the B before it) and return the new experiment. Nothing
+    is trained here: `run_setting` (`exp run`, the SLURM array) then trains each done
+    setting's missing members and appends them to its final.pt;
     settings not yet trained train all B + by from scratch.
 
     ExpError, leaving exp.json as it was, if `by` < 1, if net.B is an axis (even of one value:

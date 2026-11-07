@@ -387,8 +387,9 @@ Q_HALF_TOLERANCE = 1
 # 1 / sqrt(N B) (0.03 at N B = 10^3, less with B, but more when neighbours are correlated),
 # well below it.
 HEXATIC_MAX = 0.1
-# The plan applies HEXATIC_MAX only with at least this many neuron-samples N B: below it the
-# uniform-angle |m| of order 1 / sqrt(N B) is too close to the threshold to call.
+# HEXATIC_MAX is applied only with at least this many neuron-samples N B: uniform angles give
+# |m| of order 1 / sqrt(N B), 0.03 at N B = 10^3 and 0.06 at 256, so below it the bias of a
+# rotation-invariant map is too close to HEXATIC_MAX to call a modulus above it tuning.
 HEXATIC_MIN_SAMPLES = 1000
 # The angle statistics exist only at K = 3: then (u_2, u_3) is the whole contrast space and the
 # three latents project onto it 120 degrees apart; at K > 3 the plane is an arbitrary one of a

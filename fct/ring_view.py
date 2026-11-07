@@ -249,6 +249,10 @@ def measure_runs(
     """`measure_run` of each of `runs`, with `base_B[name]` where given (the setting and its
     twin may be different experiments with different base Bs); a name not in `runs` is an
     error, so a typo cannot silently fall back to the recorded B."""
+    if base_B is not None and not isinstance(base_B, Mapping):
+        raise TypeError(
+            f'BASE_B must be None or a mapping like {{"setting": B0, "twin": B0}}, got {base_B!r}'
+        )
     given = dict(base_B or {})
     if unknown := sorted(set(given) - set(runs)):
         raise KeyError(f"BASE_B names {unknown}, which are not among {sorted(runs)}")
