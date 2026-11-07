@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
 import numpy as np
+import torch
 from pydantic import Field, FiniteFloat, ValidationError, model_validator
 
 from fct.cache import (
@@ -69,11 +70,12 @@ from fct.config import (
     resolve_dtype,
     save_config,
 )
-from fct.data import Dataset, get_dataset, task_dims
+from fct.data import Dataset, get_dataset, make_dataset, task_dims
 from fct.meanfield import meanfield_hash, run_meanfield
 from fct.monitor import make_monitor
 from fct.schema import exclude_at_default
 from fct.spatial import SpatialConfig
+from fct.spectrum import latent_basis
 from fct.train import load_trained, train_from_config
 
 EXP_FILE = "exp.json"
@@ -225,11 +227,12 @@ class ExpConfig(StrictModel):
     lr: PosFloat
     log_int: PosInt
     save_int: PosInt
-    monitor_int: PosInt  # the experiment always monitors: MIR over training is its point
-    monitor_bins: Annotated[int, Field(ge=2)]
-    monitor_shuffles: PosInt
+    monitor_int: PosInt  # the experiment always monitors: its results are what the monitor records
+    monitor_bins: Annotated[int, Field(ge=2)]  # MIR monitor only
+    monitor_shuffles: PosInt  # MIR monitor only
     # The monitor every setting runs (`TrainConfig.monitor_kind`): "mir", or "spectrum", which
-    # needs the latents z0..z{K-1} on [0, a] (`fct.spectrum.latent_basis`).
+    # needs the linear_teacher task with latents `fct.spectrum.latent_basis` accepts (z0..z{K-1}
+    # on [0, a]); checked at load by `_validate_spectrum_frames`.
     monitor_kind: MonitorKind = TrainConfig().monitor_kind
     linear_teacher: LinearTeacherParams
     object_action: ObjectActionParams
@@ -273,6 +276,11 @@ class ExpConfig(StrictModel):
             # section ties weight_lambda to lambda_max). Experiments without one have no such
             # cross-field rule, so they are not checked here.
             _validate_combinations(self)
+        return self
+
+    @model_validator(mode="after")
+    def _spectrum_monitor_has_a_latent_frame(self) -> Self:
+        _validate_spectrum_frames(self)
         return self
 
 
@@ -589,6 +597,34 @@ def _validate_combinations(exp: ExpConfig) -> None:
     for setting in expand(exp):
         context = f"setting {setting.index} {setting.axes}"
         _config_or_value_error(exp, setting.axes, context)
+
+
+def _validate_spectrum_frames(exp: ExpConfig) -> None:
+    """Under the spectrum monitor, every setting's data has a latent frame: its task is
+    linear_teacher, and `latent_basis` accepts its latents. The latents are checked by building
+    each distinct dataset (on the CPU; small at linear-teacher sizes) and calling `latent_basis`
+    itself, so the rule is exactly the one the monitor applies when a setting starts training,
+    with no threshold copied here; an experiment that would fail there fails at load instead."""
+    if exp.monitor_kind != "spectrum":
+        return
+    checked: set[str] = set()
+    for setting in expand(exp):
+        cfg = _config_from(exp, setting.axes)
+        context = f'setting {setting.index} {setting.axes}: monitor_kind is "spectrum"'
+        if cfg.data.task != "linear_teacher":
+            raise ValueError(
+                f"{context}, which needs the latents of the linear_teacher task, but its task "
+                f"is {cfg.data.task!r}"
+            )
+        key = cfg.data.model_dump_json() + cfg.dtype
+        if key in checked:
+            continue
+        checked.add(key)
+        dataset = make_dataset(cfg.data, torch.device("cpu"), resolve_dtype(cfg.dtype))
+        try:
+            latent_basis(dataset.factors)
+        except ValueError as err:
+            raise ValueError(f"{context}: {err}") from err
 
 
 def _validate_axes(exp: ExpConfig, axes: dict[str, list]) -> None:

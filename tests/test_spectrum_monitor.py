@@ -16,8 +16,10 @@ from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset
 from fct.exp import (
     EXP_JSON_OMITTED_AT_DEFAULT,
+    ExpConfig,
     exp_text,
     expand,
+    load_exp,
     preset,
     run_setting,
     setting_config,
@@ -294,9 +296,36 @@ def test_run_setting_uses_the_spectrum_monitor_of_the_experiment(tmp_path):
     assert f"{MONITOR_PREFIX}mir" not in history
 
 
-def test_run_setting_with_symmetric_latents_fails_before_training(tmp_path):
-    exp = with_axes(preset("tiny").model_copy(update={"monitor_kind": "spectrum"}), {"net.L": [1]})
-    with pytest.raises(ValueError, match="symmetric.*mean direction is undefined"):
-        run_setting(exp, 0, tmp_path, **QUIET)
-    train_dir = cache_paths(setting_dir(tmp_path, expand(exp)[0])).train
-    assert not train_dir.exists()
+def _spectrum_tiny(latent_min: float = 0.0) -> ExpConfig:
+    """The tiny preset under the spectrum monitor, unvalidated (model_copy), latents on
+    [latent_min, 1]."""
+    tiny = preset("tiny")
+    return tiny.model_copy(
+        update={
+            "monitor_kind": "spectrum",
+            "linear_teacher": tiny.linear_teacher.model_copy(update={"latent_min": latent_min}),
+        }
+    )
+
+
+def test_an_experiment_with_symmetric_latents_is_rejected_when_built():
+    """The rule is latent_basis's own, applied to each setting's dataset, so the error is
+    raised at load, before any setting runs, and names the setting."""
+    with pytest.raises(ValueError, match=r"setting 0 .*symmetric.*mean direction is undefined"):
+        with_axes(_spectrum_tiny(latent_min=-1.0), {"net.L": [1]})
+    with_axes(_spectrum_tiny(), {"net.L": [1]})  # latents on [0, 1] have a mean direction
+
+
+@pytest.mark.parametrize(
+    "axes", [{"data.task": ["linear_teacher", "what_where"]}, None]  # None: the built-in axes
+)
+def test_an_experiment_with_a_task_without_latents_is_rejected_when_built(axes):
+    exp = _spectrum_tiny().model_copy(update={"axes": axes})
+    with pytest.raises(ValueError, match=r"needs the latents of the linear_teacher task"):
+        ExpConfig.model_validate(exp.model_dump())
+
+
+def test_a_spectrum_experiment_is_checked_when_loaded(tmp_path):
+    (tmp_path / "exp.json").write_text(exp_text(_spectrum_tiny(latent_min=-1.0)))
+    with pytest.raises(ValueError, match="symmetric"):
+        load_exp(tmp_path)
