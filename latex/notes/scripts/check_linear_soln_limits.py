@@ -4,12 +4,12 @@ Ground truth is the ansatz-free NP x NP fixed point of the linear one-hidden-lay
 network on a ring (section A); every other section checks a closed form or an
 asymptotic statement of the note against the per-mode scalar equation
     1 - delta/c = (c/N) sum_q h_q / (c^2 - sY2 h_q),
-    h_q = lam_q (lam_q sX2 + sig2) / (1 + g2 (lam_q sX2 + sig2)),
+    h_q = lam_q (lam_q sX2 + sig2) / (1 + r (lam_q sX2 + sig2)),
 solved on the branch c > sqrt(sY2 max_q h_q), and d_q = c^2 h_q / (lam_q (c^2 - sY2 h_q)).
 
 Sections (each `section_*` computes and returns the numbers, `report_*` prints them):
   A  re-derivation: ansatz-free fixed point vs the scalar equation (exact and approximate ansatz)
-  B  limiting cases: sigma -> 0, g -> 0 (flat spectrum closed form), k0 = k1 sweep, Gaussian ring
+  B  limiting cases: sigma -> 0, r -> 0 (flat spectrum closed form), k0 = k1 sweep, Gaussian ring
   C  latent task: Z^T Z / P, singular values, the mean direction, the ansatz condition
   D  functional cell types: monotonicity, rate-penalty whitening, target condensation,
      continuum width
@@ -47,7 +47,7 @@ SY_CONTINUUM = [4.0, 8.0, 16.0, 32.0]  # moderate targets: Lorentzian width >> 1
 M_IN, N_OUT, KAPPA = 6, 6, 1.0  # m, n, kappa for the k0 = k1 sweep
 K_SWEEP = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 100.0]
 SY_SWEEP = [1.0, 10.0, 100.0, 1000.0]  # target strength sY for the condensation check
-BASE = {"sx2": 1.0, "sig2": 0.1, "g2": 0.2, "delta": 0.5}  # a generic finite-everything mode
+BASE = {"sx2": 1.0, "sig2": 0.1, "r": 0.2, "delta": 0.5}  # a generic finite-everything mode
 LATENT_P, LATENT_K, LATENT_A = 20000, 3, 1.0  # Z ~ U[0, a]^(P x K) for the law of large numbers
 LIMIT_EPS = 1e-8  # stands in for sig2 -> 0 or sY2 -> 0 (small enough for the precision quoted)
 NO_RIDGE = 1e-12  # delta small enough to stand in for delta -> 0
@@ -56,11 +56,11 @@ NO_RIDGE = 1e-12  # delta small enough to stand in for delta -> 0
 PRED_N, PRED_K, PRED_A, PRED_M, PRED_NOUT = 64, 3, 1.0, 8, 8
 PRED_P = 256
 PREDICTIONS = {
-    # name: (ell, k0, k1, sig2, g2, beta)
+    # name: (ell, k0, k1, sig2, r, beta)
     "P1 prior-shaped (weak target, no rate penalty)": (4.0, 1.0, 1.0, 0.01, 0.0, 0.25),
     "P2 rate-penalty whitening": (4.0, 1.0, 1.0, 0.01, 0.1, 0.25),
     "P3 target condensation": (4.0, 1.0, 1.0, 0.01, 0.0, 10.0),
-    # P4: sig2 = g2 = 1 puts the floor sigma_0^2 = 1/2 a factor 2 below the bare sig2, so a
+    # P4: sig2 = r = 1 puts the floor sigma_0^2 = 1/2 a factor 2 below the bare sig2, so a
     # factor-1.5 tolerance on the measured floor can tell the two apart.
     "P4 white null modes": (4.0, 1.0, 1.0, 1.0, 1.0, 0.25),
     "P5 noise-dominated": (4.0, 0.001, 1.0, 1.0, 0.0, 0.25),
@@ -114,15 +114,15 @@ def ring_spectrum(n_sites, ell):
     return np.fft.fft(wrapped_gaussian(n_sites, ell)).real
 
 
-def pi_of(lam, sx2, sig2, g2):
-    """Prior-shrunk variance pi_q = alpha_q / (1 + g2 alpha_q), alpha_q = lam_q sX2 + sig2."""
+def pi_of(lam, sx2, sig2, r):
+    """Prior-shrunk variance pi_q = alpha_q / (1 + r alpha_q), alpha_q = lam_q sX2 + sig2."""
     alpha = lam * sx2 + sig2
-    return alpha / (1 + g2 * alpha)
+    return alpha / (1 + r * alpha)
 
 
-def h_of(lam, sx2, sig2, g2):
-    """h_q = lam_q pi_q = lam_q alpha_q / (1 + g2 alpha_q) (eq:hq of the note)."""
-    return lam * pi_of(lam, sx2, sig2, g2)
+def h_of(lam, sx2, sig2, r):
+    """h_q = lam_q pi_q = lam_q alpha_q / (1 + r alpha_q) (eq:hq of the note)."""
+    return lam * pi_of(lam, sx2, sig2, r)
 
 
 def bisect(f, lo, hi, n=200):
@@ -140,28 +140,28 @@ def residual(c, h, sy2, delta):
     return 1 - delta / c - np.mean(c * h / (c**2 - sy2 * h))
 
 
-def solve_c(lam, sx2, sy2, sig2, g2, delta):
+def solve_c(lam, sx2, sy2, sig2, r, delta):
     """The physical root of the per-mode equation (branch above the pole)."""
-    h = h_of(lam, sx2, sig2, g2)
+    h = h_of(lam, sx2, sig2, r)
     pole = np.sqrt(sy2 * h.max())
     # The lower bracket must stay positive when the pole is at 0 (sY2 = 0).
     lo = max(pole * (1 + 1e-13), 1e-12)
     return bisect(lambda c: residual(c, h, sy2, delta), lo, 1e9)
 
 
-def spectrum_d(lam, sx2, sy2, sig2, g2, delta):
+def spectrum_d(lam, sx2, sy2, sig2, r, delta):
     """(c, d_q): the self-consistent c and the per-frequency variance of one data mode."""
-    c = solve_c(lam, sx2, sy2, sig2, g2, delta)
-    h = h_of(lam, sx2, sig2, g2)
+    c = solve_c(lam, sx2, sy2, sig2, r, delta)
+    h = h_of(lam, sx2, sig2, r)
     # d_q = pi_q * amplification (eq:factor), not h_q / lam_q: lam_q is 0 to round-off in
     # the tail of the wrapped Gaussian and the quotient would be 0/0 there.
-    return c, pi_of(lam, sx2, sig2, g2) * c**2 / (c**2 - sy2 * h)
+    return c, pi_of(lam, sx2, sig2, r) * c**2 / (c**2 - sy2 * h)
 
 
-def tau_of(lam, sx2, sy2, sig2, g2, delta):
+def tau_of(lam, sx2, sy2, sig2, r, delta):
     """Target strength tau = sY2 max_q h_q / c^2 in (0, 1)."""
-    c = solve_c(lam, sx2, sy2, sig2, g2, delta)
-    return sy2 * h_of(lam, sx2, sig2, g2).max() / c**2
+    c = solve_c(lam, sx2, sy2, sig2, r, delta)
+    return sy2 * h_of(lam, sx2, sig2, r).max() / c**2
 
 
 def autocorrelation(d):
@@ -210,19 +210,19 @@ def latent_task(rng, n_patterns, m, n_out, n_latent, a=1.0, wy_skew=None):
     return Z @ W_X.T, Z @ W_Y.T
 
 
-def full_precision(C, K, A, YY, k1, sig2, g2, delta):
-    """The NP x NP precision (A (x) K + sig2 I)^{-1} - (B (x) K - g2 I), index order (mu, i)."""
+def full_precision(C, K, A, YY, k1, sig2, r, delta):
+    """The NP x NP precision (A (x) K + sig2 I)^{-1} - (B (x) K - r I), index order (mu, i)."""
     n_patterns, n_sites = A.shape[0], K.shape[0]
     Ci = np.linalg.inv(C + delta * np.eye(n_patterns))
     B = Ci @ YY @ Ci / k1
     I = np.eye(n_patterns * n_sites)
-    return np.linalg.inv(np.kron(A, K) + sig2 * I) - (np.kron(B, K) - g2 * I)
+    return np.linalg.inv(np.kron(A, K) + sig2 * I) - (np.kron(B, K) - r * I)
 
 
-def kernel_map(C, K, A, YY, k1, sig2, g2, delta):
+def kernel_map(C, K, A, YY, k1, sig2, r, delta):
     """C -> (1/N) sum_ij K_ij Cov[h_i, h_j], the hidden-layer kernel of eq:kernel-def."""
     n_patterns, n_sites = A.shape[0], K.shape[0]
-    Cov = np.linalg.inv(full_precision(C, K, A, YY, k1, sig2, g2, delta))
+    Cov = np.linalg.inv(full_precision(C, K, A, YY, k1, sig2, r, delta))
     Cov = Cov.reshape(n_patterns, n_sites, n_patterns, n_sites)
     return np.einsum("ij,uivj->uv", K, Cov) / n_sites
 
@@ -234,7 +234,7 @@ def _sym_from_upper(v, n):
     return C + np.triu(C, 1).T
 
 
-def ansatz_free_fixed_point(K, A, YY, k1, sig2, g2, delta, c_start, n_steps, tol):
+def ansatz_free_fixed_point(K, A, YY, k1, sig2, r, delta, c_start, n_steps, tol):
     """Newton's method (finite-difference Jacobian) on the upper triangle of C for the
     residual C - kernel_map(C), started from C = c_start I. Steps are halved until the
     NP x NP precision stays positive definite: plain damped iteration leaves the physical
@@ -245,23 +245,23 @@ def ansatz_free_fixed_point(K, A, YY, k1, sig2, g2, delta, c_start, n_steps, tol
 
     def newton_residual(v):
         C = _sym_from_upper(v, n)
-        return (C - kernel_map(C, K, A, YY, k1, sig2, g2, delta))[iu]
+        return (C - kernel_map(C, K, A, YY, k1, sig2, r, delta))[iu]
 
     def is_physical(v):
-        precision = full_precision(_sym_from_upper(v, n), K, A, YY, k1, sig2, g2, delta)
+        precision = full_precision(_sym_from_upper(v, n), K, A, YY, k1, sig2, r, delta)
         return np.linalg.eigvalsh(precision).min() > 0
 
     v = (c_start * np.eye(n))[iu]
     if not is_physical(v):
         raise ValueError("starting point is below the pole")
     for _ in range(n_steps):
-        r = newton_residual(v)
-        if np.abs(r).max() < tol:
+        res = newton_residual(v)
+        if np.abs(res).max() < tol:
             return _sym_from_upper(v, n)
         J = np.column_stack(
-            [(newton_residual(v + FD_EPS * e) - r) / FD_EPS for e in np.eye(v.size)]
+            [(newton_residual(v + FD_EPS * e) - res) / FD_EPS for e in np.eye(v.size)]
         )
-        step = -np.linalg.solve(J, r)
+        step = -np.linalg.solve(J, res)
         while not is_physical(v + step):
             step /= 2
             if np.abs(step).max() < MIN_NEWTON_STEP:
@@ -272,12 +272,12 @@ def ansatz_free_fixed_point(K, A, YY, k1, sig2, g2, delta, c_start, n_steps, tol
     )
 
 
-def scalar_roots(lam, X, Y, k0, k1, m, sig2, g2, delta):
+def scalar_roots(lam, X, Y, k0, k1, m, sig2, r, delta):
     """Roots of the per-mode equation in the eigenbasis U of X X^T (one root per data mode)."""
     w, U = np.linalg.eigh(X @ X.T)
     sx2 = np.clip(k0 * w / m, 0, None)
     sy2 = np.clip(np.diag(U.T @ Y @ Y.T @ U), 0, None) / k1  # exact when [XX^T, YY^T] = 0
-    return np.sort([solve_c(lam, a, b, sig2, g2, delta) for a, b in zip(sx2, sy2)])
+    return np.sort([solve_c(lam, a, b, sig2, r, delta) for a, b in zip(sx2, sy2)])
 
 
 def fixed_point_case(rng, skew):
@@ -351,9 +351,9 @@ def ring_check(lam):
 
 def sigma_to_zero_check(lam):
     """B1: null data modes lose all variance; latent modes converge to the sigma = 0 formula."""
-    c0, d0 = spectrum_d(lam, 0.0, 0.0, LIMIT_EPS, BASE["g2"], BASE["delta"])
-    c_eps, d_eps = spectrum_d(lam, 1.0, 2.0, LIMIT_EPS, BASE["g2"], BASE["delta"])
-    c_zero, d_zero = spectrum_d(lam, 1.0, 2.0, 0.0, BASE["g2"], BASE["delta"])
+    c0, d0 = spectrum_d(lam, 0.0, 0.0, LIMIT_EPS, BASE["r"], BASE["delta"])
+    c_eps, d_eps = spectrum_d(lam, 1.0, 2.0, LIMIT_EPS, BASE["r"], BASE["delta"])
+    c_zero, d_zero = spectrum_d(lam, 1.0, 2.0, 0.0, BASE["r"], BASE["delta"])
     return {
         "null_max_d": d0.max(),
         "null_c_minus_delta": c0 - BASE["delta"],
@@ -362,8 +362,8 @@ def sigma_to_zero_check(lam):
     }
 
 
-def g_to_zero_check(lam):
-    """B2: weak target, g = 0: d_q = lam_q sX2 + sig2 exactly and c = delta + mean(h)."""
+def r_to_zero_check(lam):
+    """B2: weak target, r = 0: d_q = lam_q sX2 + sig2 exactly and c = delta + mean(h)."""
     sx2, sig2 = 1.0, 0.1
     c, d = spectrum_d(lam, sx2, LIMIT_EPS, sig2, 0.0, BASE["delta"])
     return {
@@ -383,7 +383,7 @@ def flat_spectrum_check():
 
 
 def common_scale_sweep(lam):
-    """B3: k0 = k1 = k at sigma = g = 0: tau(k) is non-monotone, maximal near k*."""
+    """B3: k0 = k1 = k at sigma = r = 0: tau(k) is non-monotone, maximal near k*."""
     sx2, sy2 = 1.0, 1.0
     rows = []
     for k in K_SWEEP:
@@ -398,7 +398,7 @@ def common_scale_sweep(lam):
 
 
 def reduced_form_check(lam):
-    """B5: at sigma = g = 0 the equation reduces to
+    """B5: at sigma = r = 0 the equation reduces to
     1 - Delta/x = Theta (x/N) sum l_q^2/(x^2 - l_q^2)
     with x = c/c*, l_q = lam_q/lam_0, Theta = lam_0 sX/sY, Delta = delta/c*, c* = lam_0 sX sY."""
     sx2, sy2, delta = 3.0, 0.5, 2.0
@@ -426,7 +426,7 @@ def section_b():
     return {
         "ring": ring_check(lam),
         "sigma0": sigma_to_zero_check(lam),
-        "g0": g_to_zero_check(lam),
+        "r0": r_to_zero_check(lam),
         "flat": flat_spectrum_check(),
         "k_sweep": common_scale_sweep(lam),
         "reduced": reduced_form_check(lam),
@@ -459,10 +459,10 @@ def report_b(res):
         f"    latent mode: |c({LIMIT_EPS:.0e}) - c(0)| = {s['latent_dc']:.1e}, "
         f"max |d_q({LIMIT_EPS:.0e}) - d_q(0)| = {s['latent_dd']:.1e}"
     )
-    g = res["g0"]
+    z = res["r0"]
     print(
-        f"  g -> 0, weak target (sY2 = {LIMIT_EPS:.0e}): max |d_q - (lam_q sX2 + sig2)| = "
-        f"{g['max_dev_d']:.1e}, |c - delta - mean h| = {g['dev_c']:.1e}"
+        f"  r -> 0, weak target (sY2 = {LIMIT_EPS:.0e}): max |d_q - (lam_q sX2 + sig2)| = "
+        f"{z['max_dev_d']:.1e}, |c - delta - mean h| = {z['dev_c']:.1e}"
     )
     f = res["flat"]
     print(
@@ -471,14 +471,14 @@ def report_b(res):
     )
     k = res["k_sweep"]
     print(
-        f"  k0 = k1 = k sweep (sigma = g = 0, m = {M_IN}, kappa = {KAPPA}); "
+        f"  k0 = k1 = k sweep (sigma = r = 0, m = {M_IN}, kappa = {KAPPA}); "
         f"pole c* = lam_0 sX sY / sqrt(m) = {k['pole']:.4f} for every k; k* = {k['k_star']:.3f}"
     )
     for kk, c, tau in k["rows"]:
         print(f"    k = {kk:6.2f}: c = {c:9.4f}, tau = {tau:.4f}")
     x = res["reduced"]
     print(
-        f"  reduced form (sigma = g = 0): Theta = {x['theta']:.4f}, Delta = {x['Delta']:.4f}: "
+        f"  reduced form (sigma = r = 0): Theta = {x['theta']:.4f}, Delta = {x['Delta']:.4f}: "
         f"c* x = {x['c_star_x']:.10f}, full solve c = {x['c_full']:.10f}, "
         f"tau = 1/x^2 = {x['tau_reduced']:.6f} vs {x['tau_full']:.6f}"
     )
@@ -527,11 +527,11 @@ def report_c(res):
 def monotonicity_check(lam):
     """D1: d_q is increasing in lam_q for the self-consistent c, over a parameter grid."""
     grid = [
-        (sx2, sy2, sig2, g2, delta)
+        (sx2, sy2, sig2, r, delta)
         for sx2 in (0.1, 1, 10)
         for sy2 in (0.1, 1, 100)
         for sig2 in (0.01, 1)
-        for g2 in (0, 1)
+        for r in (0, 1)
         for delta in (0.1, 10)
     ]
     order = np.argsort(lam)
@@ -541,17 +541,17 @@ def monotonicity_check(lam):
 
 def whitening_check(lam):
     """D2: at weak target the latent-specific part d_q - sigma_0^2 follows
-    lam_q sX2 / ((1 + g2 sig2)(1 + g2 sig2 + g2 lam_q sX2)); the half-power |q| rises with gamma."""
-    sig2, g2, delta = 0.01, 1.0, 50.0
+    lam_q sX2 / ((1 + r sig2)(1 + r sig2 + r lam_q sX2)); the half-power |q| rises with gamma."""
+    sig2, r, delta = 0.01, 1.0, 50.0
     rows = []
     for sx2 in (0.1, 10.0):
-        _, d = spectrum_d(lam, sx2, 1e-6, sig2, g2, delta)
-        floor = sig2 / (1 + g2 * sig2)
-        pred = lam * sx2 / ((1 + g2 * sig2) * (1 + g2 * sig2 + g2 * lam * sx2))
+        _, d = spectrum_d(lam, sx2, 1e-6, sig2, r, delta)
+        floor = sig2 / (1 + r * sig2)
+        pred = lam * sx2 / ((1 + r * sig2) * (1 + r * sig2 + r * lam * sx2))
         rows.append(
             {
                 "sx2": sx2,
-                "gamma": g2 * lam[0] * sx2,
+                "gamma": r * lam[0] * sx2,
                 "max_dev": np.abs(d - floor - pred).max(),
                 "half_power_q": half_power_q(d),
             }
@@ -561,10 +561,10 @@ def whitening_check(lam):
 
 def condensation_check(lam):
     """D3: at fixed N, c^2 - sY2 h_max ~ sY h_max^{3/2} / N and d_0 ~ N sY sqrt(h_max) / lam_0."""
-    h = h_of(lam, BASE["sx2"], BASE["sig2"], BASE["g2"])
+    h = h_of(lam, BASE["sx2"], BASE["sig2"], BASE["r"])
     rows = []
     for sy in SY_SWEEP:
-        c, d = spectrum_d(lam, BASE["sx2"], sy**2, BASE["sig2"], BASE["g2"], BASE["delta"])
+        c, d = spectrum_d(lam, BASE["sx2"], sy**2, BASE["sig2"], BASE["r"], BASE["delta"])
         rows.append(
             {
                 "sy": sy,
@@ -586,14 +586,14 @@ def continuum_check():
     so sY nu_c -> 2 pi h_max^{3/2} / |h''(0)|."""
     lam_big = ring_spectrum(BIG_N, ELL)
     nu, half = np.fft.fftfreq(BIG_N), BIG_N // 2  # nu[:half] are the non-negative frequencies
-    h_big = h_of(lam_big, BASE["sx2"], BASE["sig2"], BASE["g2"])
+    h_big = h_of(lam_big, BASE["sx2"], BASE["sig2"], BASE["r"])
     h_curv = 2 * (h_big[0] - h_big[1]) * BIG_N**2  # |h''(0)| in nu units, from the grid
     alpha0 = lam_big[0] * BASE["sx2"] + BASE["sig2"]
-    dh_dlam = alpha0 / (1 + BASE["g2"] * alpha0)
-    dh_dlam += lam_big[0] * BASE["sx2"] / (1 + BASE["g2"] * alpha0) ** 2
+    dh_dlam = alpha0 / (1 + BASE["r"] * alpha0)
+    dh_dlam += lam_big[0] * BASE["sx2"] / (1 + BASE["r"] * alpha0) ** 2
     rows = []
     for sy in SY_CONTINUUM:
-        c = solve_c(lam_big, BASE["sx2"], sy**2, BASE["sig2"], BASE["g2"], BASE["delta"])
+        c = solve_c(lam_big, BASE["sx2"], sy**2, BASE["sig2"], BASE["r"], BASE["delta"])
         amp = c**2 / (c**2 - sy**2 * h_big)
         gap = c**2 - sy**2 * h_big[0]
         rows.append(
@@ -631,7 +631,7 @@ def report_d(res):
     print(f"  d_q increasing in lam_q on {m['n_sets']} parameter sets: {m['monotone']}")
     for w in res["whitening"]:
         print(
-            f"    sX2 = {w['sx2']:5.1f}: gamma = g2 lam_0 sX2 = {w['gamma']:6.1f}, "
+            f"    sX2 = {w['sx2']:5.1f}: gamma = r lam_0 sX2 = {w['gamma']:6.1f}, "
             f"max |d_q - sigma_0^2 - pred| = {w['max_dev']:.1e}, "
             f"half-power |q| = {w['half_power_q']:.0f}"
         )
@@ -666,23 +666,23 @@ def latent_modes(P, K, a, m, k0, k1, n_out, beta):
     return k0 * s2 / m, s2 / k1, P * n_out / (beta * k1)
 
 
-def prediction_spectra(ell, k0, k1, sig2, g2, beta):
+def prediction_spectra(ell, k0, k1, sig2, r, beta):
     """(lam_q, [d_q of mode 1, d_q of mode 2]) of one prediction's parameter set."""
     lam = ring_spectrum(PRED_N, ell)
     sx2, sy2, delta = latent_modes(PRED_P, PRED_K, PRED_A, PRED_M, k0, k1, PRED_NOUT, beta)
-    return lam, [spectrum_d(lam, a, b, sig2, g2, delta)[1] for a, b in zip(sx2[:2], sy2[:2])]
+    return lam, [spectrum_d(lam, a, b, sig2, r, delta)[1] for a, b in zip(sx2[:2], sy2[:2])]
 
 
-def mode_numbers(lam, sx2, sy2, sig2, g2, delta):
+def mode_numbers(lam, sx2, sy2, sig2, r, delta):
     """The regime numbers of one data mode: knobs (rho, gamma, tau) and spectrum summaries."""
-    c, d = spectrum_d(lam, sx2, sy2, sig2, g2, delta)
-    floor = sig2 / (1 + g2 * sig2)
+    c, d = spectrum_d(lam, sx2, sy2, sig2, r, delta)
+    floor = sig2 / (1 + r * sig2)
     return {
         "sx2": sx2,
         "sy2": sy2,
         "rho": lam[0] * sx2 / sig2,
-        "gamma": g2 * lam[0] * sx2,
-        "tau": sy2 * h_of(lam, sx2, sig2, g2).max() / c**2,
+        "gamma": r * lam[0] * sx2,
+        "tau": sy2 * h_of(lam, sx2, sig2, r).max() / c**2,
         "half_power_q": half_power_q(d),
         "share0": d[0] / d.sum(),
         "d0_over_floor": d[0] / floor,
@@ -690,18 +690,18 @@ def mode_numbers(lam, sx2, sy2, sig2, g2, delta):
     }
 
 
-def prediction_numbers(ell, k0, k1, sig2, g2, beta):
+def prediction_numbers(ell, k0, k1, sig2, r, beta):
     """Regime numbers of modes 1 (mean direction) and 2 (contrast) for one parameter set,
     and the ratio d_q^(1) / d_q^(2) at q = 0, ..., RATIO_Q_MAX."""
     lam = ring_spectrum(PRED_N, ell)
     sx2, sy2, delta = latent_modes(PRED_P, PRED_K, PRED_A, PRED_M, k0, k1, PRED_NOUT, beta)
-    modes = [mode_numbers(lam, a, b, sig2, g2, delta) for a, b in zip(sx2[:2], sy2[:2])]
-    d1, d2 = prediction_spectra(ell, k0, k1, sig2, g2, beta)[1]
+    modes = [mode_numbers(lam, a, b, sig2, r, delta) for a, b in zip(sx2[:2], sy2[:2])]
+    d1, d2 = prediction_spectra(ell, k0, k1, sig2, r, beta)[1]
     return {"delta": delta, "modes": modes, "ratio": (d1 / d2)[: RATIO_Q_MAX + 1]}
 
 
 def share0_sweep(settings):
-    """q = 0 share (mode 1, mode 2) for each (ell, k0, k1, sig2, g2, beta) in `settings`."""
+    """q = 0 share (mode 1, mode 2) for each (ell, k0, k1, sig2, r, beta) in `settings`."""
     return [[d[0] / d.sum() for d in prediction_spectra(*s)[1]] for s in settings]
 
 
@@ -709,16 +709,16 @@ def correlation_length_check(ell):
     """P7: setting P1 at length scale `ell`. For each mode, R(0) and the largest deviation
     of R(r)/R(0) from the kernel K(r) over 1 <= r <= 2 ell, plus the Gaussian width read off
     at r = ell, sqrt(-ell^2 / (2 ln(R(ell)/R(0))))."""
-    _, k0, k1, sig2, g2, beta = PREDICTIONS["P1 prior-shaped (weak target, no rate penalty)"]
+    _, k0, k1, sig2, r, beta = PREDICTIONS["P1 prior-shaped (weak target, no rate penalty)"]
     kernel = wrapped_gaussian(PRED_N, ell)
-    r = np.arange(1, int(2 * ell) + 1)
+    lags = np.arange(1, int(2 * ell) + 1)
     rows = []
-    for d in prediction_spectra(ell, k0, k1, sig2, g2, beta)[1]:
+    for d in prediction_spectra(ell, k0, k1, sig2, r, beta)[1]:
         R = autocorrelation(d)
         rows.append(
             {
                 "R0": R[0],
-                "max_dev": np.abs(R[r] / R[0] - kernel[r]).max(),
+                "max_dev": np.abs(R[lags] / R[0] - kernel[lags]).max(),
                 "width": np.sqrt(-(ell**2) / (2 * np.log(R[int(ell)] / R[0]))),
             }
         )
@@ -728,12 +728,12 @@ def correlation_length_check(ell):
 def section_e():
     """Regime numbers of the numbered predictions, the P3 beta sweep, the P7 length-scale
     sweep and the P8 k sweep."""
-    ell, k0, k1, sig2, g2, beta = PREDICTIONS["P3 target condensation"]
+    ell, k0, k1, sig2, r, beta = PREDICTIONS["P3 target condensation"]
     return {
         "predictions": {name: prediction_numbers(*p) for name, p in PREDICTIONS.items()},
-        "p3_beta_sweep": share0_sweep([(ell, k0, k1, sig2, g2, b) for b in P3_BETA_SWEEP]),
+        "p3_beta_sweep": share0_sweep([(ell, k0, k1, sig2, r, b) for b in P3_BETA_SWEEP]),
         "p7_ell_sweep": {ell7: correlation_length_check(ell7) for ell7 in P7_ELL_SWEEP},
-        "p8_k_sweep": share0_sweep([(ell, k, k, sig2, g2, beta) for k in P8_K_SWEEP]),
+        "p8_k_sweep": share0_sweep([(ell, k, k, sig2, r, beta) for k in P8_K_SWEEP]),
     }
 
 
@@ -743,25 +743,25 @@ def report_e(res):
         f"  ring N = {PRED_N}, K = {PRED_K}, a = {PRED_A}, m = n = {PRED_M}, P = {PRED_P}; "
         "modes: 1 = mean direction, 2 = contrast"
     )
-    for name, (ell, k0, k1, sig2, g2, beta) in PREDICTIONS.items():
-        r = res["predictions"][name]
+    for name, (ell, k0, k1, sig2, r, beta) in PREDICTIONS.items():
+        pred = res["predictions"][name]
         print(
-            f"  {name}: ell = {ell}, k0 = {k0}, k1 = {k1}, sig2 = {sig2}, g2 = {g2}, "
-            f"beta = {beta} (delta = {r['delta']:.1f})"
+            f"  {name}: ell = {ell}, k0 = {k0}, k1 = {k1}, sig2 = {sig2}, r = {r}, "
+            f"beta = {beta} (delta = {pred['delta']:.1f})"
         )
-        for mode, m in enumerate(r["modes"], start=1):
+        for mode, m in enumerate(pred["modes"], start=1):
             print(
                 f"    mode {mode}: hat sX2 = {m['sx2']:8.2f}, hat sY2 = {m['sy2']:8.2f}, "
                 f"rho = lam_0 sX2/sig2 = {m['rho']:9.1f}, "
-                f"gamma = g2 lam_0 sX2 = {m['gamma']:8.2f}, "
+                f"gamma = r lam_0 sX2 = {m['gamma']:8.2f}, "
                 f"tau = {m['tau']:.3f}, half-power |q| = {m['half_power_q']:2.0f}, "
                 f"q=0 share = {m['share0']:.3f}, d_0/sigma_0^2 = {m['d0_over_floor']:9.2f}, "
                 f"R(1)/R(0) = {m['lag1']:.3f}"
             )
-        ratio = ", ".join(f"{x:.2f}" for x in r["ratio"])
+        ratio = ", ".join(f"{x:.2f}" for x in pred["ratio"])
         print(f"    d_q(mode 1) / d_q(mode 2) at |q| = 0..{RATIO_Q_MAX}: {ratio}")
-    ell, k0, k1, sig2, g2, beta = PREDICTIONS["P3 target condensation"]
-    print(f"  P3 beta sweep at sig2 = {sig2}, g2 = {g2}: q = 0 share (mode 1, mode 2)")
+    ell, k0, k1, sig2, r, beta = PREDICTIONS["P3 target condensation"]
+    print(f"  P3 beta sweep at sig2 = {sig2}, r = {r}: q = 0 share (mode 1, mode 2)")
     for b, shares in zip(P3_BETA_SWEEP, res["p3_beta_sweep"]):
         print(f"    beta = {b:5.2f}: " + ", ".join(f"{s:.3f}" for s in shares))
     print("  P7 setting P1 at ell = " + ", ".join(f"{e:g}" for e in P7_ELL_SWEEP) + ":")
@@ -773,7 +773,7 @@ def report_e(res):
                 f"Gaussian width at r = ell: {m['width']:.3f}"
             )
     print(
-        f"  P8 common k sweep at sig2 = {sig2}, g2 = {g2}, beta = {beta}: "
+        f"  P8 common k sweep at sig2 = {sig2}, r = {r}, beta = {beta}: "
         "q = 0 share (mode 1, mode 2)"
     )
     for k, shares in zip(P8_K_SWEEP, res["p8_k_sweep"]):
