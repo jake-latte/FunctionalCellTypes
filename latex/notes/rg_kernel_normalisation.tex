@@ -75,7 +75,7 @@ The eigenvalues $\lambda_q$ of a translation-invariant kernel of fixed range are
   \item With the $1/N$, $C$ is the spectral \emph{average} $\frac1N\sum_q \lambda_q \Sigma_q$, which is $O(1)$ and has a continuum limit
   $\frac1N\sum_q \to \int_{\mathrm{BZ}} \frac{\mathrm d^d q}{(2\pi)^d}$ (lattice units) as $N\to\infty$ at fixed lattice spacing.
   The diagonal element $c$ of $D_C$ is $O(1)$ and the target tilt $b_q \propto \lambda_q \hat s_Y^2 / c^2$ stays finite: the hidden layer learns.
-  \item Without it, $c = \sum_q \lambda_q d_q + \delta = O(N)$. Then the target part of the tilt, $\lambda_q\hat s_Y^2/c^2$, vanishes as $N\to\infty$ and only the rate penalty survives, $b_q \to -g^2$. Hence $d_q \to (a_q^{-1}+g^2)^{-1} = h_q/\lambda_q$ (the prior covariance shrunk by the rate penalty), and the self-consistency degenerates to $c \simeq \sum_q h_q + \delta$, the $\hat s_Y = 0$ solution of the companion note: the representation reverts to the prior and all feature learning disappears in the thermodynamic limit, unless $\hat s_Y^2$ is made to grow with $N$.
+  \item Without it, $c = \sum_q \lambda_q d_q + \delta = O(N)$. Then the target part of the tilt, $\lambda_q\hat s_Y^2/c^2$, vanishes as $N\to\infty$ and only the rate penalty survives, $b_q \to -r$. Hence $d_q \to (a_q^{-1}+r)^{-1} = h_q/\lambda_q$ (the prior covariance shrunk by the rate penalty), and the self-consistency degenerates to $c \simeq \sum_q h_q + \delta$, the $\hat s_Y = 0$ solution of the companion note: the representation reverts to the prior and all feature learning disappears in the thermodynamic limit, unless $\hat s_Y^2$ is made to grow with $N$.
 \end{itemize}
 So the missing factor changes the qualitative large-$N$ behaviour of \texttt{eq:linear-soln}, not only a constant.
 
@@ -90,7 +90,7 @@ and hence the corrected form of \texttt{eq:linear-soln},
 \begin{equation}
   1 - \frac{\delta}{c} = \frac{c}{N}\sum_q \frac{h_q}{c^2 - \hat s_Y^2 h_q},
   \qquad
-  h_q = \frac{\lambda_q(\lambda_q\hat s_X^2 + \sigma^2)}{1 + g^2(\lambda_q \hat s_X^2 + \sigma^2)},
+  h_q = \frac{\lambda_q(\lambda_q\hat s_X^2 + \sigma^2)}{1 + r(\lambda_q \hat s_X^2 + \sigma^2)},
   \qquad
   \hat s_X^2 = \frac{k_0 s_X^2}{m},\ \hat s_Y^2 = \frac{s_Y^2}{k_1}.
   \label{eq:linear-soln-corrected}
@@ -102,7 +102,7 @@ Every parameter is set in \path{latex/notes/scripts/check_rg_linear_soln.py} (ru
 a ring of $N=12$ sites with $K_{i,j} = \exp(-r_{i,j}^2/4)$, $r_{i,j}$ the ring distance (a Gaussian of width $\sqrt2$);
 $P=4$ patterns, $m=6$ inputs, $n=5$ outputs and $3$ latents;
 $X = ZW_X^\top$, $Y = ZW_Y^\top$ with $Z_{\mu,k}\sim\mathcal U[0,1]$ i.i.d., $W_X$ the $Q$ factor of a $6\times3$ standard normal matrix and $W_Y$ $0.6$ times the $Q$ factor of a $5\times3$ one (drawn in the order $Z, W_X, W_Y$ from \path{numpy.random.default_rng(0)}), so that $XX^\top$ and $YY^\top$ commute;
-$k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $g^2 = 0.3$, $\delta = 0.5$;
+$k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $r = 0.3$, $\delta = 0.5$;
 damped iteration (damping $\tfrac12$, $4000$ steps) of the full $NP\times NP$ map $C \mapsto \frac1N\sum_{i,j}K_{i,j}\langle\phi_i\phi_j\rangle$, started from $C = 5I$, with no ansatz and no scalar reduction.
 The eigenvalues of $C+\delta I$ at the fixed point are $\{0.68867925, 0.70201000, 1.10586544, 2.46022252\}$, and the roots of \eqref{eq:linear-soln-corrected} agree to all ten printed digits; the off-diagonal part of $U^\top\tilde C U$ is $10^{-15}$.
 The equation as written in the uncorrected text gives $\{2.7642, 2.8840, 5.1682, 9.6999\}$, larger by factors $3.9$ to $4.7$.

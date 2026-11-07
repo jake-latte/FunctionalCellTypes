@@ -12,7 +12,7 @@
 \maketitle
 
 \section{Setting}
-Section~2 studies a linear network with one hidden layer of $N$ spatially embedded units, spatial kernel $K = F\Lambda F^\dagger$ (real, symmetric, translation invariant, eigenvalues $\lambda_q = \lambda_{-q}$), input and readout priors $k_0 I_m$ and $k_1 I_n$, rate penalty $g^2 I$, input noise $\sigma^2$ and $\kappa = \beta/(Pn)$.
+Section~2 studies a linear network with one hidden layer of $N$ spatially embedded units, spatial kernel $K = F\Lambda F^\dagger$ (real, symmetric, translation invariant, eigenvalues $\lambda_q = \lambda_{-q}$), input and readout priors $k_0 I_m$ and $k_1 I_n$, rate penalty $r I$, input noise $\sigma^2$ and $\kappa = \beta/(Pn)$.
 Under the shared-basis ansatz ($XX^\top = U S_X^2 U^\top$, $YY^\top = U S_Y^2 U^\top$, $\Sigma_q = U D_q U^\top$, which requires $[XX^\top, YY^\top] = 0$) every matrix is diagonal in $U$ and the problem decouples into one scalar problem per data mode $p = 1,\dots,P$.
 For one such mode write $s_X^2, s_Y^2$ for the diagonal elements of $S_X^2, S_Y^2$, and $a_q, b_q, d_q, c$ for those of $D_{A,q}, D_{B,q}, D_q, D_C$. With
 \begin{equation}
@@ -22,7 +22,7 @@ the matrix equations of Section~2 are
 \begin{equation}
 \begin{aligned}
   D_{A,q} &= \lambda_q\tfrac{k_0}{m}S_X^2 + \sigma^2 I, &
-  D_{B,q} &= \frac{\lambda_q}{k_1}D_C^{-2}S_Y^2 - g^2 I,\\
+  D_{B,q} &= \frac{\lambda_q}{k_1}D_C^{-2}S_Y^2 - r I,\\
   D_q &= \big(D_{A,q}^{-1} - D_{B,q}\big)^{-1}, &
   D_C &= \frac1N\sum_q\lambda_q D_q + \delta I .
 \end{aligned}
@@ -31,9 +31,9 @@ the matrix equations of Section~2 are
 (The $1/N$ in $D_C$ is the subject of the companion note \texttt{rg\_kernel\_normalisation.tex}.)
 
 \section{\texorpdfstring{Problem 1: the power of $c$ in $b_q$}{Problem 1: the power of c in b\_q}}
-$\tilde B_q = \frac{\lambda_q}{k_1}\tilde C^{-1}YY^\top\tilde C^{-1} - g^2 I$ is \emph{quadratic} in $\tilde C^{-1}$, so in the shared basis $D_{B,q}$ contains $D_C^{-2}$, as even the uncorrected text writes in \eqref{eq:matrix}. Its diagonal element is therefore
+$\tilde B_q = \frac{\lambda_q}{k_1}\tilde C^{-1}YY^\top\tilde C^{-1} - r I$ is \emph{quadratic} in $\tilde C^{-1}$, so in the shared basis $D_{B,q}$ contains $D_C^{-2}$, as even the uncorrected text writes in \eqref{eq:matrix}. Its diagonal element is therefore
 \begin{equation}
-  b_q = \frac{\lambda_q s_Y^2}{k_1 c^2} - g^2 = \frac{\lambda_q\hat s_Y^2}{c^2} - g^2 ,
+  b_q = \frac{\lambda_q s_Y^2}{k_1 c^2} - r = \frac{\lambda_q\hat s_Y^2}{c^2} - r ,
 \end{equation}
 whereas the uncorrected text uses $\lambda_q\hat s_Y^2/c$ in the scalar reduction.
 A units check confirms the square: $\tilde C$ has the units of a kernel, $[\tilde C] = [\phi^2]$, and the tilt $b_q$ must have units $[\phi^{-2}]$ to sit next to $a_q^{-1}$ in $d_q^{-1} = a_q^{-1} - b_q$; with $[\hat s_Y^2] = [\phi^2]$ (since $k_1\tilde C$ and $YY^\top$ are both output kernels), only $\hat s_Y^2/c^2$ has the right units.
@@ -41,18 +41,18 @@ A units check confirms the square: $\tilde C$ has the units of a kernel, $[\tild
 \section{\texorpdfstring{Problem 2: the definition of $h_q$}{Problem 2: the definition of h\_q}}
 The text defines $h_q$ through
 \begin{equation}
-  a_q^{-1} + g^2 = \frac{1}{\lambda_q\hat s_X^2 + \sigma^2} + g^2 \overset{!}{=} \frac{\lambda_q}{h_q}.
+  a_q^{-1} + r = \frac{1}{\lambda_q\hat s_X^2 + \sigma^2} + r \overset{!}{=} \frac{\lambda_q}{h_q}.
 \end{equation}
 Solving,
 \begin{equation}
-  h_q = \frac{\lambda_q(\lambda_q\hat s_X^2 + \sigma^2)}{1 + g^2(\lambda_q\hat s_X^2+\sigma^2)}
-      = \frac{\lambda_q\hat s_X^2 + \sigma^2}{\lambda_q^{-1} + g^2\big(\hat s_X^2 + \hat\sigma_q^2\big)} .
+  h_q = \frac{\lambda_q(\lambda_q\hat s_X^2 + \sigma^2)}{1 + r(\lambda_q\hat s_X^2+\sigma^2)}
+      = \frac{\lambda_q\hat s_X^2 + \sigma^2}{\lambda_q^{-1} + r\big(\hat s_X^2 + \hat\sigma_q^2\big)} .
   \label{eq:hq}
 \end{equation}
-The uncorrected text writes $g^2(\lambda_q\hat s_X^2 + \hat\sigma_q^2)$ in the denominator: one factor of $\lambda_q$ too many on $\hat s_X^2$ (and it defines $\hat\sigma_q^2$ circularly as $\hat\sigma^2/\lambda_q$; it must be $\sigma^2/\lambda_q$).
+The uncorrected text writes $r(\lambda_q\hat s_X^2 + \hat\sigma_q^2)$ in the denominator: one factor of $\lambda_q$ too many on $\hat s_X^2$ (and it defines $\hat\sigma_q^2$ circularly as $\hat\sigma^2/\lambda_q$; it must be $\sigma^2/\lambda_q$).
 Multiplying out shows the inconsistency: the uncorrected version gives
-$\lambda_q/h_q = \big(1 + g^2\lambda_q^2\hat s_X^2 + g^2\sigma^2\big)/(\lambda_q\hat s_X^2+\sigma^2)$, which differs from $a_q^{-1}+g^2$ by $g^2(\lambda_q^2-\lambda_q)\hat s_X^2/(\lambda_q\hat s_X^2+\sigma^2)$, nonzero whenever $g\neq0$ and $\lambda_q\neq1$.
-At $g = 0$ both reduce to $h_q = \lambda_q(\lambda_q\hat s_X^2+\sigma^2) = \lambda_q a_q$, so the error is invisible in the $g\to0$ limit but changes every result at finite rate penalty. For example, at large $g$ the correct $h_q \to \lambda_q/g^2$, whereas the incorrect one tends to $\lambda_q(\lambda_q\hat s_X^2+\sigma^2)/\big(g^2(\lambda_q^2\hat s_X^2+\sigma^2)\big)$, which retains a spurious dependence on the input spectrum.
+$\lambda_q/h_q = \big(1 + r\lambda_q^2\hat s_X^2 + r\sigma^2\big)/(\lambda_q\hat s_X^2+\sigma^2)$, which differs from $a_q^{-1}+r$ by $r(\lambda_q^2-\lambda_q)\hat s_X^2/(\lambda_q\hat s_X^2+\sigma^2)$, nonzero whenever $r\neq0$ and $\lambda_q\neq1$.
+At $r = 0$ both reduce to $h_q = \lambda_q(\lambda_q\hat s_X^2+\sigma^2) = \lambda_q a_q$, so the error is invisible in the $r\to0$ limit but changes every result at finite rate penalty. For example, at large $r$ the correct $h_q \to \lambda_q/r$, whereas the incorrect one tends to $\lambda_q(\lambda_q\hat s_X^2+\sigma^2)/\big(r(\lambda_q^2\hat s_X^2+\sigma^2)\big)$, which retains a spurious dependence on the input spectrum.
 
 \section{Derivation of the corrected implicit solution}
 With both corrections,
@@ -70,7 +70,7 @@ and dividing by $c$ gives the corrected \texttt{eq:linear-soln}:
 \begin{equation}
   \boxed{\;1 - \frac{\delta}{c} = \frac{c}{N}\sum_q\frac{h_q}{c^2 - \hat s_Y^2h_q},
   \qquad
-  h_q = \frac{\lambda_q(\lambda_q\hat s_X^2 + \sigma^2)}{1 + g^2(\lambda_q\hat s_X^2+\sigma^2)}\;}
+  h_q = \frac{\lambda_q(\lambda_q\hat s_X^2 + \sigma^2)}{1 + r(\lambda_q\hat s_X^2+\sigma^2)}\;}
   \label{eq:linear-soln-corrected}
 \end{equation}
 to be solved for $c > \hat s_Y\sqrt{\max_q h_q}$, separately for each data mode. Equivalent forms that are sometimes more convenient are
@@ -92,7 +92,7 @@ Other roots, and other fixed points of the full matrix map, have a precision tha
 \section{Consequences}
 \begin{itemize}
   \item The structure of the solution changes. In the original equation $1-\delta/c = \sum_q h_q/(c-\hat s_Y^2h_q)$ each summand is invariant under a joint rescaling of $c$ and $h_q$; in the corrected one it is not, so the balance between the target strength $\hat s_Y^2$ and the spatial spectrum $h_q$ is different. The singular threshold moves from $c = \hat s_Y^2\max_q h_q$ to $c = \hat s_Y\sqrt{\max_q h_q}$. Any threshold, onset of mode-selective learning or scaling law read off from the original equation has to be re-derived.
-  \item The finite-$g$ behaviour changes through $h_q$, in particular the large-$g$ limit and how the rate penalty shapes the spatial spectrum $h_q$.
+  \item The finite-$r$ behaviour changes through $h_q$, in particular the large-$r$ limit and how the rate penalty shapes the spatial spectrum $h_q$.
   \item Any later analysis (limiting cases, continuum limit, numerical predictions) must use \eqref{eq:linear-soln-corrected}.
 \end{itemize}
 
@@ -101,11 +101,11 @@ Every parameter is set in \path{latex/notes/scripts/check_rg_linear_soln.py} (ru
 a ring of $N=12$ sites with $K_{i,j} = \exp(-r_{i,j}^2/4)$, $r_{i,j}$ the ring distance (a Gaussian of width $\sqrt2$);
 $P=4$ patterns, $m=6$ inputs, $n=5$ outputs and $3$ latents;
 $X = ZW_X^\top$, $Y = ZW_Y^\top$ with $Z_{\mu,k}\sim\mathcal U[0,1]$ i.i.d., $W_X$ the $Q$ factor of a $6\times3$ standard normal matrix and $W_Y$ $0.6$ times the $Q$ factor of a $5\times3$ one (drawn in the order $Z, W_X, W_Y$ from \path{numpy.random.default_rng(0)}), so that $XX^\top$ and $YY^\top$ commute;
-$k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $g^2 = 0.3$, $\delta = 0.5$;
+$k_0 = 0.7$, $k_1 = 1.3$, $\sigma^2 = 0.2$, $r = 0.3$, $\delta = 0.5$;
 damped iteration (damping $\tfrac12$, $4000$ steps) of the full $NP\times NP$ map $C \mapsto \frac1N\sum_{i,j}K_{i,j}\langle\phi_i\phi_j\rangle$, started from $C = 5I$, with no ansatz and no scalar reduction.
 The eigenvalues of $C+\delta I$ at the fixed point are $\{0.68867925, 0.70201000, 1.10586544, 2.46022252\}$, and the roots of \eqref{eq:linear-soln-corrected} agree to all ten printed digits; the off-diagonal part of $U^\top\tilde C U$ is $10^{-15}$.
 The equation as written in the uncorrected text gives $\{2.7642, 2.8840, 5.1682, 9.6999\}$, larger by factors $3.9$ to $4.7$.
 
 \section{Recommended fix}
-Use $b_q = \lambda_q\hat s_Y^2/c^2 - g^2$, define $h_q$ by \eqref{eq:hq} with $\hat\sigma_q^2 = \sigma^2/\lambda_q$, carry $c^2$ through $d_q$ and the self-consistency, and replace \texttt{eq:linear-soln} by \eqref{eq:linear-soln-corrected}. These edits are marked in red in Section~2, with the label \texttt{eq:linear-soln} kept on the corrected equation.
+Use $b_q = \lambda_q\hat s_Y^2/c^2 - r$, define $h_q$ by \eqref{eq:hq} with $\hat\sigma_q^2 = \sigma^2/\lambda_q$, carry $c^2$ through $d_q$ and the self-consistency, and replace \texttt{eq:linear-soln} by \eqref{eq:linear-soln-corrected}. These edits are marked in red in Section~2, with the label \texttt{eq:linear-soln} kept on the corrected equation.
 \end{document}
