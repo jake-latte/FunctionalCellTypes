@@ -54,6 +54,14 @@ $r = 2\beta\,$`rate_lambda`; it becomes `rate_lambda`, and the drift-guard test
 hash rule); fold version 5 into the shared omission/hash table that branch
 introduces.
 
+Also update the LaTeX statements of today's relation, which become wrong when
+this lands: `fct_experiment_plan.tex` (the dictionary row and every
+`rate_lambda = r/(2 beta)` statement, and the `--set rate_lambda=` values of P2
+and P4: `0.2` for r = 0.1 becomes `0.1`, `2.0` for r = 1 becomes `1.0`) and
+`linear_solution_limits.tex` (the "what fct does not yet match" item). The
+acceptance criterion "G = r I and the code's loss show the same coefficient"
+of `rate-penalty-latex-r` is met only once this item lands.
+
 ## Acceptance criteria
 - For every optimiser and $\beta$: `beta * loss` at fixed weights equals
   `0.5 * beta * N * mse + 0.5 * weight_lambda * form + 0.5 * rate_lambda * sum(phi^2)`.
