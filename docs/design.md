@@ -98,7 +98,7 @@ delete the old ones. Likewise the hash of any set of sections that includes `net
 version of the forward pass of `MLP`. Version 2 reads the output from the post-activations, `Z = V^T phi(h^L) / N`
 (version 1 read it from the pre-activation `h^L`): every train and meanfield cache made under version 1 is rejected with
 `StaleCacheError`, and an experiment ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
-hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Version 5 scales the rate penalty by `1 / (2 beta)` as well, which changes no number of a run with `rate_lambda = 0`, so the version folded in is `config.hashed_loss_version(train)`: `LOSS_VERSION` when `rate_lambda > 0` and `config.RATE_FREE_LOSS_VERSION` (4, the last version that changed a rate-free loss) when it is 0. Every `rate_lambda = 0` hash and cache is unchanged by version 5; a `rate_lambda > 0` one made under version 4 is rejected with `StaleCacheError` and listed `stale` by `exp status`. A later loss change that reaches rate-free configs must raise both constants. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
+hashed train section, so every pre-existing Adam hash and cache is unchanged. Likewise `train.monitor_bins` and `train.monitor_shuffles` configure only the MIR monitor and are dropped from the hash when `monitor_kind == "spectrum"`. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Version 5 scales the rate penalty by `1 / (2 beta)` as well, which changes no number of a run with `rate_lambda = 0`, so the version folded in is `config.hashed_loss_version(train)`: `LOSS_VERSION` when `rate_lambda > 0` and `config.RATE_FREE_LOSS_VERSION` (4, the last version that changed a rate-free loss) when it is 0. Every `rate_lambda = 0` hash and cache is unchanged by version 5; a `rate_lambda > 0` one made under version 4 is rejected with `StaleCacheError` and listed `stale` by `exp status`. A later loss change that reaches rate-free configs must raise both constants. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
 enters the hash by value.
 
 Fields added after artefacts existed. A field added to a hashed section or to exp.json is left out of it while it holds
@@ -177,9 +177,9 @@ class TrainConfig(BaseModel):
     weight_lambda: float = 2e-4; rate_lambda: float = 1e-3
     log_int: int = 100; save_int: int = 100; seed: int = 0
     monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
-    monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
-    monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1)
-    monitor_kind: Literal["mir", "spectrum"] = "mir"   # which monitor runs (monitor.make_monitor); hashed only as "spectrum"
+    monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2); not hashed under the spectrum monitor
+    monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1); not hashed under the spectrum monitor
+    monitor_kind: Literal["mir", "spectrum"] = "mir"   # which monitor runs (monitor.make_monitor); hashed only as "spectrum"; "spectrum" needs monitor_int > 0
     optimizer: Literal["adam", "sgld"] = "adam"
     beta: float = 1.0                   # SGLD inverse temperature (> 0); ignored, and not hashed, for adam
 class MeanFieldConfig(BaseModel):      # the problem: the equations being solved

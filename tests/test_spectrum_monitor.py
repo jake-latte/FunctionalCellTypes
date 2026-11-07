@@ -45,11 +45,11 @@ def _teacher(P=64, K=3, latent_min=0.0, **kw) -> DataConfig:
     )
 
 
-def _cfg(data: DataConfig, N=8, L=2, B=1, **train_kw) -> Config:
+def _cfg(data: DataConfig, N=8, L=2, B=1, monitor_int=1, **train_kw) -> Config:
     return Config(
         data=data,
         net=NetConfig(N=N, L=L, B=B, phi="tanh", seed=1),
-        train=TrainConfig(monitor_kind="spectrum", **train_kw),
+        train=TrainConfig(monitor_kind="spectrum", monitor_int=monitor_int, **train_kw),
         dtype="float64",
         device="cpu",
     )
@@ -196,10 +196,37 @@ def test_make_monitor_picks_the_monitor_by_kind():
 def test_monitor_kind_enters_the_hash_only_as_spectrum():
     default = Config()
     explicit = Config(train=TrainConfig(monitor_kind="mir"))
-    spectrum = Config(train=TrainConfig(monitor_kind="spectrum"))
+    spectrum = Config(train=TrainConfig(monitor_kind="spectrum", monitor_int=1))
     assert explicit.section_hash(*TRAIN) == default.section_hash(*TRAIN)
     assert spectrum.section_hash(*TRAIN) != default.section_hash(*TRAIN)
     assert spectrum.section_hash("data", "net") == default.section_hash("data", "net")
+
+
+def test_mir_hashes_are_those_written_before_monitor_kind_existed():
+    """Literal hashes computed by the code just before `monitor_kind` was added: the default
+    config, a MIR-monitored one whose bins and shuffles enter the hash, and a rate-free one.
+    The first two have rate_lambda > 0 and so fold in LOSS_VERSION; the rate-free one folds in
+    RATE_FREE_LOSS_VERSION and is also the hash from before LOSS_VERSION 5."""
+    assert Config().section_hash(*TRAIN) == "629c7b68d953"
+    monitored = Config(train=TrainConfig(monitor_int=5, monitor_bins=7))
+    assert monitored.section_hash(*TRAIN) == "19d79cce4911"
+    rate_free = Config(train=TrainConfig(rate_lambda=0.0))
+    assert rate_free.section_hash(*TRAIN) == "bfb7ec92fda0"
+
+
+def test_bins_and_shuffles_do_not_enter_a_spectrum_hash():
+    """They configure the MIR monitor only, so they cannot change a spectrum run's history."""
+    def hashed(**train_kw) -> str:
+        return Config(train=TrainConfig(monitor_int=1, **train_kw)).section_hash(*TRAIN)
+
+    other = {"monitor_bins": 3, "monitor_shuffles": 9}
+    assert hashed(monitor_kind="spectrum", **other) == hashed(monitor_kind="spectrum")
+    assert hashed(**other) != hashed()  # under the MIR monitor they do
+
+
+def test_the_spectrum_monitor_needs_a_positive_monitor_int():
+    with pytest.raises(ValueError, match="monitor_int is 0"):
+        TrainConfig(monitor_kind="spectrum", monitor_int=0)
 
 
 def test_exp_json_carries_monitor_kind_only_as_spectrum():
