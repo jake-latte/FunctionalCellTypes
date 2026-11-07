@@ -18,7 +18,7 @@ import torch
 from torch import Tensor
 
 from fct import linear_ring as lr
-from fct.exp import axes_of, load_exp, same_value, setting_statuses
+from fct.exp import axes_of, load_exp, preset, same_value, setting_statuses
 from fct.monitor import spectrum_records
 from fct.spatial_exp import ExpSetting, select_setting
 from fct.train import MONITOR_EPOCH, History, load_trained
@@ -29,12 +29,16 @@ LOG_SWEEP_SPAN = 10.0
 # Sentences of a preset description that state its regime: what the accuracy budget allows.
 _REGIME_WORDS = re.compile(r"accura|bias", re.IGNORECASE)
 _SENTENCE_END = re.compile(r"(?<=\.)\s+(?=[A-Z(`])")
+# What `python -m fct exp init --preset NAME` with overrides writes as the description (the
+# preset's own would no longer be true of the experiment).
+_DERIVED = re.compile(r"^Preset '([^']+)' with overrides: ")
 
 
 class RingRun(NamedTuple):
     """One setting: its predicted law and, when it is trained, its records. The records are of
     the one hidden layer, float64; the last record is the final state, one sample per member."""
 
+    root: Path  # the experiment ROOT
     chosen: ExpSetting
     law: lr.Law
     description: str | None  # the experiment's (the preset's) description
@@ -70,13 +74,14 @@ def load_ring_setting(root: Path, values: Mapping[str, Any]) -> RingRun:
     chosen = select_setting(root, values, "cpu")
     law = lr.predicted_law(exp, chosen.setting.index)
     if chosen.status != "done":
-        return RingRun(chosen, law, exp.description, None, None, None, None, None)
+        return RingRun(root, chosen, law, exp.description, None, None, None, None, None)
     if chosen.cfg.net.L != 1:
         raise ValueError(
             f"the linear ring has one hidden layer, the setting has {chosen.cfg.net.L}"
         )
     _, history = load_trained(chosen.directory, chosen.cfg, CPU, F64)
     return RingRun(
+        root=root,
         chosen=chosen,
         law=law,
         description=exp.description,
@@ -89,8 +94,8 @@ def load_ring_setting(root: Path, values: Mapping[str, Any]) -> RingRun:
 
 
 def run_title(run: RingRun) -> str:
-    """A short title: the setting's index, parametrisation and axis values."""
-    axes = ", ".join(f"{a} = {v}" for a, v in run.chosen.setting.axes.items())
+    """A short title: the setting's index, parametrisation and axis values (by their last name)."""
+    axes = ", ".join(f"{a.rsplit('.', 1)[-1]} = {v}" for a, v in run.chosen.setting.axes.items())
     return f"setting {run.chosen.setting.index} ({run.law.cfg.spatial.parametrisation}): {axes}"
 
 
@@ -98,7 +103,7 @@ def describe_run(run: RingRun) -> str:
     """A markdown paragraph: which setting, how it was trained, and its state."""
     cfg = run.law.cfg
     head = (
-        f"**{run_title(run)}** of `{run.chosen.directory.parent.name}`: N = {cfg.net.N}, "
+        f"**{run_title(run)}** of `{run.root.name}`: N = {cfg.net.N}, "
         f"P = {cfg.data.P}, K = {run.law.D.shape[0]}, ell = {run.law.ell} sites, "
         f"beta = {cfg.train.beta:g}, r = {cfg.train.rate_lambda:g}, lr = {cfg.train.lr:g}, "
         f"{cfg.train.n_epochs} epochs, B = {cfg.net.B} members, "
@@ -119,6 +124,36 @@ def regime_sentences(description: str | None) -> list[str]:
     if not description:
         return []
     return [s for s in _SENTENCE_END.split(description) if _REGIME_WORDS.search(s)]
+
+
+def preset_of(description: str | None) -> str | None:
+    """The preset an experiment was made from with overrides, read off the description
+    `exp init` gave it; None for any other description."""
+    match = _DERIVED.match(description or "")
+    return None if match is None else match[1]
+
+
+def regime_markdown(root: Path, description: str | None) -> str:
+    """What an experiment's description says of its regime (`regime_sentences`), then the
+    whole description folded. An experiment made from a preset with overrides has only a note
+    of them as its description: the preset's own is quoted instead, with a warning that the
+    overrides may have moved the experiment out of the regime it documents."""
+    name = preset_of(description)
+    if name is None:
+        head, text = f"**`{root}`**, from its description:", description
+    else:
+        text = preset(name).description
+        overrides = _DERIVED.sub("", description)
+        head = (
+            f"**`{root}`** was made from the preset `{name}` with overrides ({overrides}); "
+            "they may move it out of the regime the preset documents. The preset's description:"
+        )
+    said = "\n".join(f"- {s}" for s in regime_sentences(text)) or "- (it states no regime)"
+    whole = text or "(no description)"
+    return (
+        f"{head}\n\n{said}\n\n<details><summary>the whole description</summary>\n\n"
+        f"{whole}\n\n</details>"
+    )
 
 
 # ------------------------------------------------------------------ the band share sweep

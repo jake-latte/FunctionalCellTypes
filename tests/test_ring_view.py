@@ -4,12 +4,14 @@ of a history's last record. Loading from a trained ROOT is exercised by the note
 (tests/test_build_linear_ring.py)."""
 
 import re
+from pathlib import Path
 
 import pytest
 import torch
 
 from fct import linear_ring as lr
 from fct import ring_view as rv
+from fct.cli import _derived_description
 from fct.exp import preset
 from fct.spectrum import mode_spectra
 from tests.spectrum_helpers import gaussian_field
@@ -141,6 +143,22 @@ def test_the_linear_ring_description_states_the_lr_bias_on_mode_1():
     """The notebook quotes this sentence instead of restating its numbers."""
     sentences = rv.regime_sentences(preset("linear_ring").description)
     assert any("not accurate" in s for s in sentences)
+
+
+def test_an_experiment_with_overrides_quotes_its_presets_description():
+    derived = _derived_description("linear_ring", ["lr=0.2"], ["train.beta=[1.0]"])
+    assert rv.preset_of(derived) == "linear_ring"
+    text = rv.regime_markdown(Path("p1"), derived)
+    assert "made from the preset `linear_ring` with overrides (--set lr=0.2" in text
+    assert "not accurate" in text  # the preset's regime sentence, quoted
+    assert preset("linear_ring").description in text
+
+
+def test_an_experiment_with_its_own_description_quotes_that():
+    assert rv.preset_of("my own words. Accuracy is fine.") is None
+    text = rv.regime_markdown(Path("p1"), "my own words. Accuracy is fine.")
+    assert "- Accuracy is fine." in text and "made from" not in text
+    assert "(it states no regime)" in rv.regime_markdown(Path("p1"), None)
 
 
 def test_final_member_values_stack_the_members_of_the_last_record():
