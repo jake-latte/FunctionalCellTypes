@@ -75,7 +75,7 @@ def test_ring_error_decays_as_exp_minus_L_over_xi_down_to_the_derived_floor(clc)
 
 def test_tail_coefficients_match_the_expansion_of_the_summand(clc):
     """eq:tail: the lambda^2 coefficient includes the sY^2 term of the geometric series."""
-    params = clc.SolutionParams(sx2=0.7, sy2=0.25, sig2=0.2, g2=0.3, c=2.5)
+    params = clc.SolutionParams(sx2=0.7, sy2=0.25, sig2=0.2, r=0.3, c=2.5)
     c1, c2 = clc.tail_coefficients(params, rho=1.0)
 
     def summand(lam: float) -> float:
@@ -87,7 +87,7 @@ def test_tail_coefficients_match_the_expansion_of_the_summand(clc):
     second = (summand(eps) - 2 * summand(0.0) + summand(-eps)) / eps**2 / 2
     assert first == pytest.approx(c1, rel=1e-5)
     assert second == pytest.approx(c2, rel=1e-4)
-    without_sy_term = params.sx2 / ((1 + params.g2 * params.sig2) ** 2 * params.c**2)
+    without_sy_term = params.sx2 / ((1 + params.r * params.sig2) ** 2 * params.c**2)
     assert abs(second - without_sy_term) > 10 * abs(second - c2)  # the extra term is needed
 
 
@@ -118,7 +118,7 @@ def test_torus_average_matches_two_dimensional_integral_to_the_derived_floor(clc
 
 def test_solution_params_reject_c_below_the_pole(clc):
     """The physical branch needs c > s_Y sqrt(h(lambda_0)); a c below it must fail loudly at construction."""
-    params = clc.SolutionParams(sx2=0.7, sy2=0.25, sig2=0.2, g2=0.3, c=0.1)
+    params = clc.SolutionParams(sx2=0.7, sy2=0.25, sig2=0.2, r=0.3, c=0.1)
     with pytest.raises(ValueError, match="pole"):
         clc.linear_solution_weight(params, clc.lattice_lambda_zero(SPACING, LENGTH, dim=1))
 

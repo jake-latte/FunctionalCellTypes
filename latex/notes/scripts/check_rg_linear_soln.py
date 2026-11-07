@@ -3,12 +3,12 @@
 Ground truth: the linear one-hidden-layer network on a ring of N sites. Iterate
     C -> (1/N) sum_ij K_ij Cov[phi_i, phi_j],
 with Cov the inverse of the full NP x NP precision
-    (A (x) K + sigma^2 I)^{-1} - (B (x) K - g^2 I),   A = (k0/m) X X^T,
+    (A (x) K + sigma^2 I)^{-1} - (B (x) K - r I),   A = (k0/m) X X^T,
     B = (1/k1) Ct^{-1} Y Y^T Ct^{-1},                  Ct = C + delta I.
 No shared-basis ansatz and no scalar reduction is used. The eigenvalues of Ct are
 compared with the roots of the corrected scalar equation, one per data mode,
     1 - delta/c = (c/N) sum_q h_q / (c^2 - sY^2 h_q),
-    h_q = lam_q (lam_q sX^2 + sigma^2) / (1 + g^2 (lam_q sX^2 + sigma^2)),
+    h_q = lam_q (lam_q sX^2 + sigma^2) / (1 + r (lam_q sX^2 + sigma^2)),
 and with the roots of the equation as originally written in Section 2.
 
 Run from the git root:  uv run python latex/notes/scripts/check_rg_linear_soln.py
@@ -21,7 +21,7 @@ N, P, M_IN, N_OUT, N_LATENT = 12, 4, 6, 5, 3   # sites, patterns, m, n, latents
 KERNEL_WIDTH = np.sqrt(2.0)                    # K_ij = exp(-r_ij^2 / (2 w^2)), ring distance r
 Z_MAX = 1.0                                    # Z_{mu,k} ~ U[0, Z_MAX]
 WY_SCALE = 0.6                                 # W_Y = 0.6 * (orthonormal columns)
-K0, K1, SIG2, G2, DELTA = 0.7, 1.3, 0.2, 0.3, 0.5
+K0, K1, SIG2, R, DELTA = 0.7, 1.3, 0.2, 0.3, 0.5
 DAMPING, N_ITER = 0.5, 4000
 C_START = 5.0                                  # iterate from C = C_START * I (large C, small B)
 
@@ -50,7 +50,7 @@ def precision(C, K, A, YY):
     B = Ci @ YY @ Ci / K1
     I = np.eye(N * P)
     prior = np.linalg.inv(np.kron(A, K) + SIG2 * I)  # index ordering (mu, i)
-    return prior - (np.kron(B, K) - G2 * I)
+    return prior - (np.kron(B, K) - R * I)
 
 
 def kernel_map(C, K, A, YY):
@@ -76,11 +76,11 @@ def bisect(f, lo, hi, n=200):
 
 
 def h_corrected(lam, sx):
-    return lam * (lam * sx + SIG2) / (1 + G2 * (lam * sx + SIG2))
+    return lam * (lam * sx + SIG2) / (1 + R * (lam * sx + SIG2))
 
 
 def h_original(lam, sx):
-    return (lam * sx + SIG2) / (1 / lam + G2 * (lam * sx + SIG2 / lam))
+    return (lam * sx + SIG2) / (1 / lam + R * (lam * sx + SIG2 / lam))
 
 
 def root_corrected(lam, sx, sy):
@@ -125,7 +125,7 @@ def main():
     print("ratio original / corrected             :", np.round(np.sort(original) / np.sort(corrected), 2))
 
     # Naive start from the prior: C computed with B = 0 (i.e. no target tilt).
-    Cov0 = np.linalg.inv(np.linalg.inv(np.kron(A, K) + SIG2 * np.eye(N * P)) + G2 * np.eye(N * P))
+    Cov0 = np.linalg.inv(np.linalg.inv(np.kron(A, K) + SIG2 * np.eye(N * P)) + R * np.eye(N * P))
     C_prior = np.einsum('ij,uivj->uv', K, Cov0.reshape(P, N, P, N)) / N
     C_naive = iterate_fixed_point(C_prior, K, A, YY)
     print("naive start (prior) -> eig(C+dI)       :", np.round(np.sort(np.linalg.eigvalsh(C_naive + DELTA * np.eye(P))), 4))

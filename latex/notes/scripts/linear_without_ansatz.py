@@ -1,7 +1,7 @@
 """Solve the linear one-hidden-layer fixed point without the shared-basis ansatz.
 
 Per spatial frequency q = 0, ..., N-1 the data-interaction matrix is
-    Sigma_q = (M_q - lam_q B)^{-1},   M_q = (lam_q A + sigma^2 I)^{-1} + g^2 I,
+    Sigma_q = (M_q - lam_q B)^{-1},   M_q = (lam_q A + sigma^2 I)^{-1} + r I,
     A = (k0/m) X X^T,                 B = (1/k1) Ct^{-1} Y Y^T Ct^{-1},
 and the only coupling between frequencies is the hidden-layer kernel
     Ct = delta I + (1/N) sum_q lam_q Sigma_q,    delta = 1/(k1 kappa).
@@ -37,7 +37,7 @@ KERNEL_WIDTH = np.sqrt(2.0)  # K_ij = exp(-r_ij^2 / (2 w^2))
 SX2 = np.array([2.0, 1.4, 1.0, 0.7, 0.4, 0.2])  # singular values^2 of X
 SY2 = np.array([1.0, 0.8, 0.6, 0.4, 0.25, 0.15])  # singular values^2 of Y (eps = 0)
 ROTATION_ANGLE = np.pi / 6  # output basis vs input basis at eps = 1
-PARAMS_DEFAULT = {"k0": 0.7, "k1": 1.3, "sig2": 0.2, "g2": 0.3, "delta": 0.5}
+PARAMS_DEFAULT = {"k0": 0.7, "k1": 1.3, "sig2": 0.2, "r": 0.3, "delta": 0.5}
 EPS_CHECK = (0.02, 0.01)  # perturbative check: the residual must halve
 C_START, C_START_ALT = 5.0, 50.0  # two starts, both with a small tilt
 DAMPING, TOL, MAX_ITER = 0.5, 1e-12, 50_000
@@ -54,7 +54,7 @@ class Params:
     k0: float
     k1: float
     sig2: float
-    g2: float
+    r: float
     delta: float
 
 
@@ -80,9 +80,9 @@ def ring_eigenvalues(n_sites: int, width: float) -> np.ndarray:
 
 # --- the per-frequency fixed-point map -----------------------------------------------
 def prior_precision(lam: np.ndarray, A: np.ndarray, p: Params) -> np.ndarray:
-    """M_q = (lam_q A + sigma^2 I)^{-1} + g^2 I, shape (N, P, P); depends on X only."""
+    """M_q = (lam_q A + sigma^2 I)^{-1} + r I, shape (N, P, P); depends on X only."""
     I = np.eye(A.shape[0])
-    return np.linalg.inv(lam[:, None, None] * A + p.sig2 * I) + p.g2 * I
+    return np.linalg.inv(lam[:, None, None] * A + p.sig2 * I) + p.r * I
 
 
 def tilt(Ct: np.ndarray, YY: np.ndarray, p: Params) -> np.ndarray:
@@ -191,16 +191,16 @@ def full_kernel_map(
     """
     n_sites, P = K.shape[0], A.shape[0]
     I = np.eye(n_sites * P)
-    precision = np.linalg.inv(np.kron(A, K) + p.sig2 * I) - (np.kron(tilt(Ct, YY, p), K) - p.g2 * I)
+    precision = np.linalg.inv(np.kron(A, K) + p.sig2 * I) - (np.kron(tilt(Ct, YY, p), K) - p.r * I)
     Cov = np.linalg.inv(precision).reshape(P, n_sites, P, n_sites)
     return p.delta * np.eye(P) + np.einsum("ij,uivj->uv", K, Cov) / n_sites
 
 
 # --- the commuting case: the scalar reduction ----------------------------------------
 def h_over_lam(lam: np.ndarray, sx2hat: float, p: Params) -> np.ndarray:
-    """h_q / lam_q = a / (1 + g^2 a) with a = lam_q sX^2 + sigma^2; finite at lam_q = 0."""
+    """h_q / lam_q = a / (1 + r a) with a = lam_q sX^2 + sigma^2; finite at lam_q = 0."""
     a = lam * sx2hat + p.sig2
-    return a / (1 + p.g2 * a)
+    return a / (1 + p.r * a)
 
 
 def bisect(f: Callable[[float], float], lo: float, hi: float, n: int = BISECT_STEPS) -> float:
@@ -231,7 +231,7 @@ def scalar_roots(lam: np.ndarray, sx2hat: np.ndarray, sy2hat: np.ndarray, p: Par
 
 def prior_scalar(lam: np.ndarray, p: Params) -> float:
     """Prior c on a direction orthogonal to both Gram matrices (eq:c0 of the note)."""
-    return p.delta + p.sig2 / (1 + p.g2 * p.sig2) * lam.mean()
+    return p.delta + p.sig2 / (1 + p.r * p.sig2) * lam.mean()
 
 
 # --- instance: input basis U, output basis U R(angle) ------------------------------
