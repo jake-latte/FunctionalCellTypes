@@ -1,5 +1,5 @@
 """Command-line entry point: `python -m fct init|train|solve|plot|plot-example CACHE_DIR` and
-`python -m fct exp init|list|count|status|run ROOT`.
+`python -m fct exp init|list|count|status|run|extend ROOT`.
 
 Each subcommand is a thin wiring of library functions; all computation lives elsewhere.
 Expected user errors (missing config or prerequisites, stale cache) become one stderr line
@@ -51,13 +51,16 @@ from fct.exp import (
     UnmigratedExpError,
     exp_path,
     expand,
+    extend_experiment,
     init_root,
     load_exp,
     preset,
     preset_names,
     refuse_legacy,
     run_setting,
+    setting_config,
     setting_dir,
+    setting_members,
     setting_statuses,
 )
 from fct.exp_migrate import MigrationError, migrate_exp
@@ -429,16 +432,22 @@ def cmd_exp_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _members_column(root: Path, exp: ExpConfig, setting) -> str:
+    """`<members of train/final.pt>/<net.B>`, `-` for the members without a readable final.pt."""
+    members = setting_members(root, exp, setting)
+    return f"{'-' if members is None else members}/{setting_config(exp, setting).net.B}"
+
+
 def cmd_exp_status(args: argparse.Namespace) -> int:
     exp = _load_exp(args.root)
     states = [
-        (i, state, _setting_name(args.root, s))
+        (i, state, _members_column(args.root, exp, s), _setting_name(args.root, s))
         for i, s, state in setting_statuses(args.root, exp, args.stage)
     ]
-    for i, state, name in states:
-        print(f"{i} {state} {name}")
+    for i, state, members, name in states:
+        print(f"{i} {state} {members} {name}")
     counts = [
-        sum(state == kind for _, state, _ in states)
+        sum(state == kind for _, state, _, _ in states)
         for kind in ("done", "partial", "missing", "stale")
     ]
     print("{} done, {} partial, {} missing, {} stale".format(*counts))
@@ -479,6 +488,22 @@ def cmd_exp_run(args: argparse.Namespace) -> int:
         run_setting(exp, args.index, args.root, log=print, stage=args.stage)
     except USER_FIXABLE_ERRORS as err:  # fixable by the user, no traceback
         raise CliError(str(err)) from err
+    return 0
+
+
+def cmd_exp_extend(args: argparse.Namespace) -> int:
+    """Rewrite exp.json with B + K; `exp run` (or the array job) then trains the new members."""
+    # Read here as well as in extend_experiment: for the B before, and so a missing or invalid
+    # exp.json is the one-line error every exp action gives.
+    before = _load_exp(args.root).B
+    try:
+        exp = extend_experiment(args.root, args.by)
+    except ExpError as err:
+        raise CliError(str(err)) from err
+    print(
+        f"wrote {exp_path(args.root)}: B {before} -> {exp.B}; `python -m fct exp run "
+        f"{args.root}` (or jobs/fct_exp.sh) trains the members each setting lacks"
+    )
     return 0
 
 
@@ -547,7 +572,9 @@ def _add_exp_parser(sub) -> None:
     add("list", cmd_exp_list, "print `index directory` for every setting")
     add("count", cmd_exp_count, "print the number of settings")
     p_status = add(
-        "status", cmd_exp_status, "print done / partial / missing / stale for every setting"
+        "status",
+        cmd_exp_status,
+        "print done / partial / missing / stale and members/B for every setting",
     )
     p_run = add("run", cmd_exp_run, "train or solve one setting (--index) or all of them in order")
     for p in (p_status, p_run):
@@ -556,6 +583,12 @@ def _add_exp_parser(sub) -> None:
             help="train the nets, or solve the mean-field saddle points (default: train)",
         )  # fmt: skip
     p_run.add_argument("--index", type=int, default=None, help="setting index (see `exp list`)")
+    p_extend = add(
+        "extend", cmd_exp_extend, "grow every setting's ensemble: write exp.json with B + K"
+    )
+    p_extend.add_argument(
+        "--by", type=int, required=True, metavar="K", help="members to add to every ensemble"
+    )
 
 
 # ---------------------------------------------------------------------------- entry point

@@ -20,6 +20,7 @@ pre) orientation; the readout `V` is stored (pre, post), so layer L's weight is 
 """
 
 import math
+import pickle
 from collections.abc import Sequence
 from typing import NamedTuple
 
@@ -37,7 +38,7 @@ from fct.spatial import LayerSpace
 from fct.spatial_exp import ExpSetting, select_setting
 from fct.spatial_view import data_kernels, empirical_kernels, layer_spaces
 from fct.tasks import resample
-from fct.train import History, load_weights
+from fct.train import History, load_trained_members, load_weights
 
 # History entries with a member axis that the notebook shows as mean +- sem.
 ENSEMBLE_KEYS = ("loss", "mse", "weight_l2", "rate_l2")
@@ -51,8 +52,10 @@ TEST_SEED_OFFSET = 1_000_003
 class PhaseRun(NamedTuple):
     """One setting of the experiment. `net` and `history` are None for a setting with no weights
     (status "missing" or "stale"); a "partial" one holds the latest checkpoint, `epoch` epochs
-    in. `dataset` is the training set (generated in memory, never written, when no usable file
-    is cached)."""
+    in, or, when its extension is pending (train/final.pt holds fewer members than net.B), the
+    members final.pt holds, all n_epochs in. `dataset` is the training set (generated in
+    memory, never written, when no usable file is cached). `note` says why a pending
+    extension's final.pt is not shown (unreadable or stale, as while an extension appends)."""
 
     setting: ExpSetting
     net: EnsembleMLP | None
@@ -60,14 +63,47 @@ class PhaseRun(NamedTuple):
     epoch: int  # epochs completed by `net`; 0 without weights
     spaces: list[LayerSpace]  # built from the config alone, so available for any setting
     dataset: Dataset
+    note: str | None = None
 
 
-def _load_weights(chosen: ExpSetting) -> tuple[EnsembleMLP | None, History | None, int]:
+# What torch.load and the artefact loader raise for a truncated, foreign or stale file
+# (StaleCacheError is a RuntimeError); anything else is a bug and propagates.
+_UNREADABLE = (OSError, ValueError, TypeError, RuntimeError, EOFError, pickle.UnpicklingError)
+
+Weights = tuple[EnsembleMLP | None, History | None, int, str | None]
+
+
+def _load_weights(chosen: ExpSetting) -> Weights:
+    """(net, history, epochs completed, note) of a setting; see `PhaseRun`."""
     if chosen.status not in ("done", "partial"):
-        return None, None, 0
+        return None, None, 0, None
     cfg = chosen.cfg
     device, dtype = resolve_device(cfg), resolve_dtype(cfg.dtype)
-    return load_weights(chosen.directory, cfg, device, dtype, chosen.status == "done")
+    if chosen.status == "partial" and (cache_paths(chosen.directory).train / "final.pt").exists():
+        return _load_pending_extension(chosen, device, dtype)
+    net, history, epoch = load_weights(
+        chosen.directory, cfg, device, dtype, chosen.status == "done"
+    )
+    return net, history, epoch, None
+
+
+def _load_pending_extension(chosen: ExpSetting, device, dtype) -> Weights:
+    """The members train/final.pt holds while an extension is pending, all n_epochs in. One
+    that cannot be read (or has just been replaced by the append) is a note, not an error: a
+    notebook reads while jobs run. ValueError for a single network: phase_view reads
+    ensembles."""
+    cfg = chosen.cfg
+    try:
+        net, history = load_trained_members(chosen.directory, cfg, device, dtype)
+    except _UNREADABLE as err:
+        return None, None, 0, f"train/final.pt not shown: {type(err).__name__}: {err}"
+    if not isinstance(net, EnsembleMLP):
+        # ValueError, as `load_phase_run` raises for any setting that is not an ensemble.
+        raise ValueError(  # noqa: TRY004
+            f"{chosen.directory}/train/final.pt holds a single network awaiting its extension "
+            f"to net.B={cfg.net.B}; phase_view reads ensembles, so run the extension first"
+        )
+    return net, history, cfg.train.n_epochs, None
 
 
 def _training_set(chosen: ExpSetting, has_weights: bool) -> Dataset:
@@ -93,9 +129,9 @@ def load_phase_run(root, values, device: str = "cpu") -> PhaseRun:
             f"phase_view reads ensembles, but net.B = {cfg.net.B} for {dict(values)}; use "
             "fct.spatial_exp for single networks"
         )
-    net, history, epoch = _load_weights(chosen)
+    net, history, epoch, note = _load_weights(chosen)
     dataset = _training_set(chosen, net is not None)
-    return PhaseRun(chosen, net, history, epoch, layer_spaces(cfg), dataset)
+    return PhaseRun(chosen, net, history, epoch, layer_spaces(cfg), dataset, note)
 
 
 # --------------------------------------------------------------------------- unit order

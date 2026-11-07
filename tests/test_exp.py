@@ -140,9 +140,13 @@ def test_invalid_task_parameters_fail_at_load(tiny):
 
 # ---------------------------------------------------------------------------- status
 def _write_final(train_dir, exp, setting):
-    """A minimal final.pt carrying the config hash of `setting` under the current code."""
+    """A minimal final.pt carrying the config hash of `setting` under the current code and a
+    net of its net.B members (done needs both)."""
     cfg = setting_config(exp, setting)
-    save_artefact(train_dir / "final.pt", {"epoch": 0}, cfg.section_hash("data", "net", "train"))
+    N, D_in = cfg.net.N, cfg.data.D_in
+    U = torch.zeros(N, D_in) if cfg.net.B == 1 else torch.zeros(cfg.net.B, N, D_in)
+    payload = {"epoch": 0, "net_state_dict": {"U": U}}
+    save_artefact(train_dir / "final.pt", payload, cfg.section_hash("data", "net", "train"))
 
 
 def test_status_done_partial_missing(tiny, tmp_path):
