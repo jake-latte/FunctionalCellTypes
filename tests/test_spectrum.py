@@ -754,9 +754,12 @@ def test_band_share_is_the_power_within_q_b_over_the_total():
     assert sp.band_share(d, q_band=4) == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize(("N", "q_band"), [(16, 1), (64, 3), (128, 6), (256, 12), (512, 24)])
+@pytest.mark.parametrize(
+    ("N", "q_band"), [(16, 1), (32, 2), (64, 3), (96, 5), (128, 6), (256, 12), (512, 24)]
+)
 def test_band_share_scales_its_band_with_the_ring(N, q_band):
-    """q_b = round(3 N / 64): |q| <= 3 at N = 64, the same fraction of the ring at every N."""
+    """q_b = floor(3 N / 64 + 1/2): |q| <= 3 at N = 64, the same fraction of the ring at every
+    N, rounded half up (3 N / 64 = 1.5 at N = 32 and 4.5 at N = 96)."""
     assert sp.band_half_width(N) == q_band
     d = smooth_spectrum(N, 2.0, 0.0)
     assert sp.band_share(d) == pytest.approx(sp.band_share(d, q_band=q_band))
@@ -783,3 +786,20 @@ def test_band_share_batches_over_leading_dims_and_keeps_the_dtype():
 def test_band_share_rejects_bad_inputs(d, q_band, match):
     with pytest.raises(ValueError, match=match):
         sp.band_share(d, q_band=q_band)
+
+
+def test_the_band_mask_is_the_band_of_band_share():
+    mask = sp.band_mask(64)
+    assert mask.sum() == 7 and mask[[0, 1, 2, 3, 61, 62, 63]].all()
+    d = smooth_spectrum(64, 2.0, 0.1)
+    assert sp.band_share(d) == pytest.approx(float(d[mask].sum() / d.sum()))
+
+
+def test_bootstrap_resamples_are_the_means_of_resampled_members():
+    """The counts-matrix resampling gives what indexing the members would: resampled means of
+    the identity statistic have the members' spread, and equal members give zero SE."""
+    values = torch.arange(40.0, dtype=F64).reshape(20, 2)
+    _, sem = sp.bootstrap_members(torch.ones((20, 2), dtype=F64) * 3.0, lambda m: m, 50)
+    assert torch.equal(sem, torch.zeros(2, dtype=F64))
+    _, sem = sp.bootstrap_members(values, lambda m: m, 4000, seed=3)
+    torch.testing.assert_close(sem, values.std(0, correction=0) / 20**0.5, rtol=0.05, atol=0)

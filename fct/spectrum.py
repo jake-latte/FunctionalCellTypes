@@ -14,7 +14,7 @@ The maths, with h (P, N) the activity of N neurons over P patterns (neuron i at 
   null mean      sum_p |r~_p(q)|^2 / (P - K) with r = h - U U^T h: the mean spectrum of the
                  P - K directions orthogonal to col(Z), by Parseval over any basis of col(Z)^perp
   R(Delta)       (1/N) sum_q d_q e^{2 pi i q Delta / N} = ifft(d).real; lag-1 = R(1)/R(0)
-  band share     sum_{|q| <= q_b} d_q / sum_q d_q, q_b = round(3 N / 64)
+  band share     sum_{|q| <= q_b} d_q / sum_q d_q, q_b = floor(3 N / 64 + 1/2)
   q_1/2          the largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2 (Nyquist as floor)
   angle          theta_i = atan2(t_{3,i}, t_{2,i}) in the orthonormal frame (u_2, u_3)
   hexatic        m = <e^{6 i theta_i}> over neurons; |m| measures tuning to single latents
@@ -67,7 +67,7 @@ MIN_SEM_RECORDS = 200
 # leaves |x - mean| of a constant x below 3 eps |mean| (measured up to 10^5 records in float32
 # and float64), so 8 eps leaves a margin while staying far below any real fluctuation.
 CONSTANT_EPS = 8.0
-# The band of `band_share` is |q| <= round(BAND_FRACTION * N): |q| <= 3 at N = 64.
+# The band of `band_share` is |q| <= floor(BAND_FRACTION * N + 1/2): |q| <= 3 at N = 64.
 BAND_FRACTION = 3 / 64
 _LATENT_NAME = re.compile(r"z(\d+)")
 
@@ -348,10 +348,21 @@ def spectrum_summary(d: Tensor) -> Summary:
 
 
 def band_half_width(N: int) -> int:
-    """q_b = round(3 N / 64), the half-width of `band_share`'s band: |q| <= 3 at N = 64, and
-    the same fraction of the ring at every N, so a kernel of fixed width in sites keeps the
-    same share as the ring grows."""
-    return round(BAND_FRACTION * N)
+    """q_b = floor(3 N / 64 + 1/2), 3 N / 64 rounded half up (so N = 32 gives 2 and N = 96
+    gives 5, not Python's round-half-even 4): the half-width of `band_share`'s band, |q| <= 3
+    at N = 64 and the same fraction of the ring at every N, so a kernel of fixed width in sites
+    keeps the same share as the ring grows."""
+    return math.floor(BAND_FRACTION * N + 0.5)
+
+
+def band_mask(N: int, q_band: int | None = None) -> Tensor:
+    """(N,) bool in FFT order: |q| <= q_b, with q_b = `band_half_width(N)` unless given
+    (0 <= q_band <= N/2). The one definition of the band, used by `band_share`."""
+    q_b = band_half_width(N) if q_band is None else q_band
+    if not 0 <= q_b <= N // 2:
+        raise ValueError(f"q_band must be in [0, {N // 2}] for N = {N}, got {q_b}")
+    k = torch.arange(N)
+    return torch.minimum(k, N - k) <= q_b
 
 
 def band_share(d: Tensor, q_band: int | None = None) -> float | Tensor:
@@ -361,14 +372,10 @@ def band_share(d: Tensor, q_band: int | None = None) -> float | Tensor:
     and every other |q| <= q_b twice, through q and -q.
     """
     N = _check_spectrum(d)
-    q_b = band_half_width(N) if q_band is None else q_band
-    if not 0 <= q_b <= N // 2:
-        raise ValueError(f"q_band must be in [0, {N // 2}] for N = {N}, got {q_b}")
+    in_band = band_mask(N, q_band).to(d.device)
     total = d.sum(dim=-1)
     if (total <= 0).any():
         raise ValueError(f"d must have positive total power, got sums down to {float(total.min())}")
-    k = torch.arange(N, device=d.device)
-    in_band = torch.minimum(k, N - k) <= q_b
     return _number_if_0d(d[..., in_band].sum(dim=-1) / total)
 
 
@@ -562,7 +569,8 @@ def bootstrap_members(
     the std (ddof 1) of the statistic over `n_boot` resamples of the B members with
     replacement. `statistic` must batch over leading dims ((n_boot, ...) means in, (n_boot, ...)
     out), as every summary of this module does. Resampling draws from a generator seeded with
-    `seed`, never from the global RNG. The resampled means take n_boot * B * prod(...) entries.
+    `seed`, never from the global RNG. A resample is a row of member counts (n_boot, B), so
+    the resampled means are counts @ values / B, never the (n_boot, B, ...) resampled values.
     """
     _check_float("values", values, 1)
     B = values.shape[0]
@@ -572,8 +580,14 @@ def bootstrap_members(
         raise ValueError(f"n_boot must be at least 2 for a standard error, got {n_boot}")
     estimate = torch.as_tensor(statistic(values.mean(dim=0)), device=values.device)
     gen = torch.Generator().manual_seed(seed)
-    index = torch.randint(B, (n_boot, B), generator=gen).to(values.device)
-    resampled = torch.as_tensor(statistic(values[index].mean(dim=1)), device=values.device)
+    index = torch.randint(B, (n_boot, B), generator=gen)
+    counts = torch.zeros((n_boot, B), dtype=values.dtype).scatter_add_(
+        1, index, torch.ones((n_boot, B), dtype=values.dtype)
+    )
+    means = (counts.to(values.device) @ values.reshape(B, -1) / B).reshape(
+        n_boot, *values.shape[1:]
+    )
+    resampled = torch.as_tensor(statistic(means), device=values.device)
     if resampled.shape != (n_boot, *estimate.shape):
         raise ValueError(
             f"the statistic must batch over leading dims: it maps a mean of shape "
