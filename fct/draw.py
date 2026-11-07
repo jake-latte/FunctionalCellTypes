@@ -35,6 +35,7 @@ from fct.analyse import (
 from fct.config import DataConfig
 from fct.data import TASKS, Dataset
 from fct.exp_report import MirRecord, check_finite_mir, check_layer
+from fct.spectrum import N_THETA_BINS
 from fct.tasks import ACTION_NAMES, MOTIF_SIZE, N_MACRO
 from fct.tuning import TuningCurves
 
@@ -1474,3 +1475,304 @@ def fig_mir_vs_ratio(records: Iterable[MirRecord]) -> Figure:
     fig, ax = plt.subplots(figsize=(FIG_WIDTH * 0.6, 5), layout="constrained")
     plot_mir_vs_ratio(records, ax)
     return fig
+
+
+# --------------------------------------------------------------------------- the linear ring
+# The figures of the linear-ring experiments (fct.linear_ring): one colour per latent mode, the
+# measurement as points with error bars and the theory as a line in the same colour. Every input
+# is an array already computed by fct.linear_ring; nothing here estimates anything.
+
+NULL_STYLE = {"color": _GREY, "ls": "--", "marker": "s"}  # the null row and its floor
+EXCLUDED_ALPHA = 0.12  # shading of the frequencies excluded from the statistics
+
+
+def _matrix(x: ArrayLike, name: str) -> np.ndarray:
+    values = _np(x)
+    if values.ndim != 2:
+        raise ValueError(f"{name} must be (rows, points), got shape {values.shape}")
+    return values
+
+
+def _vector(x: ArrayLike, name: str) -> np.ndarray:
+    values = _np(x)
+    if values.ndim != 1:
+        raise ValueError(f"{name} must be one-dimensional, got shape {values.shape}")
+    return values
+
+
+def _same_shape(reference: np.ndarray, **others: np.ndarray) -> None:
+    for name, other in others.items():
+        if other.shape != reference.shape:
+            raise ValueError(f"{name} has shape {other.shape}, expected {reference.shape}")
+
+
+def _shade_excluded(ax: Axes, excluded: ArrayLike | None, n_points: int) -> np.ndarray:
+    """Shade each run of excluded points (x = 0..n_points-1) and return the mask (all False if
+    `excluded` is None)."""
+    if excluded is None:
+        return np.zeros(n_points, dtype=bool)
+    mask = _np(excluded).astype(bool)
+    if mask.shape != (n_points,):
+        raise ValueError(f"excluded has shape {mask.shape}, expected ({n_points},)")
+    edges = np.diff(np.concatenate([[0], mask.astype(int), [0]]))
+    starts, stops = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+    for i, (first, stop) in enumerate(zip(starts, stops, strict=True)):
+        ax.axvspan(
+            first - 0.5,
+            stop - 0.5,
+            color=_GREY,
+            alpha=EXCLUDED_ALPHA,
+            lw=0,
+            label="excluded |q|" if i == 0 else "_nolegend_",
+        )
+    return mask
+
+
+def _errorbar_where_positive(
+    ax: Axes, x: np.ndarray, y: np.ndarray, err: np.ndarray, label: str, **style
+) -> bool:
+    """Points with error bars at the positive, finite y (a log axis cannot show the others);
+    False, and nothing drawn, when there are none."""
+    keep = np.isfinite(y) & (y > 0)
+    if not keep.any():
+        return False
+    ax.errorbar(x[keep], y[keep], yerr=err[keep], capsize=2, label=label, **style)
+    return True
+
+
+def _mark_zero(ax: Axes, label: str, **style) -> None:
+    """A legend entry for a series that is zero everywhere and so cannot be drawn on a log axis."""
+    ax.plot([], [], label=f"{label} (zero)", **style)
+
+
+def plot_spectrum(
+    measured: ArrayLike,
+    se: ArrayLike,
+    theory: ArrayLike,
+    ax: Axes | None = None,
+    *,
+    null_theory: float | None = None,
+    excluded: ArrayLike | None = None,
+) -> Axes:
+    """Folded power spectra against |q| on a log axis: one colour per latent mode, the
+    measurement (rows of `measured`, errors `se`) as points with error bars and `theory` (K, Q)
+    as a line. A `measured` with K + 1 rows has the null row last, drawn dashed in grey, with
+    the predicted null floor `null_theory` as a dashed horizontal line. Non-positive values are
+    left out (a log axis cannot show them); a row with none left is named "(zero)" in the
+    legend. `excluded` (Q,) bool shades the frequencies the statistics leave out."""
+    measured, se = _matrix(measured, "measured"), _matrix(se, "se")
+    theory = _matrix(theory, "theory")
+    _same_shape(measured, se=se)
+    K, n_q = theory.shape
+    if n_q != measured.shape[1] or measured.shape[0] not in (K, K + 1):
+        raise ValueError(
+            f"measured {measured.shape} must be (K, Q) or (K + 1, Q) for theory (K, Q) = "
+            f"{theory.shape}"
+        )
+    ax = _get_ax(ax)
+    q = np.arange(n_q)
+    _shade_excluded(ax, excluded, n_q)
+    for k in range(K):
+        color, label = _latent_color(k), f"mode {k + 1}"
+        if not _errorbar_where_positive(ax, q, measured[k], se[k], label, color=color, fmt="o"):
+            _mark_zero(ax, label, color=color, marker="o", ls="none")
+        positive = theory[k] > 0
+        ax.plot(q[positive], theory[k, positive], color=color, label=f"{label} theory")
+    if measured.shape[0] == K + 1 and not _errorbar_where_positive(
+        ax, q, measured[K], se[K], "null", **NULL_STYLE
+    ):
+        _mark_zero(ax, "null", **NULL_STYLE)
+    if null_theory is not None and null_theory > 0:
+        ax.axhline(null_theory, color=_GREY, ls="--", lw=1, label="null theory")
+    elif null_theory is not None:
+        _mark_zero(ax, "null theory", color=_GREY, ls="--")
+    ax.set(xlabel="|q|", ylabel="power  $d_q$", yscale="log")
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.legend(frameon=False, fontsize="small")
+    return ax
+
+
+def plot_spectrum_ratio(
+    ratio: ArrayLike,
+    se: ArrayLike,
+    theory: ArrayLike,
+    ax: Axes | None = None,
+    *,
+    excluded: ArrayLike | None = None,
+) -> Axes:
+    """Mode 1 over mode 2 power at each |q| = 0..Q-1: the measurement as points with error bars
+    (the `excluded` frequencies left out and shaded), the theory as a line."""
+    ratio, se, theory = _vector(ratio, "ratio"), _vector(se, "se"), _vector(theory, "theory")
+    _same_shape(ratio, se=se, theory=theory)
+    ax = _get_ax(ax)
+    q = np.arange(len(ratio))
+    keep = ~_shade_excluded(ax, excluded, len(ratio)) & np.isfinite(ratio)
+    ax.errorbar(
+        q[keep], ratio[keep], yerr=se[keep], fmt="o", capsize=2, color=_GREY, label="measured"
+    )
+    ax.plot(q, theory, color="k", label="theory")
+    ax.set(xlabel="|q|", ylabel="mode 1 / mode 2 power")
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.legend(frameon=False, fontsize="small")
+    return ax
+
+
+def plot_autocorrelation(
+    measured: ArrayLike,
+    se: ArrayLike,
+    theory: ArrayLike,
+    ax: Axes | None = None,
+    *,
+    kernel: ArrayLike | None = None,
+) -> Axes:
+    """R_k(Δ)/R_k(0) against the lag Δ = 0..L-1 per latent mode (rows): the measurement as
+    points with error bars, the theory as a line, and the prior's own profile `kernel` (L,)
+    dotted in black when given."""
+    measured, se = _matrix(measured, "measured"), _matrix(se, "se")
+    theory = _matrix(theory, "theory")
+    _same_shape(measured, se=se, theory=theory)
+    ax = _get_ax(ax)
+    lag = np.arange(measured.shape[1])
+    for k in range(measured.shape[0]):
+        color, label = _latent_color(k), f"mode {k + 1}"
+        ax.errorbar(lag, measured[k], yerr=se[k], fmt="o", capsize=2, color=color, label=label)
+        ax.plot(lag, theory[k], color=color, label=f"{label} theory")
+    if kernel is not None:
+        kernel = _vector(kernel, "kernel")
+        _same_shape(lag.astype(float), kernel=kernel)
+        ax.plot(lag, kernel, color="k", ls=":", label="prior kernel")
+    ax.axhline(0, color=_GREY, lw=0.8)
+    ax.set(xlabel="Δ (sites)", ylabel="R(Δ) / R(0)")
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.legend(frameon=False, fontsize="small")
+    return ax
+
+
+def plot_share_sweep(
+    values: ArrayLike,
+    shares: ArrayLike,
+    se: ArrayLike,
+    theory: ArrayLike,
+    ax: Axes | None = None,
+    *,
+    xlabel: str = "setting",
+    xscale: str = "linear",
+) -> Axes:
+    """Band shares (n, K) of n settings against the swept value of each (n,), one colour per
+    latent mode: the measurement as points with error bars and the theory as a line through
+    the settings in order of the swept value."""
+    values = _vector(values, "values")
+    shares, se = _matrix(shares, "shares"), _matrix(se, "se")
+    theory = _matrix(theory, "theory")
+    _same_shape(shares, se=se, theory=theory)
+    if shares.shape[0] != len(values):
+        raise ValueError(f"shares have {shares.shape[0]} rows for {len(values)} swept values")
+    if xscale == "log" and not (values > 0).all():
+        raise ValueError(f"a log axis needs positive swept values, got {values}")
+    ax = _get_ax(ax)
+    order = np.argsort(values, kind="stable")
+    for k in range(shares.shape[1]):
+        color, label = _latent_color(k), f"mode {k + 1}"
+        ax.errorbar(
+            values, shares[:, k], yerr=se[:, k], fmt="o", capsize=2, color=color, label=label
+        )
+        ax.plot(values[order], theory[order, k], color=color, label=f"{label} theory")
+    ax.set(xlabel=xlabel, ylabel="band share", xscale=xscale)
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.legend(frameon=False, fontsize="small")
+    return ax
+
+
+def plot_angle_histogram(
+    counts: ArrayLike, ax: Axes | None = None, *, marks: ArrayLike | None = None
+) -> Axes:
+    """The contrast-plane angle θ as a density over (-π, π]: `counts` on the fixed bins of
+    `fct.spectrum.theta_histogram` (summed over neurons and members), the uniform density
+    1/(2π) dashed, and the angles in `marks` (the individual latents' axes) as dotted lines."""
+    counts = _vector(counts, "counts")
+    if counts.shape != (N_THETA_BINS,):
+        raise ValueError(f"counts must have the {N_THETA_BINS} bins of theta_histogram")
+    if (counts < 0).any() or counts.sum() <= 0:
+        raise ValueError("counts must be non-negative with a positive total")
+    width = 2 * math.pi / N_THETA_BINS
+    left = -math.pi + width * np.arange(N_THETA_BINS)
+    ax = _get_ax(ax)
+    density = counts / (counts.sum() * width)
+    ax.bar(left, density, width=width, align="edge", color=_latent_color(2), alpha=0.7,
+           label="neurons")  # fmt: skip
+    ax.axhline(1 / (2 * math.pi), color="k", ls="--", lw=1, label="uniform")
+    for i, angle in enumerate(_np(marks) if marks is not None else []):
+        label = "latent axes" if i == 0 else "_nolegend_"
+        ax.axvline(angle, color=_GREY, ls=":", gid="latent axis", label=label)
+    ax.set(xlabel="θ (rad)", ylabel="density", xlim=(-math.pi, math.pi))
+    ax.legend(frameon=False, fontsize="small")
+    return ax
+
+
+def plot_relaxation(
+    epochs: ArrayLike,
+    values: ArrayLike,
+    fit_epochs: ArrayLike,
+    fitted: ArrayLike,
+    labels: Sequence[str],
+    ax: Axes | None = None,
+    *,
+    start: float | None = None,
+    band: float | None = None,
+    ylabel: str = "statistic",
+) -> Axes:
+    """A burn-in diagnostic: each statistic of the records (`values` (R, S) at `epochs` (R,))
+    as a line, its fitted relaxation (`fitted` (T, S) at `fit_epochs` (T,)) dashed in the same
+    colour, the start of the fit window dotted, and a grey band of half-width `band` around 0
+    (for statistics drawn relative to their asymptote in units of their accuracy budget)."""
+    epochs, fit_epochs = _vector(epochs, "epochs"), _vector(fit_epochs, "fit_epochs")
+    values, fitted = _matrix(values, "values"), _matrix(fitted, "fitted")
+    S = len(labels)
+    if values.shape != (len(epochs), S) or fitted.shape != (len(fit_epochs), S):
+        raise ValueError(
+            f"values {values.shape} and fitted {fitted.shape} must be (epochs, statistics) with "
+            f"{len(epochs)} and {len(fit_epochs)} epochs and {S} labelled statistics"
+        )
+    ax = _get_ax(ax)
+    if band is not None:
+        ax.axhspan(-band, band, color=_GREY, alpha=EXCLUDED_ALPHA, lw=0, label="± budget")
+    for s, label in enumerate(labels):
+        (line,) = ax.plot(epochs, values[:, s], lw=1.2, label=label)
+        ax.plot(fit_epochs, fitted[:, s], ls="--", color=line.get_color(), label=f"{label} fit")
+    if start is not None:
+        ax.axvline(start, color="k", ls=":", lw=1, label="fit window start")
+    ax.set(xlabel="epoch", ylabel=ylabel)
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.legend(frameon=False, fontsize="x-small", ncol=2)
+    return ax
+
+
+def plot_ensemble_loss(
+    epoch: ArrayLike,
+    mean: Mapping[str, ArrayLike],
+    sem: Mapping[str, ArrayLike],
+    ax: Axes | None = None,
+) -> Axes:
+    """The logged training terms of an ensemble against epoch on a log axis: the member mean of
+    each series in `mean` (keys of LOSS_STYLES) with a band of +- its standard error `sem`. A
+    series that is zero at every epoch is marked "(zero)" in the legend, as in
+    `plot_loss_curves`."""
+    styles = {key: (label, color, ls) for key, label, color, ls in LOSS_STYLES}
+    if unknown := sorted(set(mean) - set(styles)):
+        raise ValueError(f"unknown series {unknown}; known: {list(styles)}")
+    if set(sem) != set(mean):
+        raise ValueError(f"sem has series {sorted(sem)}, mean has {sorted(mean)}")
+    epoch = _vector(epoch, "epoch")
+    ax = _get_ax(ax)
+    for key in (key for key in styles if key in mean):
+        label, color, ls = styles[key]
+        values, err = _vector(mean[key], key), _vector(sem[key], f"sem of {key}")
+        _same_shape(epoch, **{key: values, f"sem of {key}": err})
+        if not np.any(values > 0):
+            label += " (zero)"
+        ax.plot(epoch, values, color=color, ls=ls, label=label)
+        ax.fill_between(epoch, values - err, values + err, color=color, alpha=0.25, lw=0)
+    ax.set(xlabel="epoch", ylabel="logged value, member mean ± sem", yscale="log")
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.legend(frameon=False, fontsize="small")
+    return ax
