@@ -11,10 +11,13 @@ initial state is rebuilt from the config and must be the one the first record me
 
 The estimator is per member: each of the B members contributes one sample, its final state
 (the last record, taken after the last step); the statistics are of the member-averaged
-spectrum and their errors the bootstrap over members (tests/linear_ring_helpers.py, where the
-tolerances are derived and checked on the predicted law itself). The q = 0 shares and q_1/2
-are printed, not asserted. The records before the last serve only the drift check, which is
-weak by construction here: chains started in their stationary law show no drift whether or not
+spectrum and their errors the bootstrap over members (fct.linear_ring; the thresholds are
+checked on the predicted law itself in tests/test_linear_ring_estimator.py). The thresholds are
+the pipeline rule, 3 x 1.35 delta-method SEs, deliberately not the experiments' rule (3
+bootstrap SEs at the run's B with a fourfold follow-up): a pipeline test must not depend on a
+follow-up run. The q = 0 shares and q_1/2 are printed, not asserted. The records before the
+last serve only the relaxation diagnostic (`fct.linear_ring.relaxation_fit`), which is weak by
+construction here: chains started in their stationary law show no relaxation whether or not
 they mix.
 
 Both diagonal settings run, each at its own lr: setting 0 (penalty) and setting 3 (whitened).
@@ -27,34 +30,26 @@ from typing import NamedTuple
 import pytest
 import torch
 
+from fct import linear_ring as lr
 from fct.cli import main
-from fct.exp import expand, load_exp, setting_dir
+from fct.exp import expand, load_exp, preset, setting_dir
 from fct.monitor import spectrum_records
 from fct.spectrum import half_power_q, mode_spectra, tuning_maps
 from fct.train import MONITOR_EPOCH, load_trained, make_net_from_config
-from tests.linear_ring_helpers import (
-    Law,
-    bounds,
-    estimate,
-    map_correlation,
-    predicted_law,
-    ring_statistics,
-    statistic_names,
-    time_drift,
-)
 
 PRESET = "linear_ring_tiny"
 DIAGONAL = {0: "penalty", 3: "whitened"}
-# Records before this epoch are left out of the drift check: the penalty's softest data-carrying
-# mode relaxes in about 2000 epochs at its lr (the preset's description), and the preset's 10^4
-# epochs are five such times, enough for the final state to forget the initial one.
-BURN_IN_EPOCHS = 2000
-DRIFT_Z = 4.0  # the drift of each statistic must be within this many of its SEs of zero
+DEFICIT_Z = 4.0  # the fitted remaining relaxation must be within this many of its SEs of zero
 EQUIVALENCE_Z = 4.0  # the two parametrisations' deviations must agree within this many SEs
-# Per member, the correlation of independent maps averages 0 with a spread of about
-# 1 / sqrt(K x 3 frequencies) = 0.4, so the member mean is 0 +- 0.03 at B = 256; a frozen
+# Per member, the correlation of independent maps averages 0. Its spread is about
+# 1 / sqrt(K x n_eff): on the smoke ring (ell = 2 sites, N = 16) lambda_q / lambda_0 = 1, 0.73,
+# 0.29 at |q| = 0, 1, 2, so about three frequencies (q = 0, +-1) carry most of each map's power
+# and the spread is 1 / sqrt(2 x 3) = 0.4, the member mean 0 +- 0.03 at B = 256; a frozen
 # sampler gives 1. A mean below 0.1 needs at least 90% decorrelation.
 MAX_MAP_CORRELATION = 0.1
+# The rebuilt initial spectra against the first record: the record is stored in float32
+# (relative precision 6e-8), and summing over patterns and the FFT leave well under 1e-6.
+MAX_INITIAL_RECORD_ERROR = 1e-5
 # At sigma = 0, x lies in the column space of Z and so does h: the null row is round-off of
 # float32 records relative to the latent power (about 1e-14 measured), far below 1e-10.
 MAX_NULL_FRACTION = 1e-10
@@ -64,7 +59,7 @@ pytestmark = pytest.mark.slow
 
 
 class Measurement(NamedTuple):
-    names: list[str]
+    stats: list[lr.Statistic]
     predicted: torch.Tensor  # (3K + 1,) the statistics of the predicted spectrum
     values: torch.Tensor  # (3K + 1,) of the member-averaged final-state spectrum
     se: torch.Tensor  # (3K + 1,) bootstrap over members
@@ -73,8 +68,7 @@ class Measurement(NamedTuple):
     shares_predicted: torch.Tensor  # (K,)
     q_half: list[int]  # of the member-averaged spectrum (reported)
     q_half_predicted: list[int]
-    drift: torch.Tensor  # (3K + 1,) second-half minus first-half time average, member mean
-    drift_se: torch.Tensor  # (3K + 1,)
+    relaxation: lr.RelaxationFit  # of the records before the final one
     map_correlation: float  # member mean of the initial-final tuning-map correlation
     initial_record_error: float  # rebuilt initial spectra against the first record, relative
     null_fraction: float  # the null row's power over the latent rows', final state
@@ -82,14 +76,7 @@ class Measurement(NamedTuple):
     n_epochs: int
 
 
-def _burn_in_index(epochs: list[int]) -> int:
-    for index, epoch in enumerate(epochs):
-        if epoch >= BURN_IN_EPOCHS:
-            return index
-    raise ValueError(f"no record at or after epoch {BURN_IN_EPOCHS}; the run has {epochs[-1]}")
-
-
-def _maps(net, law: Law) -> torch.Tensor:
+def _maps(net, law: lr.Law) -> torch.Tensor:
     """(B, K, N) tuning maps of every member of an ensemble on the setting's data."""
     with torch.no_grad():
         H = net(law.dataset.x)[0]  # (B, P, L, N)
@@ -98,31 +85,34 @@ def _maps(net, law: Law) -> torch.Tensor:
 
 def _measure(root, index: int) -> Measurement:
     exp = load_exp(root)
-    law = predicted_law(PRESET, index)
+    law = lr.predicted_law(preset(PRESET), index)
     K = law.D.shape[0]
     net, history = load_trained(setting_dir(root, expand(exp)[index]), law.cfg, CPU, F64)
     records = spectrum_records(history)[:, :, 0].to(F64)  # (R, B, K + 1, N), one hidden layer
     final = records[-1, :, :K]  # one sample per member: its final state
-    values, se = estimate(final, law)
+    values, se = lr.estimate(final, law)
     epochs = history[MONITOR_EPOCH]
-    drift, drift_se = time_drift(records[:-1, :, :K], _burn_in_index(epochs), law)
+    # The diagnostic uses the records before the final one, so it does not reuse the sample
+    # whose stationarity it vouches for.
+    relaxation = lr.relaxation_fit(
+        torch.tensor(epochs[:-1]), records[:-1, :, :K], lr.law_statistics(law)
+    )
     x, y = law.dataset.x, law.dataset.y
     initial = make_net_from_config(law.cfg, x.shape[1], y.shape[1], CPU, F64)  # same seed
     first = mode_spectra(initial(x)[0][:, :, 0].detach(), law.U)[:, :K]
     mean = final.mean(0)
     return Measurement(
-        names=statistic_names(K),
-        predicted=ring_statistics(law.D, law.ell)(law.D),
+        stats=lr.statistic_list(K),
+        predicted=lr.law_statistics(law)(law.D),
         values=values,
         se=se,
-        bounds=bounds(law),
+        bounds=lr.pipeline_bounds(law),
         shares=mean[:, 0] / mean.sum(-1),
         shares_predicted=law.D[:, 0] / law.D.sum(-1),
         q_half=torch.as_tensor(half_power_q(mean)).tolist(),
         q_half_predicted=torch.as_tensor(half_power_q(law.D)).tolist(),
-        drift=drift,
-        drift_se=drift_se,
-        map_correlation=float(map_correlation(_maps(initial, law), _maps(net, law)).mean()),
+        relaxation=relaxation,
+        map_correlation=float(lr.map_correlation(_maps(initial, law), _maps(net, law)).mean()),
         initial_record_error=float(((first - records[0, :, :K]).abs() / first.abs().max()).max()),
         null_fraction=float(records[-1, :, K].sum() / records[-1, :, :K].sum()),
         final_epoch=epochs[-1],
@@ -140,11 +130,13 @@ def _report(index: int, m: Measurement) -> str:
     )
     rows = [header]
     _, tolerance = m.bounds
-    for i, name in enumerate(m.names):
+    fit = m.relaxation
+    for i, stat in enumerate(m.stats):
+        name = stat.kind if stat.mode is None else f"{stat.kind}_{stat.mode}"
         rows.append(
             f"  {name:7s} predicted {m.predicted[i]:.4f} measured {m.values[i]:.4f} "
             f"+- {m.se[i]:.4f} (tolerance {tolerance[i]:.4f}) "
-            f"drift {m.drift[i]:+.4f} +- {m.drift_se[i]:.4f}"
+            f"remaining relaxation {fit.deficit[i]:+.4f} +- {fit.deficit_se[i]:.4f}"
         )
     return "\n".join(rows)
 
@@ -180,7 +172,7 @@ def test_the_estimate_is_the_final_state_of_every_member(smoke, index):
 @pytest.mark.parametrize("index", DIAGONAL)
 def test_the_sampler_moved_every_member_away_from_its_initial_state(smoke, index):
     m = smoke[index]
-    assert m.initial_record_error < 1e-5, "the rebuilt initial state is not the first record's"
+    assert m.initial_record_error < MAX_INITIAL_RECORD_ERROR, "not the first record's state"
     assert m.map_correlation < MAX_MAP_CORRELATION, _report(index, m)
 
 
@@ -199,9 +191,9 @@ def test_the_final_state_spectra_agree_with_the_prediction(smoke, index):
 
 
 @pytest.mark.parametrize("index", DIAGONAL)
-def test_the_records_after_the_burn_in_do_not_drift(smoke, index):
-    m = smoke[index]
-    assert (m.drift.abs() <= DRIFT_Z * m.drift_se).all(), _report(index, m)
+def test_the_records_show_no_remaining_relaxation(smoke, index):
+    fit = smoke[index].relaxation
+    assert (fit.deficit.abs() <= DEFICIT_Z * fit.deficit_se).all(), _report(index, smoke[index])
 
 
 @pytest.mark.parametrize("index", DIAGONAL)
@@ -210,8 +202,8 @@ def test_at_sigma_zero_the_activity_has_no_null_power(smoke, index):
 
 
 def test_the_two_parametrisations_agree(smoke):
-    """Each against its own prediction (the penalty's floor moves R(1)/R(0) by 3e-3), the
-    deviations agree within EQUIVALENCE_Z combined standard errors."""
+    """Each against its own prediction, the deviations agree within EQUIVALENCE_Z combined
+    standard errors (the floored frequencies are excluded from both)."""
     penalty, whitened = (smoke[index] for index in DIAGONAL)
     gap = (penalty.values - penalty.predicted) - (whitened.values - whitened.predicted)
     assert (gap.abs() <= EQUIVALENCE_Z * (penalty.se**2 + whitened.se**2).sqrt()).all()

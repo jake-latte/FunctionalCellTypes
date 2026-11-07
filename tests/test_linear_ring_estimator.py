@@ -1,42 +1,29 @@
-"""The smoke test's estimator and tolerances on maps drawn from the predicted law: the known
+"""The pipeline test's estimator and thresholds on maps drawn from the predicted law: the known
 ground truth, checked before the estimator is trusted on SGLD samples
-(tests/test_linear_ring_smoke.py; the derivation is in tests/linear_ring_helpers.py).
+(tests/test_linear_ring_smoke.py; the estimator is fct.linear_ring).
 
 Each synthetic member's activity is h = U t with t (K, N) a real stationary Gaussian field of
 the predicted spectrum of a `linear_ring_tiny` diagonal setting and U the data's latent frame,
 so the spectra go through the same `mode_spectra` call the monitor makes.
-
-The acceptance thresholds below are sized so that a correct estimator passes with certainty in
-practice: with every statistic inside three SE_MAX (4.05 true SEs) the chance that one of the
-7 statistics of an ensemble from the predicted law falls outside is below 1e-3, so the count
-(98 of 100) allows for the bootstrap SE check, whose 99th percentile is pinned below SE_MARGIN,
-and for resampling noise, not for a biased estimator.
 """
 
 import pytest
 import torch
 
+from fct import linear_ring as lr
+from fct.exp import preset
 from fct.linear_theory import theory_parameters
 from fct.spectrum import half_power_q, mode_spectra
-from tests.linear_ring_helpers import (
-    SE_MARGIN,
-    Law,
-    bounds,
-    delta_method_se,
-    estimate,
-    kind_of,
-    map_correlation,
-    predicted_law,
-    ring_statistics,
-    statistic_names,
-    time_drift,
-)
 from tests.spectrum_helpers import gaussian_field
 
 PRESET = "linear_ring_tiny"
 DIAGONAL = (0, 3)  # penalty at its lr, whitened at its lr
 N_ENSEMBLES = 200  # replicate ensembles of B members: 5% relative error on a spread
 N_CHECKED = 100  # ensembles put through the full bootstrap (the costly step)
+# The pipeline test accepted all N_ENSEMBLES = 200 synthetic ensembles of each setting when
+# measured, 0 failures in 400: a false-rejection rate below 0.75% at 95% confidence, at which
+# three or more failures among N_CHECKED = 100 has a probability of at most 4%.
+MIN_ACCEPTED = 98
 F64 = torch.float64
 
 
@@ -47,19 +34,19 @@ def _member_spectra(D: torch.Tensor, U: torch.Tensor, n: int, seed: int) -> torc
 
 
 @pytest.fixture(scope="module", params=DIAGONAL, ids=["penalty", "whitened"])
-def ensembles(request) -> tuple[Law, torch.Tensor]:
+def ensembles(request) -> tuple[lr.Law, torch.Tensor]:
     """The law of one diagonal setting and N_ENSEMBLES synthetic ensembles (n, B, K, N)."""
-    law = predicted_law(PRESET, request.param)
+    law = lr.predicted_law(preset(PRESET), request.param)
     spectra = _member_spectra(law.D, law.U, N_ENSEMBLES * law.B, seed=request.param)
     return law, spectra.reshape(N_ENSEMBLES, law.B, *law.D.shape)
 
 
-def _accepts(spectra: torch.Tensor, law: Law, seed: int) -> bool:
-    """The smoke test's verdict on one ensemble (B, K, N): every statistic within its
-    tolerance and every bootstrap SE within SE_MAX."""
-    values, se = estimate(spectra, law, seed)
-    se_max, tolerance = bounds(law)
-    truth = ring_statistics(law.D, law.ell)(law.D)
+def _accepts(spectra: torch.Tensor, law: lr.Law, seed: int) -> bool:
+    """The pipeline test's verdict on one ensemble (B, K, N): every statistic within its
+    tolerance and every bootstrap SE within the accepted maximum."""
+    values, se = lr.estimate(spectra, law, seed)
+    se_max, tolerance = lr.pipeline_bounds(law)
+    truth = lr.law_statistics(law)(law.D)
     return bool(((values - truth).abs() <= tolerance).all() and (se <= se_max).all())
 
 
@@ -72,33 +59,35 @@ def test_the_synthetic_spectra_have_the_predicted_mean(ensembles):
 
 def test_the_spread_across_ensembles_is_the_delta_method_standard_error(ensembles):
     law, spectra = ensembles
-    values = ring_statistics(law.D, law.ell)(spectra.mean(1))  # (N_ENSEMBLES, 3K + 1)
-    predicted = delta_method_se(law.D, law.ell, law.B)
+    statistics = lr.law_statistics(law)
+    values = statistics(spectra.mean(1))  # (N_ENSEMBLES, 3K + 1)
+    predicted = lr.delta_method_se(law)
     # a spread over 200 ensembles has a relative SE of 5%: allow three
     torch.testing.assert_close(values.std(0), predicted, rtol=0.15, atol=0)
     # A nonlinear statistic of the member mean is biased at O(1/B); none is visible above the
     # resolution of 200 ensembles, 4 SE / sqrt(200) = 0.28 SE.
-    bias = (values.mean(0) - ring_statistics(law.D, law.ell)(law.D)).abs()
+    bias = (values.mean(0) - statistics(law.D)).abs()
     assert (bias <= 4 * predicted / N_ENSEMBLES**0.5).all()
 
 
 def test_the_bootstrap_se_stays_below_the_margin_times_the_true_se(ensembles):
     """The 99th percentile over ensembles of (bootstrap SE / spread across ensembles) is below
-    SE_MARGIN for every statistic, which is what lets SE_MAX bound a correct measurement."""
+    PIPELINE_SE_MARGIN for every statistic, which is what lets the margin bound a correct
+    measurement's bootstrap SE."""
     law, spectra = ensembles
-    spread = ring_statistics(law.D, law.ell)(spectra.mean(1)).std(0)
-    ses = torch.stack([estimate(spectra[r], law, seed=r)[1] for r in range(N_CHECKED)])
-    assert (torch.quantile(ses / spread, 0.99, dim=0) < SE_MARGIN).all()
+    spread = lr.law_statistics(law)(spectra.mean(1)).std(0)
+    ses = torch.stack([lr.estimate(spectra[r], law, seed=r)[1] for r in range(N_CHECKED)])
+    assert (torch.quantile(ses / spread, 0.99, dim=0) < lr.PIPELINE_SE_MARGIN).all()
 
 
-def test_the_smoke_test_accepts_ensembles_of_the_predicted_law(ensembles):
+def test_the_pipeline_test_accepts_ensembles_of_the_predicted_law(ensembles):
     law, spectra = ensembles
     accepted = [_accepts(spectra[r], law, seed=r) for r in range(N_CHECKED)]
-    assert sum(accepted) >= 98
+    assert sum(accepted) >= MIN_ACCEPTED
 
 
 @pytest.mark.parametrize("alternative", ["flat", "equal_amplitudes"])
-def test_the_smoke_test_rejects_the_obvious_alternatives(ensembles, alternative):
+def test_the_pipeline_test_rejects_the_obvious_alternatives(ensembles, alternative):
     """A flat spectrum of each mode's predicted total power, and both modes at mode 1's
     spectrum (the hidden prior's shape without the input weights s_X,k^2), drawn as B members
     each, fail every time."""
@@ -112,39 +101,23 @@ def test_the_smoke_test_rejects_the_obvious_alternatives(ensembles, alternative)
     assert not any(_accepts(spectra[r], law, seed=r) for r in range(20))
 
 
-def test_the_smoke_statistics_do_not_see_the_data_term(ensembles):
+def test_the_pipeline_statistics_do_not_see_the_data_term(ensembles):
     """At beta = 0.25 the prior alone, d_k(q) = lambda_q s_X,k^2, moves no asserted statistic
-    by more than 0.15 of its SE (tau_1 = 0.008): the smoke test checks the pipeline, not the
+    by more than 0.15 of its SE (tau_1 = 0.008): the pipeline test checks the pipeline, not the
     theory's data term. q_1/2 is the same too."""
     law, _ = ensembles
     params = theory_parameters(law.cfg, law.dataset)
     prior = torch.from_numpy(params.sx2[:, None] * params.lam[None, :])
-    statistics = ring_statistics(law.D, law.ell)
-    shift = (statistics(prior) - statistics(law.D)).abs() / delta_method_se(law.D, law.ell, law.B)
+    statistics = lr.law_statistics(law)
+    shift = (statistics(prior) - statistics(law.D)).abs() / lr.delta_method_se(law)
     assert (shift <= 0.15).all()
     assert torch.equal(torch.as_tensor(half_power_q(prior)), torch.as_tensor(half_power_q(law.D)))
 
 
-def test_the_drift_of_stationary_records_is_zero_within_its_standard_error():
-    """Independent records of the predicted law, as a stationary chain gives, have no drift
-    between the halves; a chain whose q = 0 power is still growing (condensing, by 10x over the
-    run) drifts in the band share and the lag-1 autocorrelation of every mode."""
-    law = predicted_law(PRESET, DIAGONAL[1])
-    records = _member_spectra(law.D, law.U, 20 * law.B, seed=5).reshape(20, law.B, *law.D.shape)
-    mean, sem = time_drift(records, burn_in=4, law=law)
-    assert (mean.abs() <= 4 * sem).all()
-    growing = records.clone()
-    growing[..., 0] *= torch.linspace(1.0, 10.0, 20, dtype=F64)[:, None, None]
-    mean, sem = time_drift(growing, burn_in=4, law=law)
-    names = statistic_names(law.D.shape[0])
-    moved = [i for i, n in enumerate(names) if kind_of(n) in ("band", "lag1")]
-    assert (mean[moved].abs() > 4 * sem[moved]).all()
-
-
 def test_map_correlation_is_one_for_a_frozen_sampler_and_zero_for_independent_maps():
-    law = predicted_law(PRESET, DIAGONAL[1])
+    law = lr.predicted_law(preset(PRESET), DIAGONAL[1])
     gen = torch.Generator().manual_seed(9)
     first, independent = (gaussian_field(law.D, law.B, gen) for _ in range(2))
-    torch.testing.assert_close(map_correlation(first, first), torch.ones(law.B, dtype=F64))
-    correlation = map_correlation(first, independent)
+    torch.testing.assert_close(lr.map_correlation(first, first), torch.ones(law.B, dtype=F64))
+    correlation = lr.map_correlation(first, independent)
     assert abs(float(correlation.mean())) < 4 * float(correlation.std()) / law.B**0.5
