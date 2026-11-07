@@ -198,12 +198,15 @@ def test_make_monitor_picks_the_monitor_by_kind():
 
 # ------------------------------------------------------------------ the hash rule
 def test_monitor_kind_enters_the_hash_only_as_spectrum():
+    """An explicit "mir" hashes as the default; "spectrum" moves the train hash of a config
+    that differs from a MIR-monitored one in monitor_kind alone, and no other section."""
     default = Config()
     explicit = Config(train=TrainConfig(monitor_kind="mir"))
-    spectrum = Config(train=TrainConfig(monitor_kind="spectrum", monitor_int=1))
     assert explicit.section_hash(*TRAIN) == default.section_hash(*TRAIN)
-    assert spectrum.section_hash(*TRAIN) != default.section_hash(*TRAIN)
-    assert spectrum.section_hash("data", "net") == default.section_hash("data", "net")
+    mir = Config(train=TrainConfig(monitor_int=1))
+    spectrum = Config(train=TrainConfig(monitor_kind="spectrum", monitor_int=1))
+    assert spectrum.section_hash(*TRAIN) != mir.section_hash(*TRAIN)
+    assert spectrum.section_hash("data", "net") == mir.section_hash("data", "net")
 
 
 def test_mir_hashes_are_those_written_before_monitor_kind_existed():
@@ -277,11 +280,23 @@ def test_an_ensemble_run_records_a_member_axis(tmp_path):
     assert not torch.equal(spectrum[-1, 0], spectrum[-1, 1])  # the members differ
 
 
-def test_the_spectrum_monitor_leaves_training_unchanged(tmp_path):
+@pytest.mark.parametrize("optimizer", ["adam", "sgld"])
+def test_the_spectrum_monitor_leaves_training_unchanged(tmp_path, optimizer):
     """A 20-epoch monitored run of one network records (records, layers, ...) per key and ends
-    at exactly the weights and losses of the same run without a monitor."""
+    at exactly the weights and losses of the same run without a monitor. Under SGLD every step
+    draws its noise from the global RNG, so a monitor that consumed it would move the weights;
+    Adam draws nothing and checks the rest of the step."""
     L, N, K = 2, 8, 3
-    cfg = _cfg(_teacher(K=K), N=N, L=L, n_epochs=20, monitor_int=5, log_int=5, save_int=5)
+    cfg = _cfg(
+        _teacher(K=K),
+        N=N,
+        L=L,
+        n_epochs=20,
+        monitor_int=5,
+        log_int=5,
+        save_int=5,
+        optimizer=optimizer,
+    )
     unmonitored_train = {**cfg.train.model_dump(), "monitor_int": 0, "monitor_kind": "mir"}
     plain = cfg.model_copy(update={"train": TrainConfig(**unmonitored_train)})
     dataset = make_dataset(cfg.data, CPU, F64)
