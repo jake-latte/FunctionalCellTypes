@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from fct import linear_ring as lr
-from fct.exp import preset
+from fct.exp import extend_experiment, load_exp, preset, save_exp
 from fct.spectrum import bootstrap_members
 from tests.spectrum_helpers import gaussian_field
 
@@ -77,14 +77,30 @@ def test_the_delta_method_se_falls_as_one_over_root_b(tiny_law):
     torch.testing.assert_close(lr.delta_method_se(tiny_law, B=tiny_law.B), at_b)
 
 
-def test_the_budget_is_one_se_at_the_follow_up_b(tiny_law):
+def test_the_budget_is_one_se_at_the_follow_up_of_the_base_b(tiny_law):
+    base_B = tiny_law.B
     torch.testing.assert_close(
-        lr.budget_se(tiny_law), lr.delta_method_se(tiny_law, B=lr.FOLLOW_UP_FACTOR * tiny_law.B)
+        lr.budget_se(tiny_law, base_B),
+        lr.delta_method_se(tiny_law, B=lr.FOLLOW_UP_FACTOR * base_B),
     )
     predicted = lr.law_statistics(tiny_law)(tiny_law.D)
-    budget = lr.budget_se(tiny_law)
-    assert lr.regime_accurate(predicted + 0.9 * budget, tiny_law).all()
-    assert not lr.regime_accurate(predicted - 1.1 * budget, tiny_law).any()
+    budget = lr.budget_se(tiny_law, base_B)
+    assert lr.regime_accurate(predicted + 0.9 * budget, tiny_law, base_B).all()
+    assert not lr.regime_accurate(predicted - 1.1 * budget, tiny_law, base_B).any()
+
+
+def test_extending_the_experiment_leaves_the_budget_unchanged(tmp_path):
+    """`exp extend` to the follow-up grows exp.json's B fourfold; the budget is fixed by the
+    base B, so it does not shrink with it."""
+    exp = preset("linear_ring_tiny")
+    save_exp(exp, tmp_path)
+    before = lr.predicted_law(load_exp(tmp_path), 3)
+    extend_experiment(tmp_path, by=(lr.FOLLOW_UP_FACTOR - 1) * exp.B)
+    after = lr.predicted_law(load_exp(tmp_path), 3)
+    assert after.B == lr.FOLLOW_UP_FACTOR * before.B
+    torch.testing.assert_close(lr.budget_se(after, exp.B), lr.budget_se(before, exp.B))
+    with pytest.raises(ValueError, match="base_B"):
+        lr.budget_se(after, 0)
 
 
 def test_the_pipeline_bounds_are_the_named_multiples_of_the_delta_method_se(tiny_law):

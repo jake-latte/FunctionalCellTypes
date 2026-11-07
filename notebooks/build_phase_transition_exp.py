@@ -119,6 +119,7 @@ import numpy as np
 import torch
 from IPython.display import Markdown, display
 
+from fct import draw
 from fct.analyse import pick_examples, r_squared
 from fct.exp_view import tuning_view
 from fct.phase_view import (
@@ -407,32 +408,9 @@ every epoch has no point on a log y-axis and is marked "(zero)" in the legend. A
 zero is cut off at the bottom of the log y-axis. Under SGLD the curves settle to a noisy stationary level
 rather than to a minimum."""
 
-LOSS = r"""def plot_ensemble_loss(stats, title):
-    # The mean over members of the logged loss and its raw terms, each with a +- sem band.
-    terms = {
-        "loss": r"loss $\mathcal{L}$",
-        "mse": "mse",
-        "weight_l2": r"weight penalty $\Omega_w$",
-        "rate_l2": r"rate penalty $\Omega_r$",
-    }
-    fig, ax = plt.subplots(figsize=(11, 4.5), layout="constrained")
-    for key, label in terms.items():
-        mean, sem = stats.mean[key], stats.sem[key]
-        if not np.any(mean > 0):
-            label += " (zero)"
-        (line,) = ax.plot(stats.epoch, mean, label=label)
-        ax.fill_between(
-            stats.epoch, mean - sem, mean + sem, color=line.get_color(), alpha=0.25, linewidth=0
-        )
-    ax.set(xlabel="epoch", ylabel=r"logged value, mean $\pm$ sem", yscale="log", title=title)
-    ax.grid(alpha=0.25)
-    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
-    return fig
-
-
-plot_ensemble_loss(
-    STATS, f"{OPTIMIZER}: training, mean $\\pm$ sem over {N_MEMBERS} members{STATUS_TAG}"
-)
+LOSS = r"""fig, ax = plt.subplots(figsize=(11, 4.5), layout="constrained")
+draw.plot_ensemble_loss(STATS.epoch, STATS.mean, STATS.sem, ax=ax)
+ax.set_title(f"{OPTIMIZER}: training, mean $\\pm$ sem over {N_MEMBERS} members{STATUS_TAG}")
 plt.show()"""
 
 EXAMPLES_TEXT = r"""## Example outputs

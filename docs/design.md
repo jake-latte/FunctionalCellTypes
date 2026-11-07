@@ -34,6 +34,8 @@ fct/
   spatial_exp.py  # spatial-experiment notebook: pick one setting of a spatial experiment by axis values, load its trained net and the 3^k latent-lattice test set
   spatial_view.py  # spatial-prior notebook: config, resumable run, ring/lattice layout of neurons and weights, empirical kernels (pure + one I/O function)
   linear_theory.py # the linear one-hidden-layer theory on a ring from a Config and a Dataset: per-mode spectra for an orthonormal teacher, their summaries, the ansatz-free kernel for any teacher (pure)
+  linear_ring.py   # the linear-ring experiments: a setting's predicted law, ring-averaged statistics of the member-averaged final-state spectrum with bootstrap SEs, the comparison rules, the relaxation diagnostic, the notebook's measurements (pure, except predicted_law)
+  ring_view.py     # linear-ring notebook: load settings and their records (RingRun accessors), the base B of the budget, measure_run, sweeps, panel arguments, and the notebook's markdown tables
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   exp.py         # an experiment, a batch of runs over Config fields (its axes): ExpConfig, expand, run_setting, status, preset readers
   presets/       # one JSON file per preset: a complete base experiment (ExpConfig fields written out, with a description); see "Presets" under exp.py
@@ -43,7 +45,7 @@ fct/
   exemplar.py      # the exemplar notebook's logic: config from flat settings, cache layout, cached train / solve, live refresh
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / experiment
   __main__.py      # `python -m fct ...` -> cli.main()
-notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_spatial_exp.py, build_phase_transition_exp.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
+notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_spatial_exp.py, build_phase_transition_exp.py, build_linear_ring.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
 docs/issues/*.md   # current work items (finished ones move to docs/issues/archive/)
@@ -108,7 +110,7 @@ byte-identical and an absent field means its default; at any other value it ente
 are listed once, in two tables of dotted paths: `config.HASH_OMITTED_AT_DEFAULT` for `section_hash` (`net.B`,
 `net.init`, `data.teacher`, `spatial.lambda_max`, `spatial.parametrisation`, `train.monitor_kind`) and
 `exp.EXP_JSON_OMITTED_AT_DEFAULT` for exp.json (`description`, `B`, `init`, `linear_teacher.teacher`,
-`spatial.parametrisation`, `monitor_kind`). Both go through one helper,
+`spatial.parametrisation`, `monitor_kind`, `base_B`). Both go through one helper,
 `schema.exclude_at_default(model, table) -> exclude`, which builds the nested pydantic `exclude` and skips a path whose
 parent is None (an unset `spatial` section). A new field of this kind is a new table entry, nothing else.
 
@@ -483,7 +485,13 @@ holds b0 < B members, adding K = B - b0. The contract:
   B: set B back, let the run finish, then `exp extend`), final.pt is unreadable, or it holds more members than the new
   B. So an extension can be backed out: once the extension job has stopped (crashed, or been cancelled), B set back to
   b0 in exp.json takes config.json back with it, the setting is done again, and its abandoned staging directory is
-  removed (logged). Backing out while the job still runs would let it append to final.pt afterwards.
+  removed (logged). Backing out while the job still runs would let it append to final.pt afterwards. Only the "B"
+  value need be edited: the base_B the first extension recorded stays, and base_B == B reads as not extended.
+- The first extension records `base_B`, the B before it, in exp.json; later extensions keep it. An experiment
+  extended before `base_B` existed has none, so its extended B passes for the base; so does one re-initialised with
+  `exp init --force`, which writes a new experiment and drops `base_B` (deliberately: the new experiment may be
+  another preset or B, and an old base_B would not describe it). For either, set the base by hand in the
+  linear-ring notebook (`BASE_B`).
 - `extend_experiment` refuses (ExpError, exp.json unchanged) `K < 1`, an experiment with a `net.B` axis (even one of a
   single value, as in the `phase_transition` preset: the value is in every directory name and in the exp hash), and
   any partial setting: a run part-way wrote its checkpoints for the old B, and a pending extension would no longer
@@ -1054,6 +1062,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_min, latent_max, teacher = "gaussian"), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
+    # base_B: int | None = None: the B before the first `exp extend`, recorded by it and never changed after (at most B, equal once an extension is backed out by setting B back; refused beside a net.B axis and by `exp init --set`; compared by same_experiment); omitted from exp.json while None, in no hash; read by fct.ring_view for the accuracy budget
     # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, init, weight_lambda,
     # rate_lambda, optimizer, beta; an axis of the same name wins (init is shared so that `--set init=prior` makes a whitened axis value valid
     # against the base, which every axis value is checked against alone). spatial: SpatialConfig | None = None, the spatial weight prior of every setting
@@ -1092,7 +1101,7 @@ def built_values(exp) -> {axis: [values as the built Config holds them]}   # use
 def find_setting_dir(root, exp, values) -> Path         # the one run setting of `exp` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
                                                           # a subset of the axes is enough if unambiguous); only the experiment's own directories are considered; LookupError if none, several, or an unknown axis
 def setting_members(root, exp, setting) -> int | None   # members of train/final.pt (1 for a single network); None without a readable one
-def extend_experiment(root, by) -> ExpConfig            # rewrite exp.json with B + by and return it; trains nothing (run_setting does); ExpError, exp.json unchanged, for by < 1, a net.B axis, or any partial setting (train)
+def extend_experiment(root, by) -> ExpConfig            # rewrite exp.json with B + by (and, on the first extension only, base_B = the B before it) and return it; trains nothing (run_setting does); ExpError, exp.json unchanged, for by < 1, a net.B axis, or any partial setting (train)
 def has_settings(root) -> bool                            # ROOT already holds a setting directory; `exp init` refuses to write a new exp.json there without --force
 def run_setting(exp, index, root, log=print, stage="train") -> None
     # first validates/writes config.json and setting.json (ExpError if an existing one differs in data, net, train or the like: the experiment changed
@@ -1113,7 +1122,7 @@ def run_setting(exp, index, root, log=print, stage="train") -> None
     #     An InadequateSamplerError (importance sampling below the ESS floor) propagates and leaves no final.pt
 ```
 
-CLI: `python -m fct exp init ROOT --preset lambda_exp [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`. With any `--set` or `--axis` the description becomes `Preset 'NAME' with overrides: --set a.b=1; --axis c.d=[...]` (each override as given, `--set`s first); without, the preset's description is kept. `--preset` lists the files of `fct/presets` in `--help`, read lazily so that a broken folder fails only `exp init`.
+CLI: `python -m fct exp init ROOT --preset lambda_exp [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`. With any `--set` or `--axis` the description becomes `Preset 'NAME' with overrides: --set a.b=1; --axis c.d=[...]` (each override as given, `--set`s first); without, the preset's description is kept. The format is written and read back by one pair in `fct/exp.py`, `derived_description` and `parse_derived_description` (-> `Overrides(preset, sets, axes)`, None for any other text). `--preset` lists the files of `fct/presets` in `--help`, read lazily so that a broken folder fails only `exp init`.
 `--set` overrides a shared entry by dotted key; `--axis PATH=[values]` replaces or adds an axis (JSON list; the modularity presets have no editable axes and reject it); `--set axes...` is rejected (use `--axis`). `exp count|list|status|run --index i` all read the same `expand`, and `jobs/fct_exp.sh` takes the array size
 from `exp count`. `exp status` and `exp run` take `--stage train|solve` (default train): train the nets or solve the
 saddle points of the same initialised experiment, locally or as an array job (`jobs/fct_solve.sh`); `list` and `count` do not depend on the stage.
@@ -1185,8 +1194,11 @@ The analysis is `fct/linear_ring.py`.
   when |observed - predicted| exceeds FALSIFY_N_SE bootstrap SEs at the run's B, and the failure counts only if it
   persists after `exp extend` to FOLLOW_UP_FACTOR times B; two paths disagree when their deviations from their own
   predictions differ by more than EQUIVALENCE_N_SE combined SEs. A regime is accurate when |exact - predicted| is at
-  most one SE at B_max, the largest B run, the follow-up extension included (`budget_se`), which is also the bound a
-  run's remaining relaxation must stay under. The pipeline test deliberately uses a fixed rule instead
+  most one SE at B_max = FOLLOW_UP_FACTOR x the base B, the largest B run, the follow-up extension included
+  (`budget_se(law, base_B)`), which is also the bound a run's remaining relaxation must stay under. The base B is
+  given explicitly: exp.json's B grows with `exp extend`, and the follow-up must not shrink its own budget. The
+  notebook reads it from the experiment (`ring_view.recorded_base_B`: a setting's own B where net.B is an axis, else
+  the `base_B` the first extension recorded, else B). The pipeline test deliberately uses a fixed rule instead
   (`pipeline_bounds`: tolerance and largest accepted bootstrap SE in delta-method SEs), so that it needs no
   follow-up run.
 - `predicted_spectra` is the N -> infinity mean-field limit: it leaves out the readout's (n/2) log det C~ term, an
@@ -1210,12 +1222,22 @@ member_covariance(D) -> (K, N, N); delta_method_se(law, B=None) -> (3K + 1,)
 estimate(member_spectra (B, K, N), law, seed=0) -> (values, bootstrap SE)
 map_correlation(first (B, K, N), last) -> (B,)                    # 1 for a frozen sampler, 0 for independent maps
 relaxation_fit(epochs (R,), records (R, B, K, N), statistics, start=None, n_boot=RELAXATION_N_BOOT, seed=0) -> RelaxationFit(asymptote, amplitude, tau, deficit, deficit_se)
-budget_se(law) -> (3K + 1,)                                       # one delta-method SE at B_max = FOLLOW_UP_FACTOR x B
+budget_se(law, base_B) -> (3K + 1,)                               # one delta-method SE at B_max = FOLLOW_UP_FACTOR x base_B
 is_stationary(fit, budget) -> (S,) bool                           # |deficit| and its SE both below budget
-regime_accurate(exact, law) -> (3K + 1,) bool                     # |exact - predicted| <= budget_se(law)
+regime_accurate(exact, law, base_B) -> (3K + 1,) bool             # |exact - predicted| <= budget_se(law, base_B)
 disagrees(values, se, predicted) -> (S,) bool                     # beyond FALSIFY_N_SE bootstrap SEs
 paths_disagree((values, se, predicted), (values, se, predicted)) -> (S,) bool   # deviations beyond EQUIVALENCE_N_SE combined SEs
 pipeline_bounds(law) -> (largest bootstrap SE, tolerance)         # PIPELINE_SE_MARGIN and PIPELINE_N_SE x that, in delta-method SEs
+# the notebook's measurements (Q = N/2 + 1 folded frequencies or lags); the curve parts' fields are the fct.draw plot_* arguments
+measure_final(law, final (B >= 2, K + 1, N), hex_moments (B, 2), theta_counts (B, N_THETA_BINS), seed) -> FinalMeasurement(
+    primary: Primary(stats, predicted, values, se, disagree), spectrum: SpectrumCurves, ratio: RatioCurve,
+    profile: ProfileCurves, secondary: Secondary(..., unavailable {kind: reason}), angles: Angles | None (K = 3 only), B)
+measure_relaxation(law, epochs (R,), records (R, B, K, N), base_B, start=None, seed) -> RelaxationView(curves, fit, stats, budget, stationary)
+band_share_estimate(law, final (B, K, N), seed) -> (values, se, predicted) (K,)
+kept(D, keep); normalised_autocorrelation(D); lag_profile(D, keep); folded_mode_ratio(D); exact_eigenvalues(cfg, dataset); prior_profile(law)
+q_half_statistic(keep); share0_statistic(keep); hexatic_estimate(moments); latent_angles(Z, U) -> (6,); angle_marks(law); relaxation_curve(fit, t, t0)
+statistic_name(stat, ell), statistic_mode(stat), statistic_label(stat, ell)   # one naming for every table and legend
+Q_HALF_TOLERANCE = 1 (one frequency step), HEXATIC_MAX = 0.1 (the plan's P6 threshold; applied only at N B >= HEXATIC_MIN_SAMPLES = 1000, since uniform angles give |m| of order 1/sqrt(N B), 0.03 at 10^3, too close to the threshold below it), ANGLE_K = 3; q_1/2 is unavailable only on fct.spectrum.HalfPowerUndefinedError
 ```
 
 The pipeline test (`tests/test_linear_ring_smoke.py`, marked slow, about a minute on one CPU thread) runs both
@@ -1571,7 +1593,7 @@ null_power(h (..., P, N), U (P, K)) -> (..., N)                # sum_p |fft(r_p)
 mode_spectra(h (..., P, N), U (P, K)) -> (..., K + 1, N)       # rows 0..K-1 power_spectrum(tuning_maps), row K null_power: one monitor record
 fold_q(d (..., N)) -> (..., N/2 + 1)                           # (d_q + d_{-q}) / 2 at |q| = 0..N/2; N even
 autocorrelation(d (..., N)) -> R (..., N)                      # R(Delta) = (1/N) sum_q d_q e^{2 pi i q Delta / N} = ifft(d).real
-half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; of a MEAN spectrum; raises if d_0 < d_{N/2}
+half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; of a MEAN spectrum; raises HalfPowerUndefinedError (a ValueError) if d_0 < d_{N/2}
 spectrum_summary(d (..., N)) -> Summary(share0, lag1, d0, d_nyq, R (..., N))   # share0 = d_0 / sum_q d_q, lag1 = R(1)/R(0); per record
 gaussian_width(R (..., N), ell) -> float | (...)               # sqrt(-ell^2 / (2 ln(R(ell)/R(0)))); ell an integer lag in 1..N-1
 contrast_angle_statistic(t2 (..., N), t3 (..., N)) -> float | (...)   # <cos 4 theta_i> over neurons, theta_i = atan2(t3_i, t2_i) on (-pi, pi]
@@ -1776,6 +1798,18 @@ The computation layer of the phase-transition notebook: one setting of a `phase_
 - `ensemble_statistics(history) -> EnsembleStatistics(epoch, mean, sem)` for `ENSEMBLE_KEYS` (loss, mse, weight_l2, rate_l2; `weight_l2` is the raw quadratic form, before its loss coefficient): sem = std(ddof=1) / sqrt(B), NaN for B = 1.
 - `member_view(net, lattice, test, spaces, n_bins, kind, n_shuffles, seed) -> MemberView(A, info_overlap, rate_overlap, weight_kernels)` for one `MLP`: the notebook's data kernels A^(l) (`spatial_view.data_kernels`, on the lattice set), `information_overlap` and `rate_overlap` of `tuning_view` (on the random test set) and `empirical_kernels` of each weight in (post, pre) orientation. `ensemble_views(net, ...)` maps it over `net.member(b)` with shuffle seed `seed + b`; `average_views` takes the elementwise mean in unit-index space (members share the embedding), after which the units are ordered for display. The averaged overlap is the mean over members of each member's own overlap matrix (a second moment over members; for the corrected MIR the per-member clamping at zero biases it upward), not the overlap of the mean tuning. `random_test_set` raises unless the training set is exactly what `data_cfg` regenerates (compared in memory, so P, D_in, n_latents, latent range and seed all count). `FloorReport.floor` records min_rel_eig times the top eigenvalue of K, the floor the penalty factors report. `load_phase_run` is read-only: a done setting whose dataset file is missing gets its training set generated in memory.
 - `ensemble_example_outputs(net, dataset, indices) -> EnsembleExamples`: `y_pred` is (B, n_examples, D_out), one colour per member; `y_true` and `x` are the dataset rows.
+
+## linear_ring.ipynb (a linear-ring setting against the theory)
+
+`notebooks/build_linear_ring.py` builds `linear_ring.ipynb` (source only; executed copies go to the ignored `tmp/`): one setting of a linear-ring experiment (`ROOT`, `SETTING`) and, beside it, `TWIN_SETTING` in `TWIN_ROOT` (default `ROOT`), normally the same point under the other parametrisation. The defaults are `linear_ring_tiny`'s diagonal (settings 0 and 3); for `linear_ring` against `linear_ring_equivalence` give the two ROOTs. Other parameters: `BURN_IN` (start of the relaxation fit, default half the run), `BASE_B` (`{"setting": B0, "twin": B0}`, ints, overriding the base B the budget is computed at; None reads each from its experiment, `recorded_base_B`), `SWEEP_AXIS` (a numeric axis for the band-share figure, default the setting index), `EXACT` / `TWIN_EXACT` (the exact posterior's statistics, in `statistic_list` order, for `regime_accurate`), `SEED` (the bootstrap's).
+
+- The analysis is `fct.linear_ring` (`measure_final`, `measure_relaxation`, `band_share_estimate`); `fct.ring_view` loads (`load_ring_settings`, `load_shown`; `RingRun`'s `final_spectra`, `final_latent`, `relaxation_records` give the record layout), joins (`measure_run`), builds the sweeps (grouped by ROOT and the axes they hold fixed, so a twin in the same ROOT gets its own) and writes the tables; every figure is a `fct.draw` `plot_*` (`plot_ensemble_loss`, `plot_relaxation`, `plot_spectrum`, `plot_share_sweep`, `plot_spectrum_ratio`, `plot_autocorrelation`, `plot_angle_histogram`), drawn one panel per shown setting by `draw.fig_panels`. Code cells hold library calls only (a test refuses loops, comprehensions and definitions), and the markdown's thresholds are filled in from the library's constants at build time.
+- One sample per member: everything is read off the member-averaged final-state spectrum (the last record) with the bootstrap over members; the records before it feed only the relaxation diagnostic. Per-member values are not shown.
+- The summary table lists every primary statistic with `disagrees`, the secondary q_1/2 (flagged beyond `Q_HALF_TOLERANCE`) and q = 0 shares, and, at K = 3 only, the hexatic modulus (flagged above `HEXATIC_MAX`); a q_1/2 that cannot be formed (a spectrum rising to Nyquist) is listed unavailable with its reason; the regime column is `regime_accurate` of `EXACT`, else "not assessed". With two settings, `equivalence_table` applies `paths_disagree` and states the number of statistics compared.
+- The intro states that `predicted_spectra` is the N -> infinity mean-field limit and that the whitened lr's bias on mode 1 exceeds the accuracy budget at `linear_ring`'s base point; the numbers are quoted from each experiment's description (`regime_sentences`), or from its preset's when `exp init` replaced the description with a note of overrides (`regime_markdown`).
+- It calls none of the MIR readers (they refuse spectrum experiments), only `fct.report.exp_root_from_env`, and of `fct.phase_view` only `ensemble_statistics` (its prior figures label the penalty's factors, which a whitened run does not train with).
+- An untrained setting is reported in the loader and left out of the figures; with no trained setting every later cell says so (`when_trained`).
+- `tests/test_build_linear_ring.py` executes it (marked slow) on `linear_ring_tiny` at B = 32 trained through the CLI: both settings side by side, one setting swept along `train.lr`, both swept along `train.lr` (one sweep each), a K = 3 ring at B = 16 (the angle histogram and hexatic row), and an untrained setting.
 
 ## phase_transition_exp.ipynb (the phase_transition experiment, drawn)
 

@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, NamedTuple, Self
 
 import numpy as np
 import torch
@@ -257,6 +257,13 @@ class ExpConfig(StrictModel):
     L: PosInt = NetConfig().L
     g: PosFloat = NetConfig().g
     B: PosInt = NetConfig().B
+    # The B before the first `exp extend`, written by `extend_experiment` when it first grows B
+    # and never changed after: the size a setting was designed with, at which its accuracy
+    # budget is computed (`fct.linear_ring.budget_se`). None (omitted from exp.json) until the
+    # experiment is extended, when B is still the base. At most B: equal once an extension is
+    # backed out by setting B back by hand in exp.json, which leaves base_B as it was. Not an
+    # axis, and not given to `exp init`.
+    base_B: PosInt | None = None
     # The initial law (`NetConfig.init`); "prior" is required by the whitened parametrisation,
     # and a shared field (`--set init=prior`) because a `spatial.parametrisation` axis value is
     # validated against the experiment's base, which must already start from the prior.
@@ -287,6 +294,21 @@ class ExpConfig(StrictModel):
             # section ties weight_lambda to lambda_max). Experiments without one have no such
             # cross-field rule, so they are not checked here.
             _validate_combinations(self)
+        return self
+
+    @model_validator(mode="after")
+    def _base_B_is_at_most_B(self) -> Self:
+        if self.base_B is not None:
+            if B_AXIS in (self.axes or {}):
+                raise ValueError(
+                    f"base_B is recorded only by extending B, which {B_AXIS} as an axis forbids"
+                )
+            # base_B == B is an extension backed out (B set back by hand): not extended now
+            if self.base_B > self.B:
+                raise ValueError(
+                    f"base_B ({self.base_B}) is the B before an extension, so it cannot exceed "
+                    f"B ({self.B})"
+                )
         return self
 
     @model_validator(mode="after")
@@ -402,6 +424,51 @@ def preset(name: str, directory: Path | str | None = None) -> ExpConfig:
         raise PresetError(f"the preset file {path} is not a valid experiment: {err}") from err
 
 
+# ---------------------------------------------------------------------------- derived descriptions
+# An experiment made from a preset with overrides (`exp init --preset NAME --set ... --axis ...`)
+# no longer fits the preset's description, so it is given one that names the preset and the
+# overrides as they were typed. The writer and the parser below are the only two places that
+# know the format.
+_DERIVED = re.compile(rf"^Preset '({PRESET_NAME_RULE})' with overrides: (.+)$", re.DOTALL)
+_OVERRIDE_SEPARATOR = "; "
+_SET, _AXIS = "--set ", "--axis "
+
+
+class Overrides(NamedTuple):
+    """The preset an experiment was made from and the overrides given to `exp init`."""
+
+    preset: str
+    sets: list[str]  # "key=value" as typed
+    axes: list[str]  # "path=[values]" as typed
+
+
+def derived_description(preset_name: str, sets: list[str], axes: list[str]) -> str:
+    """What an experiment made from a preset with overrides says about itself: the preset and
+    each override as it was given (`parse_derived_description` reads it back)."""
+    given = [_SET + item for item in sets] + [_AXIS + item for item in axes]
+    return f"Preset {preset_name!r} with overrides: {_OVERRIDE_SEPARATOR.join(given)}"
+
+
+def parse_derived_description(description: str | None) -> Overrides | None:
+    """The `Overrides` of a description `derived_description` wrote; None for any other text.
+    ValueError for a description in that form whose overrides do not parse (an override whose
+    value contains the separator "; " cannot be read back)."""
+    match = _DERIVED.match(description or "")
+    if match is None:
+        return None
+    sets, axes = [], []
+    for item in match[2].split(_OVERRIDE_SEPARATOR):
+        if item.startswith(_SET):
+            sets.append(item.removeprefix(_SET))
+        elif item.startswith(_AXIS):
+            axes.append(item.removeprefix(_AXIS))
+        else:
+            raise ValueError(
+                f"cannot read the override {item!r} of the description {description!r}"
+            )
+    return Overrides(match[1], sets, axes)
+
+
 def exp_path(root: Path) -> Path:
     return Path(root) / EXP_FILE
 
@@ -411,6 +478,7 @@ def exp_path(root: Path) -> Path:
 EXP_JSON_OMITTED_AT_DEFAULT: dict[str, Any] = {
     "description": None,
     "B": NetConfig().B,
+    "base_B": None,
     "init": NetConfig().init,
     "linear_teacher.teacher": LinearTeacherParams.model_fields["teacher"].default,
     "spatial.parametrisation": SpatialConfig().parametrisation,
@@ -445,7 +513,9 @@ def save_exp(exp: ExpConfig, root: Path) -> None:
 
 def same_experiment(a: ExpConfig, b: ExpConfig) -> bool:
     """Whether two experiments are the same one: every field equal except the description,
-    which is documentation and may be edited without changing what runs."""
+    which is documentation and may be edited without changing what runs. base_B is compared:
+    it is the size the settings were designed with, which sets their accuracy budget, so two
+    experiments that run the same B but were designed at different sizes are not the same."""
     return a.model_dump(exclude={"description"}) == b.model_dump(exclude={"description"})
 
 
@@ -970,9 +1040,10 @@ def find_setting_dir(root: Path, exp: ExpConfig, values: Mapping[str, Any]) -> P
 
 
 def extend_experiment(root: Path, by: int) -> ExpConfig:
-    """Grow every setting's ensemble by `by` members: rewrite ROOT/exp.json with B + by and
-    return the new experiment. Nothing is trained here: `run_setting` (`exp run`, the SLURM
-    array) then trains each done setting's missing members and appends them to its final.pt;
+    """Grow every setting's ensemble by `by` members: rewrite ROOT/exp.json with B + by (and,
+    on the first extension, base_B = the B before it) and return the new experiment. Nothing
+    is trained here: `run_setting` (`exp run`, the SLURM array) then trains each done
+    setting's missing members and appends them to its final.pt;
     settings not yet trained train all B + by from scratch.
 
     ExpError, leaving exp.json as it was, if `by` < 1, if net.B is an axis (even of one value:
@@ -996,7 +1067,8 @@ def extend_experiment(root: Path, by: int) -> ExpConfig:
             f"cannot extend while training is partial in settings {partial}; run them to the "
             f"end first (`python -m fct exp run {root}`)"
         )
-    extended = ExpConfig.model_validate({**exp.model_dump(), "B": exp.B + by})
+    base_B = exp.B if exp.base_B is None else exp.base_B  # the first extension records it
+    extended = ExpConfig.model_validate({**exp.model_dump(), "B": exp.B + by, "base_B": base_B})
     save_exp(extended, root)
     return extended
 

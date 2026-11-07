@@ -359,7 +359,7 @@ def test_spectrum_summary_runs_on_noisy_white_null_rows():
 
 def test_half_power_q_rejects_a_spectrum_rising_to_nyquist():
     d = torch.linspace(1.0, 2.0, 8, dtype=F64)  # d_0 = 1 < d_{N/2}
-    with pytest.raises(ValueError, match="d_0 .* d_N/2"):
+    with pytest.raises(sp.HalfPowerUndefinedError, match="d_0 .* d_N/2"):
         sp.half_power_q(d)
     batch = torch.stack([d, d.flip(-1), d])  # rows 0 and 2 rise to Nyquist
     with pytest.raises(ValueError, match="2 of 3 spectra.*first at batch index \\[0\\]"):
