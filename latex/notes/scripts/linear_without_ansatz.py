@@ -615,10 +615,10 @@ def report_instance(inst: Instance, p: Params) -> None:
 
 def report_commuting_case(inst: Instance, p: Params) -> None:
     """Check (ii): the commuting case reproduces the scalar roots."""
-    r = commuting_check(inst, p)
+    res = commuting_check(inst, p)
     print("\n[commuting case, eps = 0]")
-    row("eig(Ct) - scalar roots, max abs", f"{r.root_error:.1e}")
-    row("off-diagonal fraction of Ct in U", f"{r.offdiag_fraction:.1e}")
+    row("eig(Ct) - scalar roots, max abs", f"{res.root_error:.1e}")
+    row("off-diagonal fraction of Ct in U", f"{res.offdiag_fraction:.1e}")
 
 
 def report_non_commuting_case(inst: Instance, p: Params) -> None:
@@ -650,13 +650,15 @@ def report_non_commuting_case(inst: Instance, p: Params) -> None:
 def report_perturbative_check(inst: Instance, p: Params) -> None:
     """Check (iv): first-order theory against the solver; the pair nearest an avoided crossing."""
     theory = first_order(inst, p)
-    r = first_order_residuals(inst, p)
+    res = first_order_residuals(inst, p)
     q_lo, q_hi = 0, inst.n_sites // 2
     print("\n[first-order theory vs solver]")
     row("max |C1|, max |Theta|", f"{np.abs(theory.C1).max():.4f}, {np.abs(theory.Theta).max():.4f}")
-    for eps, rc, rt in zip(r.eps, r.C1, r.Theta):
+    for eps, rc, rt in zip(res.eps, res.C1, res.Theta):
         row(f"eps={eps}: max |C1_num - C1|, |Theta_num - Theta|", f"{rc:.2e}, {rt:.2e}")
-    ratios = f"C1 {r.C1[0] / r.C1[1]:.2f}, Theta {r.Theta[0] / r.Theta[1]:.2f}  (2 = O(eps))"
+    ratios = (
+        f"C1 {res.C1[0] / res.C1[1]:.2f}, Theta {res.Theta[0] / res.Theta[1]:.2f}  (2 = O(eps))"
+    )
     row("residual ratio eps -> eps/2", ratios)
     scale_dependence = np.abs(theory.Theta[q_lo] - theory.Theta[q_hi])
     r_idx, p_idx = (
@@ -676,38 +678,40 @@ def report_perturbative_check(inst: Instance, p: Params) -> None:
     )
 
 
-def print_rank_deficient_check(r: RankDeficientCheck) -> None:
+def print_rank_deficient_check(res: RankDeficientCheck) -> None:
     """Check (v) lines shared by the two rank-deficient instances."""
-    row("relative commutator |[G_X, G_Y]|", f"{r.commutator_G:.3f}")
-    row("relative commutator of the Gram matrices on col(Z)", f"{r.commutator_restricted:.3f}")
-    row("max |Pi Ct Pi_perp|", f"{r.block_offdiag:.1e}")
-    row("max |Pi_perp Ct Pi_perp - c0 Pi_perp|", f"{r.complement_error:.1e}   (c0 = {r.c0:.6f})")
-    row("eig(Ct)", np.round(r.eig_Ct, 4))
-    row("largest angle (deg) in col(Z) of a Sigma_q eigvec to q=0", f"{r.max_angle_to_q0:.1f}")
+    row("relative commutator |[G_X, G_Y]|", f"{res.commutator_G:.3f}")
+    row("relative commutator of the Gram matrices on col(Z)", f"{res.commutator_restricted:.3f}")
+    row("max |Pi Ct Pi_perp|", f"{res.block_offdiag:.1e}")
+    row(
+        "max |Pi_perp Ct Pi_perp - c0 Pi_perp|", f"{res.complement_error:.1e}   (c0 = {res.c0:.6f})"
+    )
+    row("eig(Ct)", np.round(res.eig_Ct, 4))
+    row("largest angle (deg) in col(Z) of a Sigma_q eigvec to q=0", f"{res.max_angle_to_q0:.1f}")
 
 
 def report_rank_deficient(p: Params) -> None:
     """Check (v) with orthonormal Z: the block structure, and rotation within col(Z)."""
     rd = make_rank_deficient_instance(np.random.default_rng(SEED_RANK_DEFICIENT))
-    r = rank_deficient_check(rd, p)
+    res = rank_deficient_check(rd, p)
     P, L = rd.Z.shape
     print(
         f"\n[rank-deficient task, L={L} < P={P}, orthonormal Z, non-commuting G_X, G_Y]"
-        f"  ({r.n_iter} iterations)"
+        f"  ({res.n_iter} iterations)"
     )
-    print_rank_deficient_check(r)
+    print_rank_deficient_check(res)
 
 
 def report_rank_deficient_non_orthonormal(p: Params) -> None:
     """Check (v) with [G_X, G_Y] = 0 but Z^T Z not proportional to I: the bases still rotate."""
     rd = make_commuting_latents_non_orthonormal_z(np.random.default_rng(SEED_RANK_DEFICIENT))
-    r = rank_deficient_check(rd, p)
+    res = rank_deficient_check(rd, p)
     P, L = rd.Z.shape
     print(
         f"\n[rank-deficient task, L={L} < P={P}, Z^T Z off-diagonal {ZZ_OFFDIAG}, "
-        f"G_X = I, G_Y = diag{GY_DIAG}]  ({r.n_iter} iterations)"
+        f"G_X = I, G_Y = diag{GY_DIAG}]  ({res.n_iter} iterations)"
     )
-    print_rank_deficient_check(r)
+    print_rank_deficient_check(res)
 
 
 def main() -> None:
