@@ -8,7 +8,8 @@ the data section's `latent_range` became `latent_min` / `latent_max` (a field re
 hash holding the data section moved), and those of every setting with train.rate_lambda > 0
 when LOSS_VERSION 5 scaled the rate penalty by 1 / (2 beta) (a rate_lambda = 0 setting hashes
 version 4, `fct.config.hashed_loss_version`, and kept its hashes); the experiment hashes and
-directories are the original ones. A renamed or restructured experiment must not move any of them, or finished runs would be
+directories are the original ones. `linear_ring` and `linear_ring_tiny`, which never had a Python
+definition, are pinned as their files first built them. A renamed or restructured experiment must not move any of them, or finished runs would be
 taken for stale.
 """
 
@@ -111,7 +112,11 @@ def _data_hash_without_teacher(cfg: Config) -> str:
     return hashlib.sha256(json.dumps(hashed, sort_keys=True).encode()).hexdigest()[:12]
 
 
-@pytest.mark.parametrize("name", [*sorted(PINNED), "legacy_config"])
+# The presets on the default (Gaussian) teacher; the linear-ring presets use the orthonormal one.
+GAUSSIAN_TEACHER = [n for n in sorted(PINNED) if preset(n).linear_teacher.teacher == "gaussian"]
+
+
+@pytest.mark.parametrize("name", [*GAUSSIAN_TEACHER, "legacy_config"])
 def test_the_gaussian_teacher_hashes_as_a_data_section_without_the_field(name):
     # Fails if section_hash keeps `teacher` for the Gaussian teacher. The train, solve and
     # result hashes that include the data are guarded by the pins (preset_hashes.json,

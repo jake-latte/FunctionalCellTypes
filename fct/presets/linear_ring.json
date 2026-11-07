@@ -1,0 +1,151 @@
+{
+  "description": "The linear ring of latex/notes/fct_experiment_plan.tex (sec:presets, the dictionary tab:dictionary) at sigma^2 = 0: N = 64 hidden units on a ring, hidden kernel length_scale 4 sites (box = N = 64), P = 256 patterns; linear_teacher with m = n = 8 features, K = 3 latents uniform on [0, 1] and an orthonormal teacher; L = 1, phi id, g 1; k0 = k1 = 1 (input and output kernels of length_scale 0 and amplitude 1, weight_lambda 1, so k = 1 / weight_lambda); r = rate_lambda = 0; beta 0.25 (prediction 1, regime a1); SGLD, float64; every population on the deterministic grid. B = 64 members and one sample per member, its final state after 2 x 10^5 epochs: statistics are of the member-averaged final-state spectrum, with errors from the spread across members (at B = 64 a q = 0 share has standard error 0.025 and R(1)/R(0) 0.0015); the spectrum records (every 500 epochs) are only a burn-in diagnostic, with the first 10^4 epochs as burn-in. Predicted by fct.linear_theory.predicted_spectra on the seed-0 data (whitened): q_1/2 = 2, q = 0 shares 0.157, R(1)/R(0) 0.969 for every mode, d_0 ratio of mode 1 to mode 2 9.36 (the measured s_k^2; 10.08 from the formula values). The axes cross spatial.parametrisation [penalty, whitened] with train.lr [1.2e-4, 0.005], and the diagonal is the experiment: setting 0 (penalty, lr 1.2e-4) and setting 3 (whitened, lr 0.005), run with `exp run ROOT --index 0` and `--index 3` (`bash jobs/fct_exp.sh ROOT --submit --index 0`, `--index 3`). Setting 1 (penalty at 0.005) is refused at run start by the penalty's step check; setting 2 (whitened at 1.2e-4) runs and shows the whitened result does not depend on lr. Each lr comes from its own run-start check. Penalty: lr k_max = 0.48, k_max = weight_lambda / (beta min_rel_eig lambda_0) = 3988 the curvature of the floored modes (the check refuses lr k_max >= 2), which inflates their variance by 1.3x and moves R(1)/R(0) by 3e-4. Whitened: lr lambda_max(loss Hessian) = 0.025 (lambda_max = 4.9 at the prior initial state, the logged check value; refused at >= 1), a 1% inflation of every prior mode. min_rel_eig 1e-4 floors |q| >= 11 (a 9e-4 change in R(1)/R(0); 1e-3 would move it by 9e-3, six standard errors) and lets the penalty's softest data-carrying mode relax in about 2 x 10^4 epochs; under the default 1e-6 the check would refuse any lr above 5e-6. Both parametrisations start from the prior (init prior, which whitened requires). Every other beta or weight_lambda needs its own lr pair: set beta with --set beta= and the pair with --axis 'train.lr=[...]' by the same two rules, and check that the run-start log of the whitened setting reports lr lambda_max <= 0.1.",
+  "N": 64,
+  "P": 256,
+  "n_epochs": 200000,
+  "lr": 0.005,
+  "log_int": 1000,
+  "save_int": 10000,
+  "monitor_int": 500,
+  "monitor_bins": 2,
+  "monitor_shuffles": 1,
+  "monitor_kind": "spectrum",
+  "linear_teacher": {
+    "n_features": 8,
+    "n_latents": 3,
+    "latent_min": 0.0,
+    "latent_max": 1.0,
+    "teacher": "orthonormal"
+  },
+  "object_action": {
+    "grid_size": 5,
+    "max_objects": 3
+  },
+  "what_where": {
+    "n_motifs": 8
+  },
+  "seeds": {
+    "data": 0,
+    "net": 0,
+    "train": 0
+  },
+  "dtype": "float64",
+  "device": "auto",
+  "task": "linear_teacher",
+  "L": 1,
+  "g": 1.0,
+  "B": 64,
+  "init": "prior",
+  "phi": "id",
+  "weight_lambda": 1.0,
+  "rate_lambda": 0.0,
+  "optimizer": "sgld",
+  "beta": 0.25,
+  "spatial": {
+    "d": 1,
+    "box": 64.0,
+    "input": {
+      "embedding": {
+        "kind": "grid",
+        "shape": null,
+        "seed": 0
+      },
+      "kernel": {
+        "length_scale": 0.0,
+        "amplitude": 1.0
+      }
+    },
+    "hidden": {
+      "embedding": {
+        "kind": "grid",
+        "shape": null,
+        "seed": 0
+      },
+      "kernel": {
+        "length_scale": 4.0,
+        "amplitude": 1.0
+      }
+    },
+    "output": {
+      "embedding": {
+        "kind": "grid",
+        "shape": null,
+        "seed": 0
+      },
+      "kernel": {
+        "length_scale": 0.0,
+        "amplitude": 1.0
+      }
+    },
+    "min_rel_eig": 0.0001,
+    "lambda_max": null,
+    "parametrisation": "penalty"
+  },
+  "meanfield": {
+    "n_points": 100,
+    "beta": null,
+    "prior_scale": null,
+    "alpha": null,
+    "learning_prefactor": null,
+    "rate_tilt": null,
+    "solver": {
+      "sampler": "hmc",
+      "n_outer": 300,
+      "n_inner_max": 30,
+      "inner_tol": 0.01,
+      "inner_tol_mc": 2.0,
+      "eta_phi": 0.05,
+      "eta_phihat": 0.05,
+      "eta_max": 0.25,
+      "eta_grow": 1.1,
+      "max_backtrack": 8,
+      "eta_min_rel": 0.001,
+      "max_div_frac": 0.02,
+      "max_h2_growth": 10.0,
+      "max_h2_prior_ratio": 100.0,
+      "max_mc_err_growth": 10.0,
+      "eps_collapse": 0.01,
+      "project_tilt": true,
+      "tilt_floor": 0.05,
+      "max_rel_step": 0.1,
+      "inner_step_control": "progress",
+      "eta_max_phihat": 0.25,
+      "phi_step_scale": "kernel",
+      "inner_start": "target",
+      "tilt_tripwire_resid": 0.9,
+      "tilt_tripwire_steps": 3,
+      "pd_floor_rel": 1e-08,
+      "inv_floor_rel": 0.0001,
+      "n_chains": 2048,
+      "n_trans": 2,
+      "n_trans_outer": 5,
+      "n_leap": 10,
+      "eps0": 0.05,
+      "target_accept": 0.75,
+      "adapt_rate": 0.05,
+      "warmup_trans": 200,
+      "sample_dtype": "float32",
+      "jitter_rel": 1e-06,
+      "precondition": true,
+      "n_importance_samples": 4096,
+      "importance_proposal_scale": 1.0,
+      "min_ess_drop": 0.1,
+      "min_ess_frac": 0.01,
+      "init": "lazy",
+      "n_init_samples": 20000,
+      "log_int": 5,
+      "save_int": 10,
+      "seed": 0
+    }
+  },
+  "axes": {
+    "spatial.parametrisation": [
+      "penalty",
+      "whitened"
+    ],
+    "train.lr": [
+      0.00012,
+      0.005
+    ]
+  }
+}

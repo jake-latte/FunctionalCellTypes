@@ -44,6 +44,9 @@ OLD_EXP_JSON = {
     "spatial_exp": "b6ab301de6953a037275e4c4a7fdab1672aac9d756c764c85be943e8e626adf6",
     "phase_transition": "e0e498cc65190b09e7c8b09389aaef54a05f067ecaa596cc00ef26d1082bdae2",
 }
+# Presets written as files from the start: no Python preset wrote an exp.json for them, so they
+# are pinned only by tests/fixtures/preset_hashes.json.
+FILE_ONLY_PRESETS = {"linear_ring", "linear_ring_tiny"}
 NEW_EXP_JSON = {
     "tiny": "5a5b65629334c478eb9a0c13f2401182a4856bd5e467e877bcef7afa84e65a08",
     "full": "ae24961b09720fb9439e140d34041a108c7f067982ad9d8442da42d798db810f",
@@ -106,8 +109,8 @@ def test_the_exp_json_written_by_the_cli_loads_back_to_the_preset(tmp_path):
     assert exp_hash(loaded) == exp_hash(preset("phase_transition"))
 
 
-def test_the_pins_cover_every_preset():
-    assert set(NEW_EXP_JSON) == set(OLD_EXP_JSON) == set(preset_names())
+def test_the_pins_cover_every_preset_that_had_a_python_definition():
+    assert set(NEW_EXP_JSON) == set(OLD_EXP_JSON) == set(preset_names()) - FILE_ONLY_PRESETS
 
 
 @pytest.mark.parametrize("name", sorted(NEW_EXP_JSON))

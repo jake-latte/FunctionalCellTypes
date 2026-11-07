@@ -29,11 +29,15 @@ from fct.exp import (
     with_axes,
 )
 from fct.exp_migrate import migrate_exp
+from fct.spatial import build_spaces, parameter_factors
+from fct.train import prior_coefficient, prior_stiffness
 from tests.report_helpers import QUIET
 
 PACKAGED = [
     "full",
     "lambda_exp",
+    "linear_ring",
+    "linear_ring_tiny",
     "modularity",
     "phase_transition",
     "spatial_exp",
@@ -74,7 +78,7 @@ def _edit(path: Path, **changes) -> None:
 
 
 # ---------------------------------------------------------------------------- the packaged files
-def test_the_packaged_presets_are_the_eight_base_experiments():
+def test_the_packaged_presets_are_the_ten_base_experiments():
     assert preset_names() == PACKAGED
 
 
@@ -93,6 +97,75 @@ def test_lambda_exp_is_four_axes_of_which_two_hold_seven_log_spaced_values():
     exp = preset("lambda_exp")
     assert len(expand(exp)) == 2 * 2 * 7 * 7
     assert [len(v) for v in exp.axes.values()] == [2, 2, 7, 7]
+
+
+LINEAR_RING = ["linear_ring", "linear_ring_tiny"]
+PARAMETRISATION = "spatial.parametrisation"
+
+
+@pytest.mark.parametrize("name", LINEAR_RING)
+def test_the_linear_ring_presets_are_the_linear_theory_at_sigma_zero(name):
+    """The dictionary of the experiment plan with the 2026-11-06 decisions: no input noise
+    field, deterministic grids, latents on [0, 1], an orthonormal teacher, the spectrum monitor,
+    both parametrisations started from the prior, B a shared field of at least 16."""
+    exp = preset(name)
+    assert "noise" not in json.dumps(exp.model_dump())
+    assert (exp.task, exp.phi, exp.L, exp.g, exp.dtype) == (
+        "linear_teacher",
+        "id",
+        1,
+        1.0,
+        "float64",
+    )
+    assert (exp.optimizer, exp.monitor_kind, exp.init) == ("sgld", "spectrum", "prior")
+    assert (exp.weight_lambda, exp.rate_lambda) == (1.0, 0.0)
+    teacher = exp.linear_teacher
+    assert (teacher.latent_min, teacher.latent_max, teacher.teacher) == (0.0, 1.0, "orthonormal")
+    assert exp.B >= 16 and "net.B" not in exp.axes
+    assert exp.spatial.box == exp.N  # length scales in sites
+    for population in (exp.spatial.input, exp.spatial.hidden, exp.spatial.output):
+        assert population.embedding.kind == "grid"
+    assert exp.spatial.input.kernel.length_scale == exp.spatial.output.kernel.length_scale == 0
+    assert list(exp.axes) == [PARAMETRISATION, "train.lr"]
+    assert exp.axes[PARAMETRISATION] == ["penalty", "whitened"]
+
+
+@pytest.mark.parametrize("name", LINEAR_RING)
+def test_each_parametrisation_runs_at_the_lr_its_own_check_sets(name, tmp_path):
+    """The lr axis is paired with the parametrisation: on the diagonal the penalty runs at half
+    the stiffest step its check accepts (lr k_max = 2 c stiffness lr just under 0.5) and the
+    whitened net at its own lr; off the diagonal the penalty at the whitened lr is refused
+    when the run starts."""
+    exp = preset(name)
+    settings = expand(exp)
+    penalty, refused = (setting_config(exp, settings[i]) for i in (0, 1))
+    assert settings[0].axes == {PARAMETRISATION: "penalty", "train.lr": exp.axes["train.lr"][0]}
+    assert settings[3].axes == {PARAMETRISATION: "whitened", "train.lr": exp.axes["train.lr"][1]}
+    stiffness = prior_stiffness(
+        parameter_factors(
+            build_spaces(
+                penalty.spatial, m=penalty.data.D_in, N=exp.N, L=1, n_out=penalty.data.D_in
+            )
+        )
+    )
+    lr_k_max = penalty.train.lr * 2 * prior_coefficient(penalty.train) * stiffness
+    assert 0.4 < lr_k_max <= 0.5
+    with pytest.raises(ValueError, match="diverges on the spatial prior"):
+        run_setting(exp.model_copy(update={"device": "cpu"}), 1, tmp_path, **QUIET)
+    assert refused.train.lr == exp.axes["train.lr"][1]
+
+
+@pytest.mark.parametrize("name", LINEAR_RING)
+def test_the_whitened_diagonal_setting_passes_its_step_check_with_a_tenfold_margin(name, tmp_path):
+    """One epoch of setting 3 logs the run-start check: lr lambda_max(loss Hessian) at the
+    prior initial state, which the presets keep below 0.1 (at most 5% inflation of the
+    stiffest mode; the check itself refuses 1)."""
+    exp = preset(name).model_copy(update={"n_epochs": 1, "device": "cpu"})
+    lines: list[str] = []
+    run_setting(exp, 3, tmp_path, log=lines.append)
+    (check,) = [line for line in lines if line.startswith("SGLD step check")]
+    step = float(check.split("= ")[1].split()[0])
+    assert step <= 0.1
 
 
 # ---------------------------------------------------------------------------- editing a folder

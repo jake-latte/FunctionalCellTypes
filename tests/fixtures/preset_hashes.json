@@ -1143,5 +1143,49 @@
    "linear_teacher/s0018_d4_lambda_max0.9_B8",
    "linear_teacher/s0019_d4_lambda_max0.99_B8"
   ]
+ },
+ "linear_ring": {
+  "exp_hash": "445f484fa4af",
+  "n_settings": 4,
+  "train": [
+   "d8ba858eb220",
+   "1c1b1af79f63",
+   "f581de1efade",
+   "1cab4634fa43"
+  ],
+  "solve": [
+   "620fdd2c1376",
+   "21bcde2170c2",
+   "29435eaa9862",
+   "37d3a36eca7d"
+  ],
+  "relpaths": [
+   "linear_teacher/s0000_parametrisationpenalty_lr0.00012",
+   "linear_teacher/s0001_parametrisationpenalty_lr0.005",
+   "linear_teacher/s0002_parametrisationwhitened_lr0.00012",
+   "linear_teacher/s0003_parametrisationwhitened_lr0.005"
+  ]
+ },
+ "linear_ring_tiny": {
+  "exp_hash": "95912920ff67",
+  "n_settings": 4,
+  "train": [
+   "69da152bf346",
+   "c85ae3f97282",
+   "4ccf74e7b02e",
+   "05837c5d1430"
+  ],
+  "solve": [
+   "d65fb10b357b",
+   "a81c18186a9a",
+   "39c74c8583ea",
+   "e458220f13b5"
+  ],
+  "relpaths": [
+   "linear_teacher/s0000_parametrisationpenalty_lr0.0006",
+   "linear_teacher/s0001_parametrisationpenalty_lr0.005",
+   "linear_teacher/s0002_parametrisationwhitened_lr0.0006",
+   "linear_teacher/s0003_parametrisationwhitened_lr0.005"
+  ]
  }
 }
