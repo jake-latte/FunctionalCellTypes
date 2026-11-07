@@ -1384,7 +1384,7 @@ power_spectrum(t (..., N)) -> d (..., N)                       # |fft(t, dim=-1)
 null_power(h (..., P, N), U (P, K)) -> (..., N)                # sum_p |fft(r_p)/sqrt(N)|^2 / (P - K), r = h - U U^T h (U_perp never formed)
 mode_spectra(h (..., P, N), U (P, K)) -> (..., K + 1, N)       # rows 0..K-1 power_spectrum(tuning_maps), row K null_power: one monitor record
 fold_q(d (..., N)) -> (..., N/2 + 1)                           # (d_q + d_{-q}) / 2 at |q| = 0..N/2; N even
-autocorrelation(d (..., N)) -> R (..., N)                      # R(r) = (1/N) sum_q d_q e^{2 pi i q r / N} = ifft(d).real
+autocorrelation(d (..., N)) -> R (..., N)                      # R(Delta) = (1/N) sum_q d_q e^{2 pi i q Delta / N} = ifft(d).real
 half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; of a MEAN spectrum; raises if d_0 < d_{N/2}
 spectrum_summary(d (..., N)) -> Summary(share0, lag1, d0, d_nyq, R (..., N))   # share0 = d_0 / sum_q d_q, lag1 = R(1)/R(0); per record
 gaussian_width(R (..., N), ell) -> float | (...)               # sqrt(-ell^2 / (2 ln(R(ell)/R(0)))); ell an integer lag in 1..N-1

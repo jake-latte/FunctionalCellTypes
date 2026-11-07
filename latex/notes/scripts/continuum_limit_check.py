@@ -18,7 +18,7 @@ lattice and cutoff-continuum values differ at O(1); the a^{2d} rule is therefore
 K + nugget * I, whose spectrum is bounded below. The smooth weight is the summand of the
 corrected eq:linear-soln,
     lambda_q f(lambda_q) = h_q / (c^2 - sY^2 h_q),
-    h_q = lambda_q (lambda_q sX^2 + sigma^2) / (1 + g^2 (lambda_q sX^2 + sigma^2)),
+    h_q = lambda_q (lambda_q sX^2 + sigma^2) / (1 + r (lambda_q sX^2 + sigma^2)),
 and the finite-size error is quoted for increasing N: it falls as e^{-L/xi}, with 1/xi the
 imaginary part of the nearest pole of the summand, which is compared with the exact pole.
 A torus repeats the check in d = 2 on the square zone. Finally the d = 2 power-law spectrum
@@ -42,9 +42,9 @@ LENGTH = 1.0  # l, kernel width (l / a = 2, zone-edge aliasing error e^{-2 pi^2 
 RING_SIZES = (4, 8, 16, 32, 64, 128, 256)
 TORUS_SIDES = (4, 8, 16, 32, 64)
 N_QUAD = 2000  # Gauss-Legendre nodes per dimension for the continuum integrals
-# hat s_X^2, hat s_Y^2, sigma^2, g^2, c; c is above the pole (lambda_0 is larger in d = 2)
-PARAMS_1D = {"sx2": 0.7, "sy2": 0.25, "sig2": 0.2, "g2": 0.3, "c": 2.0}
-PARAMS_2D = {"sx2": 0.7, "sy2": 0.25, "sig2": 0.2, "g2": 0.3, "c": 6.0}
+# hat s_X^2, hat s_Y^2, sigma^2, r, c; c is above the pole (lambda_0 is larger in d = 2)
+PARAMS_1D = {"sx2": 0.7, "sy2": 0.25, "sig2": 0.2, "r": 0.3, "c": 2.0}
+PARAMS_2D = {"sx2": 0.7, "sy2": 0.25, "sig2": 0.2, "r": 0.3, "c": 6.0}
 NUGGET = 0.1  # epsilon in K + epsilon I for the inverse-kernel check
 INVERSE_RING_SIZE = 128
 FLOOR_MARGIN = 2.0  # the pass threshold is this multiple of the derived aliasing floor
@@ -58,12 +58,13 @@ Weight = Callable[[np.ndarray], np.ndarray]
 
 @dataclass(frozen=True)
 class SolutionParams:
-    """Scalars of one data mode in the corrected eq:linear-soln."""
+    """Scalars of one data mode in the corrected eq:linear-soln; r is the rate-penalty
+    coefficient (the notes' G = r I)."""
 
     sx2: float
     sy2: float
     sig2: float
-    g2: float
+    r: float
     c: float
 
 
@@ -82,9 +83,9 @@ def ring_kernel(n_sites: int, spacing: float, length: float, nugget: float = 0.0
 
 def torus_kernel_row(side: int, spacing: float, length: float) -> np.ndarray:
     """First row of the kernel on a side x side torus, as a side x side array."""
-    r = ring_distance(side, spacing)
-    r2 = r[:, None] ** 2 + r[None, :] ** 2
-    return np.exp(-r2 / (2 * length**2))
+    dist = ring_distance(side, spacing)
+    dist2 = dist[:, None] ** 2 + dist[None, :] ** 2
+    return np.exp(-dist2 / (2 * length**2))
 
 
 def lattice_spectrum(K: np.ndarray, spacing: float) -> tuple[np.ndarray, np.ndarray]:
@@ -171,7 +172,7 @@ def lattice_lambda_zero(spacing: float, length: float, dim: int) -> float:
 def h_of_lambda(lam: np.ndarray, p: SolutionParams) -> np.ndarray:
     """h_q of the corrected eq:linear-soln as a function of lambda_q (increasing in lambda)."""
     u = lam * p.sx2 + p.sig2
-    return lam * u / (1 + p.g2 * u)
+    return lam * u / (1 + p.r * u)
 
 
 def pole_of_c(p: SolutionParams, lam0: float) -> float:
@@ -203,9 +204,9 @@ def tail_coefficients(p: SolutionParams, rho: float) -> tuple[float, float]:
     aliasing floor. c_2 collects the linear term of H and the first term of the geometric series
     in sY^2 rho lambda H / c^2.
     """
-    h0 = p.sig2 / (1 + p.g2 * p.sig2)  # H at lambda = 0, the pure-noise mode variance
+    h0 = p.sig2 / (1 + p.r * p.sig2)  # H at lambda = 0, the pure-noise mode variance
     c1 = h0 / p.c**2
-    c2 = rho * p.sx2 / ((1 + p.g2 * p.sig2) ** 2 * p.c**2) + rho * p.sy2 * h0**2 / p.c**4
+    c2 = rho * p.sx2 / ((1 + p.r * p.sig2) ** 2 * p.c**2) + rho * p.sy2 * h0**2 / p.c**4
     return c1, c2
 
 
@@ -228,8 +229,8 @@ def spectrum_at_learning_pole(p: SolutionParams) -> float:
     h = T is a quadratic in lambda; the positive root is returned.
     """
     target = p.c**2 / p.sy2
-    b = p.sig2 - target * p.g2 * p.sx2
-    return (-b + math.sqrt(b**2 + 4 * p.sx2 * target * (1 + p.g2 * p.sig2))) / (2 * p.sx2)
+    b = p.sig2 - target * p.r * p.sx2
+    return (-b + math.sqrt(b**2 + 4 * p.sx2 * target * (1 + p.r * p.sig2))) / (2 * p.sx2)
 
 
 def learning_pole_imag_q(p: SolutionParams, spacing: float, length: float) -> float:
@@ -350,7 +351,7 @@ def solve_power_law_2d(
         lo, hi = (mid, hi) if residual(mid) < 0 else (lo, mid)
     c = (lo + hi) / 2
     prior_term = float(np.sum(w * h))
-    lam_pole = spectrum_at_learning_pole(SolutionParams(p.sx2, p.sy2, p.sig2, p.g2, c))
+    lam_pole = spectrum_at_learning_pole(SolutionParams(p.sx2, p.sy2, p.sig2, p.r, c))
     xi_star = 1 / math.sqrt(mass**2 - gamma / lam_pole) * mass
     return PowerLawSolution(
         cutoff_over_mass, c, c_star, prior_term, c - delta - prior_term, xi_star
@@ -359,7 +360,7 @@ def solve_power_law_2d(
 
 def log_asymptote_slope(p: SolutionParams, gamma: float) -> float:
     """dc / dlog(Lambda^2/m^2) as Lambda -> infinity: H(0) gamma / (4 pi), eq:c-log."""
-    return p.sig2 / (1 + p.g2 * p.sig2) * gamma / (4 * math.pi)
+    return p.sig2 / (1 + p.r * p.sig2) * gamma / (4 * math.pi)
 
 
 def log_slopes(solutions: Sequence[PowerLawSolution]) -> list[float]:
@@ -475,7 +476,9 @@ def main() -> None:
         print_inverse(nugget, *inverse_kernel_check(nugget))
 
     # (vi) d = 2 power law: UV-sensitive, but pinned near the pole at accessible cutoffs
-    solutions = [solve_power_law_2d(p1, **POWER_LAW, cutoff_over_mass=r) for r in POWER_LAW_CUTOFFS]
+    solutions = [
+        solve_power_law_2d(p1, **POWER_LAW, cutoff_over_mass=cutoff) for cutoff in POWER_LAW_CUTOFFS
+    ]
     print_power_law(solutions, log_asymptote_slope(p1, POWER_LAW["gamma"]))
 
     if errors_1d[-1] > FLOOR_MARGIN * floor_1d or errors_2d[-1] > FLOOR_MARGIN * floor_2d:

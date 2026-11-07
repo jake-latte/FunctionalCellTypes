@@ -24,7 +24,7 @@ We begin by making some simplifying assumptions for the spatial kernels:
     &&
     K^{(1),\text{post}} = k_1 I,
     &&
-    G = g^2 I
+    G = r I
 \end{align*}
 and studying the simplest possible case, where we have only one hidden layer. Redefining terms, we write:
 \begin{align*}
@@ -111,15 +111,15 @@ where $\lambda_q$ are the eigenvalues of $K$. This allows us to complete the inv
 \end{align*}
 Similarly, we can diagonalise
 \begin{align*}
-    \hat \Phi^{\mu,\nu}_{\alpha,\beta} K^{(1),\text{post}}_{\alpha,\beta} K^{(1),\text{pre}}_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
+    \hat \Phi^{\mu,\nu}_{\alpha,\beta} K^{(1),\text{post}}_{\alpha,\beta} K^{(1),\text{pre}}_{i,j} - r \delta^{\mu,\nu} \delta_{i,j}
     =
-    B^{\mu,\nu} K_{i,j} - g^2 \delta^{\mu,\nu} \delta_{i,j}
+    B^{\mu,\nu} K_{i,j} - r \delta^{\mu,\nu} \delta_{i,j}
     =
-    F_{i,q} ( \lambda_q B^{\mu,\nu} - g^2 \delta^{\mu,\nu} ) F^*_{j,q}
+    F_{i,q} ( \lambda_q B^{\mu,\nu} - r \delta^{\mu,\nu} ) F^*_{j,q}
 \end{align*}
 by defining
 \begin{align*}
-    \tilde B^{\mu,\nu}_q = \lambda_q B^{\mu,\nu} - g^2 \delta^{\mu,\nu}
+    \tilde B^{\mu,\nu}_q = \lambda_q B^{\mu,\nu} - r \delta^{\mu,\nu}
 \end{align*}
 Because the activation function is linear, $h \equiv \phi$ and we write
 \begin{align*}
@@ -162,7 +162,7 @@ The goal now is to diagonalise
     &&
     \text{and}
     &&
-    \tilde B_q = \frac{\lambda_q}{k_1} \tilde C^{-1} Y Y^{\top} \tilde C^{-1} - g^2 I_P
+    \tilde B_q = \frac{\lambda_q}{k_1} \tilde C^{-1} Y Y^{\top} \tilde C^{-1} - r I_P
 \end{align*}
 Consider firstly the $C$ kernel lurking inside the $B$ term:
 \begin{align*}
@@ -227,7 +227,7 @@ and consequently
 \begin{align*}
     \tilde B_q 
     = 
-    U \Big( \frac{\lambda_q}{k_1} D_{C}^{-2} S_Y^2 - g^2 I_P \Big) U^{\top}
+    U \Big( \frac{\lambda_q}{k_1} D_{C}^{-2} S_Y^2 - r I_P \Big) U^{\top}
     \equiv 
     U D_{B,q} U^{\top}
 \end{align*}
@@ -242,7 +242,7 @@ Thus we have diagonalised the problem
 \begin{align*}
     D_{A,q} = \lambda_q \frac{k_0}{m} S_X^2 + \sigma^2 I_P,
     &&
-    D_{B,q} = \frac{\lambda_q}{k_1} D_C^{-2} S_Y^2 - g^2 I_P,
+    D_{B,q} = \frac{\lambda_q}{k_1} D_C^{-2} S_Y^2 - r I_P,
     &&
     D_C = \frac1N \sum_q \lambda_q D_q + \frac{1}{k_1 \kappa} I_P
 \end{align*}
@@ -262,7 +262,7 @@ to solve:
     =
     a_q^{-1} - b_q
     =
-    \frac{1}{\lambda_q \hat s_X^2 + \sigma^2} - \frac{\lambda_q \hat s_Y^2}{c^2} + g^2
+    \frac{1}{\lambda_q \hat s_X^2 + \sigma^2} - \frac{\lambda_q \hat s_Y^2}{c^2} + r
     =
     \frac{\lambda_q}{h_q} - \frac{\lambda_q \typo{\hat s_Y^2}}{c^2}
 \end{align*}
@@ -270,7 +270,7 @@ where we have introduced
 \begin{align*}
     h_q 
     =
-    \frac{\lambda_q \hat s_X^2 + \sigma^2 }{\lambda_q^{-1} + g^2 (\hat s_X^2 + \hat \sigma^2_q)}
+    \frac{\lambda_q \hat s_X^2 + \sigma^2 }{\lambda_q^{-1} + r (\hat s_X^2 + \hat \sigma^2_q)}
 \end{align*}
 this gives
 \begin{align*}

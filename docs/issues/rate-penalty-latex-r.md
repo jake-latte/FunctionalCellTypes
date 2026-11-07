@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: in progress
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -51,3 +51,6 @@ the pending rename.
   every note are unchanged (the rename changes no value).
 - A reviewer reading `02_renormalisation_group.tex` eq. "G = r I" and the
   code's loss sees the same coefficient without a factor.
+- Note: the last criterion ("G = r I" and the code's loss show the same coefficient
+  without a factor) is met only after `rate-penalty-code` lands; until then the
+  code's coefficient is `rate_lambda = r / (2 beta)`.

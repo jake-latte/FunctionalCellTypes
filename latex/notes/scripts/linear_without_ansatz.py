@@ -1,7 +1,7 @@
 """Solve the linear one-hidden-layer fixed point without the shared-basis ansatz.
 
 Per spatial frequency q = 0, ..., N-1 the data-interaction matrix is
-    Sigma_q = (M_q - lam_q B)^{-1},   M_q = (lam_q A + sigma^2 I)^{-1} + g^2 I,
+    Sigma_q = (M_q - lam_q B)^{-1},   M_q = (lam_q A + sigma^2 I)^{-1} + r I,
     A = (k0/m) X X^T,                 B = (1/k1) Ct^{-1} Y Y^T Ct^{-1},
 and the only coupling between frequencies is the hidden-layer kernel
     Ct = delta I + (1/N) sum_q lam_q Sigma_q,    delta = 1/(k1 kappa).
@@ -37,7 +37,7 @@ KERNEL_WIDTH = np.sqrt(2.0)  # K_ij = exp(-r_ij^2 / (2 w^2))
 SX2 = np.array([2.0, 1.4, 1.0, 0.7, 0.4, 0.2])  # singular values^2 of X
 SY2 = np.array([1.0, 0.8, 0.6, 0.4, 0.25, 0.15])  # singular values^2 of Y (eps = 0)
 ROTATION_ANGLE = np.pi / 6  # output basis vs input basis at eps = 1
-PARAMS_DEFAULT = {"k0": 0.7, "k1": 1.3, "sig2": 0.2, "g2": 0.3, "delta": 0.5}
+PARAMS_DEFAULT = {"k0": 0.7, "k1": 1.3, "sig2": 0.2, "r": 0.3, "delta": 0.5}
 EPS_CHECK = (0.02, 0.01)  # perturbative check: the residual must halve
 C_START, C_START_ALT = 5.0, 50.0  # two starts, both with a small tilt
 DAMPING, TOL, MAX_ITER = 0.5, 1e-12, 50_000
@@ -54,7 +54,7 @@ class Params:
     k0: float
     k1: float
     sig2: float
-    g2: float
+    r: float
     delta: float
 
 
@@ -65,8 +65,8 @@ class NotPositiveDefiniteError(ValueError):
 # --- spatial kernel -----------------------------------------------------------------
 def ring_kernel(n_sites: int, width: float) -> np.ndarray:
     """Translation-invariant Gaussian kernel on a periodic ring, shape (N, N)."""
-    r = np.minimum(np.arange(n_sites), n_sites - np.arange(n_sites))
-    row = np.exp(-(r**2) / (2 * width**2))
+    dist = np.minimum(np.arange(n_sites), n_sites - np.arange(n_sites))
+    row = np.exp(-(dist**2) / (2 * width**2))
     return np.array([np.roll(row, i) for i in range(n_sites)])
 
 
@@ -80,9 +80,9 @@ def ring_eigenvalues(n_sites: int, width: float) -> np.ndarray:
 
 # --- the per-frequency fixed-point map -----------------------------------------------
 def prior_precision(lam: np.ndarray, A: np.ndarray, p: Params) -> np.ndarray:
-    """M_q = (lam_q A + sigma^2 I)^{-1} + g^2 I, shape (N, P, P); depends on X only."""
+    """M_q = (lam_q A + sigma^2 I)^{-1} + r I, shape (N, P, P); depends on X only."""
     I = np.eye(A.shape[0])
-    return np.linalg.inv(lam[:, None, None] * A + p.sig2 * I) + p.g2 * I
+    return np.linalg.inv(lam[:, None, None] * A + p.sig2 * I) + p.r * I
 
 
 def tilt(Ct: np.ndarray, YY: np.ndarray, p: Params) -> np.ndarray:
@@ -191,16 +191,16 @@ def full_kernel_map(
     """
     n_sites, P = K.shape[0], A.shape[0]
     I = np.eye(n_sites * P)
-    precision = np.linalg.inv(np.kron(A, K) + p.sig2 * I) - (np.kron(tilt(Ct, YY, p), K) - p.g2 * I)
+    precision = np.linalg.inv(np.kron(A, K) + p.sig2 * I) - (np.kron(tilt(Ct, YY, p), K) - p.r * I)
     Cov = np.linalg.inv(precision).reshape(P, n_sites, P, n_sites)
     return p.delta * np.eye(P) + np.einsum("ij,uivj->uv", K, Cov) / n_sites
 
 
 # --- the commuting case: the scalar reduction ----------------------------------------
 def h_over_lam(lam: np.ndarray, sx2hat: float, p: Params) -> np.ndarray:
-    """h_q / lam_q = a / (1 + g^2 a) with a = lam_q sX^2 + sigma^2; finite at lam_q = 0."""
+    """h_q / lam_q = a / (1 + r a) with a = lam_q sX^2 + sigma^2; finite at lam_q = 0."""
     a = lam * sx2hat + p.sig2
-    return a / (1 + p.g2 * a)
+    return a / (1 + p.r * a)
 
 
 def bisect(f: Callable[[float], float], lo: float, hi: float, n: int = BISECT_STEPS) -> float:
@@ -231,7 +231,7 @@ def scalar_roots(lam: np.ndarray, sx2hat: np.ndarray, sy2hat: np.ndarray, p: Par
 
 def prior_scalar(lam: np.ndarray, p: Params) -> float:
     """Prior c on a direction orthogonal to both Gram matrices (eq:c0 of the note)."""
-    return p.delta + p.sig2 / (1 + p.g2 * p.sig2) * lam.mean()
+    return p.delta + p.sig2 / (1 + p.r * p.sig2) * lam.mean()
 
 
 # --- instance: input basis U, output basis U R(angle) ------------------------------
@@ -406,7 +406,7 @@ def non_commuting_solution(inst: Instance, p: Params, eps: float = 1.0) -> NonCo
 
 @dataclass(frozen=True)
 class FirstOrder:
-    """First-order theory in the basis U. Index layout [q, r, p] per frequency, [p, r] otherwise.
+    """First-order theory in the basis U. Index layout [q, t, p] per frequency, [p, t] otherwise.
 
     c, d: zeroth-order diagonals of Ct (P,) and Sigma_q (N, P).
     B1, C1: eq:first-order, (P, P).  Sigma1: eq:Sigma1, (N, P, P).
@@ -426,20 +426,20 @@ def first_order(inst: Instance, p: Params) -> FirstOrder:
 
     In the basis U: c and d from the scalar reduction (eq:linear-soln), T from eq:T, B1 and C1
     from eq:first-order, Sigma1 from eq:Sigma1, Theta from eq:theta. Index layout: B1, C1, T
-    are [p, r]; d is [q, p]; Sigma1 and Theta are [q, r, p], so Theta[q, r, p] is the
-    coefficient of e_r in column p of the eigenbasis of Sigma_q (zero on the diagonal).
+    are [p, t]; d is [q, p]; Sigma1 and Theta are [q, t, p], so Theta[q, t, p] is the
+    coefficient of e_t in column p of the eigenbasis of Sigma_q (zero on the diagonal).
     """
     lam, P = inst.lam, len(inst.sx2)
     sx2hat, sy2hat, Ehat = inst.sx2hat(p), inst.sy2hat(p), inst.E / p.k1
     c = scalar_roots(lam, sx2hat, sy2hat, p)
     hl = np.array([h_over_lam(lam, sx, p) for sx in sx2hat]).T  # (N, P)
     d = c**2 * hl / (c**2 - sy2hat * lam[:, None] * hl)
-    T = np.einsum("q,qp,qr->pr", lam**2, d, d) / len(lam)
-    cp, cr = c[:, None], c[None, :]
-    B1 = Ehat * cp * cr / (cp**2 * cr**2 + T * (sy2hat[None, :] * cp + sy2hat[:, None] * cr))
+    T = np.einsum("q,qp,qt->pt", lam**2, d, d) / len(lam)
+    cp, ct = c[:, None], c[None, :]
+    B1 = Ehat * cp * ct / (cp**2 * ct**2 + T * (sy2hat[None, :] * cp + sy2hat[:, None] * ct))
     C1 = T * B1
     Sigma1 = lam[:, None, None] * d[:, :, None] * d[:, None, :] * B1
-    gap = d[:, None, :] - d[:, :, None]  # [q, r, p] = d_qp - d_qr
+    gap = d[:, None, :] - d[:, :, None]  # [q, t, p] = d_qp - d_qt
     off = ~np.eye(P, dtype=bool)
     Theta = np.zeros_like(Sigma1)
     Theta[:, off] = (Sigma1 / np.where(off, gap, 1.0))[:, off]
@@ -473,7 +473,7 @@ def first_order_residuals(
 def theta_denominator(
     inst: Instance, p: Params, c: np.ndarray, pair: tuple[int, int], lam: float
 ) -> float:
-    """Denominator of eq:theta for the modes (p, r) = pair as a function of lam_q."""
+    """Denominator of eq:theta for the modes (p, t) = pair as a function of lam_q."""
     sx, sy = inst.sx2hat(p), inst.sy2hat(p)
     i, j = pair
     input_term = (sx[i] - sx[j]) / ((lam * sx[i] + p.sig2) * (lam * sx[j] + p.sig2))
@@ -615,10 +615,10 @@ def report_instance(inst: Instance, p: Params) -> None:
 
 def report_commuting_case(inst: Instance, p: Params) -> None:
     """Check (ii): the commuting case reproduces the scalar roots."""
-    r = commuting_check(inst, p)
+    res = commuting_check(inst, p)
     print("\n[commuting case, eps = 0]")
-    row("eig(Ct) - scalar roots, max abs", f"{r.root_error:.1e}")
-    row("off-diagonal fraction of Ct in U", f"{r.offdiag_fraction:.1e}")
+    row("eig(Ct) - scalar roots, max abs", f"{res.root_error:.1e}")
+    row("off-diagonal fraction of Ct in U", f"{res.offdiag_fraction:.1e}")
 
 
 def report_non_commuting_case(inst: Instance, p: Params) -> None:
@@ -650,64 +650,68 @@ def report_non_commuting_case(inst: Instance, p: Params) -> None:
 def report_perturbative_check(inst: Instance, p: Params) -> None:
     """Check (iv): first-order theory against the solver; the pair nearest an avoided crossing."""
     theory = first_order(inst, p)
-    r = first_order_residuals(inst, p)
+    res = first_order_residuals(inst, p)
     q_lo, q_hi = 0, inst.n_sites // 2
     print("\n[first-order theory vs solver]")
     row("max |C1|, max |Theta|", f"{np.abs(theory.C1).max():.4f}, {np.abs(theory.Theta).max():.4f}")
-    for eps, rc, rt in zip(r.eps, r.C1, r.Theta):
+    for eps, rc, rt in zip(res.eps, res.C1, res.Theta):
         row(f"eps={eps}: max |C1_num - C1|, |Theta_num - Theta|", f"{rc:.2e}, {rt:.2e}")
-    ratios = f"C1 {r.C1[0] / r.C1[1]:.2f}, Theta {r.Theta[0] / r.Theta[1]:.2f}  (2 = O(eps))"
+    ratios = (
+        f"C1 {res.C1[0] / res.C1[1]:.2f}, Theta {res.Theta[0] / res.Theta[1]:.2f}  (2 = O(eps))"
+    )
     row("residual ratio eps -> eps/2", ratios)
     scale_dependence = np.abs(theory.Theta[q_lo] - theory.Theta[q_hi])
-    r_idx, p_idx = (
+    t_idx, p_idx = (
         int(i) for i in np.unravel_index(scale_dependence.argmax(), scale_dependence.shape)
     )
     thetas = (
-        f"Theta[q=0]={theory.Theta[q_lo, r_idx, p_idx]:.4f}, "
-        f"Theta[q=N/2]={theory.Theta[q_hi, r_idx, p_idx]:.4f}"
+        f"Theta[q=0]={theory.Theta[q_lo, t_idx, p_idx]:.4f}, "
+        f"Theta[q=N/2]={theory.Theta[q_hi, t_idx, p_idx]:.4f}"
     )
-    row(f"largest scale dependence: (Theta_q)_(r,p), (r,p)=({r_idx + 1},{p_idx + 1})", thetas)
-    # the denominator of eq:theta for the pair (p, r) is odd under p <-> r, so lam* is the same
-    lam_star = resonance_lambda(inst, p, theory.c, (p_idx, r_idx))
+    row(f"largest scale dependence: (Theta_q)_(t,p), (t,p)=({t_idx + 1},{p_idx + 1})", thetas)
+    # the denominator of eq:theta for the pair (p, t) is odd under p <-> t, so lam* is the same
+    lam_star = resonance_lambda(inst, p, theory.c, (p_idx, t_idx))
     where = "none above lam_max" if lam_star is None else f"{lam_star:.2f}"
     row(
-        f"eq:theta denominator for modes ({r_idx + 1},{p_idx + 1}) vanishes at lam*",
+        f"eq:theta denominator for modes ({t_idx + 1},{p_idx + 1}) vanishes at lam*",
         f"{where} (lam_max = {inst.lam.max():.2f})",
     )
 
 
-def print_rank_deficient_check(r: RankDeficientCheck) -> None:
+def print_rank_deficient_check(res: RankDeficientCheck) -> None:
     """Check (v) lines shared by the two rank-deficient instances."""
-    row("relative commutator |[G_X, G_Y]|", f"{r.commutator_G:.3f}")
-    row("relative commutator of the Gram matrices on col(Z)", f"{r.commutator_restricted:.3f}")
-    row("max |Pi Ct Pi_perp|", f"{r.block_offdiag:.1e}")
-    row("max |Pi_perp Ct Pi_perp - c0 Pi_perp|", f"{r.complement_error:.1e}   (c0 = {r.c0:.6f})")
-    row("eig(Ct)", np.round(r.eig_Ct, 4))
-    row("largest angle (deg) in col(Z) of a Sigma_q eigvec to q=0", f"{r.max_angle_to_q0:.1f}")
+    row("relative commutator |[G_X, G_Y]|", f"{res.commutator_G:.3f}")
+    row("relative commutator of the Gram matrices on col(Z)", f"{res.commutator_restricted:.3f}")
+    row("max |Pi Ct Pi_perp|", f"{res.block_offdiag:.1e}")
+    row(
+        "max |Pi_perp Ct Pi_perp - c0 Pi_perp|", f"{res.complement_error:.1e}   (c0 = {res.c0:.6f})"
+    )
+    row("eig(Ct)", np.round(res.eig_Ct, 4))
+    row("largest angle (deg) in col(Z) of a Sigma_q eigvec to q=0", f"{res.max_angle_to_q0:.1f}")
 
 
 def report_rank_deficient(p: Params) -> None:
     """Check (v) with orthonormal Z: the block structure, and rotation within col(Z)."""
     rd = make_rank_deficient_instance(np.random.default_rng(SEED_RANK_DEFICIENT))
-    r = rank_deficient_check(rd, p)
+    res = rank_deficient_check(rd, p)
     P, L = rd.Z.shape
     print(
         f"\n[rank-deficient task, L={L} < P={P}, orthonormal Z, non-commuting G_X, G_Y]"
-        f"  ({r.n_iter} iterations)"
+        f"  ({res.n_iter} iterations)"
     )
-    print_rank_deficient_check(r)
+    print_rank_deficient_check(res)
 
 
 def report_rank_deficient_non_orthonormal(p: Params) -> None:
     """Check (v) with [G_X, G_Y] = 0 but Z^T Z not proportional to I: the bases still rotate."""
     rd = make_commuting_latents_non_orthonormal_z(np.random.default_rng(SEED_RANK_DEFICIENT))
-    r = rank_deficient_check(rd, p)
+    res = rank_deficient_check(rd, p)
     P, L = rd.Z.shape
     print(
         f"\n[rank-deficient task, L={L} < P={P}, Z^T Z off-diagonal {ZZ_OFFDIAG}, "
-        f"G_X = I, G_Y = diag{GY_DIAG}]  ({r.n_iter} iterations)"
+        f"G_X = I, G_Y = diag{GY_DIAG}]  ({res.n_iter} iterations)"
     )
-    print_rank_deficient_check(r)
+    print_rank_deficient_check(res)
 
 
 def main() -> None:
