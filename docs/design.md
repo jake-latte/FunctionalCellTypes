@@ -453,8 +453,9 @@ holds b0 < B members, adding K = B - b0. The contract:
   or spectrum, per-layer lists of each member) a member axis of B; the RNG state stays the old run's. final.pt is
   replaced (atomically) by the result stamped with `train_hash` of the new config: it IS the B-member artefact, and
   `net.B` stays in the train hash, so no existing cache changes hash. Then the old run's leftover periodic
-  `train/ckpt_*.pt` (stamped with the b0 hash; nothing resumes from them) and the staging directory are deleted, each
-  removal logged; a crash in between leaves a done setting, whose leftover staging directory the next `run_setting`
+  `train/ckpt_*.pt` (stamped with the b0 hash; nothing resumes from them; `remove_stale_checkpoints` deletes every
+  checkpoint whose hash is not final.pt's) and the staging directory are deleted, each removal logged; a crash in
+  between leaves a done setting, whose leftover stale checkpoints and staging directory the next `run_setting`
   removes (logged). A single network (b0 = 1) and a block of one (K = 1) gain their member axis on append.
 - Equality with a from-scratch run of B. Under Adam (no noise) the new members equal members b0 .. B-1 of a
   from-scratch run bit for bit, history and monitor records included (`tests/test_ensemble_extend.py`), for K >= 2; a
@@ -474,11 +475,15 @@ holds b0 < B members, adding K = B - b0. The contract:
   checkpoint, stamped with the b0 hash. The readers of partial settings therefore check for final.pt first and show
   the b0 members it holds (`load_trained_members`), all n_epochs in: `report.load_setting_result` (one network, so for
   b0 = 1; provisional, with a note saying the extension is pending) and `phase_view.load_phase_run` (an ensemble;
-  ValueError if final.pt holds a single network).
-- config.json follows exp.json's `net.B` (`exp._write_or_reconcile_config`) unless an original run is part-way (its
-  checkpoints were written for the old B) or final.pt holds more members than the new B. So an extension can be
-  backed out: if it is interrupted and B is set back to b0 in exp.json, config.json goes back with it, the setting is
-  done again, and its abandoned staging directory is removed (logged).
+  ValueError if final.pt holds a single network). Like a checkpoint, a final.pt that cannot be read or is stale (a
+  running extension replaces it when it appends) is reported in a note (`SettingResult.note`, `PhaseRun.note`), not
+  raised.
+- config.json follows exp.json's `net.B` (`exp._write_or_reconcile_config`) unless `exp._net_B_refusal` objects,
+  with an ExpError naming net.B and the fix: an original run is part-way (its checkpoints were written for the old
+  B: set B back, let the run finish, then `exp extend`), final.pt is unreadable, or it holds more members than the new
+  B. So an extension can be backed out: once the extension job has stopped (crashed, or been cancelled), B set back to
+  b0 in exp.json takes config.json back with it, the setting is done again, and its abandoned staging directory is
+  removed (logged). Backing out while the job still runs would let it append to final.pt afterwards.
 - `extend_experiment` refuses (ExpError, exp.json unchanged) `K < 1`, an experiment with a `net.B` axis (even one of a
   single value, as in the `phase_transition` preset: the value is in every directory name and in the exp hash), and
   any partial setting: a run part-way wrote its checkpoints for the old B, and a pending extension would no longer
