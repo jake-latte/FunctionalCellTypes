@@ -121,6 +121,22 @@ def test_a_run_stopped_early_has_its_deficit_measured():
     assert not lr.is_stationary(fit, final_se)[0]
 
 
+def test_a_late_window_of_a_relaxed_run_is_stationary_and_conclusive():
+    """Fitted from the middle of a run relaxed early (tau = 300 of 2000 epochs), the deficit is
+    zero within an SE no larger than the window mean's, which is below the final record's SE:
+    the diagnostic can tell."""
+    epochs, records = _relaxing_records(tau=300.0, depth=0.6, seed=4)
+    fit = lr.relaxation_fit(epochs, records, _low_q_power, start=1000.0, n_boot=100)
+    final_se = _low_q_power(records[-1]).std(0) / records.shape[1] ** 0.5
+    assert lr.is_stationary(fit, final_se)[0]
+
+
+def test_the_deficit_se_is_never_below_the_window_means():
+    epochs, records = _relaxing_records(tau=300.0, depth=0.0, seed=5)
+    fit = lr.relaxation_fit(epochs, records, _low_q_power, n_boot=50)
+    assert float(fit.deficit_se[0]) > 0
+
+
 def test_the_relaxation_fit_needs_four_records():
     epochs, records = _relaxing_records(tau=300.0, depth=0.0, seed=3)
     with pytest.raises(ValueError, match="at least 4"):

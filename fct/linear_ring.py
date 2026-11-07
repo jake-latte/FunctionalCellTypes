@@ -213,40 +213,52 @@ def relaxation_fit(
     epochs: Tensor,
     records: Tensor,
     statistics: Callable[[Tensor], Tensor],
+    start: float | None = None,
     n_boot: int = 200,
 ) -> RelaxationFit:
-    """Fit y(t) = A - C exp(-t / tau) to the member-averaged statistics of each record.
+    """Fit y(t) = A - C exp(-(t - t_0) / tau) to the member-averaged statistics of the records
+    from epoch `start` on (all records if None).
 
     `records` (R, B, K, N) are the members' spectra at `epochs` (R,); `statistics` maps a mean
     spectrum (..., K, N) to (..., S). The deficit C exp(-(t_end - t_0) / tau) is what the fitted
-    relaxation leaves at the last record; its SE is half the 16-84% range of the refitted deficit
-    over `n_boot` resamples of the members (the members are independent chains, so no
-    autocorrelation time enters). A stationary series gives a deficit near 0 within that SE.
+    relaxation leaves at the last record. Fitting all records gives the time constant of the
+    main relaxation; to test the end of a run, fit a late window (`start`), where a relaxation
+    still under way shows as a drift that extrapolates to a deficit. The deficit's SE is the
+    larger of half the 16-84% range of the refitted deficit over `n_boot` resamples of the
+    members (the members are independent chains, so no autocorrelation time enters) and the
+    bootstrap SE of the window's mean statistic: a fit whose tau falls inside the first record
+    spacing puts the deficit at exactly 0 in every resample, and the floor keeps it from
+    claiming more precision than the window's data has.
     """
-    if records.shape[0] < 4:
-        raise ValueError(f"need at least 4 records to fit a relaxation, got {records.shape[0]}")
-    t = epochs.to(F64)
+    window = torch.ones_like(epochs, dtype=torch.bool) if start is None else epochs >= start
+    if int(window.sum()) < 4:
+        raise ValueError(f"need at least 4 records to fit a relaxation, got {int(window.sum())}")
+    t = epochs[window].to(F64)
+    records = records[window]
     y = statistics(records.mean(1))  # (R, S)
     A, C, tau = _fit_relaxation(t, y)
     end = float(t[-1] - t[0])
     deficit = C * torch.exp(-end / tau)
     B = records.shape[1]
     gen = torch.Generator().manual_seed(0)
-    resampled = []
+    deficits, means = [], []
     for _ in range(n_boot):
-        members = torch.randint(B, (B,), generator=gen)
-        _, Cb, taub = _fit_relaxation(t, statistics(records[:, members].mean(1)))
-        resampled.append(Cb * torch.exp(-end / taub))
+        resampled = statistics(records[:, torch.randint(B, (B,), generator=gen)].mean(1))
+        _, Cb, taub = _fit_relaxation(t, resampled)
+        deficits.append(Cb * torch.exp(-end / taub))
+        means.append(resampled.mean(0))
     # Half the 16-84% range, the SD of a normal: a resample whose tau runs to the end of the
     # grid makes the plain SD meaningless while leaving the quantiles alone.
-    q16, q84 = torch.quantile(torch.stack(resampled), torch.tensor([0.16, 0.84], dtype=F64), dim=0)
-    return RelaxationFit(A, C, tau, deficit, (q84 - q16) / 2)
+    q16, q84 = torch.quantile(torch.stack(deficits), torch.tensor([0.16, 0.84], dtype=F64), dim=0)
+    floor = torch.stack(means).std(0)
+    return RelaxationFit(A, C, tau, deficit, torch.maximum((q84 - q16) / 2, floor))
 
 
 def is_stationary(fit: RelaxationFit, se_max_b: Tensor) -> Tensor:
     """(S,) bool: the fitted deficit at the last record is below one standard error of the
-    statistic at B_max, the largest B that will be run (the accuracy budget of a regime)."""
-    return fit.deficit.abs() < se_max_b
+    statistic at B_max, the largest B that will be run (the accuracy budget of a regime), and
+    the fit can tell: its own SE is below that too (otherwise a small deficit is no evidence)."""
+    return (fit.deficit.abs() < se_max_b) & (fit.deficit_se < se_max_b)
 
 
 # ------------------------------------------------------------------ comparison rules
