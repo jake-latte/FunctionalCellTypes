@@ -56,7 +56,7 @@ Depends on `latent-bounds`, `orthonormal-teacher`, `whitened-spatial-prior`,
   preset crosses `spatial.parametrisation` with `train.lr` and the diagonal (settings 0
   and 3) is the experiment; setting 1 is refused at run start, setting 2 runs (the lr
   check of the whitened net).
-- `linear_ring`: N 512, ell 2 sites, P 256, m = n = 4, K 3, beta 10, B 64,
+- `linear_ring`: N 512, ell 2 sites, P 256, m = n = 4, K 3, beta 10, B 32,
   min_rel_eig 1e-6, lr 9e-5 (penalty) and 0.96 (whitened), 0.9 of each check's bound;
   2 x 10^6 epochs (the penalty's relaxation time is an estimate, 6 x 10^5 epochs).
 - `linear_ring_tiny`: the smoke geometry at beta 0.25, B 256, min_rel_eig 1e-3, lrs
@@ -69,11 +69,14 @@ Depends on `latent-bounds`, `orthonormal-teacher`, `whitened-spatial-prior`,
 geometry, beta 10): exact over predicted q = 0 power of mode 1 is 0.53, 0.69, 0.81,
 0.90, 0.94 at N = 16, 32, 64, 128, 256, and the old `linear_ring` (N 64, m 8) at beta 10
 gives 0.57; at beta 0.25 the theory has the sign of the data effect wrong (about 5%
-below the prior on both rings). At ell = 2, P = 256, K = 3, m = n = 4, beta = 10 and
-B = 64 the exact-minus-predicted error on the primary statistics is 0.3-0.8 SE at
-N = 256 and 0.3-0.6 SE at N = 512 (relative 0.1-1.3% and 0.06-0.7%); N = 512 keeps
-it below one third of the 3-SE margin with room for a larger B. The data term moves
-R(1)/R(0) by 47/7/5 SE (modes 1/2/3), the band share by 30/4/3 SE.
+below the prior on both rings). At ell = 2, P = 256, K = 3, m = n = 4, beta = 10 the
+exact-minus-predicted error on the primary statistics, in SEs at B = 64, is 0.1-0.8 at
+N = 256 and 0.1-0.55 at N = 512 (relative 0.1-1.3% and 0.06-0.7%). The plan's regime
+rule asks for at most one SE at B_max, the largest B run including the fourfold
+follow-up extension: with B = 32 (B_max = 128) N = 512 gives at most 0.78 SE, while
+N = 256 would give 1.1. The data term moves R(1)/R(0) by 33/5/3.5 SE (modes 1/2/3) and
+the band share by 21/3.1/2.2 SE at B = 32, twice that at B_max. N = 1024 would allow
+B = 64 (B_max 256) at twice the cost.
 
 ### Estimator
 A member's tuning map is a real Gaussian field, so its power is D(q) chi^2_1 at q = 0,

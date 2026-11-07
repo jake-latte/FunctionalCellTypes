@@ -1148,16 +1148,16 @@
   "exp_hash": "92a38f1a8ff5",
   "n_settings": 4,
   "train": [
-   "9e0a378ed4d1",
-   "ab5286b39bc9",
-   "f7a8836589ac",
-   "1d4e1033d4ba"
+   "a55ea158ac4a",
+   "95e5d946af3a",
+   "a2fdb8480586",
+   "87f4d7296dba"
   ],
   "solve": [
-   "f7279834cf66",
-   "2e5d6173c167",
-   "653daa2b5c3e",
-   "e0ad6a56c6f6"
+   "fb5cddf0538c",
+   "9ce258a7042a",
+   "00dbc94b963d",
+   "1cf22a2c7019"
   ],
   "relpaths": [
    "linear_teacher/s0000_parametrisationpenalty_lr9e-05",
