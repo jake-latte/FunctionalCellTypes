@@ -548,6 +548,7 @@ def make_monitor(dataset: Dataset, cfg: Config) -> Monitor      # the maker trai
 def make_mir_monitor(dataset: Dataset, cfg: Config) -> Monitor  # ValueError if dataset.factors is None
 def make_spectrum_monitor(dataset: Dataset, cfg: Config) -> Monitor   # ValueError if dataset.factors is None or latent_basis refuses them
 def spectrum_record(H (P, L, N), U (P, K)) -> dict[str, list[Tensor]]  # one record of the spectrum monitor, pure
+def spectrum_records(history: History) -> Tensor (R, B, L, K + 1, N)  # monitor_spectrum stacked; B = 1 for a single network; ValueError without spectrum records
 SPECTRUM_MONITOR_KEYS = ("spectrum", "hex", "theta_hist")
 ```
 
@@ -576,7 +577,8 @@ equal to the rates). Every value is a list over hidden layers of CPU tensors:
 | `hex`        | (2,) float32, K >= 3 only | Re, Im of `hexatic_moment(t2, t3)`, the contrasts of the tuning maps     |
 | `theta_hist` | (36,) int64, K >= 3 only  | `theta_histogram(t2, t3)`                                               |
 
-So `monitor_spectrum` stacks to (records, layers, K+1, N), and to (records, members, layers, K+1, N) for an ensemble.
+So `monitor_spectrum` stacks to (records, layers, K+1, N), and to (records, members, layers, K+1, N) for an ensemble;
+`spectrum_records` returns the latter for both (B = 1 for a single network), and its last record is the final state.
 `SPECTRUM_MONITOR_KEYS` lists the keys of a K >= 3 record; for K < 3 a record holds `spectrum` alone. `hex` and
 `theta_hist` are recorded for every K >= 3 but are meaningful only at K = 3: for K >= 4 the contrast directions
 u_2..u_K have near-degenerate singular values, so `(u_2, u_3)` is an arbitrary plane of that space.
@@ -1072,7 +1074,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
 # Presets: base experiments stored as data. fct/presets/<name>.json, one complete ExpConfig per file (no inheritance, no comments), is the only
 # definition of a preset; its `description` carries the prose and caveats, so read the file rather than a copy here. The names are tiny, full,
 # modularity (the same as full, two files: both names are in use), lambda_exp (the two lambda axes are 7 log-spaced values, one per decade, np.logspace(-6, 0, 7)),
-# spatial_tiny, spatial_n_scan, spatial_exp, phase_transition. To change a preset edit its file; to add one, add `<name>.json` with name matching
+# spatial_tiny, spatial_n_scan, spatial_exp, phase_transition, linear_ring, linear_ring_tiny (see "The linear-ring presets" below). To change a preset edit its file; to add one, add `<name>.json` with name matching
 # [A-Za-z_][A-Za-z0-9_]*. Files are read at call time, so a new file is seen at once with an editable install; a wheel holds the files it was built with.
 def preset(name, directory=None) -> ExpConfig    # the base experiment <directory or fct/presets>/<name>.json, read through importlib.resources (so also from inside a wheel) and validated; PresetError (an ExpError, so a ValueError) naming the full path if the name is unknown (the message lists the presets and the ignored files) or the file is unreadable or invalid
 def preset_names(directory=None) -> list[str]     # sorted, found at call time: regular files `<stem>.json` with stem matching [A-Za-z_][A-Za-z0-9_]*; folders (even `x.json`), dotfiles, a bare `.json`, README and other files are ignored; `*.json` files whose stem breaks the rule are reported by the unknown-preset error
@@ -1151,6 +1153,41 @@ axes line width 1.2), `LINE_WIDTH`, `MARKER_SIZE`, `ANNOTATION_SIZE` (heatmap ce
 Heights stay in each `fig_*` and grow with the number of rows of panels. The legends of `plot_loss_curves` (right of the axis) and
 `plot_prediction_scatter` (below it) assume such a constrained-layout figure and may clip in a caller-supplied `ax`. The notebook
 sets `figure.dpi = 100` (about 1300 px wide; the executed notebook of the 36-setting experiment is ~14 MB and is not committed).
+
+### The linear-ring presets
+
+`linear_ring` (N = 64, P = 256, m = 8, K = 3, length_scale 4 sites, B = 64, 2 x 10^5 epochs) and `linear_ring_tiny`
+(N = 16, P = 32, m = 4, K = 2, length_scale 2, B = 256, 10^4 epochs, CPU) are the linear theory of
+`linear_theory.py` at sigma = 0: linear_teacher with an orthonormal teacher and latents on [0, 1], phi id, L = 1,
+k0 = k1 = 1 (input and output kernels of length_scale 0, weight_lambda 1), r = rate_lambda = 0, beta 0.25, SGLD in
+float64, grid embeddings with box = N, `init = "prior"` and the spectrum monitor. Each file's description carries the
+predicted numbers and every choice below.
+
+- Sampling: one sample per member, its final state; B is the sample size and a shared field, not an axis. Statistics
+  are of the member-averaged final-state spectrum with bootstrap errors over members (`bootstrap_members`); the
+  records are a burn-in diagnostic only.
+- `spatial.parametrisation` and `train.lr` are crossed (axes are a product; nothing pairs them), and the diagonal is
+  the experiment: setting 0 is the penalty at its lr, setting 3 the whitened net at its own; run them with
+  `exp run ROOT --index 0` and `--index 3`. Setting 1 (penalty at the whitened lr) is refused at run start by the
+  penalty's step check; setting 2 (whitened at the penalty lr) runs and shows the whitened result does not depend on lr.
+- Each lr comes from its own run-start check. Penalty: lr k_max = 0.48 with k_max = weight_lambda / (beta
+  min_rel_eig lambda_0), the curvature of the floored modes (the check refuses lr k_max >= 2); their Euler
+  inflation (1.3x) carries a negligible part of the power. Whitened: lr lambda_max(loss Hessian) = 0.03 (tiny) and
+  0.025 (full), the value the check logs (it refuses 1). `min_rel_eig` is 1e-3 on the smoke ring and 1e-4 at full
+  size, small enough that the floor moves R(1)/R(0) by 3e-3 and 9e-4, large enough that the penalty's soft modes relax
+  in 2 x 10^3 and 2 x 10^4 epochs; under the default 1e-6 the check would refuse any lr above 2.5e-6 and 5e-6.
+
+The smoke test (`tests/test_linear_ring_smoke.py`, about a minute on one CPU thread) runs both diagonal settings of
+`linear_ring_tiny` through the CLI. Its estimator and tolerances (`tests/linear_ring_helpers.py`) follow from the
+predicted law: a member's tuning map is a real stationary Gaussian field, so its power is D(q) chi^2_1 at q = 0, N/2
+and D(q) Exp(1) elsewhere, shared by q and -q (folding +-q gains nothing). The delta method on the member mean then
+gives at B = 256 the standard errors 0.021 (q = 0 share), 0.0042 (R(1)/R(0)), 4.2% (power over |q| <= 3) and 0.44 (the
+ratio of the two modes' band powers, predicted 7.37). The tolerance is three times SE_MAX = 1.35 x these (the 99th
+percentile of a bootstrap SE over the true one is 1.30), and the test fails if a bootstrap SE exceeds SE_MAX.
+`tests/test_linear_ring_estimator.py` checks all of this on ensembles drawn from the predicted law before it is
+trusted on SGLD. At beta 0.25 the prediction is within 0.11 SE of the prior alone, so the smoke test checks the
+sampler and the measurement, not the data term. At beta = 10 the smoke ring is too small for the theory: SGLD gives
+mode 1 about half the predicted q = 0 power (0.72 of it at N = 64, 1.00 at N = 256, the theory's large-N limit).
 
 ## report.py and notebooks/
 
@@ -1479,7 +1516,8 @@ Python number, of `(..., N)` a tensor `(...)`. Index convention: `u_k` is column
 the angle uses rows 1 and 2 of `tuning_maps`.
 
 Every estimator is per network: one trained network, or one ensemble member, gives one sample of each spectrum
-and summary, and spread is taken across members (`member_mean_sem`). `average_records` / `record_sem` pool the
+and summary, and spread is taken across members (`member_mean_sem`, or `bootstrap_members` for a statistic of the
+member-averaged spectrum such as q_1/2 or a share of the mean spectrum). `average_records` / `record_sem` pool the
 records of one chain and are a diagnostic of burn-in and mixing, not an estimator: one SGLD chain is not trusted
 to visit independent networks.
 
@@ -1504,6 +1542,8 @@ average_records(records (R, ...), burn_in) -> (...)            # mean over recor
 integrated_autocorr_time(records (R, ...), burn_in) -> TauEstimate(tau (...), reliable (...) bool)   # 1 + 2 sum_k rho_k, Geyer's initial monotone sequence; NaN where not reliable
 record_sem(records (R, ...), burn_in) -> SemEstimate(sem, tau, reliable)   # sem = sqrt(C(0) tau / n), n_eff = n / tau; NaN exactly where not reliable
 member_mean_sem(values (B, ...)) -> (mean (...), sem (...))   # across independent members: std (ddof 1) / sqrt(B), B >= 2
+bootstrap_members(values (B, ...), statistic, n_boot=1000, seed=0) -> (estimate, sem)   # statistic(values.mean(0)) and the std (ddof 1) of the
+    # statistic over n_boot resamples of the members with replacement; statistic must batch over leading dims; own generator, B >= 2
 ```
 
 The latent basis needs latents on `[0, a]`. Then `u_1` is the mean direction, `s_1^2 / s_2^2 -> 3K + 1` and the
