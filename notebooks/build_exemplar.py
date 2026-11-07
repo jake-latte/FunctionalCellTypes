@@ -43,12 +43,14 @@ directories named by hashes of the settings: re-running reloads a finished step,
 interrupted one, and changing a solver setting re-solves without retraining.
 
 **What the theory is compared with.** `PRIOR_COEFF` is the coefficient of the squared weights in the loss, and the library's
-`weight_lambda` is $\\lambda_w = 2\\beta\\,\\texttt{PRIOR\\_COEFF}$ ($\\beta = 1$ for Adam), so SGLD and Adam train the same loss.
+`weight_lambda` is $\\lambda_w = 2\\beta\\,\\texttt{PRIOR\\_COEFF}$ ($\\beta = 1$ for Adam), so SGLD and Adam train the same weight prior.
+That holds for the weight prior only: `RATE_LAMBDA` is $r$, the rate coefficient of the stationary law, so the loss's
+rate term is $\\frac{\\texttt{RATE\\_LAMBDA}}{2\\beta}\\sum\\phi^2$ and differs between SGLD ($\\beta$ = `BETA`) and Adam ($\\beta = 1$).
 The loss puts the prior $\\frac{\\lambda_w}{2\\beta}\\sum W^2$
 on the squared weights, so at equilibrium each weight has variance $1 / \\lambda_w$
 for every $\\beta$; the readout acts as a Gaussian likelihood whose ridge is
-$\\alpha = \\lambda_w\\,P\\,m / \\beta$, the rate penalty is a tilt
-$2\\beta\\,\\texttt{RATE\\_LAMBDA}$, and the data term of the action has prefactor
+$\\alpha = \\lambda_w\\,P\\,m / \\beta$, the rate penalty
+$\\frac{\\texttt{RATE\\_LAMBDA}}{2\\beta}\\sum\\phi^2$ is a tilt $\\texttt{RATE\\_LAMBDA}$, and the data term of the action has prefactor
 $\\lambda_w / 2$ (one half only for unit prior scale). The solver's defaults are exactly these four constants (`fct.meanfield.network_constants`), so
 the theory is that of the distribution the net was sampled from.
 
@@ -85,8 +87,10 @@ PHI = "tanh"  # "tanh", "relu", "sigmoid" or "id" (linear)
 G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights
-PRIOR_COEFF = 1e-2  # coefficient of the sum of squared weights in the loss
-RATE_LAMBDA = 1e-3  # rate penalty"""
+PRIOR_COEFF = 1e-2  # loss coefficient of the sum of squared weights: weight_lambda = 2 beta PRIOR_COEFF
+# rate coefficient r of the stationary law, not of the loss: the loss carries r / (2 beta) sum phi^2.
+# Its value has not been re-tuned for that 1 / (2 beta) scaling of the loss's rate term.
+RATE_LAMBDA = 1e-3"""
 
 TRAINING = """OPTIMIZER = "sgld"  # "sgld" (Langevin noise of variance 2 * LR / BETA per step) or "adam"
 BETA = 10.0  # inverse temperature: read by SGLD, and the beta of the mean-field theory
@@ -97,6 +101,7 @@ TRAIN_SEED = 0"""
 SETUP = """import matplotlib as mpl
 
 from fct.cache import cache_root_from_env
+from fct.config import law_beta
 from fct.draw import fig_example_outputs, fig_loss_curves
 from fct.exemplar import (
     LiveView,
@@ -125,7 +130,7 @@ TRAIN = """CFG = exemplar_config(
     g=G,
     data_seed=DATA_SEED,
     net_seed=NET_SEED,
-    weight_lambda=PRIOR_COEFF * 2 * (1.0 if OPTIMIZER != "sgld" else BETA),
+    weight_lambda=PRIOR_COEFF * 2 * law_beta(OPTIMIZER, BETA),
     rate_lambda=RATE_LAMBDA,
     optimizer=OPTIMIZER,
     beta=BETA,

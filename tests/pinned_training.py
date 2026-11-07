@@ -11,7 +11,10 @@ behaviour is meant to change, and say so in the commit.
 Provenance: written by the code of `main` before the ensemble dimension (net.B) existed, so
 the pinned test proves B = 1 runs are unchanged by it. The config hashes (top level and in every
 file) were later rewritten in place, nothing else touched, when the data section's
-`latent_range` became `latent_min` / `latent_max`. "adam" is a monitored L2 run, "sgld" an
+`latent_range` became `latent_min` / `latent_max`, and again when LOSS_VERSION 5 scaled the rate
+penalty by 1 / (2 beta): `pinned_config` sets the rate_lambda (2e-3 for adam, 0.1 for sgld at
+beta 50) whose rate coefficient is the 1e-3 the runs were written with, and every other number
+of the files is unchanged. "adam" is a monitored L2 run, "sgld" an
 SGLD run with a dense spatial prior.
 """
 
@@ -42,11 +45,14 @@ def _spatial() -> SpatialConfig:
 def pinned_config(name: str, **net_kw) -> Config:
     """The config of pinned run `name` ("adam" or "sgld"); `net_kw` overrides net fields."""
     train = {"n_epochs": 7, "lr": 1e-2, "log_int": 2, "save_int": 3, "seed": 4}
+    # rate_lambda gives the rate coefficient rate_lambda / (2 beta) = 1e-3 (exactly, in floating
+    # point) of the runs as written, when the loss carried rate_lambda = 1e-3 unscaled.
     if name == "adam":
-        train |= {"monitor_int": 3}
+        train |= {"monitor_int": 3, "rate_lambda": 2e-3}
         spatial = None
     elif name == "sgld":
         train |= {"optimizer": "sgld", "beta": 50.0, "weight_lambda": 1e-2, "lr": 1e-3}
+        train |= {"rate_lambda": 0.1}
         spatial = _spatial()
     else:
         raise ValueError(f"unknown pinned run {name!r}")

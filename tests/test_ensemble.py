@@ -12,6 +12,7 @@ from fct.monitor import MIR_MONITOR_KEYS, make_mir_monitor
 from fct.sgld import SGLD
 from fct.train import (
     MONITOR_EPOCH,
+    LossCoefficients,
     _grad_norm,
     _step,
     compute_loss,
@@ -28,6 +29,7 @@ from tests.pinned_training import pinned_config, usum_monitor
 
 CPU, F64 = torch.device("cpu"), torch.float64
 QUIET = {"log": lambda s: None}
+COEFFICIENTS = LossCoefficients(prior=0.3, rate=0.1)  # arbitrary, so both penalties enter the loss
 D_IN, D_OUT = 4, 2
 
 
@@ -174,7 +176,7 @@ def test_forward_rejects_the_wrong_input_width():
 
 def _single_loss_and_grads(net: MLP, x, y, penalty=None):
     net.zero_grad()
-    loss, parts = compute_loss(net, x, y, 0.3, 0.1, penalty or MLP.weight_l2)
+    loss, parts = compute_loss(net, x, y, COEFFICIENTS, penalty or MLP.weight_l2)
     loss.backward()
     return parts, {n: p.grad.clone() for n, p in net.named_parameters()}
 
@@ -182,7 +184,7 @@ def _single_loss_and_grads(net: MLP, x, y, penalty=None):
 def test_ensemble_loss_is_the_sum_of_member_losses_with_member_gradients():
     ens, x = _ensemble(3), _x()
     y = torch.randn(5, D_OUT, dtype=F64, generator=torch.Generator().manual_seed(3))
-    loss, parts = compute_loss(ens, x, y, 0.3, 0.1)
+    loss, parts = compute_loss(ens, x, y, COEFFICIENTS)
     loss.backward()
     assert all(v.shape == (3,) for v in parts.values())
     torch.testing.assert_close(loss.detach(), parts["loss"].sum(), rtol=0, atol=0)
@@ -197,7 +199,7 @@ def test_ensemble_loss_is_the_sum_of_member_losses_with_member_gradients():
 def test_a_single_network_penalty_on_an_ensemble_fails_loudly():
     ens, x = _ensemble(2), _x()
     with pytest.raises(ValueError, match="per member"):
-        compute_loss(ens, x, torch.zeros(5, D_OUT, dtype=F64), 0.3, 0.1, MLP.weight_l2)
+        compute_loss(ens, x, torch.zeros(5, D_OUT, dtype=F64), COEFFICIENTS, MLP.weight_l2)
 
 
 def test_spatial_prior_of_an_ensemble_is_the_members_penalties():
@@ -217,12 +219,12 @@ def test_grad_norm_of_an_ensemble_is_each_members_with_the_spatial_prior():
     ens = make_net(cfg.net, D_IN, D_OUT, CPU, F64)
     singles = [ens.member(b) for b in range(3)]
     x, y = _x(), torch.randn(5, D_OUT, dtype=F64, generator=torch.Generator().manual_seed(3))
-    compute_loss(ens, x, y, 0.3, 0.1, make_weight_penalty(cfg, ens))[0].backward()
+    compute_loss(ens, x, y, COEFFICIENTS, make_weight_penalty(cfg, ens))[0].backward()
     norms = _grad_norm(ens)
     assert norms.shape == (3,)
     single_penalty = make_weight_penalty(_with_B(cfg, 1), singles[0])
     for b, single in enumerate(singles):
-        compute_loss(single, x, y, 0.3, 0.1, single_penalty)[0].backward()
+        compute_loss(single, x, y, COEFFICIENTS, single_penalty)[0].backward()
         torch.testing.assert_close(norms[b], _grad_norm(single), rtol=1e-12, atol=0)
 
 
@@ -277,7 +279,7 @@ def _single_noise(gen):
 def _sgld_steps(net, optim, x, y, k):
     for _ in range(k):
         optim.zero_grad()
-        compute_loss(net, x, y, 0.01, 0.1)[0].backward()
+        compute_loss(net, x, y, LossCoefficients(0.01, 0.1))[0].backward()
         optim.step()
 
 

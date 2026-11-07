@@ -258,8 +258,10 @@ uv run python -m fct plot CACHE_DIR           # figures that need results (--whi
 uv run python -m fct plot-example CACHE_DIR   # figure that needs no results
 ```
 
-`solve` uses `train.rate_lambda` as its rate tilt, the per-sample coefficient of the trained
-(summed) rate penalty; `--set meanfield.rate_tilt=...` overrides it. The `meanfield` section
+`solve` uses `train.rate_lambda` as its rate tilt: training puts the rate penalty
+`rate_lambda / (2 beta) * sum phi^2` in the loss (beta = `train.beta` under SGLD, 1 under Adam),
+so the law exp(-beta L) carries `(rate_lambda / 2) sum phi^2` for every beta; `--set
+meanfield.rate_tilt=...` overrides it. The `meanfield` section
 holds the problem (points, `beta`, prior, `alpha`, rate tilt); how it is solved lives in
 `meanfield.solver`, e.g. `--set meanfield.solver.sampler=importance` for importance sampling
 from the prior instead of HMC, or `--set meanfield.solver.n_chains=512`. A `config.json` in

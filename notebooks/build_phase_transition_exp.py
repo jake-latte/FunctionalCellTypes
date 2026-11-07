@@ -400,7 +400,7 @@ The loss and its three raw terms as logged during training, against epoch on a l
 **mean over the $B$ members** with a band of one standard error of that mean,
 $$\bar f(t) = \frac{1}{B} \sum_{b=1}^{B} f_b(t), \qquad \mathrm{sem}(t) = \frac{1}{\sqrt{B}} \sqrt{\frac{1}{B - 1} \sum_{b=1}^{B} \big(f_b(t) - \bar f(t)\big)^2},$$
 for $f \in \{\mathcal{L}, \mathrm{mse}, \Omega_w, \Omega_r\}$ with
-$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \lambda_r\, \Omega_r,$$
+$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \frac{\lambda_r}{2\beta}\, \Omega_r,$$
 where $\Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top)$ and $\Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$.
 The terms are drawn unweighted, so they do not add up to the $\mathcal{L}$ curve; a term that is zero at
 every epoch has no point on a log y-axis and is marked "(zero)" in the legend. A band that reaches

@@ -60,7 +60,9 @@ PINNED_SOLVES = _PROBLEMS | {
     f"{name}_legacy_steps": spec | {"meanfield": spec["meanfield"] | LEGACY_STEP_CONTROL}
     for name, spec in _PROBLEMS.items()
 }
-LAMBDA_W, LAMBDA_R, P_PIN, D_IN_PIN = 1e-3, 1e-3, 6, 4
+# LAMBDA_R is the rate tilt itself (`fct.meanfield.network_constants`): 2.0 is the tilt the pinned
+# solves were written with, 2 * beta * rate_lambda at meanfield beta 1e3 and rate_lambda 1e-3.
+LAMBDA_W, LAMBDA_R, P_PIN, D_IN_PIN = 1e-3, 2.0, 6, 4
 
 # A config.json in the flat pre-split layout, with non-default values in both the problem
 # and the solver fields of the meanfield section. Its solver runs the plain Algorithm 1, so

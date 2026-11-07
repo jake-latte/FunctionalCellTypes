@@ -17,7 +17,7 @@ import torch
 from fct.config import NetConfig
 from fct.model import make_net
 from fct.sgld import SGLD
-from fct.train import compute_loss
+from fct.train import LossCoefficients, compute_loss
 
 # (label, N, L, phi, D_in, D_out, P): the phase-transition preset's sizes, a deeper tanh net,
 # and a large P.
@@ -33,7 +33,7 @@ def _step_fn(net, x, y) -> Callable[[], None]:
 
     def step() -> None:
         optim.zero_grad()
-        compute_loss(net, x, y, 0.5, 1e-3)[0].backward()
+        compute_loss(net, x, y, LossCoefficients(prior=0.5, rate=1e-3))[0].backward()
         optim.step()
 
     return step

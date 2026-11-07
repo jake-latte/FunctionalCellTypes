@@ -69,11 +69,6 @@ def script():
 # ------------------------------------------------------------------ synthetic builders
 
 
-def rate_lambda_for(r: float, beta: float) -> float:
-    """train.rate_lambda that makes the rate coefficient r under the loss's r = 2 beta rate_lambda."""
-    return r / (2.0 * beta)
-
-
 def ring_config(
     N: int,
     ell: float,
@@ -102,7 +97,7 @@ def ring_config(
         train=TrainConfig(
             optimizer="sgld",
             beta=beta,
-            rate_lambda=rate_lambda_for(r, beta),
+            rate_lambda=r,  # the loss scales it by 1 / (2 beta), so it is r for every beta
             weight_lambda=weight_lambda,
         ),
         spatial=SpatialConfig(

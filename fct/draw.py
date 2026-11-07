@@ -608,7 +608,7 @@ def _history_columns(history: Mapping, keys: Sequence[str], what: str) -> dict[s
 def plot_loss_curves(history: Mapping[str, ArrayLike], ax: Axes | None = None) -> Axes:
     """The logged training terms against epoch on a log axis.
 
-    The total loss is 0.5*N*mse + lambda_w/(2 beta)*weight_l2 + lambda_r*rate_l2 (rate_l2
+    The total loss is 0.5*N*mse + lambda_w/(2 beta)*weight_l2 + lambda_r/(2 beta)*rate_l2 (rate_l2
     summed over the samples; beta = 1 for Adam), so the three raw terms are drawn as logged and do not add up to the
     loss curve. A series that is zero at every epoch cannot be seen on a log axis and is marked
     "(zero)" in the legend instead.

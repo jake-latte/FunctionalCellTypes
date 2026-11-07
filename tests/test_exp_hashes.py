@@ -5,8 +5,10 @@
 experiment hash, and for each setting its train hash (`section_hash("data", "net", "train")`),
 its mean-field (solve) hash and its directory. The train and solve hashes were recomputed when
 the data section's `latent_range` became `latent_min` / `latent_max` (a field rename, so every
-hash holding the data section moved); the experiment hashes and directories are the original
-ones. A renamed or restructured experiment must not move any of them, or finished runs would be
+hash holding the data section moved), and those of every setting with train.rate_lambda > 0
+when LOSS_VERSION 5 scaled the rate penalty by 1 / (2 beta) (a rate_lambda = 0 setting hashes
+version 4, `fct.config.hashed_loss_version`, and kept its hashes); the experiment hashes and
+directories are the original ones. A renamed or restructured experiment must not move any of them, or finished runs would be
 taken for stale.
 """
 

@@ -65,9 +65,9 @@ what is plotted.
   stored (post, pre), are $W_1 = U$ of shape $(N, m)$, $W_l = J_{l-1}$, and $W_{L+1} = V^\top$.
   The rates are $r^{(l)}_{i\mu} = \phi(h^{(l)}_{i\mu})$.
 - Loss (`fct/train.py`):
-  $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \frac{\lambda_w}{2\beta} \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \lambda_r \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
+  $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \frac{\lambda_w}{2\beta} \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \frac{\lambda_r}{2\beta} \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
   with $\mathrm{mse} = \frac{1}{P m} \sum_\mu \lVert y_\mu - \hat y_\mu \rVert^2$,
-  $\lambda_w = 2\beta\,$`PRIOR_COEFF` (derived from the loss coefficient `PRIOR_COEFF` $= \lambda_w / 2\beta$, so SGLD and Adam train the same loss), $\lambda_r$ = `RATE_LAMBDA`, $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
+  $\lambda_w = 2\beta\,$`PRIOR_COEFF` (derived from the loss coefficient `PRIOR_COEFF` $= \lambda_w / 2\beta$, so SGLD and Adam train the same weight prior), $\lambda_r$ = `RATE_LAMBDA`, the rate coefficient $r$ of the stationary law (so $\beta\mathcal{L}$ carries $\frac{\lambda_r}{2} \sum (r^{(l)}_{i\mu})^2$ and the loss's rate term, unlike its weight prior, differs between SGLD and Adam), $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
   defined in the spatial prior section.
 
 Set `CACHE_ROOT` in the first cell. The run is cached under it in a directory named by a hash of
@@ -91,7 +91,9 @@ G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights
 PRIOR_COEFF = 3e-3  # coefficient of the spatial weight penalty in the loss
-RATE_LAMBDA = 1e-4  # multiplies the rate penalty
+# rate coefficient r of the stationary law, not of the loss: the loss carries r / (2 beta) sum phi^2.
+# Its value has not been re-tuned for that 1 / (2 beta) scaling of the loss's rate term.
+RATE_LAMBDA = 1e-4
 DEVICE = "cpu"  # "cpu", "cuda" or "auto"; these nets are tiny"""
 
 TRAINING_TEXT = r"""## Training
@@ -171,7 +173,8 @@ they are a prior on the weights, not the mean-field kernels $\Phi^{(l)}$ over *s
 `fct/meanfield.py`. Under this prior those kernels gain a pair of unit indices; they are shown,
 built from the trained activity and these $K$, in their own section below."""
 
-SPATIAL = """from fct.spatial import SpatialConfig
+SPATIAL = """from fct.config import law_beta
+from fct.spatial import SpatialConfig
 from fct.spatial_view import population_spec
 
 D = 1  # embedding dimension: a ring for 1, a torus for 2 (a grid then needs a shape, d <= 2)
@@ -204,7 +207,7 @@ CFG = make_config(
     g=G,
     data_seed=DATA_SEED,
     net_seed=NET_SEED,
-    weight_lambda=PRIOR_COEFF * 2 * (1.0 if OPTIMIZER != "sgld" else BETA),
+    weight_lambda=PRIOR_COEFF * 2 * law_beta(OPTIMIZER, BETA),
     rate_lambda=RATE_LAMBDA,
     optimizer=OPTIMIZER,
     beta=BETA,
@@ -367,7 +370,7 @@ display(
 LOSS_TEXT = r"""## Loss curves
 
 The loss and its three raw terms, as logged during training, against epoch on a log axis:
-$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \lambda_r\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
+$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \frac{\lambda_r}{2\beta}\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
 The terms are drawn unweighted, so they do not add up to the $\mathcal{L}$ curve; a term that is zero at
 every epoch has no point on a log axis and is marked "(zero)" in the legend. Under SGLD the
 curves settle to a noisy stationary level rather than to a minimum."""

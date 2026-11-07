@@ -2,9 +2,9 @@
 `fct.hmc.project_tilt` enforces, checked against the per-orthant oracle
 `fct.hmc.relu_orthant_check` and against an exact test of normalisability.
 
-The problem is the exemplar notebook's default (notebooks/build_exemplar.py) with PHI = "relu":
-a linear teacher with m = 6 features and k = 2 latents, P = 20, beta = 10, prior coefficient
-1e-2 (weight_lambda 0.2, prior_scale 5), rate_lambda 1e-3 (rate_tilt 0.02). Its inputs span
+The problem is the exemplar notebook's (notebooks/build_exemplar.py) with PHI = "relu" and a
+rate tilt of 0.02: a linear teacher with m = 6 features and k = 2 latents, P = 20, beta = 10,
+prior coefficient 1e-2 (weight_lambda 0.2, prior_scale 5), rate_lambda 0.02 (= rate_tilt). Its inputs span
 k = 2 dimensions, so the prior Sigma = prior_scale X X^T / m has rank 2 (plus the solver's
 jitter): h lives on a plane, and scanning the exponent over the directions of that plane
 decides normalisability (see `plane_scan` for the bound that makes a positive scan a proof).
@@ -27,7 +27,7 @@ from fct.meanfield import solve
 from tests.pinned_runs import LEGACY_STEP_CONTROL
 
 F64 = torch.float64
-BETA, WEIGHT_LAMBDA, RATE_LAMBDA = 10.0, 0.2, 1e-3
+BETA, WEIGHT_LAMBDA, RATE_LAMBDA = 10.0, 0.2, 0.02
 DELTA = 0.05  # the default solver.tilt_floor
 JITTER_REL = 1e-6  # the default solver.jitter_rel
 N_ANGLES = 200_001

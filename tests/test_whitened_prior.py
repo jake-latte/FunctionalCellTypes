@@ -26,12 +26,14 @@ from fct.spatial import (
     whitening_matrix,
 )
 from fct.train import (
+    LossCoefficients,
     _check_sgld_step_resolves_the_prior,
     _step,
     compute_loss,
     largest_hessian_eigenvalue,
     load_latest_checkpoint,
     load_trained,
+    loss_coefficients,
     make_net_from_config,
     make_weight_penalty,
     prior_coefficient,
@@ -285,7 +287,7 @@ def test_identity_factors_reproduce_the_plain_net_bit_for_bit():
     for got, want in zip(whitened(x), plain(x), strict=True):
         assert torch.equal(got, want)
     for net in (plain, whitened):
-        compute_loss(net, x, y, 0.3, 0.1)[0].backward()
+        compute_loss(net, x, y, LossCoefficients(0.3, 0.1))[0].backward()
     pairs = zip(whitened.named_parameters(), plain.named_parameters(), strict=True)
     for (name, p), (_, q) in pairs:
         assert torch.equal(p, q) and torch.equal(p.grad, q.grad), name
@@ -540,10 +542,10 @@ def test_the_whitened_penalty_is_the_plain_sum_of_squares_of_xi():
     hand = sum(p.square().sum() for p in net.parameters())
     torch.testing.assert_close(penalty(net), hand, rtol=1e-15, atol=0)
     tc = cfg.train
-    loss, parts = compute_loss(net, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)
+    loss, parts = compute_loss(net, ds.x, ds.y, loss_coefficients(tc), penalty)
     data = 0.5 * net.N * (ds.y - net(ds.x)[1]).square().mean()
     rates = net.phi(net(ds.x)[0]).square().sum()
-    want = data + tc.weight_lambda / (2 * tc.beta) * hand + tc.rate_lambda * rates
+    want = data + (tc.weight_lambda * hand + tc.rate_lambda * rates) / (2 * tc.beta)
     assert loss.item() == pytest.approx(want.item(), rel=1e-12)
     assert parts["weight_l2"].item() == pytest.approx(hand.item(), rel=1e-12)
 
@@ -669,8 +671,8 @@ def test_largest_hessian_eigenvalue_of_an_ensemble_is_the_largest_over_its_membe
 
     def loss_of(net, weight_penalty):
         x, y = ds.x, ds.y
-        coefficient = prior_coefficient(tc)
-        return lambda: compute_loss(net, x, y, coefficient, tc.rate_lambda, weight_penalty)[0]
+        coefficients = loss_coefficients(tc)
+        return lambda: compute_loss(net, x, y, coefficients, weight_penalty)[0]
 
     joint = largest_hessian_eigenvalue(loss_of(ens, penalty), ens.parameters())
     members = [ens.member(b) for b in range(3)]
@@ -683,7 +685,9 @@ def test_largest_hessian_eigenvalue_leaves_the_global_rng_alone():
     cfg = _cfg()
     ds, net = _setup(cfg)
     state = torch.get_rng_state()
-    largest_hessian_eigenvalue(lambda: compute_loss(net, ds.x, ds.y, 0.1, 0.0)[0], net.parameters())
+    largest_hessian_eigenvalue(
+        lambda: compute_loss(net, ds.x, ds.y, LossCoefficients(0.1, 0.0))[0], net.parameters()
+    )
     assert torch.equal(torch.get_rng_state(), state)
 
 
@@ -696,7 +700,7 @@ def test_sgld_under_whitening_refuses_a_step_the_loss_curvature_cannot_take(tmp_
     penalty = make_weight_penalty(cfg, net)
 
     def loss():
-        return compute_loss(net, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)[0]
+        return compute_loss(net, ds.x, ds.y, loss_coefficients(tc), penalty)[0]
 
     lam = largest_hessian_eigenvalue(loss, net.parameters())
     assert lam > 0

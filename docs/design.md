@@ -98,7 +98,7 @@ delete the old ones. Likewise the hash of any set of sections that includes `net
 version of the forward pass of `MLP`. Version 2 reads the output from the post-activations, `Z = V^T phi(h^L) / N`
 (version 1 read it from the pre-activation `h^L`): every train and meanfield cache made under version 1 is rejected with
 `StaleCacheError`, and an experiment ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
-hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
+hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Version 5 scales the rate penalty by `1 / (2 beta)` as well, which changes no number of a run with `rate_lambda = 0`, so the version folded in is `config.hashed_loss_version(train)`: `LOSS_VERSION` when `rate_lambda > 0` and `config.RATE_FREE_LOSS_VERSION` (4, the last version that changed a rate-free loss) when it is 0. Every `rate_lambda = 0` hash and cache is unchanged by version 5; a `rate_lambda > 0` one made under version 4 is rejected with `StaleCacheError` and listed `stale` by `exp status`. A later loss change that reaches rate-free configs must raise both constants. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
 enters the hash by value.
 
 Fields added after artefacts existed. A field added to a hashed section or to exp.json is left out of it while it holds
@@ -234,7 +234,7 @@ class Config(BaseModel):
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
     is_whitened: bool   # property: spatial is set and its parametrisation is "whitened"; the one test of the parametrisation
-    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `LOSS_VERSION` when `train` is), first 12 hex chars; >=1 section required
+    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `hashed_loss_version(train)` when `train` is: `LOSS_VERSION`, or `RATE_FREE_LOSS_VERSION` at `rate_lambda = 0`), first 12 hex chars; >=1 section required
         # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
         # every field of HASH_OMITTED_AT_DEFAULT dropped while at its default ("Fields added after artefacts existed")
 
@@ -366,10 +366,11 @@ def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype, whitening=Non
 ## train.py
 
 ```python
-def compute_loss(net, x, y, prior_coefficient, rate_lambda, weight_penalty=None) -> tuple[Tensor, dict[str, Tensor]]   # None: the net's own weight_l2
+def compute_loss(net, x, y, coefficients: LossCoefficients, weight_penalty=None) -> tuple[Tensor, dict[str, Tensor]]   # None: the net's own weight_l2
     # ensemble: every part is (B,), member b's own, and the returned loss is the SUM over members (so member b's gradient is its own loss's)
-    # loss = 0.5*N*mse + prior_coefficient*weight_l2 + rate_lambda*rate_l2; callers pass the function
-    #   prior_coefficient(cfg.train) = train.weight_lambda / (2 beta), never the raw train.weight_lambda
+    # loss = 0.5*N*mse + coefficients.prior*weight_l2 + coefficients.rate*rate_l2; callers pass
+    #   loss_coefficients(cfg.train) = (train.weight_lambda / (2 beta), train.rate_lambda / (2 beta))
+    #   (beta = law_beta(optimizer, beta): train.beta under SGLD, 1 under Adam); anything but a LossCoefficients raises TypeError
     # weight_l2 = weight_penalty(net): the sum of squares of every parameter by default, the spatial prior
     #   sum_l tr(M_post W_l M_pre W_l^T) from make_weight_penalty when cfg.spatial is set (see "Spatial weight prior in training")
     # rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
@@ -437,30 +438,30 @@ effective temperature that tends to `1/beta` when the noise dominates the drift)
 
 Mapping to `Latex/sections/01_setup.tex`. The Latex trains `d(theta) = -grad L_tex dt + sqrt(2/beta) eta` with
 `L_tex = N/(2Pn) sum (f - y)^2 + (1/beta) P_weight + (1/beta) P_rates`, i.e. `p ~ exp(-beta L_tex)`. The repo loss is
-`L = 0.5 N mse + weight_lambda / (2 beta) weight_l2 + rate_lambda rate_l2` (`weight_l2` is the spatial prior when one is set; `beta = 1` for Adam) and `mse` is the mean over the P*n entries, so the data
+`L = 0.5 N mse + weight_lambda / (2 beta) weight_l2 + rate_lambda / (2 beta) rate_l2` (`weight_l2` is the spatial prior when one is set; `beta = 1` for Adam) and `mse` is the mean over the P*n entries, so the data
 terms agree and `beta L_tex = beta (0.5 N mse) + P_weight + P_rates`. SGLD on `L` at inverse temperature `beta` samples
-`exp(-beta L) = exp(-beta 0.5 N mse - weight_lambda/2 weight_l2 - beta rate_lambda rate_l2)`. The Latex regulariser
-strengths are therefore `P_weight = weight_lambda/2 weight_l2` (independent of `beta`) and `lambda_tex = beta * rate_lambda` for the rates. `beta` sets only the noise; `lr` is the step
+`exp(-beta L) = exp(-beta 0.5 N mse - weight_lambda/2 weight_l2 - rate_lambda/2 rate_l2)`. The Latex regulariser
+strengths are therefore `P_weight = weight_lambda/2 weight_l2` and `P_rates = rate_lambda/2 rate_l2`, both independent of `beta`: `rate_lambda` is the notes' `r` (`G = r I`). `beta` sets only the noise; `lr` is the step
 size `dt`.
 
 #### Prior scaling convention
 
 The weight prior enters the loss as `weight_lambda / (2 beta) * tr(M_post W M_pre W^T)` per layer (the iid prior `K = M = I` included: the plain L2 is
 `weight_lambda / (2 beta) * sum W^2`), where `beta` is `train.beta` under SGLD and 1 under Adam (`fct.train.prior_coefficient`). The `1/beta` cancels the `beta` of the
-stationary law, so `vec(W) ~ N(0, K / weight_lambda)` for every `beta` (`K = M^-1`); the data and rate terms carry the `beta`. The recorded `weight_l2` history is the raw quadratic form
-(no coefficient), so it does not depend on `beta`. Consequences for the mean-field constants (`fct.meanfield.network_constants`, for the standard-normal-parametrised
+stationary law, so `vec(W) ~ N(0, K / weight_lambda)` for every `beta` (`K = M^-1`); only the data term carries the `beta`. The rate penalty follows the same rule: it enters the loss as `rate_lambda / (2 beta) * sum phi^2` (`fct.train.rate_coefficient`), so `beta L` carries `(rate_lambda / 2) sum phi^2` for every `beta` and `rate_lambda` is the notes' rate coefficient `r`. The recorded `weight_l2` and `rate_l2` histories are the raw sums
+(no coefficient), so they do not depend on `beta`. Consequences for the mean-field constants (`fct.meanfield.network_constants`, for the standard-normal-parametrised
 weights and the 1/N readout), which are the solver's defaults whenever `MeanFieldConfig` leaves them unset (`beta` is `train.beta` under SGLD, 1 under Adam; an explicit value of any field wins):
 
 | constant | value for `exp(-beta L)` |
 |---|---|
 | `prior_scale` | `1 / weight_lambda` |
 | `alpha` | `weight_lambda P d_out / beta` |
-| `rate_tilt` | `2 beta rate_lambda` (from `exp(-beta rate_lambda sum phi^2)`) |
+| `rate_tilt` | `rate_lambda` (from `exp(-rate_lambda/2 sum phi^2)`) |
 | `learning_prefactor` | `1 / (2 prior_scale) = weight_lambda / 2` (the kernels are unscaled) |
 
-All four are exact for SGLD. Under Adam there is no Gibbs distribution; the Adam loss is the `beta = 1` case, so its prior is `weight_lambda/2 weight_l2` and the solver uses `beta = 1`.
+All four are exact for SGLD. Under Adam there is no Gibbs distribution; the Adam loss is the `beta = 1` case, so its prior is `weight_lambda/2 weight_l2`, its rate penalty `rate_lambda/2 rate_l2`, and the solver uses `beta = 1`.
 
-All `weight_lambda` values in this document, the presets and the notebooks are stated under this convention. A value chosen under the previous convention (loss prior `weight_lambda * form`) maps to the same effective loss by multiplying by `2 beta` for SGLD and by 2 for Adam (`beta = 1`); the library default is therefore `2e-4` (was `1e-4`), the spatial notebook's `60` (was `3e-3`, `beta = 1e4`) and the exemplar's `0.2` (was `1e-2`, `beta = 10`).
+All `weight_lambda` values in this document, the presets and the notebooks are stated under this convention. A value chosen under the previous convention (loss prior `weight_lambda * form`) maps to the same effective loss by multiplying by `2 beta` for SGLD and by 2 for Adam (`beta = 1`); the library default is therefore `2e-4` (was `1e-4`), the spatial notebook's `60` (was `3e-3`, `beta = 1e4`) and the exemplar's `0.2` (was `1e-2`, `beta = 10`). `rate_lambda` values are likewise stated as the notes' `r`; the values in the presets and notebooks were kept, so their rate penalty in the loss is `1 / (2 beta)` of what it was under `LOSS_VERSION` 4 (a half under Adam).
 
 Monitor hook: `monitor(net)` is called under `torch.no_grad()` with the global RNG state restored afterwards,
 at the START of every epoch e with `e % monitor_int == 0` (after e's periodic checkpoint, before its step; so e = 0
@@ -628,7 +629,7 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
 def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print, on_outer=None) -> SolveResult
     # raises SpatialPriorUnsupportedError (a ValueError) when cfg.spatial is set, before touching the cache: the solver knows only the iid prior;
     # `python -m fct solve` and `python -m fct exp run` (with or without --index) report it as a one-line error
-    # constants of the action: prior_scale, alpha, rate_tilt (2 beta rate_lambda) and learning_prefactor follow the network
+    # constants of the action: prior_scale, alpha, rate_tilt (= rate_lambda) and learning_prefactor follow the network
     # (`network_constants`, beta = meanfield.beta or train.beta for SGLD / 1 for Adam); an explicit meanfield field overrides it.
     # X = dataset.x[:n_points], Y = dataset.y[:n_points]; lambda_w/lambda_r from cfg.train; phi/g/L from cfg.net
     # hash = section_hash("data","net","train","meanfield") (meanfield as hash_payload); returns final.pt if present
@@ -1275,7 +1276,7 @@ default, and what every `config.json` written before the field existed loads as)
   inverse temperature `beta`: `beta * weight_lambda / (2 beta) * tr(...) = P_weight` gives
   `M^l_tex = weight_lambda (M^post (x) M^pre)`, so the prior covariance is
   `K^l_tex = (K^post (x) K^pre) / weight_lambda`, for every `beta`. For identity kernels this is the L2 case, variance `1 / weight_lambda`.
-- The rate penalty is unchanged (`rate_lambda * sum phi^2`, identity `G`).
+- The rate penalty is not spatial: `rate_lambda / (2 beta) * sum phi^2` (`rate_coefficient`), identity `G = rate_lambda I`.
 - The matrices `M` are built once per `train` call (float64 on the CPU, then cast to the net's dtype and device). They are
   not parameters and not checkpointed: a resumed run rebuilds them from the config, so resume is exact.
 - Hash: the `spatial` section enters `section_hash` with `train` only when it is set, so the caches of runs without it keep
@@ -1458,7 +1459,7 @@ D4, the dictionary, Appendix "Reproducing the numbers") is the source. Float64 n
 inputs.
 
 ```python
-theory_rate(cfg) -> float                  # r, the rate coefficient of (r/2) sum phi^2 in beta L: 2 beta rate_lambda under the loss's convention
+theory_rate(cfg) -> float                  # r, the rate coefficient of (r/2) sum phi^2 in beta L: train.rate_lambda (the loss scales it by 1 / (2 beta))
 ring_spectrum(K) -> (N,)                   # lam_q of a symmetric circulant kernel, DFT order (round-off negatives -> 0, real ones raise)
 latent_matrix(factors, K) -> Z (P, K)      # z0..z{K-1} as columns; missing or extra z{i} raise
 uniform_latent_s2(P, K, a) -> (K,)         # the P >> K formula: P a^2 (3K+1)/12 then P a^2/12
@@ -1532,7 +1533,7 @@ Limits: the viewer needs positive lambdas. Axes containing lambda = 0 cannot be 
 `notebooks/build_exemplar.py` builds `exemplar.ipynb` (source only; executed copies go to the ignored `tmp/`): one linear-teacher run, trained with SGLD (or Adam), then the mean-field solve of the same problem with live diagnostics. `fct/exemplar.py` holds all the logic; the cells set variables and call it and `fct.draw`.
 
 - `exemplar_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed) -> Config`: a thin wrapper over `spatial_view.make_config` (no spatial prior, CPU, float64; log and checkpoint intervals as there) that adds the `meanfield` section: `n_points = P` (all points are solved); every other constant follows the network (`fct.meanfield.network_constants`). `with_solver(cfg, **solver_fields)` sets `SolverConfig` fields (unknown ones raise).
-- Why the solver's defaults follow the network: SGLD at `beta` samples `exp(-beta L)`, and the loss prior `weight_lambda / (2 beta) ||theta||^2` makes each (standard-normal-parametrised) weight have variance `1 / weight_lambda` for every `beta` (pinned by a test per `beta`: weights in directions the data does not span have that variance), the readout's Gaussian likelihood gives the ridge `alpha = weight_lambda P d_out / beta`, the rate penalty is the tilt `2 beta rate_lambda`, and, the solver's kernels being unscaled (`Sigma = prior_scale Phi0`), the data-term prefactor is `learning_prefactor = 1 / (2 prior_scale) = weight_lambda / 2`. A test checks `run_meanfield`'s defaults against `network_constants` for several `beta` and for Adam. An exact Gibbs / closed-form check found the fixed point near the net's kernel scale only with this prefactor (at c = 0.5 the single-site precision is non-normalisable near it).
+- Why the solver's defaults follow the network: SGLD at `beta` samples `exp(-beta L)`, and the loss prior `weight_lambda / (2 beta) ||theta||^2` makes each (standard-normal-parametrised) weight have variance `1 / weight_lambda` for every `beta` (pinned by a test per `beta`: weights in directions the data does not span have that variance), the readout's Gaussian likelihood gives the ridge `alpha = weight_lambda P d_out / beta`, the rate penalty `rate_lambda / (2 beta) sum phi^2` is the tilt `rate_lambda`, and, the solver's kernels being unscaled (`Sigma = prior_scale Phi0`), the data-term prefactor is `learning_prefactor = 1 / (2 prior_scale) = weight_lambda / 2`. A test checks `run_meanfield`'s defaults against `network_constants` for several `beta` and for Adam. An exact Gibbs / closed-form check found the fixed point near the net's kernel scale only with this prefactor (at c = 0.5 the single-site precision is non-normalisable near it).
 - Cache layout under CACHE_ROOT: `exemplar-<section_hash(data, net, train)>/{data, train, config.json}` and, inside it, `solve-<section_hash(data, net, train, meanfield)>/meanfield/` (`exemplar_dirs`). A solver setting therefore re-solves without retraining. `train_exemplar(cfg, cache_root, log) -> spatial_view.TrainRun` (via `spatial_view.train_in`, which `train_run` shares) and `solve_exemplar(cfg, dataset, net, cache_root, plot_every, show, log, on_failure) -> SolveResult` go through `train_from_config` / `run_meanfield`, so both resume from checkpoints and reload finished work. `on_failure` is called before an exception from the solve propagates (the notebook passes `LiveView.flush`).
 - Live view: `live_figures(snapshot)` is `[fig_layer_kernels({Φ, Φ̂}), fig_solver_health, fig_sampler_health]` (layers counted from 1 in all three); `live_plotter(every, show)` is an `on_outer` callback that calls `show(figures)` at outer steps 0, every, 2 every, ...; `solve_exemplar` calls `show` once more with the finished solve's figures (a loaded final.pt runs no steps). Plotting time is charged to the history's `time`. `LiveView(tail)` is the notebook edge: `show` does `clear_output(wait=True)`, displays and closes the figures, then reprints its last `tail` log lines (`log` collects them, `flush` prints them), because clearing empties the whole cell output. IPython is imported lazily; the clear / display / print functions are injectable.
 - `kernel_comparison` (solved Φ_l beside the net's, `draw.fig_kernels` with an own colour scale per panel), `empirical_kernel_figure`, `example_outputs_of(net, dataset)`, `solve_summary(history, sampler, Phi=None, net_Phi=None)` (markdown computed from the solve: first and last fixed-point residual of Φ̂ with "fell" / "rose", smallest ESS fraction and where, largest eigenvalue and mean diagonal of the solved and the net's kernels, train MSE theory and net, alignment). `cache_root_from_env` lives in `fct.cache` (`$FCT_CACHE_ROOT`), shared with the spatial notebook.
