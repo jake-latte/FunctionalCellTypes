@@ -112,8 +112,9 @@ def prior_coefficient(tc: TrainConfig) -> float:
 
     beta is the SGLD inverse temperature `tc.beta`, and 1 for Adam (which has no temperature).
     The SGLD stationary law is exp(-beta L), so dividing by beta here leaves the prior
-    exp(-weight_lambda/2 * form), i.e. weights N(0, K / weight_lambda), for every beta, while
-    the data and rate terms of the law carry the factor beta.
+    exp(-weight_lambda/2 * form), i.e. weights N(0, K / weight_lambda), for every beta; only
+    the data term of the law carries the factor beta (the rate term is scaled the same way,
+    `rate_coefficient`).
     """
     return tc.weight_lambda / (2.0 * _law_beta(tc))
 

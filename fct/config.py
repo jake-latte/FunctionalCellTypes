@@ -26,7 +26,7 @@ from fct.tasks import TASK_SPECS
 # under another definition are rejected as stale instead of mixed with new ones. Increase it
 # whenever the loss changes in a way the TrainConfig fields do not express. History: 1 summed
 # the rate penalty over the samples, 2 averaged it over them, 3 sums it again, 4 scales the
-# weight prior by 1 / (2 beta) (beta = 1 for Adam); 5: rate penalty scaled by 1/(2 beta).
+# weight prior by 1 / (2 beta) (beta = 1 for Adam), 5 scales the rate penalty by 1 / (2 beta) too.
 LOSS_VERSION = 5
 # The last LOSS_VERSION that changed the loss of a config without a rate penalty
 # (train.rate_lambda = 0), which is the version hashed for such a config (`hashed_loss_version`):

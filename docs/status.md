@@ -50,7 +50,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
   Every earlier `weight_lambda` maps to the same effective loss by x 2 beta (SGLD) or x 2 (Adam); the library default is now 2e-4
   and the spatial and exemplar notebooks take the loss coefficient `PRIOR_COEFF` (3e-3, 1e-2) and derive `weight_lambda = 2 beta PRIOR_COEFF` (beta = 1 for Adam), so SGLD and Adam train the same loss. DECIDED: the mean-field solver's defaults follow the network
   (`fct.meanfield.network_constants`): `prior_scale = 1/weight_lambda`, `alpha = weight_lambda P d_out / beta`,
-  `rate_tilt = 2 beta rate_lambda`, `learning_prefactor = weight_lambda/2`, `beta = train.beta` (SGLD) or 1 (Adam); explicit
+  `rate_tilt = rate_lambda` (the loss carries `rate_lambda / (2 beta) * sum phi^2`, `LOSS_VERSION` 5), `learning_prefactor = weight_lambda/2`, `beta = train.beta` (SGLD) or 1 (Adam); explicit
   `MeanFieldConfig` fields win. All four are exact for SGLD (a test on the exemplar's weight variance per beta, and one on `run_meanfield`'s defaults with the
   library's own `meanfield.beta = None`, which follows `train.beta`, or 1 under Adam). Every earlier mean-field result is stale. Still open: the `lambda_exp` preset's `weight_lambda` axis
   (log-spaced 1e-6..1) was not rescaled.
@@ -67,7 +67,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
 - Exemplar notebook: the solves are not converged at the default 40/80 outer steps (residual still falling);
   the importance sampler only works for small P (default P = 20; raises at 24).
 - Experiment solve: `jobs/fct_solve.sh` duplicates the sbatch header of `jobs/fct_exp.sh` (keep them in step by hand).
-- Mean-field rate tilt defaults to `2 beta rate_lambda` (see above); `meanfield.rate_tilt` overrides.
+- Mean-field rate tilt defaults to `rate_lambda`, the notes' r (see above); `meanfield.rate_tilt` overrides.
 This was decided in `remove-rate-penalty-p-scaling`, not by the PI.
 - Factor groups for MIR: object-action = {position, objects (G*G occupancy bits), actions (5 bits)};
   a group's MI is the SUM of its members' MIs; what-where = {where, what}; linear teacher = one group
