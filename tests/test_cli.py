@@ -233,14 +233,21 @@ def _no_factors(*args):
 def test_finished_run_loads_without_building_the_monitor(tmp_path, monkeypatch):
     assert _init(tmp_path, "train.monitor_int=3") == 0
     assert main(["train", str(tmp_path)]) == 0
-    monkeypatch.setattr("fct.cli.make_mir_monitor", _no_factors)
+    monkeypatch.setattr("fct.cli.make_monitor", _no_factors)
     assert main(["train", str(tmp_path)]) == 0
 
 
 def test_fresh_run_without_factors_fails_loudly(tmp_path, monkeypatch):
     assert _init(tmp_path, "train.monitor_int=3") == 0
-    monkeypatch.setattr("fct.cli.make_mir_monitor", _no_factors)
+    monkeypatch.setattr("fct.cli.make_monitor", _no_factors)
     with pytest.raises(ValueError, match="factors"):
+        main(["train", str(tmp_path)])
+
+
+def test_train_builds_the_monitor_of_monitor_kind(tmp_path):
+    # the position task's factors are not latents z0..z{K-1}: the spectrum monitor refuses them
+    assert _init(tmp_path, "train.monitor_int=3", "train.monitor_kind=spectrum") == 0
+    with pytest.raises(ValueError, match="not a latent"):
         main(["train", str(tmp_path)])
 
 
@@ -343,7 +350,7 @@ def test_the_exp_help_uses_only_the_experiment_vocabulary():
         a.choices["exp"] for a in top._actions if isinstance(a, argparse._SubParsersAction)
     )
     texts = _help_texts(exp_parser)
-    assert len(texts) == 7  # exp and its six actions
+    assert len(texts) == 8  # exp and its seven actions
     assert not any("sweep" in t.lower() or "grid" in t.lower() for t in texts)
 
 

@@ -78,18 +78,38 @@ def _check_input_dim(cfg: DataConfig, expected: int) -> None:
         )
 
 
+def _orthonormal_columns(w: Tensor) -> Tensor:
+    """The Gram-Schmidt basis of the columns of `w` (m, k): the Q factor of its reduced QR
+    decomposition with the sign of each column fixed so that diag(R) >= 0, giving Q^T Q = I_k.
+
+    The sign fix makes Q canonical (column j of Q has a positive overlap with column j of `w`)
+    and so independent of the LAPACK backend and the dtype; Q is a deterministic function of
+    the Gaussian draws, not a Haar-distributed draw of its own.
+    """
+    q, r = torch.linalg.qr(w, mode="reduced")
+    sign = torch.where(r.diagonal() < 0, -1.0, 1.0).to(q.dtype)  # a zero diagonal counts as +1
+    return q * sign
+
+
 def linear_teacher(cfg: DataConfig, device: torch.device, dtype: torch.dtype) -> Dataset:
-    """x = Z W_X^T and y = Z W_Y^T for latents Z (P, k) iid uniform on [-a, a].
+    """x = Z W_X^T and y = Z W_Y^T for latents Z (P, k) iid uniform on [latent_min, latent_max].
 
     W_X and W_Y are (m, k) with iid N(0, 1/k) entries, fixed by the seed; m = cfg.D_in is the
-    number of features of both x and y. Every latent is its own factor and its own group.
+    number of features of both x and y. With cfg.teacher = "orthonormal" each map is replaced
+    by the Gram-Schmidt basis of its columns (`_orthonormal_columns`); the random stream, and
+    so Z, is the same as for the Gaussian teacher. This changes the scale: a Gaussian column
+    has norm about sqrt(m / k), an orthonormal one norm 1, so the variance of each feature of x
+    and y falls by a factor of about k / m. Every latent is its own factor and its own group.
     """
     _validate_linear_teacher(cfg)
-    k, m, a = cfg.n_latents, cfg.D_in, cfg.latent_range
+    k, m, lo, hi = cfg.n_latents, cfg.D_in, cfg.latent_min, cfg.latent_max
     gen = torch.Generator().manual_seed(cfg.seed)
-    z = a * (2 * torch.rand((cfg.P, k), dtype=dtype, generator=gen) - 1)
+    # With the default [-1, 1] this is -1 + 2 * rand, bit for bit the symmetric 2 * rand - 1.
+    z = lo + (hi - lo) * torch.rand((cfg.P, k), dtype=dtype, generator=gen)
     w_x = torch.randn((m, k), dtype=dtype, generator=gen) / k**0.5
     w_y = torch.randn((m, k), dtype=dtype, generator=gen) / k**0.5
+    if cfg.teacher == "orthonormal":
+        w_x, w_y = _orthonormal_columns(w_x), _orthonormal_columns(w_y)
     z, w_x, w_y = z.to(device), w_x.to(device), w_y.to(device)
     names = [f"z{i}" for i in range(k)]
     return Dataset(
@@ -351,27 +371,29 @@ def _teacher_maps(cfg: DataConfig, reference: Dataset) -> tuple[Tensor, Tensor]:
 
 
 def latent_lattice_dataset(cfg: DataConfig, reference: Dataset) -> Dataset:
-    """One sample per point of the lattice {-a, 0, a}^k of a linear teacher's latents.
+    """One sample per point of the lattice {lo, mid, hi}^k of a linear teacher's latents.
 
-    k = cfg.n_latents and a = cfg.latent_range, giving 3^k rows. Row i is the i-th element of
-    the Cartesian product of (-a, 0, a) taken k times: z0 varies slowest, the last latent
-    fastest, so row i is reproducible from i alone (digit j of i in base 3, most significant
-    first, selects latent j's value from (-a, 0, a)). x and y use the W_X and W_Y in
-    `reference.extras`, so the points are held-out data of the same teacher. Pure: nothing is
-    read or written on disk.
+    k = cfg.n_latents, lo = cfg.latent_min, hi = cfg.latent_max and mid = (lo + hi) / 2, giving
+    3^k rows. Row i is the i-th element of the Cartesian product of (lo, mid, hi) taken k times:
+    z0 varies slowest, the last latent fastest, so row i is reproducible from i alone (digit j
+    of i in base 3, most significant first, selects latent j's value from (lo, mid, hi)). x and
+    y use the W_X and W_Y in `reference.extras`, so the points are held-out data of the same
+    teacher. Pure: nothing is read or written on disk.
 
     `cfg` must be the DataConfig `reference` was generated from. Its D_in and n_latents are
-    checked against the shapes of the maps; `latent_range` cannot be verified from the
-    reference and is taken on trust. The maps are assumed to share `reference.x`'s dtype and
-    device, which the result inherits.
+    checked against the shapes of the maps; `latent_min` and `latent_max` cannot be verified
+    from the reference and are taken on trust. The maps are assumed to share `reference.x`'s
+    dtype and device, which the result inherits.
     """
     if cfg.task != "linear_teacher":
         raise ValueError(
             f"latent_lattice_dataset is defined for task 'linear_teacher', not {cfg.task!r}"
         )
     w_x, w_y = _teacher_maps(cfg, reference)
-    k, a = cfg.n_latents, cfg.latent_range
-    values = torch.tensor([-a, 0.0, a], dtype=reference.x.dtype, device=reference.x.device)
+    k, lo, hi = cfg.n_latents, cfg.latent_min, cfg.latent_max
+    values = torch.tensor(
+        [lo, (lo + hi) / 2, hi], dtype=reference.x.dtype, device=reference.x.device
+    )
     z = torch.cartesian_prod(*[values] * k).reshape(-1, k)  # reshape: k = 1 yields a 1-D tensor
     names = [f"z{i}" for i in range(k)]
     return Dataset(

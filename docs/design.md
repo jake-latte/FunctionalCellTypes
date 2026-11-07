@@ -28,10 +28,14 @@ fct/
   tuning.py        # tuning_curves (MIR's bins) and select_neurons: pure helpers for the phase-transition notebook
   exp_report.py   # MirRecord and mir_matrix: experiment records -> (layer, lambda_r, lambda_w) MIR array
   exp_view.py     # experiment ROOT -> the figures of a lambda_exp experiment (the phase-transition notebook): setting snapping, MIR records of one depth/activation, tuning of one layer
-  monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
+  monitor.py       # make_monitor picks the training hook by train.monitor_kind: make_mir_monitor (per-layer MIR) or make_spectrum_monitor (per-layer spectra, hexatic moment, theta histogram)
   spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1}, the factorised weight quadratic form (pure)
+  spectrum.py      # tuning maps on the ring, unitary-DFT spectra per latent mode and the null mean, q_1/2 / share / lag-1, cos 4 theta, the hexatic moment, theta histograms, record and member errors (pure)
   spatial_exp.py  # spatial-experiment notebook: pick one setting of a spatial experiment by axis values, load its trained net and the 3^k latent-lattice test set
   spatial_view.py  # spatial-prior notebook: config, resumable run, ring/lattice layout of neurons and weights, empirical kernels (pure + one I/O function)
+  linear_theory.py # the linear one-hidden-layer theory on a ring from a Config and a Dataset: per-mode spectra for an orthonormal teacher, their summaries, the ansatz-free kernel for any teacher (pure)
+  linear_ring.py   # the linear-ring experiments: a setting's predicted law, ring-averaged statistics of the member-averaged final-state spectrum with bootstrap SEs, the comparison rules, the relaxation diagnostic, the notebook's measurements (pure, except predicted_law)
+  ring_view.py     # linear-ring notebook: load settings and their records (RingRun accessors), the base B of the budget, measure_run, sweeps, panel arguments, and the notebook's markdown tables
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   exp.py         # an experiment, a batch of runs over Config fields (its axes): ExpConfig, expand, run_setting, status, preset readers
   presets/       # one JSON file per preset: a complete base experiment (ExpConfig fields written out, with a description); see "Presets" under exp.py
@@ -41,7 +45,7 @@ fct/
   exemplar.py      # the exemplar notebook's logic: config from flat settings, cache layout, cached train / solve, live refresh
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / experiment
   __main__.py      # `python -m fct ...` -> cli.main()
-notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_spatial_exp.py, build_phase_transition_exp.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
+notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_spatial_exp.py, build_phase_transition_exp.py, build_linear_ring.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
 docs/issues/*.md   # current work items (finished ones move to docs/issues/archive/)
@@ -62,6 +66,7 @@ CACHE_DIR/config.json                # written by `init`; the single source of h
 CACHE_DIR/data/dataset.pt            # generated task data
 CACHE_DIR/train/ckpt_<epoch:06d>.pt  # periodic checkpoint (only the latest kept)
 CACHE_DIR/train/final.pt             # final trained model (+ history)
+CACHE_DIR/train/extend_<b0>-<B>/     # members b0 .. B-1 of an ensemble being extended (own ckpt_*.pt and final.pt); deleted once appended
 CACHE_DIR/meanfield/ckpt_<outer:05d>.pt, CACHE_DIR/meanfield/final.pt
 CACHE_DIR/analysis/<name>.pt         # intermediate analysis results
 CACHE_DIR/figures/<name>.png
@@ -96,8 +101,18 @@ delete the old ones. Likewise the hash of any set of sections that includes `net
 version of the forward pass of `MLP`. Version 2 reads the output from the post-activations, `Z = V^T phi(h^L) / N`
 (version 1 read it from the pre-activation `h^L`): every train and meanfield cache made under version 1 is rejected with
 `StaleCacheError`, and an experiment ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
-hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
+hashed train section, so every pre-existing Adam hash and cache is unchanged. Likewise `train.monitor_bins` and `train.monitor_shuffles` configure only the MIR monitor and are dropped from the hash when `monitor_kind == "spectrum"`. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Version 5 scales the rate penalty by `1 / (2 beta)` as well, which changes no number of a run with `rate_lambda = 0`, so the version folded in is `config.hashed_loss_version(train)`: `LOSS_VERSION` when `rate_lambda > 0` and `config.RATE_FREE_LOSS_VERSION` (4, the last version that changed a rate-free loss) when it is 0. Every `rate_lambda = 0` hash and cache is unchanged by version 5; a `rate_lambda > 0` one made under version 4 is rejected with `StaleCacheError` and listed `stale` by `exp status`. A later loss change that reaches rate-free configs must raise both constants. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
 enters the hash by value.
+
+Fields added after artefacts existed. A field added to a hashed section or to exp.json is left out of it while it holds
+its default, the value every artefact written before the field existed implies, so those hashes and exp.json texts stay
+byte-identical and an absent field means its default; at any other value it enters, and the artefact is new. The fields
+are listed once, in two tables of dotted paths: `config.HASH_OMITTED_AT_DEFAULT` for `section_hash` (`net.B`,
+`net.init`, `data.teacher`, `spatial.lambda_max`, `spatial.parametrisation`, `train.monitor_kind`) and
+`exp.EXP_JSON_OMITTED_AT_DEFAULT` for exp.json (`description`, `B`, `init`, `linear_teacher.teacher`,
+`spatial.parametrisation`, `monitor_kind`, `base_B`). Both go through one helper,
+`schema.exclude_at_default(model, table) -> exclude`, which builds the nested pydantic `exclude` and skips a path whose
+parent is None (an unset `spatial` section). A new field of this kind is a new table entry, nothing else.
 
 The meanfield section enters every hash as `MeanFieldConfig.hash_payload()`, not as its nested dump: the problem fields
 and the solver fields that existed before the sampler choice (`config.LEGACY_SOLVER_FIELDS`, `log_int` and `save_int`
@@ -123,11 +138,18 @@ cache stale.
 Every `.pt` file must be loadable with `torch.load(path, weights_only=True)`:
 only tensors, Python scalars/str/None, lists, dicts. No pickled modules,
 functions or numpy arrays (convert numpy to lists / tensors before saving).
-Models are stored as `state_dict` and rebuilt from the config with `make_net`.
+Models are stored as `state_dict` (the parameters `U`, `J.<k>`, `V`: the weights, or `xi`
+under the whitened spatial prior, whose factors are not stored) and rebuilt from the config
+with `train.make_net_from_config`.
 
 ## config.py
 
 ```python
+Teacher = Literal["gaussian", "orthonormal"]       # the linear teacher's map type (DataConfig, LinearTeacherParams)
+def reject_latent_range(data: Any) -> None        # ValueError naming latent_min / latent_max if a raw mapping
+                                                  # still carries the removed latent_range (a before-validator of both models)
+def check_latent_interval(latent_min, latent_max) -> None   # ValueError unless latent_min < latent_max and
+                                                  # latent_max - latent_min is finite (an after-validator of both models)
 class DataConfig(BaseModel):      # model_config = ConfigDict(extra="forbid") on every model
     task: Literal["position", "linear_teacher", "object_action", "what_where"] = "position"
     P: int = 4096; D_in: int = 64
@@ -136,7 +158,12 @@ class DataConfig(BaseModel):      # model_config = ConfigDict(extra="forbid") on
     cov: list[list[float]] | None = None          # None -> identity
     embedding: Literal["linear", "fourier"] = "fourier"
     # linear_teacher
-    n_latents: int = 3; latent_range: float = 1.0   # k latents, uniform on [-a, a]
+    n_latents: int = 3                              # k latents, iid uniform on [latent_min, latent_max]
+    latent_min: float = -1.0; latent_max: float = 1.0   # finite, latent_min < latent_max with a finite difference; a config with the
+                                                    # removed latent_range fails naming these two
+    teacher: Teacher = "gaussian"                   # Literal["gaussian", "orthonormal"]. W_X, W_Y: iid N(0, 1/k), or the
+                                                    # sign-canonical Q factor of those same draws (orthonormal columns,
+                                                    # feature variance ~k/m lower); hashed only when "orthonormal"
     # object_action
     grid_size: int = 5; max_objects: int = 3        # G x G grid, 0..A objects
     # what_where
@@ -147,13 +174,15 @@ class NetConfig(BaseModel):
     phi: Literal["relu", "tanh", "sigmoid", "id"] = "relu"   # "id": phi(h) = h, a linear net
     seed: int = 0
     B: int = 1                          # ensemble size (>= 1): B > 1 trains B non-interacting nets in one run (see "Ensembles" below); hashed only when != 1
+    init: Literal["standard", "prior"] = "standard"   # initial law: every parameter N(0, 1), or W from the prior the loss encodes (see "Spatial weight prior in training"); hashed only as "prior"; required by the whitened parametrisation
 class TrainConfig(BaseModel):
     n_epochs: int = 15_000; lr: float = 1e-3
     weight_lambda: float = 2e-4; rate_lambda: float = 1e-3
     log_int: int = 100; save_int: int = 100; seed: int = 0
     monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
-    monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
-    monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1)
+    monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2); not hashed under the spectrum monitor
+    monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1); not hashed under the spectrum monitor
+    monitor_kind: Literal["mir", "spectrum"] = "mir"   # which monitor runs (monitor.make_monitor); hashed only as "spectrum"; "spectrum" needs monitor_int > 0
     optimizer: Literal["adam", "sgld"] = "adam"
     beta: float = 1.0                   # SGLD inverse temperature (> 0); ignored, and not hashed, for adam
 class MeanFieldConfig(BaseModel):      # the problem: the equations being solved
@@ -209,9 +238,10 @@ class Config(BaseModel):
     spatial: SpatialConfig | None = None   # the spatial weight prior (fct.spatial); None -> weight L2 norm
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float64"
-    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `LOSS_VERSION` when `train` is), first 12 hex chars; >=1 section required
+    is_whitened: bool   # property: spatial is set and its parametrisation is "whitened"; the one test of the parametrisation
+    def section_hash(self, *sections: str) -> str   # sha256 of canonical JSON of those sections AND the top-level dtype (and `MODEL_VERSION` when `net` is a section, `hashed_loss_version(train)` when `train` is: `LOSS_VERSION`, or `RATE_FREE_LOSS_VERSION` at `rate_lambda = 0`), first 12 hex chars; >=1 section required
         # with `train`: optimizer/beta dropped for adam; the `spatial` section added only when it is set
-        # with `net`: net.B dropped when it is 1, so every single-network cache keeps its hash
+        # every field of HASH_OMITTED_AT_DEFAULT dropped while at its default ("Fields added after artefacts existed")
 
 def default_config() -> Config
 def load_config(path: Path) -> Config          # raises on unknown keys / bad types
@@ -220,7 +250,7 @@ def resolve_device(cfg: Config) -> torch.device   # "auto" -> cuda if available 
 def resolve_dtype(name: str) -> torch.dtype
 ```
 
-`task` selects the generator and only that task's fields are read; the fields of other tasks are ignored but still enter the cache hash (changing one makes an existing data cache stale). Fields are range-constrained (sizes and intervals >= 1, rates and scales > 0, `target_accept` in (0,1), `tilt_floor` in [0,1); `D_in` must be even for the position task with `embedding="fourier"`; for `linear_teacher`, `D_in` (the number of features m of both x and y) must exceed `n_latents`; `max_objects` >= 0 while `n_latents`, `grid_size`, `n_motifs` are >= 1 and `latent_range` > 0; `max_objects <= grid_size**2`, `n_motifs <= 511`, and for `object_action` / `what_where` `D_in` must equal the fixed 2*G*G / 81), and `load_config` raises `ValidationError` naming the field.
+`task` selects the generator and only that task's fields are read; the fields of other tasks are ignored but still enter the cache hash (changing one makes an existing data cache stale). Fields are range-constrained (sizes and intervals >= 1, rates and scales > 0, `target_accept` in (0,1), `tilt_floor` in [0,1); `D_in` must be even for the position task with `embedding="fourier"`; for `linear_teacher`, `D_in` (the number of features m of both x and y) must exceed `n_latents`; `max_objects` >= 0 while `n_latents`, `grid_size`, `n_motifs` are >= 1; `latent_min < latent_max`; `max_objects <= grid_size**2`, `n_motifs <= 511`, and for `object_action` / `what_where` `D_in` must equal the fixed 2*G*G / 81), and `load_config` raises `ValidationError` naming the field.
 
 ## activations.py
 
@@ -284,7 +314,12 @@ because the config imports `TASK_SPECS`.
 
 ```python
 def linear_teacher(cfg, device, dtype) -> Dataset   # Q = period = None
-    # Z (P,k) iid U[-a,a]; W_X, W_Y (m,k) iid N(0,1/k), m = cfg.D_in; x = Z W_X^T, y = Z W_Y^T, both (P,m)
+    # Z (P,k) iid U[latent_min, latent_max] (lo + (hi - lo) * rand; the default [-1, 1] is 2 * rand - 1 bit for bit); W_X, W_Y (m,k) iid N(0,1/k), m = cfg.D_in; x = Z W_X^T, y = Z W_Y^T, both (P,m)
+    # teacher = "orthonormal": W_X, W_Y replaced by the Q of torch.linalg.qr(W, mode="reduced") of the same draws,
+    # each column's sign fixed so diag(R) >= 0 (a zero diagonal counts as +1): canonical, a function of the Gaussian
+    # draws (column j has positive overlap with W[:, j]) independent of LAPACK backend and dtype, not Haar-distributed.
+    # W^T W = I_k; same random stream, so Z is the Gaussian teacher's. Scale: a Gaussian column has norm ~ sqrt(m/k),
+    # an orthonormal one norm 1, so the variance of each feature of x and y falls by about k/m
     # factors z0..z{k-1} (float); one singleton group per latent; extras W_X, W_Y
 def object_action(cfg, device, dtype) -> Dataset   # Q = period = None
     # G x G grid, cell = row*G + col; agent cell uniform; #objects uniform on 0..A; distinct object cells drawn
@@ -310,39 +345,48 @@ def resample(cfg, reference: Dataset, seed, device, dtype) -> Dataset
     # definition in reference.extras (object_action has none: the new seed is enough). Generators are unchanged.
 def latent_lattice_dataset(cfg, reference: Dataset) -> Dataset
     # linear_teacher only (ValueError naming the task otherwise; ValueError if reference.extras lacks W_X / W_Y): one
-    # row per point of {-a, 0, a}^k, a = latent_range, 3^k rows, z0 slowest and the last latent fastest, values in
-    # the order (-a, 0, a); x = z W_X^T, y = z W_Y^T with the reference's maps; factors z0..z{k-1}, singleton groups,
+    # row per point of {lo, (lo + hi)/2, hi}^k, lo = latent_min, hi = latent_max, 3^k rows, z0 slowest and the last
+    # latent fastest, values in the order (lo, (lo + hi)/2, hi); x = z W_X^T, y = z W_Y^T with the reference's maps; factors z0..z{k-1}, singleton groups,
     # extras = reference.extras; device and dtype of reference.x
 ```
 
 ## model.py
 
 ```python
-class MLP(nn.Module)   # the notebook's net: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None); forward(x) -> (H (P,L,N), Z (P,D_out)) with Z = phi(H[:, -1]) @ V / N, a linear readout of the last layer's post-activations (MODEL_VERSION 2); weight_l2()
+class MLP(nn.Module)   # the notebook's net: __init__(D_in, D_out, N, L, g, phi, device, dtype, generator=None, whitening=None, init_std=1.0); forward(x) -> (H (P,L,N), Z (P,D_out)) with Z = phi(H[:, -1]) @ V / N, a linear readout of the last layer's post-activations (MODEL_VERSION 2); weight_l2()
 class EnsembleMLP(nn.Module)   # B MLPs batched over a leading member axis: U (B,N,D_in), J_k (B,N,N), V (B,N,D_out); __init__(members: Sequence[MLP]) copies and stacks them
     # forward(x (P,D_in)) -> (H (B,P,L,N), Z (B,P,D_out)); weight_l2() -> (B,); member(b) -> MLP (a copy of member b's weights); B, device, dtype properties
     # forward: batched matmuls with contiguous (B,P,.) results, each scale factor on the smaller of weight and result
 Net = MLP | EnsembleMLP                                  # MLP.B = 1 (class attribute), so `net.B` works for both;
     # member_axes: leading axes indexing members (MLP 0, EnsembleMLP 1), which train.per_member reduces around
-MLP.from_weights(U, J, V, g, phi) -> MLP                 # an MLP holding the given weights (no copy, no random draw); member() uses it
+class Whitening(nn.Module)                               # net.whitening: (S_rows, S_cols) per parameter name as NON-persistent buffers (follow .to(device, dtype), not in the state dict); whiten(name, xi) = S_rows xi S_cols; None for a plain net
+def effective_weights(net) -> {"U" | "J.k" | "V": W}    # the weights the forward pass uses: the parameters themselves (same tensors) for a plain net, S_rows xi S_cols under whitening; what every reader of trained weights reads
+MLP.from_weights(U, J, V, g, phi, whitening=None) -> MLP   # an MLP holding the given parameters (no copy, no random draw); member() uses it
 def member_seed(seed: int, b: int) -> int                # member 0: seed itself; b > 0: first 8 bytes (little-endian) of sha256("fct.model.member:<seed>:<b>")
-def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype) -> Net   # cfg.B = 1: an MLP, weights drawn on CPU from a local torch.Generator seeded with cfg.seed;
+def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype, whitening=None, init_std=1.0, members=None) -> Net   # cfg.B = 1: an MLP, parameters N(0, init_std^2) drawn on CPU from a local torch.Generator seeded with cfg.seed;
     # cfg.B > 1: an EnsembleMLP whose member b is drawn from a generator seeded with member_seed(cfg.seed, b); then moved to device (no global RNG touched); phi = get_phi(cfg.phi)
+    # whitening: the factors of fct.spatial.whitening_factors; train.make_net_from_config passes them with init_std = weight_lambda ** -0.5 under spatial.parametrisation == "whitened"
+    # members: a range (default range(cfg.B)) of the members to build, in order: member j of the result is member members[j] of the whole ensemble bit for bit (an MLP if the range holds one); how an extension builds the members it adds
 ```
 
 ## train.py
 
 ```python
-def compute_loss(net, x, y, prior_coefficient, rate_lambda, weight_penalty=None) -> tuple[Tensor, dict[str, Tensor]]   # None: the net's own weight_l2
+def compute_loss(net, x, y, coefficients: LossCoefficients, weight_penalty=None) -> tuple[Tensor, dict[str, Tensor]]   # None: the net's own weight_l2
     # ensemble: every part is (B,), member b's own, and the returned loss is the SUM over members (so member b's gradient is its own loss's)
-    # loss = 0.5*N*mse + prior_coefficient*weight_l2 + rate_lambda*rate_l2; callers pass the function
-    #   prior_coefficient(cfg.train) = train.weight_lambda / (2 beta), never the raw train.weight_lambda
+    # loss = 0.5*N*mse + coefficients.prior*weight_l2 + coefficients.rate*rate_l2; callers pass
+    #   loss_coefficients(cfg.train) = (train.weight_lambda / (2 beta), train.rate_lambda / (2 beta))
+    #   (beta = law_beta(optimizer, beta): train.beta under SGLD, 1 under Adam); anything but a LossCoefficients raises TypeError
     # weight_l2 = weight_penalty(net): the sum of squares of every parameter by default, the spatial prior
     #   sum_l tr(M_post W_l M_pre W_l^T) from make_weight_penalty when cfg.spatial is set (see "Spatial weight prior in training")
     # rate_l2 = phi(h)^2 summed over samples, neurons and layers (as in the notebook), so it grows with P
 WeightPenalty = Callable[[Net], Tensor]   # 0-d for an MLP, (B,) for an ensemble
 def per_member(net, t, reduce=torch.sum) -> Tensor   # reduce over every axis but the member axis (all axes for an MLP)
-def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None, else the spatial prior for net's sizes, dtype and device
+def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None or its parametrisation is "whitened" (the plain |xi|^2), else the spatial prior for net's sizes, dtype and device
+    # for SGLD refuses a step the prior's stiffest curvature cannot take, on either path; ValueError if the net's parametrisation is not the config's
+def prior_stiffness(factors) -> float   # max over parameters of lambda_max(M_rows) lambda_max(M_cols): the prior's curvature is 2 prior_coefficient times it along its stiffest direction (1 under whitening)
+def make_net_from_config(cfg: Config, D_in, D_out, device, dtype, members=None) -> Net   # members as in make_net; the one place a Config becomes a net: make_net of cfg.net (standard-normal z), under net.init "prior" scaled by weight_lambda ** -0.5 and, under the penalty, correlated by floored_whitening_factors; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) as the net's factors
+def largest_hessian_eigenvalue(loss_fn, params, max_iter=300, seed=0) -> float   # the most positive Hessian eigenvalue, by Lanczos with full reorthogonalisation on Hessian-vector products (double backward), in float64; converged when the top Ritz pair's residual is below HESSIAN_RTOL (1e-8, or 64 eps of the dtype) of the largest Ritz value, else ValueError ("did not converge"); an ensemble's block-diagonal Hessian gives the largest over members; local generator, parameters and .grad untouched
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
 History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus grad_norm, param_msd for SGLD; plus the monitor_* keys below when monitored
@@ -351,13 +395,25 @@ def train(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print,
     # resume from latest CACHE_DIR/train/ckpt_*.pt (net + optimiser + history + epoch + RNG state); return final.pt directly if present
     # checkpoint every save_int epochs and at the end (final.pt); hash = section_hash("data","net","train")
     # monitor: required exactly when cfg.train.monitor_int > 0 (ValueError otherwise, before anything runs)
+    # ValueError, before anything runs, if the net's parametrisation is not the config's (whitening factors exactly when cfg.is_whitened)
+    # a fresh SGLD run under "whitened" first estimates lambda_max of the loss Hessian at the initial net (largest_hessian_eigenvalue),
+    #   raises (naming lr and lambda_max, before any checkpoint) if lr * lambda_max >= 1, and logs "SGLD step check: ..." otherwise
 def train_from_config(cfg: Config, dataset: Dataset, cache_dir: Path, log=print, monitor=None) -> tuple[MLP, History]
-    # make_net from cfg.net / cfg.dtype / the dataset's x and y widths on resolve_device(cfg), then train(...); shared by `fct train` and the experiment
-def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, History]   # rebuilds net with make_net and loads final.pt (history incl. monitor_* keys); raises FileNotFoundError if absent
+    # make_net_from_config(cfg, the dataset's x and y widths, resolve_device(cfg), cfg.dtype), then train(...); shared by `fct train` and the experiment
+def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, History]   # rebuilds the net with make_net_from_config (the config's net section and, under "whitened", its whitening factors; sizes from the saved U and V) and loads final.pt's state dict into it (history incl. monitor_* keys); raises FileNotFoundError if absent
     # an EnsembleMLP and an ensemble history when cfg.net.B > 1 (load_latest_checkpoint likewise)
 def select_member(net: Net, history, member: int | None = None) -> tuple[MLP, History]   # a single net passes through (member None or 0);
     # an ensemble needs member (ValueError if None, IndexError out of range) and gives net.member(member), member_history(history, member)
 def member_history(history, member) -> History          # every entry but epoch / monitor_epoch indexed by member: a single network's history
+def extend_trained(cfg, dataset, cache_dir, log=print, monitor=None) -> tuple[Net, History]   # grow train/final.pt (b0 members, written under cfg with net.B = b0) to cfg.net.B; see "Growing an ensemble"
+def append_members(old: dict, new: dict) -> dict        # pure: the payload of old's members followed by new's (state dict, Adam moments, every per-member history entry concatenated; epoch / monitor_epoch must agree; a single network counts as one member); ValueError if they do not fit
+def trained_member_count(path) -> int                   # members of a train artefact (1 for a single network), from its U alone; ValueError if unreadable or not a net
+def extension_seed(seed, b0) -> int                     # the global-RNG seed of an extension's staging run: first 8 bytes of sha256("fct.train.extension:<seed>:<b0>"); b0 >= 1
+def staging_dir(train_dir, b0, B) -> Path; remove_staging(train_dir, log=print, keep=None)   # train/extend_<b0>-<B>/ (half-open); delete, logging each, every staging directory but `keep`
+def with_ensemble_size(cfg, B) -> Config                # cfg with net.B = B
+def load_trained_members(cache_dir, cfg, device, dtype) -> tuple[Net, History]   # load_trained of the members final.pt holds, whatever cfg.net.B says (a pending extension's b0)
+def train_hash(cfg) -> str                              # section_hash("data", "net", "train"): the stamp of every train artefact (checkpoints, final.pt)
+SHARED_HISTORY_KEYS = ("epoch", "monitor_epoch")         # the history keys without a member axis
 ```
 
 Ensembles (`net.B > 1`). One run trains B copies of the network that share the dataset and differ in their initial
@@ -381,6 +437,68 @@ commands, `report.load_setting_result`, `exp_view.load_setting_data` and `lrtune
 mean-field `solve` raises for an ensemble, and the experiment's solve stage raises `ExpError` for an ensemble setting
 before writing anything, trained or not (its solve status stays "missing").
 
+Growing an ensemble. The members of an ensemble are its posterior samples (one network per member: a single SGLD
+chain is not trusted to give several independent ones), so an experiment that is done can be given more members
+without retraining the ones it has: `fct exp extend ROOT --by K` (`exp.extend_experiment`) rewrites exp.json with
+`B + K`, and `exp run` (or the SLURM array, unchanged) then calls `extend_trained` for every setting whose final.pt
+holds b0 < B members, adding K = B - b0. The contract:
+
+- Members b0 .. B-1 are built by `make_net_from_config(cfg, ..., members=range(b0, B))`, so their initial weights are
+  those of a from-scratch run of B (`member_seed` does not depend on B), and train as an ensemble of their own (an
+  `MLP` for K = 1) with `train`'s machinery in `train/extend_<b0>-<B>/`, under the staging config (`net.B = K`,
+  `train.seed = extension_seed(train.seed, b0)`) whose hash stamps the staging checkpoints: an interrupted extension
+  resumes from them exactly, RNG state included. The monitor (`make_monitor`, of `train.monitor_kind`: MIR or
+  spectrum) is built from the setting's config, so it sees each new member exactly as a from-scratch run would.
+- Then `append_members` concatenates, along the member axis, the state dict (exactly the parameters: a whitened net's
+  factors are non-persistent buffers rebuilt from the config), Adam's moments, and every history entry but
+  `SHARED_HISTORY_KEYS` (which must agree), so each per-member list has B entries and each `monitor_<key>` entry (MIR
+  or spectrum, per-layer lists of each member) a member axis of B; the RNG state stays the old run's. final.pt is
+  replaced (atomically) by the result stamped with `train_hash` of the new config: it IS the B-member artefact, and
+  `net.B` stays in the train hash, so no existing cache changes hash. Then the old run's leftover periodic
+  `train/ckpt_*.pt` (stamped with the b0 hash; nothing resumes from them; `remove_stale_checkpoints` deletes every
+  checkpoint whose hash is not final.pt's) and the staging directory are deleted, each removal logged; a crash in
+  between leaves a done setting, whose leftover stale checkpoints and staging directory the next `run_setting`
+  removes (logged). A single network (b0 = 1) and a block of one (K = 1) gain their member axis on append.
+- Equality with a from-scratch run of B. Under Adam (no noise) the new members equal members b0 .. B-1 of a
+  from-scratch run bit for bit, history and monitor records included (`tests/test_ensemble_extend.py`), for K >= 2; a
+  block of one trains as an `MLP`, whose forward pass equals the batched one to round-off. Under SGLD the noise is ONE
+  global stream over the whole ensemble (the default; the per-member streams of `tests/test_ensemble.py` exist only as
+  an injected `noise` in tests), so a from-scratch run of B gives member b a slice of draws of shape (B, ...) that no
+  run of fewer members can reproduce. The staging run therefore draws from a stream of its own (`extension_seed`;
+  reseeding with `train.seed` would hand the new members the old members' noise rearranged, and with K = b0 their first
+  noise exactly, which a test checks): the new members start from the same weights as the from-scratch ones
+  (everything recorded before the first step agrees bit for bit) and are independent samples of the same law, equal in
+  distribution, not bit for bit. The old members are bit for bit what they were.
+- Status. `setting_status` (train) counts members: done needs final.pt's hash to be the config's AND B members; a
+  final.pt of b0 < B members carrying the hash of the config with `net.B = b0` is partial (a pending extension);
+  anything else, more members than B included, is stale, and `run_setting` refuses a final.pt of more members than B
+  with an `ExpError` before writing anything (an ensemble only grows).
+- Readers. A pending extension is partial but is not a run part-way: its train/ may hold the old run's last periodic
+  checkpoint, stamped with the b0 hash. The readers of partial settings therefore check for final.pt first and show
+  the b0 members it holds (`load_trained_members`), all n_epochs in: `report.load_setting_result` (one network, so for
+  b0 = 1; provisional, with a note saying the extension is pending) and `phase_view.load_phase_run` (an ensemble;
+  ValueError if final.pt holds a single network). Like a checkpoint, a final.pt that cannot be read or is stale (a
+  running extension replaces it when it appends) is reported in a note (`SettingResult.note`, `PhaseRun.note`), not
+  raised.
+- config.json follows exp.json's `net.B` (`exp._write_or_reconcile_config`) unless `exp._net_B_refusal` objects,
+  with an ExpError naming net.B and the fix: an original run is part-way (its checkpoints were written for the old
+  B: set B back, let the run finish, then `exp extend`), final.pt is unreadable, or it holds more members than the new
+  B. So an extension can be backed out: once the extension job has stopped (crashed, or been cancelled), B set back to
+  b0 in exp.json takes config.json back with it, the setting is done again, and its abandoned staging directory is
+  removed (logged). Backing out while the job still runs would let it append to final.pt afterwards. Only the "B"
+  value need be edited: the base_B the first extension recorded stays, and base_B == B reads as not extended.
+- The first extension records `base_B`, the B before it, in exp.json; later extensions keep it. An experiment
+  extended before `base_B` existed has none, so its extended B passes for the base; so does one re-initialised with
+  `exp init --force`, which writes a new experiment and drops `base_B` (deliberately: the new experiment may be
+  another preset or B, and an old base_B would not describe it). For either, set the base by hand in the
+  linear-ring notebook (`BASE_B`).
+- `extend_experiment` refuses (ExpError, exp.json unchanged) `K < 1`, an experiment with a `net.B` axis (even one of a
+  single value, as in the `phase_transition` preset: the value is in every directory name and in the exp hash), and
+  any partial setting: a run part-way wrote its checkpoints for the old B, and a pending extension would no longer
+  match a larger B (run them first). Settings not yet trained simply train B + K members from scratch.
+- Not covered: the solve stage refuses ensembles anyway, so a B = 1 setting's mean-field solve is stale once it is
+  extended (the net section, with B, is in the solve hash).
+
 Cost: an ensemble is one batched run, measured in `docs/issues/ensemble-training.md` (`jobs/bench_ensemble.py`). It is
 faster than B singles on the GPU and at the phase-transition preset's sizes on the CPU, but SLOWER than a loop of B
 singles on the CPU when the activations are large (P 2048: about 2x slower; deep tanh nets: on par), because its
@@ -397,30 +515,30 @@ effective temperature that tends to `1/beta` when the noise dominates the drift)
 
 Mapping to `Latex/sections/01_setup.tex`. The Latex trains `d(theta) = -grad L_tex dt + sqrt(2/beta) eta` with
 `L_tex = N/(2Pn) sum (f - y)^2 + (1/beta) P_weight + (1/beta) P_rates`, i.e. `p ~ exp(-beta L_tex)`. The repo loss is
-`L = 0.5 N mse + weight_lambda / (2 beta) weight_l2 + rate_lambda rate_l2` (`weight_l2` is the spatial prior when one is set; `beta = 1` for Adam) and `mse` is the mean over the P*n entries, so the data
+`L = 0.5 N mse + weight_lambda / (2 beta) weight_l2 + rate_lambda / (2 beta) rate_l2` (`weight_l2` is the spatial prior when one is set; `beta = 1` for Adam) and `mse` is the mean over the P*n entries, so the data
 terms agree and `beta L_tex = beta (0.5 N mse) + P_weight + P_rates`. SGLD on `L` at inverse temperature `beta` samples
-`exp(-beta L) = exp(-beta 0.5 N mse - weight_lambda/2 weight_l2 - beta rate_lambda rate_l2)`. The Latex regulariser
-strengths are therefore `P_weight = weight_lambda/2 weight_l2` (independent of `beta`) and `lambda_tex = beta * rate_lambda` for the rates. `beta` sets only the noise; `lr` is the step
+`exp(-beta L) = exp(-beta 0.5 N mse - weight_lambda/2 weight_l2 - rate_lambda/2 rate_l2)`. The Latex regulariser
+strengths are therefore `P_weight = weight_lambda/2 weight_l2` and `P_rates = rate_lambda/2 rate_l2`, both independent of `beta`: `rate_lambda` is the notes' `r` (`G = r I`). `beta` sets only the noise; `lr` is the step
 size `dt`.
 
 #### Prior scaling convention
 
 The weight prior enters the loss as `weight_lambda / (2 beta) * tr(M_post W M_pre W^T)` per layer (the iid prior `K = M = I` included: the plain L2 is
 `weight_lambda / (2 beta) * sum W^2`), where `beta` is `train.beta` under SGLD and 1 under Adam (`fct.train.prior_coefficient`). The `1/beta` cancels the `beta` of the
-stationary law, so `vec(W) ~ N(0, K / weight_lambda)` for every `beta` (`K = M^-1`); the data and rate terms carry the `beta`. The recorded `weight_l2` history is the raw quadratic form
-(no coefficient), so it does not depend on `beta`. Consequences for the mean-field constants (`fct.meanfield.network_constants`, for the standard-normal-parametrised
+stationary law, so `vec(W) ~ N(0, K / weight_lambda)` for every `beta` (`K = M^-1`); only the data term carries the `beta`. The rate penalty follows the same rule: it enters the loss as `rate_lambda / (2 beta) * sum phi^2` (`fct.train.rate_coefficient`), so `beta L` carries `(rate_lambda / 2) sum phi^2` for every `beta` and `rate_lambda` is the notes' rate coefficient `r`. The recorded `weight_l2` and `rate_l2` histories are the raw sums
+(no coefficient), so they do not depend on `beta`. Consequences for the mean-field constants (`fct.meanfield.network_constants`, for the standard-normal-parametrised
 weights and the 1/N readout), which are the solver's defaults whenever `MeanFieldConfig` leaves them unset (`beta` is `train.beta` under SGLD, 1 under Adam; an explicit value of any field wins):
 
 | constant | value for `exp(-beta L)` |
 |---|---|
 | `prior_scale` | `1 / weight_lambda` |
 | `alpha` | `weight_lambda P d_out / beta` |
-| `rate_tilt` | `2 beta rate_lambda` (from `exp(-beta rate_lambda sum phi^2)`) |
+| `rate_tilt` | `rate_lambda` (from `exp(-rate_lambda/2 sum phi^2)`) |
 | `learning_prefactor` | `1 / (2 prior_scale) = weight_lambda / 2` (the kernels are unscaled) |
 
-All four are exact for SGLD. Under Adam there is no Gibbs distribution; the Adam loss is the `beta = 1` case, so its prior is `weight_lambda/2 weight_l2` and the solver uses `beta = 1`.
+All four are exact for SGLD. Under Adam there is no Gibbs distribution; the Adam loss is the `beta = 1` case, so its prior is `weight_lambda/2 weight_l2`, its rate penalty `rate_lambda/2 rate_l2`, and the solver uses `beta = 1`.
 
-All `weight_lambda` values in this document, the presets and the notebooks are stated under this convention. A value chosen under the previous convention (loss prior `weight_lambda * form`) maps to the same effective loss by multiplying by `2 beta` for SGLD and by 2 for Adam (`beta = 1`); the library default is therefore `2e-4` (was `1e-4`), the spatial notebook's `60` (was `3e-3`, `beta = 1e4`) and the exemplar's `0.2` (was `1e-2`, `beta = 10`).
+All `weight_lambda` values in this document, the presets and the notebooks are stated under this convention. A value chosen under the previous convention (loss prior `weight_lambda * form`) maps to the same effective loss by multiplying by `2 beta` for SGLD and by 2 for Adam (`beta = 1`); the library default is therefore `2e-4` (was `1e-4`), the spatial notebook's `60` (was `3e-3`, `beta = 1e4`) and the exemplar's `0.2` (was `1e-2`, `beta = 10`). `rate_lambda` values are likewise stated as the notes' `r`; the values in the presets and notebooks were kept, so their rate penalty in the loss is `1 / (2 beta)` of what it was under `LOSS_VERSION` 4 (a half under Adam).
 
 Monitor hook: `monitor(net)` is called under `torch.no_grad()` with the global RNG state restored afterwards,
 at the START of every epoch e with `e % monitor_int == 0` (after e's periodic checkpoint, before its step; so e = 0
@@ -433,8 +551,16 @@ With `monitor_int == 0` the history keys and values are those of an unmonitored 
 ## monitor.py
 
 ```python
-def make_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]   # ValueError if dataset.factors is None
+Monitor = Callable[[MLP], dict[str, list]]                      # train.Monitor
+def make_monitor(dataset: Dataset, cfg: Config) -> Monitor      # the maker train.monitor_kind names: "mir" or "spectrum"
+def make_mir_monitor(dataset: Dataset, cfg: Config) -> Monitor  # ValueError if dataset.factors is None
+def make_spectrum_monitor(dataset: Dataset, cfg: Config) -> Monitor   # ValueError if dataset.factors is None or latent_basis refuses them
+def spectrum_record(H (P, L, N), U (P, K)) -> dict[str, list[Tensor]]  # one record of the spectrum monitor, pure
+def spectrum_records(history: History) -> Tensor (R, B, L, K + 1, N)  # monitor_spectrum stacked; B = 1 for a single network; ValueError without spectrum records
+SPECTRUM_MONITOR_KEYS = ("spectrum", "hex", "theta_hist")
 ```
+
+`make_monitor` is how `run_setting` and `python -m fct train` build the monitor, so the choice is made in one place.
 
 The docstring of `make_mir_monitor` owns the contract (the keys `MIR_MONITOR_KEYS`, their meaning and the settings
 used); `MIR_MONITOR_KEYS` is exported from `monitor.py`. One call runs the net on `dataset.x`, takes the rates phi(H)
@@ -446,6 +572,32 @@ estimate plus one per shuffle, shared by the bias correction and the chance leve
 `monitor_shuffles`, P, N and the number of factors. Measured (CPU, float64, 16 torch threads, N=256, L=5, P=4096, relu,
 `monitor_bins=10`, `monitor_shuffles=5`): about 1.5 s per call on `object_action` (G=5; 3 factor groups) and 0.22 s on
 `what_where` (m=8).
+
+The spectrum monitor (`train.monitor_kind = "spectrum"`) measures what `spectrum.py` defines. It builds the latent
+frame `U = latent_basis(dataset.factors).U` once, when the monitor is made, so data without latents `z0..z{K-1}` or
+with symmetric latents (no mean direction) raise `latent_basis`'s ValueError before training starts. A call runs
+`net(dataset.x)` with no input noise and returns `spectrum_record(H, U)` of the pre-activations H (for `phi = "id"`
+equal to the rates). Every value is a list over hidden layers of CPU tensors:
+
+| key          | per layer                 | what                                                                    |
+|--------------|---------------------------|-------------------------------------------------------------------------|
+| `spectrum`   | (K+1, N) float32          | `mode_spectra`: rows 0..K-1 the latent modes, row K the null mean       |
+| `hex`        | (2,) float32, K >= 3 only | Re, Im of `hexatic_moment(t2, t3)`, the contrasts of the tuning maps     |
+| `theta_hist` | (36,) int64, K >= 3 only  | `theta_histogram(t2, t3)`                                               |
+
+So `monitor_spectrum` stacks to (records, layers, K+1, N), and to (records, members, layers, K+1, N) for an ensemble;
+`spectrum_records` returns the latter for both (B = 1 for a single network), and its last record is the final state.
+`SPECTRUM_MONITOR_KEYS` lists the keys of a K >= 3 record; for K < 3 a record holds `spectrum` alone. `hex` and
+`theta_hist` are recorded for every K >= 3 but are meaningful only at K = 3: for K >= 4 the contrast directions
+u_2..u_K have near-degenerate singular values, so `(u_2, u_3)` is an arbitrary plane of that space.
+The moment is stored complex, not as its modulus, and the histogram as counts, because those average and sum across
+records and members; the statistic is |<e^{6 i theta}>| of a mean moment. Records are float32 because a
+full-size run holds (K+1) N L floats per record per member over thousands of records (4 x 64 x 4 x 4000 = 4.1 x 10^6,
+16 MB per member as float32); the powers are computed in the run's dtype and only stored in float32. The records
+along one run are a diagnostic of burn-in and mixing (`record_sem` with its `reliable` mask), not an estimator; the
+monitor only records. A call draws nothing from any RNG. The readers of the MIR history (`report.load_results`,
+`report.load_setting_result`, `lrtune.evaluate_setting`) refuse a spectrum experiment through
+`monitor.require_mir_monitor`, saying that it records spectra, not MIR.
 
 ## hmc.py
 
@@ -588,7 +740,7 @@ def solve(X, Y, L, lambda_w, lambda_r, phi, g, cfg: MeanFieldConfig, net=None, l
 def run_meanfield(cfg: Config, dataset: Dataset, net: MLP, cache_dir: Path, log=print, on_outer=None) -> SolveResult
     # raises SpatialPriorUnsupportedError (a ValueError) when cfg.spatial is set, before touching the cache: the solver knows only the iid prior;
     # `python -m fct solve` and `python -m fct exp run` (with or without --index) report it as a one-line error
-    # constants of the action: prior_scale, alpha, rate_tilt (2 beta rate_lambda) and learning_prefactor follow the network
+    # constants of the action: prior_scale, alpha, rate_tilt (= rate_lambda) and learning_prefactor follow the network
     # (`network_constants`, beta = meanfield.beta or train.beta for SGLD / 1 for Adam); an explicit meanfield field overrides it.
     # X = dataset.x[:n_points], Y = dataset.y[:n_points]; lambda_w/lambda_r from cfg.train; phi/g/L from cfg.net
     # hash = section_hash("data","net","train","meanfield") (meanfield as hash_payload); returns final.pt if present
@@ -906,12 +1058,14 @@ MODULARITY_EXP_AXES = {"data.task": EXP_TASKS, "net.L": LAYERS, "net.phi": PHIS,
 @dataclass(frozen=True) class Setting: index: int; axes: dict[axis, value] (axis order); task: str; relpath: Path
     # consumers read axes explicitly, e.g. setting.axes["net.L"]
 MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda"); EXP_OWNED_AXES: dict[axis, the experiment field to change instead]
-class ExpConfig(StrictModel)   # description: str | None = None (what the experiment is; documentation only: in no hash, directory name, setting.json record or same_experiment check; omitted from exp.json when None), N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
-                             # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_range), object_action: ObjectActionParams(grid_size, max_objects),
+class ExpConfig(StrictModel)   # description: str | None = None (what the experiment is; documentation only: in no hash, directory name, setting.json record or same_experiment check; omitted from exp.json when None), N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles, monitor_kind = "mir" (TrainConfig.monitor_kind of every setting; omitted from exp.json at "mir"; "spectrum" is rejected at load unless every setting is linear_teacher with latents latent_basis accepts, checked by building each distinct dataset and calling latent_basis),
+                             # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_min, latent_max, teacher = "gaussian"), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
-    # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, weight_lambda,
-    # rate_lambda, optimizer, beta; an axis of the same name wins. spatial: SpatialConfig | None = None, the spatial weight prior of every setting
+    # base_B: int | None = None: the B before the first `exp extend`, recorded by it and never changed after (at most B, equal once an extension is backed out by setting B back; refused beside a net.B axis and by `exp init --set`; compared by same_experiment); omitted from exp.json while None, in no hash; read by fct.ring_view for the accuracy budget
+    # Shared network and loss fields (library defaults, so an experiment without them builds the configs it always did): L, g, phi, B, init, weight_lambda,
+    # rate_lambda, optimizer, beta; an axis of the same name wins (init is shared so that `--set init=prior` makes a whitened axis value valid
+    # against the base, which every axis value is checked against alone). spatial: SpatialConfig | None = None, the spatial weight prior of every setting
     # (written to Config.spatial; training hashes change with it, exp_hash does not). A `spatial.<path>` axis varies a field of the section and
     # is rejected at load ("set the experiment's spatial section first") when the experiment has none; `spatial` itself is a valid axis only while the
     # section is None (its values are whole dumps, or None). A dict- or list-valued axis value (or one whose text exceeds MAX_LABEL_VALUE = 24 characters) is labelled in directory names as `<axis>-<6 hex of the
@@ -922,37 +1076,41 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
     # it is read by the solve stage only (a meanfield.* path is also valid as an axis, as any Config field)
     # axes: axis = dotted Config path (net.L, net.phi, train.rate_lambda, train.weight_lambda, data.task, ...), values = explicit lists; an axis
     # overrides the base value (net.N over N, train.lr over lr, ...), except the fields the experiment owns, which are rejected: data.P, data.D_in,
-    # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles (change the
+    # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles, train.monitor_kind (change the
     # experiment field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
     # build the same Config, so [0, 0.0] is a repeat), then every combination is built into a Config, so a bad axis name or value fails
     # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the experiment's `weight_lambda` field (the TrainConfig default 2e-4 unless set) unless it is an axis
 # Presets: base experiments stored as data. fct/presets/<name>.json, one complete ExpConfig per file (no inheritance, no comments), is the only
 # definition of a preset; its `description` carries the prose and caveats, so read the file rather than a copy here. The names are tiny, full,
 # modularity (the same as full, two files: both names are in use), lambda_exp (the two lambda axes are 7 log-spaced values, one per decade, np.logspace(-6, 0, 7)),
-# spatial_tiny, spatial_n_scan, spatial_exp, phase_transition. To change a preset edit its file; to add one, add `<name>.json` with name matching
+# spatial_tiny, spatial_n_scan, spatial_exp, phase_transition, linear_ring, linear_ring_tiny (see "The linear-ring presets" below). To change a preset edit its file; to add one, add `<name>.json` with name matching
 # [A-Za-z_][A-Za-z0-9_]*. Files are read at call time, so a new file is seen at once with an editable install; a wheel holds the files it was built with.
 def preset(name, directory=None) -> ExpConfig    # the base experiment <directory or fct/presets>/<name>.json, read through importlib.resources (so also from inside a wheel) and validated; PresetError (an ExpError, so a ValueError) naming the full path if the name is unknown (the message lists the presets and the ignored files) or the file is unreadable or invalid
 def preset_names(directory=None) -> list[str]     # sorted, found at call time: regular files `<stem>.json` with stem matching [A-Za-z_][A-Za-z0-9_]*; folders (even `x.json`), dotfiles, a bare `.json`, README and other files are ignored; `*.json` files whose stem breaks the rule are reported by the unknown-preset error
-def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json (UTF-8; every writer goes through write_exp_text, which writes a .tmp sibling and renames it; exp_text(exp) leaves `description` out when it is None and `B` out when it equals `NetConfig().B`, so an experiment without them has the text it had before those fields existed; an absent `B` means the default); load raises FileNotFoundError naming the path
+def save_exp(exp, root) / load_exp(root) -> ExpConfig   # ROOT/exp.json (UTF-8; every writer goes through write_exp_text, which writes a .tmp sibling and renames it; exp_text(exp) leaves out every field of EXP_JSON_OMITTED_AT_DEFAULT at its default ("Fields added after artefacts existed")); load raises FileNotFoundError naming the path
 def same_experiment(a, b) -> bool                      # every field equal except `description` (model_dump(exclude={"description"})); used wherever two experiments are compared (lrtune's trial root, migrate's resume check)
 def expand(exp) -> list[Setting]                       # itertools.product over the axes in the order written (first axis slowest); index i is stable for a given exp.json and independent of the sizes; adding a value to any axis but the first renumbers later settings and orphans their directories (grow an experiment in a fresh ROOT)
 def get_setting(exp, index) -> Setting                 # ExpError (a ValueError) "index i is out of range; valid indices are 0..N-1"
 def setting_dir(root, setting) -> Path                   # ROOT / setting.relpath (see Layout)
 def data_config(exp, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the experiment
 def setting_config(exp, setting) -> Config             # base config for the setting's task (net seed = seeds.net, monitor_* from the experiment) with each axis value written over it
-def setting_status(root, exp, setting, stage="train") -> "done" | "partial" | "missing" | "stale"   # stage "train": done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stage "solve": the same for meanfield/final.pt and the hash of data, net, train, meanfield (what run_meanfield writes); stale = a final.pt with another hash, or an unreadable one; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint). The stages are independent: a solve is stale when the solver or the training config changed, a trained net never when only the solver did
+def setting_status(root, exp, setting, stage="train") -> "done" | "partial" | "missing" | "stale"   # stage "train": done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stage "solve": the same for meanfield/final.pt and the hash of data, net, train, meanfield (what run_meanfield writes); stale = a final.pt with another hash, or an unreadable one; partial = a ckpt_*.pt but no final.pt, or (train) a final.pt of fewer members than net.B written under this config with that smaller B (an extended experiment; "Growing an ensemble"); done (train) also needs net.B members, and a final.pt of more is stale; missing otherwise (so also a run that has not yet reached its first checkpoint). The stages are independent: a solve is stale when the solver or the training config changed, a trained net never when only the solver did
 def exp_hash(exp) -> str                               # short hash of the built values of every axis (so [0, 1e-3] == [0.0, 1e-3]) plus the base task unless data.task is an axis; stored in setting.json
 def read_setting(directory, exp) -> {"index", "exp_hash", "axes"}   # a setting directory's setting.json; ExpError naming the directory if it was written under another experiment or has no exp hash
 def built_values(exp) -> {axis: [values as the built Config holds them]}   # used by exp_hash and the directory labels, so a value has one spelling in both
 def find_setting_dir(root, exp, values) -> Path         # the one run setting of `exp` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
                                                           # a subset of the axes is enough if unambiguous); only the experiment's own directories are considered; LookupError if none, several, or an unknown axis
+def setting_members(root, exp, setting) -> int | None   # members of train/final.pt (1 for a single network); None without a readable one
+def extend_experiment(root, by) -> ExpConfig            # rewrite exp.json with B + by (and, on the first extension only, base_B = the B before it) and return it; trains nothing (run_setting does); ExpError, exp.json unchanged, for by < 1, a net.B axis, or any partial setting (train)
 def has_settings(root) -> bool                            # ROOT already holds a setting directory; `exp init` refuses to write a new exp.json there without --force
 def run_setting(exp, index, root, log=print, stage="train") -> None
     # first validates/writes config.json and setting.json (ExpError if an existing one differs in data, net, train or the like: the experiment changed
     # under existing artefacts; this check comes BEFORE the done check, so a changed experiment raises even for a done setting; only the meanfield section
-    # may differ, and config.json is then updated to the experiment's, so `python -m fct solve DIR` solves what the experiment does),
+    # and net.B may differ (net.B as "Growing an ensemble" says), and config.json is then updated to the experiment's, so `python -m fct solve DIR` solves what the experiment does),
     # StaleCacheError if the stage's final.pt is stale, returns at once if done (log "already done (<stage>)"), else get_dataset and
-    #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_mir_monitor(dataset, cfg)); resumes a partial run exactly (see train.py)
+    #   stage "train" (`_train_setting`): train_from_config(cfg, dataset, dir, log, monitor=make_monitor(dataset, cfg)), the monitor of train.monitor_kind, built (and so failing on unsuitable data) before training; resumes a partial run exactly (see train.py);
+    #     a partial setting WITH a final.pt (fewer members than net.B: the experiment was extended) runs extend_trained instead ("Growing an ensemble");
+    #     ExpError, before anything is written, for a final.pt of more members than net.B; a done train setting has any leftover staging directory removed (logged)
     #   stage "solve": run_meanfield(cfg, dataset, net, dir, log) into DIR/meanfield/, net = the trained net if train/final.pt exists (history gets the
     #     net-comparison keys), else None (keys absent; "no trained net" is logged). Resumes from a solver checkpoint; the net-or-not choice is fixed
     #     once a solve has started: a checkpoint written with the other choice raises ExpError (one line, naming the file; `exp run --index` prints it
@@ -964,7 +1122,7 @@ def run_setting(exp, index, root, log=print, stage="train") -> None
     #     An InadequateSamplerError (importance sampling below the ESS floor) propagates and leaves no final.pt
 ```
 
-CLI: `python -m fct exp init ROOT --preset lambda_exp [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`. With any `--set` or `--axis` the description becomes `Preset 'NAME' with overrides: --set a.b=1; --axis c.d=[...]` (each override as given, `--set`s first); without, the preset's description is kept. `--preset` lists the files of `fct/presets` in `--help`, read lazily so that a broken folder fails only `exp init`.
+CLI: `python -m fct exp init ROOT --preset lambda_exp [--axis net.L=[1,2,3]] [--set N=64 --set n_epochs=2000 ...]`. With any `--set` or `--axis` the description becomes `Preset 'NAME' with overrides: --set a.b=1; --axis c.d=[...]` (each override as given, `--set`s first); without, the preset's description is kept. The format is written and read back by one pair in `fct/exp.py`, `derived_description` and `parse_derived_description` (-> `Overrides(preset, sets, axes)`, None for any other text). `--preset` lists the files of `fct/presets` in `--help`, read lazily so that a broken folder fails only `exp init`.
 `--set` overrides a shared entry by dotted key; `--axis PATH=[values]` replaces or adds an axis (JSON list; the modularity presets have no editable axes and reject it); `--set axes...` is rejected (use `--axis`). `exp count|list|status|run --index i` all read the same `expand`, and `jobs/fct_exp.sh` takes the array size
 from `exp count`. `exp status` and `exp run` take `--stage train|solve` (default train): train the nets or solve the
 saddle points of the same initialised experiment, locally or as an array job (`jobs/fct_solve.sh`); `list` and `count` do not depend on the stage.
@@ -976,7 +1134,9 @@ keeps the old (in)consistency instead of judging it: a record left by an earlier
 deletes settings) is renamed too and reported as "kept from an earlier experiment", with ", `exp run` refuses it, as before" when its
 directory belongs to the current experiment under another hash. `plan_migration` reads and checks everything and writes nothing: the
 converted file must validate as `ExpConfig` (a legacy file that does not, say one carrying the removed `meanfield.readout`, is refused
-naming the field: the old code could not load it either, so the folder's results are stale under the current code), every
+naming the field: the old code could not load it either, so the folder's results are stale under the current code; one whose
+linear teacher spells `latent_range` is refused with both readings, [-a, a] and [0, a], and the hand edit to `latent_min` /
+`latent_max` for each, since the file cannot tell which interval drew its latents), every
 setting.json must be readable JSON with exactly one of the two hash keys, and a record with the experiment's own hash must have the
 `index` and `axes` that the experiment gives its directory. `apply_plan` then converts the setting files, writes exp.json, and removes
 sweep.json last, each file by `<name>.tmp` and `os.replace`; a failed write (an `OSError`) leaves a folder that running the command
@@ -1002,6 +1162,93 @@ axes line width 1.2), `LINE_WIDTH`, `MARKER_SIZE`, `ANNOTATION_SIZE` (heatmap ce
 Heights stay in each `fig_*` and grow with the number of rows of panels. The legends of `plot_loss_curves` (right of the axis) and
 `plot_prediction_scatter` (below it) assume such a constrained-layout figure and may clip in a caller-supplied `ax`. The notebook
 sets `figure.dpi = 100` (about 1300 px wide; the executed notebook of the 36-setting experiment is ~14 MB and is not committed).
+
+### The linear-ring presets
+
+`linear_ring`, `linear_ring_equivalence` and `linear_ring_tiny` are the linear theory of `linear_theory.py` at
+sigma = 0 (linear_teacher with an orthonormal teacher and latents on [0, 1], phi id, L = 1, SGLD in float64, grid
+embeddings with box = N, `init = "prior"`, the spectrum monitor). Every size, lr, floor, run length, predicted and
+exact number and cost is in the files' descriptions, which are the only copy; what follows is the design they share.
+The analysis is `fct/linear_ring.py`.
+
+- `linear_ring` is the whitened path at the base point and the path of every sweep (beta, k); its penalty twin
+  `linear_ring_equivalence` differs only in `spatial.parametrisation`, lr and run length. They are two experiments
+  (two ROOTs), not two settings of one, because the paths need different lr and n_epochs and an experiment's axes
+  can only cross values; their common one-value beta axis makes them the same setting. Run plan: the two at the
+  base point first, then the sweeps on the whitened path. `linear_ring_tiny` is a pipeline check that crosses
+  `spatial.parametrisation` with `train.lr` and runs the diagonal (settings 0 and 3; setting 1 is refused at run
+  start, setting 2 runs).
+- Each real run takes a stated fraction of what its own run-start check accepts (penalty: lr weight_lambda
+  stiffness / (2 beta) < 1; whitened: lr lambda_max(loss Hessian) < 1, checked only at the prior start), and the
+  descriptions record the Euler inflation 1/(1 - lr c / 2) that implies for the stiffest modes and, for the whitened
+  path, the measured lr bias of the statistics, which can exceed the regime's accuracy budget.
+- Sampling: one sample per member, its final state; B is the sample size and a shared field, not an axis.
+  Statistics are read off the member-averaged final-state spectrum with bootstrap errors over members
+  (`linear_ring.estimate`); the records feed only the relaxation diagnostic.
+- Falsifiers are ring-averaged (`linear_ring.ring_statistics`): R(1)/R(0), R(ell)/R(0) (the Gaussian width at ell
+  is a function of it), the band share over `spectrum.band_mask` and the ratio of the two leading modes' band
+  powers. The q = 0 share and q_1/2 rest on one or two frequencies and are reported only. The frequencies the
+  penalty floor raises are removed from both paths' spectra first (`linear_ring.unfloored_frequencies`): the
+  penalty path inflates them by its Euler factor, which `predicted_spectra` does not model.
+- The rules (`linear_ring.disagrees`, `paths_disagree`, `budget_se`, `regime_accurate`): an agreement test fails
+  when |observed - predicted| exceeds FALSIFY_N_SE bootstrap SEs at the run's B, and the failure counts only if it
+  persists after `exp extend` to FOLLOW_UP_FACTOR times B; two paths disagree when their deviations from their own
+  predictions differ by more than EQUIVALENCE_N_SE combined SEs. A regime is accurate when |exact - predicted| is at
+  most one SE at B_max = FOLLOW_UP_FACTOR x the base B, the largest B run, the follow-up extension included
+  (`budget_se(law, base_B)`), which is also the bound a run's remaining relaxation must stay under. The base B is
+  given explicitly: exp.json's B grows with `exp extend`, and the follow-up must not shrink its own budget. The
+  notebook reads it from the experiment (`ring_view.recorded_base_B`: a setting's own B where net.B is an axis, else
+  the `base_B` the first extension recorded, else B). The pipeline test deliberately uses a fixed rule instead
+  (`pipeline_bounds`: tolerance and largest accepted bootstrap SE in delta-method SEs), so that it needs no
+  follow-up run.
+- `predicted_spectra` is the N -> infinity mean-field limit: it leaves out the readout's (n/2) log det C~ term, an
+  O(n/N) correction that converges slowly (exact over predicted q = 0 power of mode 1 at the smoke geometry and
+  beta = 10: 0.53, 0.69, 0.81, 0.90, 0.94 at N = 16, 32, 64, 128, 256, from an exact Gibbs sampler run off-repo).
+  `linear_ring` is sized so that the exact posterior and the prediction differ on every falsifier by at most one SE
+  at its B_max, while the data term moves each statistic from the prior by several SEs.
+- Stationarity (`linear_ring.relaxation_fit`, `is_stationary`): A - C exp(-t / tau) is fitted to the member-averaged
+  statistics of the records (tau on a log grid up to the span of the records, A and C by least squares). Over all
+  records it measures the main relaxation; over a late window (`start`) it tests the end of the run: the deficit
+  C exp(-t_end / tau) still to relax at the last record, with its bootstrap-over-members SE (floored at the SE of the
+  window's mean, so a fit with tau inside the first record spacing cannot report 0 +- 0), must be below one SE at
+  B_max, and so must that SE. A relaxation slower than the window shows as a drift at tau = span.
+
+```python
+Law(cfg, dataset, D (K, N), U (P, K), ell, B, keep (N,) bool)    # predicted_law(exp, index): one setting's prediction
+unfloored_frequencies(cfg, dataset) -> (N,) bool                  # exact lambda_q >= min_rel_eig * max lambda, both paths
+Statistic(kind, mode); statistic_list(K)                          # (lag1|lagl|band, 1..K) then (ratio, None)
+ring_statistics(N, ell, keep=None) -> f((..., K, N)) -> (..., 3K + 1);  law_statistics(law)
+member_covariance(D) -> (K, N, N); delta_method_se(law, B=None) -> (3K + 1,)
+estimate(member_spectra (B, K, N), law, seed=0) -> (values, bootstrap SE)
+map_correlation(first (B, K, N), last) -> (B,)                    # 1 for a frozen sampler, 0 for independent maps
+relaxation_fit(epochs (R,), records (R, B, K, N), statistics, start=None, n_boot=RELAXATION_N_BOOT, seed=0) -> RelaxationFit(asymptote, amplitude, tau, deficit, deficit_se)
+budget_se(law, base_B) -> (3K + 1,)                               # one delta-method SE at B_max = FOLLOW_UP_FACTOR x base_B
+is_stationary(fit, budget) -> (S,) bool                           # |deficit| and its SE both below budget
+regime_accurate(exact, law, base_B) -> (3K + 1,) bool             # |exact - predicted| <= budget_se(law, base_B)
+disagrees(values, se, predicted) -> (S,) bool                     # beyond FALSIFY_N_SE bootstrap SEs
+paths_disagree((values, se, predicted), (values, se, predicted)) -> (S,) bool   # deviations beyond EQUIVALENCE_N_SE combined SEs
+pipeline_bounds(law) -> (largest bootstrap SE, tolerance)         # PIPELINE_SE_MARGIN and PIPELINE_N_SE x that, in delta-method SEs
+# the notebook's measurements (Q = N/2 + 1 folded frequencies or lags); the curve parts' fields are the fct.draw plot_* arguments
+measure_final(law, final (B >= 2, K + 1, N), hex_moments (B, 2), theta_counts (B, N_THETA_BINS), seed) -> FinalMeasurement(
+    primary: Primary(stats, predicted, values, se, disagree), spectrum: SpectrumCurves, ratio: RatioCurve,
+    profile: ProfileCurves, secondary: Secondary(..., unavailable {kind: reason}), angles: Angles | None (K = 3 only), B)
+measure_relaxation(law, epochs (R,), records (R, B, K, N), base_B, start=None, seed) -> RelaxationView(curves, fit, stats, budget, stationary)
+band_share_estimate(law, final (B, K, N), seed) -> (values, se, predicted) (K,)
+kept(D, keep); normalised_autocorrelation(D); lag_profile(D, keep); folded_mode_ratio(D); exact_eigenvalues(cfg, dataset); prior_profile(law)
+q_half_statistic(keep); share0_statistic(keep); hexatic_estimate(moments); latent_angles(Z, U) -> (6,); angle_marks(law); relaxation_curve(fit, t, t0)
+statistic_name(stat, ell), statistic_mode(stat), statistic_label(stat, ell)   # one naming for every table and legend
+Q_HALF_TOLERANCE = 1 (one frequency step), HEXATIC_MAX = 0.1 (the plan's P6 threshold; applied only at N B >= HEXATIC_MIN_SAMPLES = 1000, since uniform angles give |m| of order 1/sqrt(N B), 0.03 at 10^3, too close to the threshold below it), ANGLE_K = 3; q_1/2 is unavailable only on fct.spectrum.HalfPowerUndefinedError
+```
+
+The pipeline test (`tests/test_linear_ring_smoke.py`, marked slow, about a minute on one CPU thread) runs both
+diagonal settings of `linear_ring_tiny` through the CLI. It checks the CLI, both parametrisations, the monitor and
+the estimator, not the theory's data term: the prediction there is within a fraction of an SE of the prior alone,
+and both settings start from the prior, so it also requires every member's final tuning maps to have decorrelated
+from its initial ones (a frozen sampler would otherwise pass). The estimator follows from the predicted law: a
+member's tuning map is a real stationary Gaussian field, so its power is D(q) chi^2_1 at q = 0, N/2 and D(q) Exp(1)
+elsewhere, shared by q and -q (folding +-q gains nothing), and the delta method on the member mean gives each
+statistic's SE. `tests/test_linear_ring_estimator.py` checks the estimator and the pipeline thresholds on ensembles
+drawn from the predicted law first, including the percentile of bootstrap SE over true SE behind the pipeline margin.
 
 ## report.py and notebooks/
 
@@ -1111,7 +1358,7 @@ style; a diverged run is a red cross at the top of its panel.
 
 ```
 python -m fct init CACHE_DIR [--set data.P=512 --set net.L=2 ...]   # writes config.json from defaults; refuses to overwrite unless --force
-python -m fct train CACHE_DIR                                        # builds the MIR monitor (lazily, at its first call) when train.monitor_int > 0
+python -m fct train CACHE_DIR                                        # builds the monitor of train.monitor_kind (lazily, at its first call) when train.monitor_int > 0
 python -m fct solve CACHE_DIR
 python -m fct plot CACHE_DIR [--which all|learning|representation|neurons|training|solver|kernels]   # result-dependent figures -> CACHE_DIR/figures/
 python -m fct plot-example CACHE_DIR                                 # result-independent figure
@@ -1119,8 +1366,9 @@ python -m fct plot-example CACHE_DIR                                 # result-in
 python -m fct exp init ROOT [--preset tiny|full] [--set n_epochs=100 ...] [--force]   # writes ROOT/exp.json; --set takes dotted keys like `init`
 python -m fct exp list ROOT      # "<index> <task>/L{L}_{phi}_r{rate}" per setting
 python -m fct exp count ROOT     # 36
-python -m fct exp status ROOT [--stage train|solve]   # "<index> done|partial|missing|stale <dir>" per setting, then "N done, N partial, N missing, N stale"
-python -m fct exp run ROOT [--index i] [--stage train|solve]   # train (default) or solve setting i (a SLURM array task); without --index, all settings in order
+python -m fct exp status ROOT [--stage train|solve]   # "<index> done|partial|missing|stale <members>/<B> <dir>" per setting (members of train/final.pt, "-" without one; B the setting's net.B), then "N done, N partial, N missing, N stale"
+python -m fct exp run ROOT [--index i] [--stage train|solve]   # train (default) or solve setting i (a SLURM array task); without --index, all settings in order; trains the members an extended setting lacks
+python -m fct exp extend ROOT --by K   # rewrite exp.json with B + K ("wrote ...: B 2 -> 5; ..."); refusals (K < 1, a net.B axis, a partial setting) are one stderr line, exit 1
 ```
 
 The experiment subcommands exit 1 with one stderr line for a missing or invalid exp.json, an out-of-range index, or a setting whose
@@ -1146,6 +1394,8 @@ bash jobs/fct_exp.sh ROOT --list | --status      # `fct exp list` / `fct exp sta
 ```
 
 `ROOT` is the first argument or `$FCT_EXP_ROOT`; it must exist and hold a `exp.json`. Array size comes from `fct exp count`.
+After `fct exp extend ROOT --by K` the script is used unchanged: each array task's `exp run --index i` trains the members
+setting i lacks (`tests/test_ensemble_extend.py` runs one task through the script); `--status` shows `members/B`.
 `FCT_MAX_CONCURRENT` (default 4) caps running tasks; `FCT_PYTHON` overrides `<project>/.venv/bin/python`. Each task runs
 `python -m fct exp run ROOT --index $SLURM_ARRAY_TASK_ID --stage train` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
 `--index` applies to `--submit`/`--dry-run` only: `N` is one setting, `A:B` the half-open range of settings A .. B-1 (like a Python
@@ -1174,7 +1424,7 @@ is stated once, in the module docstring of `fct/spatial.py`.
 EmbeddingSpec(kind="grid"|"random", shape=None, seed=0)   # grid shape must multiply to n, None -> n points for d = 1; random takes no shape
 KernelSpec(length_scale=0.1, amplitude=1.0)               # length_scale in the same units as box
 PopulationSpec(embedding, kernel)
-SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6, lambda_max=None)   # hidden 1..L share `hidden`; grid in d > 1 needs a shape; lambda_max > 0 or None (see "lambda_max")
+SpatialConfig(d=1, box=1.0, input, hidden, output, min_rel_eig=1e-6, lambda_max=None, parametrisation="penalty")   # hidden 1..L share `hidden`; grid in d > 1 needs a shape; lambda_max > 0 or None (see "lambda_max"); parametrisation "penalty" | "whitened"
 
 # pure computation (float64, CPU)
 make_embedding(spec, n, d, box, index=0) -> Embedding(positions (n, d), box)   # local generator: global RNG untouched
@@ -1182,9 +1432,13 @@ torus_distance(x, y, box) -> (n, m)                       # Euclidean norm of pe
 periodic_gaussian_kernel(x_post, x_pre, length_scale, box, amplitude) -> (n_post, n_pre)   # wrapped Gaussian, diagonal = amplitude
 wrapped_gaussian_profile(delta, length_scale, box, amplitude)   # the kernel along one axis (the analytic curve in the figure)
 penalty_matrix(K, min_rel_eig) -> (M, FloorReport(n_floored, fraction_floored, n_negative, cond_before, cond_after))
-build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties
+whitening_matrix(K) -> S                                  # K^{1/2}, symmetric PSD, eigenvalues clamped at 0 (no floor); raises on a clearly negative one
+floored_square_root(K, min_rel_eig) -> S_floored          # (M^{-1})^{1/2}: the square root of the floored kernel the penalty encodes; whitening_matrix(K) bit for bit when nothing is floored
+build_spaces(cfg, m, N, L, n_out) -> [LayerSpace(layer, pre, post)]   # L + 1 layers; M_pre, M_post properties; each Population has K, M, report, S, S_floored
 weight_quadratic_form(W, M_rows, M_cols) -> Tensor        # tr(M_rows W M_cols W^T), any dtype/device; identity factors give W.square().sum() exactly; W (..., r, c) gives one value per matrix
 parameter_factors(spaces) -> {"U" | "J.k" | "V": (M_rows, M_cols)}   # factors of each MLP weight in its STORED orientation (V: (M_pre, M_post))
+whitening_factors(spaces) -> {"U" | "J.k" | "V": (S_rows, S_cols)}   # the same, with S: W = S_rows xi S_cols (see "Spatial weight prior in training")
+floored_whitening_factors(spaces) -> {"U" | "J.k" | "V": (S_fl_rows, S_fl_cols)}   # the same, with S_floored: the penalty path's prior draw
 data_kernel(psi (P, n_pre), K_pre (n_pre, n_pre)) -> (P, P)           # A = psi K_pre psi^T / n_pre: the data factor of the paper's Phi^{mu nu}_ij = K^post_ij A_{mu nu} (eq. phi-diagonalised); K_pre = I gives psi psi^T / n_pre
 spatial_kernel_pairs(A (P, P), K_post (n, n), trials) -> (S, S, n, n)   # block [s, t] = A[trials[s], trials[t]] * K_post; ValueError on non-square inputs and on trials empty or outside 0..P-1
 ```
@@ -1228,18 +1482,250 @@ default, and what every `config.json` written before the field existed loads as)
   inverse temperature `beta`: `beta * weight_lambda / (2 beta) * tr(...) = P_weight` gives
   `M^l_tex = weight_lambda (M^post (x) M^pre)`, so the prior covariance is
   `K^l_tex = (K^post (x) K^pre) / weight_lambda`, for every `beta`. For identity kernels this is the L2 case, variance `1 / weight_lambda`.
-- The rate penalty is unchanged (`rate_lambda * sum phi^2`, identity `G`).
+- The rate penalty is not spatial: `rate_lambda / (2 beta) * sum phi^2` (`rate_coefficient`), identity `G = rate_lambda I`.
 - The matrices `M` are built once per `train` call (float64 on the CPU, then cast to the net's dtype and device). They are
   not parameters and not checkpointed: a resumed run rebuilds them from the config, so resume is exact.
 - Hash: the `spatial` section enters `section_hash` with `train` only when it is set, so the caches of runs without it keep
   their hashes (pinned in `tests/test_spatial_prior.py`), and a run trained without the prior is stale for a config with it.
+  Within it `lambda_max` and `parametrisation`, and `net.init` in the net section, follow "Fields added after artefacts
+  existed": every penalty run started from the standard draw keeps its hash, and a whitened run, or a run started from
+  the prior, has a new one.
 - SGLD stability. The prior's stiffest curvature is `(weight_lambda / beta) lambda_max(M^post) lambda_max(M^pre)`, which a wide
   kernel makes large (up to `1 / (min_rel_eig * lambda_max(K))` per factor). An Euler step diverges once
   `lr * weight_lambda / (2 beta) * lambda_max(M^post) lambda_max(M^pre) >= 1`, so `make_weight_penalty` raises for SGLD before the
   first step. The check is necessary, not sufficient (the data and rate terms add curvature). Adam rescales its steps and
   is not checked.
-- Not covered: the initial weights are still iid `N(0, 1)` rather than drawn from the prior, so the prior term starts
-  large for a wide kernel; the mean-field solver still assumes the L2 prior.
+- Initial law (`net.init`). Under `"standard"` (the default, and the only start before the field existed) every
+  parameter is iid `N(0, 1)`, far from the prior for a wide kernel. Under `"prior"` W is drawn from the prior the loss
+  encodes, from the same standard-normal draw `z`: `W0 = S_fl,post z S_fl,pre / sqrt(weight_lambda)` with `S_fl` the
+  square root of the floored kernel `M^{-1}` (`floored_square_root`); without a spatial prior `z / sqrt(weight_lambda)`.
+  It needs `weight_lambda > 0` and enters the net hash only as `"prior"`.
+- Not covered: the mean-field solver still assumes the L2 prior.
+
+The whitened parametrisation (`spatial.parametrisation = "whitened"`; the default `"penalty"` is everything above).
+The floor caps the prior's soft modes (`lambda_q^eff = max(lambda_q, min_rel_eig * lambda_0)`) and makes SGLD stiff
+(the bound above scales as `1 / min_rel_eig`). Under `"whitened"` the trained parameters are `xi`, one per weight, with
+`W = S_post xi S_pre`, `S = K^{1/2}` the symmetric PSD square root (`spatial.whitening_matrix`: eigenvalues clamped at
+0, no inversion, no floor; `Population.S`, `whitening_factors(spaces)` per parameter in its stored orientation like
+`parameter_factors`), and the penalty is the plain `|xi|^2` with the unchanged coefficient `weight_lambda / (2 beta)`, so
+`Cov(vec W) = (K^post (x) K^pre) / weight_lambda` exactly for every spectrum and the prior curvature is
+`weight_lambda / beta` in every direction of `xi`. The two paths share data, seeds, loss coefficients, monitor,
+history keys and checkpoint layout; how their dynamics differ is below ("Dynamics").
+
+- How the net applies it. `Config` requires `net.init = "prior"` under `"whitened"` (a start away from the prior
+  would contradict the reason for the parametrisation), and `make_net_from_config` (train.py) builds the net with
+  `whitening=whitening_factors(spaces)` and `init_std = weight_lambda ** -0.5`, so `xi ~ N(0, I / weight_lambda)` is a
+  draw from its prior and every direction the data does not touch starts in equilibrium. With nothing floored the
+  penalty path's `"prior"` start is the same `W0` bit for bit (same `z`, and `S_floored` is then `S`). The net holds `xi` as its parameters under the unchanged
+  names `U`, `J.<k>`, `V` and the factors in a `Whitening` submodule of non-persistent buffers; `forward` materialises
+  `W = S_rows xi S_cols` each call (two extra small matmuls per weight per step) through `effective_weights(net)`,
+  which for a plain net returns the parameters themselves (the same tensors, so the penalty path is bit for bit what it
+  was). SGLD and Adam iterate `net.parameters()`, i.e. `xi`, unchanged. Ensembles share one set of factors between
+  members (`EnsembleMLP` refuses members whose factors differ) and `member(b)` hands a copy to the member.
+- Readers. Everything that calls the net (`net_kernels`, the monitors, `tuning_view`, `example_outputs`) sees `W`
+  through the forward pass. Anything that reads a weight matrix reads `effective_weights(net)[name]`, never `net.U`
+  (which is `xi` under whitening): `phase_view.weight_kernels` and the spatial notebook's `order_weights` /
+  `ordered_kernel_comparison` calls do. `select_member` / `member(b)` carry the factors, so a member is read like any net.
+- Checkpoints. `net_state_dict` holds `xi` under the parameter names and nothing else (the factors are not in the
+  state dict, like the penalty matrices); `_net_from_payload` rebuilds the net through `make_net_from_config`, which
+  recomputes the factors from the config, so `load_trained`, `load_latest_checkpoint` and resume restore the net exactly.
+  `train` and `make_weight_penalty` raise if the net's parametrisation is not the config's (a plain net under
+  `"whitened"` or a whitened net under `"penalty"`), since the loss would otherwise silently take `xi` for `W`.
+- Run-start checks (SGLD only; Adam rescales its steps). Both paths refuse a step the prior's stiffest curvature cannot
+  take, with the curvature of the parameters actually trained: `lr * weight_lambda / (2 beta) * lambda_max(M_post)
+  lambda_max(M_pre) >= 1` under the penalty, `lr * weight_lambda / (2 beta) >= 1` under whitening. That bound misses
+  the data term's curvature, so a whitened run additionally estimates `lambda_max` of the loss Hessian at the initial
+  net on the dataset (`largest_hessian_eigenvalue`: Lanczos on Hessian-vector products from a local generator, so the
+  training RNG stream is untouched, which raises rather than return an unconverged value; power iteration would find
+  the eigenvalue of largest magnitude, which may be negative, and converges slowly when two are close), refuses `lr * lambda_max >= 1` (half the divergence limit, naming
+  `lr` and `lambda_max`) and logs the value otherwise (`SGLD step check: ...`). It runs on a fresh start only; a
+  resumed run passed it when it started.
+- Dynamics. The two paths sample the same law by different dynamics, and nothing here fixes how runs on them are
+  compared.
+  - SGLD on `xi` is, in `W`, Langevin dynamics preconditioned by `S^2 = K_post (x) K_pre`: `vec W = (S_post (x) S_pre)
+    vec xi` is linear, so a step `-lr grad_xi L + noise` is `-lr (K_post (x) K_pre) grad_W L` plus noise of covariance
+    `(2 lr / beta) (K_post (x) K_pre)` in `W`. The stationary law is the same `exp(-beta L(W))`, up to the eigenvalue
+    floor of the penalty path; the relaxation times differ. Under the penalty a prior mode of variance `lambda`
+    relaxes in about `beta lambda / (weight_lambda lr)` steps: the fine modes (small `lambda_q`, the largest prior
+    curvature `weight_lambda / (beta lambda_q)`) relax fastest and set the step bound, and the coarse modes (large
+    `lambda_q`) relax slowest. Under whitening every prior mode relaxes in `beta / (weight_lambda lr)` steps.
+  - The same `train.lr` is therefore a different step in `W` on the two paths (scaled by `K_post (x) K_pre` under
+    whitening). Adam is not invariant under the reparametrisation (its moments are elementwise, in `xi` or in `W`), so
+    its trajectories differ; only its fixed point, the MAP, agrees, up to the floor.
+  - `grad_norm` and `param_msd` are measured in the coordinates trained: `xi` under whitening, `W` under the penalty.
+    `weight_l2` is the same quantity on both paths, the prior's quadratic form `vec W^T (K_post (x) K_pre)^{-1} vec W`
+    (`|xi|^2` under whitening), with the floored kernels under the penalty.
+  - A singular `K` (or one with eigenvalues below round-off) confines `W` to the range of `S` under whitening: that is
+    the exact, degenerate prior. The penalty path instead gives those directions the floor's variance
+    `min_rel_eig lambda_max(K)`, so the two differ there.
+- Hash. `parametrisation` enters the train hash only as `"whitened"` ("Fields added after artefacts existed"), so every
+  penalty hash is unchanged and a whitened run has a new hash; `Config` requires `weight_lambda > 0` under whitening (the prior
+  `N(0, K / weight_lambda)` and the initial draw need it). `min_rel_eig` is unused under whitening but still hashed.
+  An experiment may run `spatial.parametrisation` as an axis (`--axis 'spatial.parametrisation=["penalty","whitened"]'`,
+  with `--set init=prior`, since every axis value is validated against the experiment's base) to train the two side by
+  side.
+
+## spectrum.py (tuning-map spectra on the ring)
+
+Pure functions on torch tensors (any floating dtype and device; the dtype is preserved): hidden activity
+`h (P, N)` of N neurons over P patterns, neuron i at ring site i (the grid embedding of `spatial.py`), becomes
+tuning maps, their unitary-DFT power, the null-direction power and summary statistics. No file I/O, no `Config`.
+Every function raises `ValueError` on a bad shape, a non-float or non-finite input, `K >= P`, or a basis that is
+not orthonormal (`TypeError` for a non-tensor). Spectra are in FFT order, `q = 0, 1, .., N/2, .., -1`. Every
+function except `latent_basis` takes leading batch dims `...` (records, members); a summary of one map `(N,)` is a
+Python number, of `(..., N)` a tensor `(...)`. Index convention: `u_k` is column k-1 of `U` and row k-1 of `t`, so
+the angle uses rows 1 and 2 of `tuning_maps`.
+
+Every estimator is per network: one trained network, or one ensemble member, gives one sample of each spectrum
+and summary, and spread is taken across members (`member_mean_sem`, or `bootstrap_members` for a statistic of the
+member-averaged spectrum such as q_1/2 or a share of the mean spectrum). `average_records` / `record_sem` pool the
+records of one chain and are a diagnostic of burn-in and mixing, not an estimator: one SGLD chain is not trusted
+to visit independent networks.
+
+```python
+latent_basis(factors: Mapping[str, Tensor]) -> LatentBasis(U (P, K), s2 (K,), Z (P, K))
+    # Z = [z0 .. z{K-1}] stacked by index (z10 after z9; other keys and colliding names such as z1/z01 raise); thin SVD
+    # Z = U S V^T, s descending, columns flipped so 1^T u_k >= 0; s2 = S^2 (measured, finite-P). Precondition: u_1 is the
+    # mean direction, s_1^2 / s_2^2 >= 2 (K >= 2) and cos(u_1, 1) >= 1/2 * sqrt(3K/(3K+1)); symmetric latents raise (below)
+tuning_maps(h (..., P, N), U (P, K)) -> t (..., K, N)          # t = U^T h, t_{k,i} = u_k^T h_i
+power_spectrum(t (..., N)) -> d (..., N)                       # |fft(t, dim=-1) / sqrt(N)|^2, no mean subtracted
+null_power(h (..., P, N), U (P, K)) -> (..., N)                # sum_p |fft(r_p)/sqrt(N)|^2 / (P - K), r = h - U U^T h (U_perp never formed)
+mode_spectra(h (..., P, N), U (P, K)) -> (..., K + 1, N)       # rows 0..K-1 power_spectrum(tuning_maps), row K null_power: one monitor record
+fold_q(d (..., N)) -> (..., N/2 + 1)                           # (d_q + d_{-q}) / 2 at |q| = 0..N/2; N even
+autocorrelation(d (..., N)) -> R (..., N)                      # R(Delta) = (1/N) sum_q d_q e^{2 pi i q Delta / N} = ifft(d).real
+half_power_q(d (..., N)) -> int | (...) int64                  # largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2; N even; of a MEAN spectrum; raises HalfPowerUndefinedError (a ValueError) if d_0 < d_{N/2}
+spectrum_summary(d (..., N)) -> Summary(share0, lag1, d0, d_nyq, R (..., N))   # share0 = d_0 / sum_q d_q, lag1 = R(1)/R(0); per record
+gaussian_width(R (..., N), ell) -> float | (...)               # sqrt(-ell^2 / (2 ln(R(ell)/R(0)))); ell an integer lag in 1..N-1
+contrast_angle_statistic(t2 (..., N), t3 (..., N)) -> float | (...)   # <cos 4 theta_i> over neurons, theta_i = atan2(t3_i, t2_i) on (-pi, pi]
+theta_histogram(t2 (..., N), t3 (..., N)) -> (..., 36) int64   # counts on the fixed bins (-pi + j w, -pi + (j+1) w], w = 2 pi / 36
+hexatic_moment(t2 (..., N), t3 (..., N)) -> complex (...)      # <e^{6 i theta_i}> over neurons; always a tensor (complex64 / complex128 as the input), 0-d for one map
+average_records(records (R, ...), burn_in) -> (...)            # mean over records[burn_in:] of one chain (diagnostic)
+integrated_autocorr_time(records (R, ...), burn_in) -> TauEstimate(tau (...), reliable (...) bool)   # 1 + 2 sum_k rho_k, Geyer's initial monotone sequence; NaN where not reliable
+record_sem(records (R, ...), burn_in) -> SemEstimate(sem, tau, reliable)   # sem = sqrt(C(0) tau / n), n_eff = n / tau; NaN exactly where not reliable
+member_mean_sem(values (B, ...)) -> (mean (...), sem (...))   # across independent members: std (ddof 1) / sqrt(B), B >= 2
+band_half_width(N) -> int                                      # q_b = floor(3 N / 64 + 1/2), rounded half up: |q| <= 3 at N = 64
+band_mask(N, q_band=None) -> (N,) bool                         # |q| <= q_b in FFT order: the one band definition
+band_share(d (..., N), q_band=None) -> float | (...)            # sum_{|q| <= q_b} d_q / sum_q d_q, unfolded; q_b = band_half_width(N) unless given
+bootstrap_members(values (B, ...), statistic, n_boot=1000, seed=0) -> (estimate, sem)   # statistic(values.mean(0)) and the std (ddof 1) of the
+    # statistic over n_boot resamples of the members with replacement; statistic must batch over leading dims; own generator, B >= 2
+```
+
+The latent basis needs latents on `[0, a]`. Then `u_1` is the mean direction, `s_1^2 / s_2^2 -> 3K + 1` and the
+cosine of `u_1` with the constant pattern vector is `sqrt(3K/(3K+1))` (0.95 at K = 3). For symmetric latents (on
+`[-a, a]`) the K singular values are degenerate up to `O(P^-1/2)` noise, the SVD frame is a random rotation of col(Z)
+(at P = 256, K = 3: s2 = 93, 82, 72 and cos(u_1, 1) = 0.07), and `latent_basis` raises, saying the mean direction is
+undefined. It requires `s_1^2 / s_2^2 >= 2` (K >= 2) and the cosine at half its `[0, a]` value (the only check at
+K = 1, which is therefore the weakest case). Simulated false rejection of `[0, a]` latents / false acceptance of
+symmetric ones, both checks, 2 x 10^5 draws per cell:
+
+| P  | K = 1      | K = 2         | K = 3     | K = 4     |
+|----|------------|---------------|-----------|-----------|
+| 16 | 0 / 8.3%   | 5e-6 / 1.73%  | 0 / 0.73% | 0 / 0.40% |
+| 32 | 0 / 1.31%  | 0 / 0.064%    | 0 / 0.011%| 0 / 0.005%|
+| 64 | 0 / 3.4e-4 | 0 / 0         | 0 / 0     | 0 / 0     |
+
+At P = 16, K <= 3 the two distributions overlap, so no threshold has near-zero false rejection with false
+acceptance below 0.1%. The presets run at P = 256, where none of this matters.
+
+`half_power_q` is a statistic of a mean spectrum (over records or members). In one record `d_0` and `d_{N/2}` are
+single chi^2 draws whose order is noise: a map with mean `D_0 = 100 D_{N/2}` has `d_0 < d_{N/2}` with probability
+`(2/pi) atan(sqrt(D_{N/2}/D_0)) = 6%`, and `half_power_q` raises on any such spectrum (counting them). So
+`spectrum_summary` leaves it out and returns only what is defined per record.
+
+`null_power` projects out col(Z) before the FFT. Subtracting the latent power from the total would cancel
+catastrophically when the null floor is far below the latent power (at sigma = 0 the floor is 0, and the
+subtraction left values of either sign at 1e-14).
+
+The angle statistic needs the orthonormal frame `(u_2, u_3)`: tuning to an oblique pair such as the raw
+`(z_2, z_3)` squeezes an isotropic cloud along the bisector and biases it negative (for unit-variance tunings with
+correlation rho, `<cos 4 theta> = -r^2`, `r = (sqrt(1+rho) - sqrt(1-rho)) / (sqrt(1+rho) + sqrt(1-rho))`). `atan2`
+can return `-pi`; it is mapped to `pi`, so `theta_histogram` bins are right-closed on `(-pi, pi]` and histograms of
+records and members sum. A silent neuron (`t2 = t3 = 0`) has `theta = 0` and counts as axis-aligned. "Axis-aligned"
+means aligned with the SVD contrast axes `(u_2, u_3)`, not with the latents: at K = 3 the three latents project onto
+the contrast plane 120 degrees apart, so `cos 4 theta` does not detect tuning to individual latents.
+
+Tuning to single latents is measured by the frame-free statistic `|<e^{6 i theta}>|` instead. Three directions 120 degrees apart have the
+same `6 theta`, so neurons each tuned to one of three latents give a modulus near 1 (above 0.99 at P = 4096 with the
+frame of `latent_basis`), and a rotation-invariant `(t2, t3)` gives `O(N^-1/2)` (`|m|` is Rayleigh with `E|m|^2 = 1/N`).
+Rotating the tunings by phi, that is the frame `(u_2, u_3)` by -phi, multiplies the moment by `e^{6 i phi}`, so the
+modulus does not depend on where the SVD puts `u_2` in the contrast plane. `hexatic_moment` returns the complex mean:
+moments average across members and records, moduli do not (the modulus of a mean is not the mean of moduli). A
+silent neuron has `theta = 0` here too. The moment, like every angle statistic, is meaningful only at K = 3, where
+`(u_2, u_3)` spans the whole contrast space; for K >= 4 the contrasts u_2..u_K have near-degenerate singular values and
+`(u_2, u_3)` is whichever plane of them the SVD returned.
+
+`record_sem`: `rho_k = C(k) / C(0)` from the biased autocovariance of the records after burn-in (FFT, zero-padded
+to 2n). `tau` is Geyer's initial monotone sequence estimator (Geyer 1992): the pairs `Gamma_m = rho_{2m} +
+rho_{2m+1}` are summed over their initial positive run, made non-increasing, `tau = -1 + 2 sum_m Gamma_m`, over lags
+up to n/2. Pairing cancels the alternation of an anticorrelated component, so a slow component under it is still
+seen (a cut-off window such as Sokal's stops at lag 1 there and reports tau about 1 for a chain with tau = 7.8), and
+`tau < 1` is returned for anticorrelated records. Geyer's estimator is biased low for strongly alternating records
+(AR(1) with phi <= -0.8), and at phi about -0.9 it often gives `tau <= 0`.
+
+Reliability is per element, never per call: these are burn-in diagnostics, and one slow element must not fail a
+monitor-sized call. An element is unreliable when its pairs stay positive to lag n/2, when `tau <= 0`, or when the
+chain holds fewer than 20 correlation times (`n < 20 tau`, judged on the estimated tau, which is itself biased low on
+short chains: at n = 1000 a third of tau = 80 elements pass). Unreliable elements get NaN in `tau` and `sem` and
+False in `reliable`; callers must read `reliable`, and a NaN never appears without its mask saying why. Only bad
+input (shape, dtype, non-finite) and fewer than 200 records after burn-in raise; with independent records, 2.6e-5
+of elements are marked unreliable at 100 records, one in 1.3 x 10^6 at 150 and none at 200. Records are constant
+when `C(0) <= (8 eps max(|mean|, tiny))^2` (rounding leaves a constant within 3 eps |mean| of its mean); they give
+`tau = 1`, `sem = 0` and `reliable = True`.
+
+## linear_theory.py (the linear theory from a config)
+
+The predictions of `latex/notes/linear_solution_limits.tex` (the per-mode solution, eq:linear-soln) and
+`linear_without_ansatz.tex` (the master equation, eq:master) for a linear one-hidden-layer network on a ring, trained by
+SGLD, as pure functions of the `Config` that configures the run and its `Dataset`. The maths and the dictionary from
+theory symbols to config fields are stated once, in the module docstring; `latex/notes/fct_experiment_plan.tex` (Section
+D4, the dictionary, Appendix "Reproducing the numbers") is the source. Float64 numpy throughout; tensors are accepted as
+inputs.
+
+```python
+theory_rate(cfg) -> float                  # r, the rate coefficient of (r/2) sum phi^2 in beta L: train.rate_lambda (the loss scales it by 1 / (2 beta))
+ring_spectrum(K) -> (N,)                   # lam_q of a symmetric circulant kernel, DFT order (round-off negatives -> 0, real ones raise)
+latent_matrix(factors, K) -> Z (P, K)      # z0..z{K-1} as columns; missing or extra z{i} raise
+uniform_latent_s2(P, K, a) -> (K,)         # the P >> K formula: P a^2 (3K+1)/12 then P a^2/12
+network_parameters(cfg, dataset, sig2=0.0, exact_kernel=False) -> NetworkParameters(N, m, n, P, lam, lam0, lam_bar, k0, k1, beta, delta, sig2, r)
+theory_parameters(cfg, dataset, sig2=0.0, exact_kernel=False) -> TheoryParameters(... , n_latents, U, s2, sx2, sy2)   # orthonormal teacher, latents on [0, a]
+# both parameter dataclasses hold numpy arrays and compare and hash by identity (eq=False)
+noise_floor(sig2, r) -> sigma_0^2;  prior_shrunk_variance(lam, sx2, sig2, r) -> pi_q;  pi_lam(lam, sx2, sig2, r) -> h_q = lam_q pi_q
+physical_root(h, sy2, delta) -> c          # bisection on the branch c > sqrt(sy2 max h), from the next float above the pole
+solve_mode(lam, sx2, sy2, sig2, r, delta) -> Mode(c, d (N,), tau);  per_mode_spectrum(...) -> (c, d);  target_strength(lam, sx2, sy2, sig2, r, c) -> tau
+predicted_spectra(cfg, dataset, sig2=0.0, exact_kernel=False) -> Prediction(d (K, N), null_floor, c (K,), tau (K,), params; .lam, .U, .s2)
+predicted_summary(d) -> PredictedSummary(q_half, share0, lag1)    # of one predicted (mean) spectrum, via fct.spectrum
+ansatz_free_kernel(cfg, dataset, sig2=0.0, exact_kernel=False) -> C~ (P, P)   # the fixed point of eq:master for the dataset's actual Gram matrices
+```
+
+`network_parameters` validates the config against the theory and fails loudly otherwise: one hidden layer, `phi = "id"`,
+the `linear_teacher` task, `train.optimizer = "sgld"` (Adam gives a MAP point, not samples of exp(-beta L)), a spatial
+prior on a `d = 1` grid ring whose input and output kernels are multiples of the identity, `dtype = "float64"` (a
+float32 run casts M to float32 and trains with a prior whose coarse lam_q are off by 1-2%), and a dataset of shape
+(`data.P`, m) and (`data.P`, n) with finite entries. k0 and k1 are the input and output kernel amplitudes over
+`train.weight_lambda` (Cov(W) = K / weight_lambda for every layer) and delta = P n / (beta k1). lam_q is by default the
+spectrum of the prior the run trains with, N(0, M^{-1}) with M = `post.M`: max(lam_q of K, `report.floor`), the floor rule
+of `penalty_matrix` (`min_rel_eig` times K's top eigenvalue, after any `lambda_max` rescaling), computed from K rather
+than by inverting M, which would lose log10(1 / min_rel_eig) digits on the coarse modes (37 of 64 frequencies are
+floored in the common setting). Under `spatial.parametrisation = "whitened"` the run trains with N(0, K) itself, so the
+default is K's spectrum; `exact_kernel=True` gives K's spectrum on the penalty path too. `tests/test_linear_theory.py` ties k0, k1, delta, r and the floor to the loss that
+`fct.train._step` builds, so a change to how the trainer scales a term fails there. `sig2` is an explicit argument because no config field
+holds the input noise: sigma -> 0 is the default, and at `sig2 = 0` a null mode and every frequency with lam_q = 0 get
+d_q = 0 exactly (nothing divides by sigma).
+
+The per-mode weights sx2 = k0 s2 / m, sy2 = s2 / k1 use the singular values of Z, which is the theory only for an
+orthonormal teacher (X X^T = Y Y^T = Z Z^T). `theory_parameters` and `predicted_spectra` therefore require `W_X` and
+`W_Y` in `dataset.extras` to have orthonormal columns (to 1e-10), and x and y to be Z W_X^T and Z W_Y^T for them (to 1e-10
+relative), and refuse the Gaussian teacher, for which sx2 and sy2 would be off in scale by about m / K. The latent frame
+U, s2 is `fct.spectrum.latent_basis`, the measurement's own, so the per-mode theory also refuses symmetric latents (no
+mean direction) and rank-deficient Z; the presets draw the latents on [0, 1]. `ansatz_free_kernel` uses the actual Gram matrices and holds for any teacher: it is
+solved by Newton (finite-difference Jacobian, steps halved until admissible and descending) on the subspace spanned by the
+data and set to the prior value delta + sigma_0^2 lam_bar on its complement, which is exact. Each per-frequency covariance
+is evaluated as S (I + S T S)^{-1} S with S = (lam_q A + sig2 I)^{1/2} from one eigendecomposition of A, the form that
+stays finite at sig2 = 0.
+
+`latent_basis`, `half_power_q` and `autocorrelation` are `fct.spectrum`'s (unitary DFT, FFT order, column k - 1 of U is
+u_k, signed so that 1^T u_k >= 0); `predicted_summary` keeps q_half, which `spectrum_summary` leaves out because one
+record of a map is not a mean spectrum, while a prediction is.
 
 ## tuning.py, exp_report.py and the phase-transition figures
 
@@ -1270,7 +1756,7 @@ Limits: the viewer needs positive lambdas. Axes containing lambda = 0 cannot be 
 `notebooks/build_exemplar.py` builds `exemplar.ipynb` (source only; executed copies go to the ignored `tmp/`): one linear-teacher run, trained with SGLD (or Adam), then the mean-field solve of the same problem with live diagnostics. `fct/exemplar.py` holds all the logic; the cells set variables and call it and `fct.draw`.
 
 - `exemplar_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed) -> Config`: a thin wrapper over `spatial_view.make_config` (no spatial prior, CPU, float64; log and checkpoint intervals as there) that adds the `meanfield` section: `n_points = P` (all points are solved); every other constant follows the network (`fct.meanfield.network_constants`). `with_solver(cfg, **solver_fields)` sets `SolverConfig` fields (unknown ones raise).
-- Why the solver's defaults follow the network: SGLD at `beta` samples `exp(-beta L)`, and the loss prior `weight_lambda / (2 beta) ||theta||^2` makes each (standard-normal-parametrised) weight have variance `1 / weight_lambda` for every `beta` (pinned by a test per `beta`: weights in directions the data does not span have that variance), the readout's Gaussian likelihood gives the ridge `alpha = weight_lambda P d_out / beta`, the rate penalty is the tilt `2 beta rate_lambda`, and, the solver's kernels being unscaled (`Sigma = prior_scale Phi0`), the data-term prefactor is `learning_prefactor = 1 / (2 prior_scale) = weight_lambda / 2`. A test checks `run_meanfield`'s defaults against `network_constants` for several `beta` and for Adam. An exact Gibbs / closed-form check found the fixed point near the net's kernel scale only with this prefactor (at c = 0.5 the single-site precision is non-normalisable near it).
+- Why the solver's defaults follow the network: SGLD at `beta` samples `exp(-beta L)`, and the loss prior `weight_lambda / (2 beta) ||theta||^2` makes each (standard-normal-parametrised) weight have variance `1 / weight_lambda` for every `beta` (pinned by a test per `beta`: weights in directions the data does not span have that variance), the readout's Gaussian likelihood gives the ridge `alpha = weight_lambda P d_out / beta`, the rate penalty `rate_lambda / (2 beta) sum phi^2` is the tilt `rate_lambda`, and, the solver's kernels being unscaled (`Sigma = prior_scale Phi0`), the data-term prefactor is `learning_prefactor = 1 / (2 prior_scale) = weight_lambda / 2`. A test checks `run_meanfield`'s defaults against `network_constants` for several `beta` and for Adam. An exact Gibbs / closed-form check found the fixed point near the net's kernel scale only with this prefactor (at c = 0.5 the single-site precision is non-normalisable near it).
 - Cache layout under CACHE_ROOT: `exemplar-<section_hash(data, net, train)>/{data, train, config.json}` and, inside it, `solve-<section_hash(data, net, train, meanfield)>/meanfield/` (`exemplar_dirs`). A solver setting therefore re-solves without retraining. `train_exemplar(cfg, cache_root, log) -> spatial_view.TrainRun` (via `spatial_view.train_in`, which `train_run` shares) and `solve_exemplar(cfg, dataset, net, cache_root, plot_every, show, log, on_failure) -> SolveResult` go through `train_from_config` / `run_meanfield`, so both resume from checkpoints and reload finished work. `on_failure` is called before an exception from the solve propagates (the notebook passes `LiveView.flush`).
 - Live view: `live_figures(snapshot)` is `[fig_layer_kernels({Φ, Φ̂}), fig_solver_health, fig_sampler_health]` (layers counted from 1 in all three); `live_plotter(every, show)` is an `on_outer` callback that calls `show(figures)` at outer steps 0, every, 2 every, ...; `solve_exemplar` calls `show` once more with the finished solve's figures (a loaded final.pt runs no steps). Plotting time is charged to the history's `time`. `LiveView(tail)` is the notebook edge: `show` does `clear_output(wait=True)`, displays and closes the figures, then reprints its last `tail` log lines (`log` collects them, `flush` prints them), because clearing empties the whole cell output. IPython is imported lazily; the clear / display / print functions are injectable.
 - `kernel_comparison` (solved Φ_l beside the net's, `draw.fig_kernels` with an own colour scale per panel), `empirical_kernel_figure`, `example_outputs_of(net, dataset)`, `solve_summary(history, sampler, Phi=None, net_Phi=None)` (markdown computed from the solve: first and last fixed-point residual of Φ̂ with "fell" / "rose", smallest ESS fraction and where, largest eigenvalue and mean diagonal of the solved and the net's kernels, train MSE theory and net, alignment). `cache_root_from_env` lives in `fct.cache` (`$FCT_CACHE_ROOT`), shared with the spatial notebook.
@@ -1283,11 +1769,11 @@ Default sizes (P = 20, m = 6, k = 2, N = 128, L = 1, tanh, beta = 10, 10000 SGLD
 
 `notebooks/build_spatial.py` builds `spatial.ipynb` (source only; an executed copy goes to the ignored `tmp/`): one linear-teacher run under the spatial weight prior, trained through the normal cache, with the tuning of every neuron laid out by position. The library computes and the notebook draws: `fct/spatial_view.py` has the config, the run and the layout helpers (no plotting), `fct.spatial` the kernels and penalty matrices, `fct.exp_view.tuning_view` the tuning curves and per-neuron MIR, `fct.analyse` the example outputs. Every figure is drawn by a plotting function written out in full (plain matplotlib) in the code cell that shows it, and each such cell is preceded by a markdown cell defining the plotted quantity with an equation; the notebook does not import `fct.draw`. So the figure code exists once, in the notebook, where the reader sees it; its tests (`tests/test_build_spatial.py`) run those functions on synthetic inputs by executing the imports and function definitions of the generated cells. A new figure is one more markdown + code pair in `build_notebook`: settings, then the plotting function, then the call and `plt.show()`.
 
-- Config and run: `population_spec(kind, length_scale, amplitude=1, shape=None, seed=0) -> PopulationSpec`; `make_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed, spatial, device) -> Config` (task `linear_teacher`, `D_in = m`, `n_latents = k`; `log_int = n_epochs // 50`, `save_int = n_epochs // 4`); `layer_spaces(cfg)` (the L + 1 `LayerSpace`s, `n_out = D_in`); `cache_dir_for(cfg, root) = root / "spatial_<section_hash(data, net, train)>"` (the hash includes the spatial section, so any change of setting is a new directory); `train_run(cfg, root, log) -> TrainRun(cache_dir, dataset, net, history)` writes `config.json`, loads or generates the dataset and calls `train_from_config`, so a finished run is loaded and an interrupted one resumes; `cache_root_from_env()` reads `$FCT_CACHE_ROOT`.
+- Config and run: `population_spec(kind, length_scale, amplitude=1, shape=None, seed=0) -> PopulationSpec`; `make_config(*, P, m, k, N, L, phi, g, data_seed, net_seed, weight_lambda, rate_lambda, optimizer, beta, lr, n_epochs, train_seed, spatial, device, init="standard") -> Config` (task `linear_teacher`, `D_in = m`, `n_latents = k`; `log_int = n_epochs // 50`, `save_int = n_epochs // 4`); `layer_spaces(cfg)` (the L + 1 `LayerSpace`s, `n_out = D_in`); `cache_dir_for(cfg, root) = root / "spatial_<section_hash(data, net, train)>"` (the hash includes the spatial section, so any change of setting is a new directory); `train_run(cfg, root, log) -> TrainRun(cache_dir, dataset, net, history)` writes `config.json`, loads or generates the dataset and calls `train_from_config`, so a finished run is loaded and an interrupted one resumes; `cache_root_from_env()` reads `$FCT_CACHE_ROOT`.
 - Layout (pure): `position_order(positions)` argsort around a ring (d = 1 only); `order_weights(W, pos_post, pos_pre) -> OrderedWeights(W, post_order, pre_order)` (rows by post position, columns by pre position; W is (post, pre), so `MLP.U` is (hidden, input)); `panel_grid(positions, n_cols) -> PanelGrid(n_rows, n_cols, cells)` with `cells[u] = (row, col)`: ring order along wrapped rows of `n_cols` for d = 1, the unit's lattice cell for d = 2 (column from x, row from y with y up; positions that do not form a full lattice, such as a random 2-D embedding, raise), d > 2 raises. `empirical_kernels(W) = (W W^T / n_pre, W^T W / n_post)`; `ordered_kernel_comparison(space, W) -> KernelComparison` has the prior and empirical kernels of one layer indexed in the same ring order.
 - Figures, each with its plotting function defined in its cell: `plot_layer_prior(space)` per weight layer (K_pre, K_post, every K_ij against torus distance with the profile `wrapped_gaussian_profile`, unit positions; d <= 2), `plot_loss_curves(history, title)` (loss and raw terms, log y), `plot_example_outputs(outputs, title)` (true and predicted output vectors and the pooled R^2 scatter), `plot_kernel_comparison(comparison, space)` (prior K_post / K_pre beside U U^T / m and U^T U / N, ring-sorted; d = 1), `plot_weights_by_position(W, space)` (U sorted by position; d = 1), `plot_tuning_by_position(view, positions, n_cols, bar_width)` (`view` a `TuningView`; bars drawn by the unlisted helper `_draw_information_bars`) (a curve panel and an information bar panel per neuron, placed by `panel_grid`, one curve and one bar per latent, from `exp_view.tuning_view`, so tuning and MIR are computed as in the phase-transition notebook). The kernels shown are weight-prior and weight second-moment kernels over units, not the mean-field Phi over samples of `meanfield.py` (the spatially indexed Phi is the next bullet); the markdown says so.
 - Spatially indexed kernels (the paper's eq. kernel-def under the factorised prior): hidden layer l (0-based) is the pre population of `SPACES[l + 1]`, so K^pre = `SPACES[l + 1].pre.K` and K^post = `SPACES[l + 1].post.K` (the next hidden layer, or the output for the last one); psi is `meanfield.readout_activities` (phi(h) on every layer, the paper's eq. kernel-def), computed on the training device and moved to the CPU in float64 where the K live. Helpers defined in the cells and tested: `data_kernels(H, phi, spaces) -> (L, P, P)` and `layer_kernel_pairs(A, spaces, layer, trials) -> (post population, (S, S, n, n) blocks)`. Figures: `plot_data_kernels(A, order, sorted_by)` (one panel per hidden layer, A^(l) (P, P) sorted by `sample_order` on the latent `PHI_SORT_LATENT`, own symmetric scale, title with psi and tr A / P), `plot_trial_latents(factors, trials)` (bars of z_{f mu} of the `PHI_TRIALS` samples `spread_trials(order, S)` picks at evenly spaced ranks of the sorted order), and per hidden layer `plot_spatial_kernel_pairs(pairs, trials, unit_order, title)` (the S x S grid of (n_post, n_post) blocks Phi^{mu nu}_ij, units in `position_order` for d = 1 and index order otherwise, one symmetric colour scale for the grid, an all-zero grid shown on -1..1). The activities psi are those of the held-out test set (`fct.data.get_latent_lattice_dataset`, the 3^k lattice points, so A^(l) is (3^k, 3^k)): the cell's `TEST_DATASET` is made in the train cell, and `sample_order`, the trial picks and the pair grids all read it; the example outputs are drawn from it too: `plot_example_outputs(outputs, title, everything=None)` shows `N_EXAMPLES` test points as panels and, in the scatter, every entry of all 3^k test points with their pooled R^2 (`everything`; the shown examples only if omitted). `plot_data_kernels(A, order, sorted_by, B=None)` draws `fct.spatial.latent_kernel(factors)` = B = Z Z^T / k (P, P) first when given, in the same sample order, so each A^(l) is read against the kernel of a layer linear in the latents. The input kernel Phi^(0) is not drawn.
-- Notebook cells: task and network (the `parameters`-tagged cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `N`, `L`, `PHI`, `G`, seeds, `PRIOR_COEFF`, `RATE_LAMBDA`, `DEVICE`), training (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup (imports), spatial (`D`, `BOX`, `MIN_REL_EIG`, `INPUT`, `HIDDEN`, `OUTPUT`), the eigenvalue-floor and step-size tables, the prior kernels, train, loss curves, example outputs (`N_EXAMPLES`), first-layer kernels, first-layer weights, the data kernels A (`PHI_SORT_LATENT`), the chosen trials (`PHI_TRIALS`), the Phi grids, tuning (`N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). `build_spatial.set_parameters(nb, values)` rewrites the one-line `NAME = value` assignments (a name not assigned exactly once raises); `execute_notebook(nb, cache_root, overrides)` runs a copy with them set, and the CLI takes them as `--set NAME=literal`.
+- Notebook cells: task and network (the `parameters`-tagged cell: `CACHE_ROOT`, `P`, `M_IN`, `K_LATENTS`, `N`, `L`, `PHI`, `G`, seeds, `PRIOR_COEFF`, `RATE_LAMBDA`, `DEVICE`), training (`OPTIMIZER`, `BETA`, `LR`, `N_EPOCHS`, `TRAIN_SEED`), setup (imports), spatial (`D`, `BOX`, `MIN_REL_EIG`, `PARAMETRISATION`, `INIT`, `INPUT`, `HIDDEN`, `OUTPUT`), the eigenvalue-floor and step-size tables (under `PARAMETRISATION = "whitened"`: "not floored: exact prior", stiffness 1, the bound `lr * weight_lambda / (2 beta) < 1`), the prior kernels, train, loss curves, example outputs (`N_EXAMPLES`), first-layer kernels, first-layer weights (both read `first_layer_weights(net)`, the effective `U`, which is `S xi S` under whitening), the data kernels A (`PHI_SORT_LATENT`), the chosen trials (`PHI_TRIALS`), the Phi grids, tuning (`N_BINS`, `N_SHUFFLES`, `MIR_KIND`, `N_COLS`). `build_spatial.set_parameters(nb, values)` rewrites the one-line `NAME = value` assignments (a name not assigned exactly once raises); `execute_notebook(nb, cache_root, overrides)` runs a copy with them set, and the CLI takes them as `--set NAME=literal`.
 - Default sizes: 16 hidden units on a ring, 12 inputs, kernel length scale 0.15, `MIN_REL_EIG = 1e-2`, `LR = 1e-2`, `PRIOR_COEFF = 3e-3`, the coefficient of the penalty in the loss; the config cell derives `weight_lambda = 2 * PRIOR_COEFF * beta (beta = 1 for Adam)`, so both optimisers train the same loss). SGLD is rejected unless `lr * weight_lambda / (2 beta) * lambda_max(M_l) < 1` for every layer, with `lambda_max(M_l) = lambda_max(M_post) lambda_max(M_pre)` and `lambda_max(M^p) = 1 / (min_rel_eig * lambda_max(K^p))` (here about 368, so the product is about 0.011), and the library default floor of 1e-6 starts even Adam with a prior term of order 1e9; both optimisers run 2000 epochs in a few seconds on a CPU. SGLD fits the teacher less closely than Adam in the same number of epochs (executed: final train mse 0.198 under SGLD, 0.124 under Adam).
 - Limits: kernels and tuning panels cover d <= 2; the weight image and the ring-sorted empirical kernels need d = 1. A hidden-layer panel per neuron gets large for N in the hundreds (the figure height grows with the rows).
 
@@ -1307,11 +1793,23 @@ The computation layer of the phase-transition notebook: one setting of a `phase_
 
 - `load_phase_run(root, values, device="cpu") -> PhaseRun(setting, net, history, epoch, spaces, dataset)`: `select_setting` plus the weights of a done setting (`load_trained`) or the latest checkpoint of a partial one (`load_latest_checkpoint`, `epoch` = epochs reached); a missing or stale setting has `net = history = None`, `epoch = 0`, and its training set is generated in memory (nothing is written into a setting never run). `spaces` come from the config alone. `ValueError` for `net.B < 2`.
 - `unit_order(positions, sort_dim)`: stable argsort of the units by one coordinate; `ValueError` unless `0 <= sort_dim < d`.
-- `random_test_set(data_cfg, train, n_points, seed=None) -> RandomTestSet(dataset, seed)`: `fct.tasks.resample` with `P = n_points`, so the samples are new but the teacher maps are the training set's. Default seed is the data seed + `TEST_SEED_OFFSET`, and the seed used is returned. The 3^k latent-lattice set (`get_latent_lattice_dataset`) stays the test set of the A plots.
-- Prior factors, per weight layer (`layer_priors(spaces, weight_lambda, n_eig) -> [LayerPrior]`): `covariance_factors` = K^post / sqrt(lambda_w), K^pre / sqrt(lambda_w), whose Kronecker product is K^post (x) K^pre / lambda_w, the prior as configured (not what training samples: the penalty floors K's small eigenvalues); `effective_covariance_factors` = M^-1 / sqrt(lambda_w) on each side, product (lambda_w M^post (x) M^pre)^-1, which is what the networks were trained under; `penalty_factors` = sqrt(lambda_w) M^post, sqrt(lambda_w) M^pre, product lambda_w M^post (x) M^pre (the loss's quadratic form without 1 / 2 beta). lambda_w multiplies the Kronecker product once, so each factor carries its square root (symmetric in post and pre); under `spatial.lambda_max` weight_lambda is 1 and the split is the identity. Spectra: the covariance and effective covariance keep the `n_eig` LARGEST eigenvalues, descending; the penalty keeps the `n_eig` SMALLEST, ascending, because its largest eigenvalues are all the floor value (a flat line; at N 512, lambda_max 0.1 it covers 27-99% of the hidden eigenvalues for d = 4..1). `LayerPrior.floors` gives, per population, `n_floored`, `fraction_floored`, `covariance_floor` and `penalty_ceiling` (on the plotted scale) for drawing the floor line.
+- `random_test_set(data_cfg, train, n_points, seed=None) -> RandomTestSet(dataset, seed)`: `fct.tasks.resample` with `P = n_points`, so the samples are new (latents uniform on [`latent_min`, `latent_max`]) but the teacher maps are the training set's. `ValueError` unless `data_cfg` regenerates the training set exactly, which fixes `P`, `D_in`, `n_latents`, `latent_min`, `latent_max`, `teacher` and `seed`; the message prints them. Default seed is the data seed + `TEST_SEED_OFFSET`, and the seed used is returned. The 3^k latent-lattice set (`get_latent_lattice_dataset`) stays the test set of the A plots.
+- Prior factors, per weight layer (`layer_priors(spaces, weight_lambda, n_eig, *, whitened) -> [LayerPrior]`, `whitened` required: the run's `Config.is_whitened`, recorded as `LayerPrior.whitened`): `covariance_factors` = K^post / sqrt(lambda_w), K^pre / sqrt(lambda_w), whose Kronecker product is K^post (x) K^pre / lambda_w, the prior as configured (not what training samples: the penalty floors K's small eigenvalues); `effective_covariance_factors(space, weight_lambda, *, whitened)` = what the networks were trained under: M^-1 / sqrt(lambda_w) on each side under the penalty, product (lambda_w M^post (x) M^pre)^-1 (K floored), and K / sqrt(lambda_w) (S^2, nothing floored) under the whitened parametrisation; the phase-transition notebook labels it floored or exact accordingly; `penalty_factors` = sqrt(lambda_w) M^post, sqrt(lambda_w) M^pre, product lambda_w M^post (x) M^pre (the loss's quadratic form without 1 / 2 beta). lambda_w multiplies the Kronecker product once, so each factor carries its square root (symmetric in post and pre); under `spatial.lambda_max` weight_lambda is 1 and the split is the identity. Spectra: the covariance and effective covariance keep the `n_eig` LARGEST eigenvalues, descending; the penalty keeps the `n_eig` SMALLEST, ascending, because its largest eigenvalues are all the floor value (a flat line; at N 512, lambda_max 0.1 it covers 27-99% of the hidden eigenvalues for d = 4..1). `LayerPrior.floors` gives, per population, `n_floored`, `fraction_floored`, `covariance_floor` and `penalty_ceiling` (on the plotted scale) for drawing the floor line.
 - `ensemble_statistics(history) -> EnsembleStatistics(epoch, mean, sem)` for `ENSEMBLE_KEYS` (loss, mse, weight_l2, rate_l2; `weight_l2` is the raw quadratic form, before its loss coefficient): sem = std(ddof=1) / sqrt(B), NaN for B = 1.
 - `member_view(net, lattice, test, spaces, n_bins, kind, n_shuffles, seed) -> MemberView(A, info_overlap, rate_overlap, weight_kernels)` for one `MLP`: the notebook's data kernels A^(l) (`spatial_view.data_kernels`, on the lattice set), `information_overlap` and `rate_overlap` of `tuning_view` (on the random test set) and `empirical_kernels` of each weight in (post, pre) orientation. `ensemble_views(net, ...)` maps it over `net.member(b)` with shuffle seed `seed + b`; `average_views` takes the elementwise mean in unit-index space (members share the embedding), after which the units are ordered for display. The averaged overlap is the mean over members of each member's own overlap matrix (a second moment over members; for the corrected MIR the per-member clamping at zero biases it upward), not the overlap of the mean tuning. `random_test_set` raises unless the training set is exactly what `data_cfg` regenerates (compared in memory, so P, D_in, n_latents, latent range and seed all count). `FloorReport.floor` records min_rel_eig times the top eigenvalue of K, the floor the penalty factors report. `load_phase_run` is read-only: a done setting whose dataset file is missing gets its training set generated in memory.
 - `ensemble_example_outputs(net, dataset, indices) -> EnsembleExamples`: `y_pred` is (B, n_examples, D_out), one colour per member; `y_true` and `x` are the dataset rows.
+
+## linear_ring.ipynb (a linear-ring setting against the theory)
+
+`notebooks/build_linear_ring.py` builds `linear_ring.ipynb` (source only; executed copies go to the ignored `tmp/`): one setting of a linear-ring experiment (`ROOT`, `SETTING`) and, beside it, `TWIN_SETTING` in `TWIN_ROOT` (default `ROOT`), normally the same point under the other parametrisation. The defaults are `linear_ring_tiny`'s diagonal (settings 0 and 3); for `linear_ring` against `linear_ring_equivalence` give the two ROOTs. Other parameters: `BURN_IN` (start of the relaxation fit, default half the run), `BASE_B` (`{"setting": B0, "twin": B0}`, ints, overriding the base B the budget is computed at; None reads each from its experiment, `recorded_base_B`), `SWEEP_AXIS` (a numeric axis for the band-share figure, default the setting index), `EXACT` / `TWIN_EXACT` (the exact posterior's statistics, in `statistic_list` order, for `regime_accurate`), `SEED` (the bootstrap's).
+
+- The analysis is `fct.linear_ring` (`measure_final`, `measure_relaxation`, `band_share_estimate`); `fct.ring_view` loads (`load_ring_settings`, `load_shown`; `RingRun`'s `final_spectra`, `final_latent`, `relaxation_records` give the record layout), joins (`measure_run`), builds the sweeps (grouped by ROOT and the axes they hold fixed, so a twin in the same ROOT gets its own) and writes the tables; every figure is a `fct.draw` `plot_*` (`plot_ensemble_loss`, `plot_relaxation`, `plot_spectrum`, `plot_share_sweep`, `plot_spectrum_ratio`, `plot_autocorrelation`, `plot_angle_histogram`), drawn one panel per shown setting by `draw.fig_panels`. Code cells hold library calls only (a test refuses loops, comprehensions and definitions), and the markdown's thresholds are filled in from the library's constants at build time.
+- One sample per member: everything is read off the member-averaged final-state spectrum (the last record) with the bootstrap over members; the records before it feed only the relaxation diagnostic. Per-member values are not shown.
+- The summary table lists every primary statistic with `disagrees`, the secondary q_1/2 (flagged beyond `Q_HALF_TOLERANCE`) and q = 0 shares, and, at K = 3 only, the hexatic modulus (flagged above `HEXATIC_MAX`); a q_1/2 that cannot be formed (a spectrum rising to Nyquist) is listed unavailable with its reason; the regime column is `regime_accurate` of `EXACT`, else "not assessed". With two settings, `equivalence_table` applies `paths_disagree` and states the number of statistics compared.
+- The intro states that `predicted_spectra` is the N -> infinity mean-field limit and that the whitened lr's bias on mode 1 exceeds the accuracy budget at `linear_ring`'s base point; the numbers are quoted from each experiment's description (`regime_sentences`), or from its preset's when `exp init` replaced the description with a note of overrides (`regime_markdown`).
+- It calls none of the MIR readers (they refuse spectrum experiments), only `fct.report.exp_root_from_env`, and of `fct.phase_view` only `ensemble_statistics` (its prior figures label the penalty's factors, which a whitened run does not train with).
+- An untrained setting is reported in the loader and left out of the figures; with no trained setting every later cell says so (`when_trained`).
+- `tests/test_build_linear_ring.py` executes it (marked slow) on `linear_ring_tiny` at B = 32 trained through the CLI: both settings side by side, one setting swept along `train.lr`, both swept along `train.lr` (one sweep each), a K = 3 ring at B = 16 (the angle histogram and hexatic row), and an untrained setting.
 
 ## phase_transition_exp.ipynb (the phase_transition experiment, drawn)
 

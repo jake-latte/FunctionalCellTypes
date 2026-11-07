@@ -8,15 +8,16 @@ Fields are range-constrained too, so impossible values fail at load time naming 
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, get_args
 
 import torch
-from pydantic import Field, model_validator
+from pydantic import Field, FiniteFloat, model_validator
 
 # The constrained types and StrictModel are re-exported: other modules import them from here.
-from fct.schema import NonNegFloat, NonNegInt, PosFloat, PosInt, StrictModel
+from fct.schema import NonNegFloat, NonNegInt, PosFloat, PosInt, StrictModel, exclude_at_default
 from fct.spatial import SpatialConfig
 from fct.tasks import TASK_SPECS
 
@@ -25,8 +26,13 @@ from fct.tasks import TASK_SPECS
 # under another definition are rejected as stale instead of mixed with new ones. Increase it
 # whenever the loss changes in a way the TrainConfig fields do not express. History: 1 summed
 # the rate penalty over the samples, 2 averaged it over them, 3 sums it again, 4 scales the
-# weight prior by 1 / (2 beta) (beta = 1 for Adam).
-LOSS_VERSION = 4
+# weight prior by 1 / (2 beta) (beta = 1 for Adam), 5 scales the rate penalty by 1 / (2 beta) too.
+LOSS_VERSION = 5
+# The last LOSS_VERSION that changed the loss of a config without a rate penalty
+# (train.rate_lambda = 0), which is the version hashed for such a config (`hashed_loss_version`):
+# version 5 rescales only the rate penalty, so their numbers and caches are those of version 4.
+# A loss change that reaches rate-free configs too must raise both constants.
+RATE_FREE_LOSS_VERSION = 4
 
 # Version of the network definition (`fct.model.MLP`), folded into every hash that holds the
 # net section, for the same reason: a trained net or a mean-field result made with another
@@ -35,11 +41,41 @@ LOSS_VERSION = 4
 MODEL_VERSION = 2
 
 
+def reject_latent_range(data: Any) -> None:
+    """ValueError naming the replacement fields if `data` (a raw mapping) carries the removed
+    `latent_range`; the strict models would reject it anyway, but without saying what to use."""
+    if isinstance(data, dict) and "latent_range" in data:
+        raise ValueError(
+            "latent_range was replaced by latent_min and latent_max (the latents are uniform "
+            f"on [latent_min, latent_max]); for latent_range={data['latent_range']!r} set "
+            "latent_min=-latent_range and latent_max=latent_range"
+        )
+
+
+def check_latent_interval(latent_min: float, latent_max: float) -> None:
+    """ValueError unless latent_min < latent_max, so the latents' interval is not empty, and
+    unless its width is finite: the latents are latent_min + width * rand, so an overflowing
+    width (finite bounds near +-1e308) would make them non-finite without any other error."""
+    if not latent_min < latent_max:
+        raise ValueError(
+            f"latent_min must be below latent_max; got latent_min={latent_min}, "
+            f"latent_max={latent_max}"
+        )
+    if not math.isfinite(latent_max - latent_min):
+        raise ValueError(
+            f"latent_max - latent_min must be finite; got latent_min={latent_min}, "
+            f"latent_max={latent_max}, whose difference overflows"
+        )
+
+
+Teacher = Literal["gaussian", "orthonormal"]
+
+
 class DataConfig(StrictModel):
     """Data settings. `task` selects the generator and only that task's fields are read: the
     fields of other tasks are ignored, but they still enter the cache hash, so changing one
     makes an existing data cache stale. Sizes and counts are PosInt (>= 1) except
-    `max_objects` (>= 0); `latent_range` is PosFloat. Constraints between fields (the task's
+    `max_objects` (>= 0). Constraints between fields (latent_min < latent_max, the task's
     fixed D_in, max_objects <= grid_size**2, n_motifs <= 511, D_in > n_latents) are checked
     here so a bad config fails at load time.
     """
@@ -58,13 +94,28 @@ class DataConfig(StrictModel):
     embedding: Literal["linear", "fourier"] = "fourier"
     # linear_teacher
     n_latents: PosInt = 3
-    latent_range: PosFloat = 1.0
+    # The latents are iid uniform on [latent_min, latent_max].
+    latent_min: FiniteFloat = -1.0
+    latent_max: FiniteFloat = 1.0
+    # W_X, W_Y: iid N(0, 1/k) entries, or the orthonormal-column Q factor of those draws.
+    teacher: Teacher = "gaussian"
     # object_action
     grid_size: PosInt = 5
     max_objects: NonNegInt = 3
     # what_where
     n_motifs: PosInt = 8
     seed: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _latent_range_was_replaced(cls, data: Any) -> Any:
+        reject_latent_range(data)
+        return data
+
+    @model_validator(mode="after")
+    def _latent_interval_is_nonempty(self) -> Self:
+        check_latent_interval(self.latent_min, self.latent_max)
+        return self
 
     @model_validator(mode="after")
     def _fourier_needs_even_D_in(self) -> Self:
@@ -84,7 +135,9 @@ class DataConfig(StrictModel):
 
 
 Phi = Literal["relu", "tanh", "sigmoid", "id"]
+InitLaw = Literal["standard", "prior"]
 Optimizer = Literal["adam", "sgld"]
+MonitorKind = Literal["mir", "spectrum"]
 
 
 class NetConfig(StrictModel):
@@ -97,28 +150,67 @@ class NetConfig(StrictModel):
     # (`fct.model.EnsembleMLP`); they share the data and differ in initial weights and SGLD
     # noise. B enters the hash only when it is not 1, so single-network caches keep theirs.
     B: PosInt = 1
+    # Initial weights: "standard" draws every parameter N(0, 1); "prior" draws W from its prior,
+    # N(0, (K_post (x) K_pre) / weight_lambda) with the kernels the trained prior encodes (the
+    # floored M^{-1} under the penalty, K itself under "whitened", I without a spatial prior),
+    # from the same standard-normal draw (`fct.train.make_net_from_config`). Hashed only as
+    # "prior", so every earlier cache keeps its hash; the whitened parametrisation requires it.
+    init: InitLaw = "standard"
 
 
 class TrainConfig(StrictModel):
     n_epochs: NonNegInt = 15_000
     lr: PosFloat = 1e-3
-    # The loss carries the weight prior as weight_lambda / (2 beta) * quadratic form, with beta
-    # = `beta` for SGLD and 1 for Adam (`fct.train.prior_coefficient`).
+    # The loss carries the weight prior as weight_lambda / (2 beta) * quadratic form and the rate
+    # penalty as rate_lambda / (2 beta) * sum phi^2, with beta = `beta` for SGLD and 1 for Adam
+    # (`fct.train.prior_coefficient`, `fct.train.rate_coefficient`), so beta L carries
+    # (rate_lambda / 2) sum phi^2: rate_lambda is the notes' r.
     weight_lambda: NonNegFloat = 2e-4
     rate_lambda: NonNegFloat = 1e-3
     log_int: PosInt = 100
     save_int: PosInt = 100
     seed: int = 0
-    # Modularity monitor: 0 disables it. The settings are hashed with the run so a cached
-    # run always matches the monitor settings that produced its history.
+    # Training monitor: monitor_int = 0 disables it; bins and shuffles are the MIR monitor's.
+    # The settings that shape the history are hashed with the run, so a cached run always
+    # matches the monitor that produced it (bins and shuffles not under the spectrum monitor).
     monitor_int: NonNegInt = 0
     monitor_bins: Annotated[int, Field(ge=2)] = 10
     monitor_shuffles: PosInt = 5
+    # Which monitor runs every monitor_int epochs (`fct.monitor.make_monitor`): the MIR, or the
+    # tuning-map spectra and angle statistics. Hashed only as "spectrum", so every cache made
+    # with the MIR monitor keeps its hash.
+    monitor_kind: MonitorKind = "mir"
     # "sgld" adds Gaussian noise of variance 2 * lr / beta to every step (see fct.sgld). `beta`
     # is read only by SGLD; both fields enter the hash only for SGLD (`section_hash`), so
     # adam runs keep the hashes they had before these fields existed.
     optimizer: Optimizer = "adam"
     beta: PosFloat = 1.0
+
+    @model_validator(mode="after")
+    def _the_spectrum_monitor_runs(self) -> Self:
+        # monitor_int = 0 runs no monitor, so a "spectrum" kind would be hashed into a run whose
+        # history holds no spectra.
+        if self.monitor_kind == "spectrum" and self.monitor_int == 0:
+            raise ValueError(
+                'train.monitor_kind is "spectrum" but train.monitor_int is 0, which disables the '
+                'monitor; set monitor_int > 0, or leave monitor_kind at "mir"'
+            )
+        return self
+
+
+def law_beta(optimizer: Optimizer, beta: float) -> float:
+    """The inverse temperature of the law exp(-beta L) the optimiser targets: `beta` under SGLD,
+    1 under Adam, which has no temperature. It takes the two fields rather than a TrainConfig so
+    the notebooks can derive weight_lambda from their loss coefficient before building one."""
+    if optimizer not in get_args(Optimizer):
+        raise ValueError(f"unknown optimizer {optimizer!r}; expected one of {get_args(Optimizer)}")
+    return beta if optimizer == "sgld" else 1.0
+
+
+def hashed_loss_version(train: TrainConfig) -> int:
+    """The loss version folded into a hash that holds `train`: `LOSS_VERSION`, or
+    `RATE_FREE_LOSS_VERSION` when the config has no rate penalty, whose loss it still defines."""
+    return LOSS_VERSION if train.rate_lambda > 0 else RATE_FREE_LOSS_VERSION
 
 
 # Solver fields that no longer exist, at the value every hash written while they did holds
@@ -362,6 +454,18 @@ class AnalysisConfig(StrictModel):
     n_cols: PosInt = 8  # columns in the neuron-map grid
 
 
+# Fields left out of `section_hash` while they hold the value every hash written before they
+# existed implies (their defaults), so those hashes do not move: dotted path -> that value.
+HASH_OMITTED_AT_DEFAULT: dict[str, Any] = {
+    "net.B": NetConfig().B,
+    "net.init": NetConfig().init,
+    "data.teacher": DataConfig().teacher,
+    "spatial.lambda_max": SpatialConfig().lambda_max,
+    "spatial.parametrisation": SpatialConfig().parametrisation,
+    "train.monitor_kind": TrainConfig().monitor_kind,
+}
+
+
 class Config(StrictModel):
     data: DataConfig = DataConfig()
     net: NetConfig = NetConfig()
@@ -388,16 +492,45 @@ class Config(StrictModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _whitened_starts_from_its_prior(self) -> Self:
+        # The whitened parametrisation exists to sample the exact prior; a start away from it
+        # would leave the directions the data does not touch to relax on the slowest scale.
+        if self.is_whitened and self.net.init != "prior":
+            raise ValueError(
+                f'spatial.parametrisation is "whitened" but net.init is "{self.net.init}"; '
+                'set net.init="prior" so that xi starts from its prior'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _a_prior_draw_needs_a_proper_prior(self) -> Self:
+        # The prior N(0, K / weight_lambda) does not exist at weight_lambda = 0.
+        if self.net.init == "prior" and self.train.weight_lambda <= 0:
+            raise ValueError(
+                f"train.weight_lambda is {self.train.weight_lambda!r} but net.init is "
+                '"prior", whose draw N(0, K / weight_lambda) needs weight_lambda > 0'
+            )
+        return self
+
+    @property
+    def is_whitened(self) -> bool:
+        """Whether this config trains the whitened parametrisation of the spatial prior."""
+        return self.spatial is not None and self.spatial.parametrisation == "whitened"
+
     def section_hash(self, *sections: str) -> str:
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and
-        `LOSS_VERSION` when "train" is. `train.optimizer` / `train.beta` are left out of the
-        hash for the adam optimiser, and `net.B` when it is 1. The `spatial` section enters
-        with "train" only when it is set (without its `lambda_max` while that is None), so runs
-        without a spatial prior keep the hashes they had before the section existed. The
-        meanfield section enters as `MeanFieldConfig.hash_payload()`, not as its dump.
+        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and the
+        loss version when "train" is (`hashed_loss_version`: `RATE_FREE_LOSS_VERSION` without a
+        rate penalty). `train.optimizer` / `train.beta` are left out of the hash for the adam
+        optimiser, `train.monitor_bins` / `train.monitor_shuffles` for the spectrum monitor (they
+        configure the MIR monitor only), and every field of `HASH_OMITTED_AT_DEFAULT` while it holds
+        its default (`fct.schema.exclude_at_default`), so a config that does not set such a
+        field hashes as it did before the field existed. The `spatial` section enters with
+        "train" only when it is set. The meanfield section enters as
+        `MeanFieldConfig.hash_payload()`, not as its dump.
         Canonical JSON (sorted keys) makes the hash independent of field and argument order.
         """
         if not sections:
@@ -405,23 +538,20 @@ class Config(StrictModel):
         unknown = set(sections) - set(type(self).model_fields)
         if unknown:
             raise ValueError(f"unknown config sections {sorted(unknown)}")
-        hashed = self.model_dump(include={*sections, "dtype"})
+        omitted = exclude_at_default(self, HASH_OMITTED_AT_DEFAULT)
+        hashed = self.model_dump(include={*sections, "dtype"}, exclude=omitted)
         if "meanfield" in sections:
             hashed["meanfield"] = self.meanfield.hash_payload()
         if "net" in sections:  # the forward pass belongs to the net section
             hashed["model_version"] = MODEL_VERSION
-            if self.net.B == 1:  # a single network hashes as before the ensemble size existed
-                del hashed["net"]["B"]
         if "train" in sections:  # the loss definition lives in the train section
-            hashed["loss_version"] = LOSS_VERSION
+            hashed["loss_version"] = hashed_loss_version(self.train)
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes
                 del hashed["train"]["optimizer"], hashed["train"]["beta"]
+            if self.train.monitor_kind == "spectrum":  # MIR-only fields: no effect on spectra
+                del hashed["train"]["monitor_bins"], hashed["train"]["monitor_shuffles"]
             if self.spatial is not None:  # the weight prior is part of the training loss
-                hashed["spatial"] = self.spatial.model_dump()
-                if (
-                    self.spatial.lambda_max is None
-                ):  # omitted while None: configs without it hash as before
-                    del hashed["spatial"]["lambda_max"]
+                hashed["spatial"] = self.spatial.model_dump(exclude=omitted.get("spatial"))
         canonical = json.dumps(hashed, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 

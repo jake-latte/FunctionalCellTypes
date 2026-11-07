@@ -19,6 +19,7 @@ from fct.cache import cache_paths
 from fct.config import (
     Config,
     DataConfig,
+    InitLaw,
     NetConfig,
     Optimizer,
     Phi,
@@ -82,13 +83,15 @@ def make_config(
     train_seed: int,
     spatial: SpatialConfig | None,
     device: Literal["auto", "cpu", "cuda"],
+    init: InitLaw = "standard",
 ) -> Config:
     """The linear-teacher run of the notebook: m features, k latents, P samples, an L-layer net
-    of N units, trained by `optimizer` under the spatial prior `spatial`. Every field is
-    validated by the config models, so an impossible combination fails here."""
+    of N units starting from the initial law `init`, trained by `optimizer` under the spatial
+    prior `spatial`. Every field is validated by the config models, so an impossible
+    combination (a whitened prior from the standard draw, say) fails here."""
     return Config(
         data=DataConfig(task="linear_teacher", P=P, D_in=m, n_latents=k, seed=data_seed),
-        net=NetConfig(N=N, L=L, g=g, phi=phi, seed=net_seed),
+        net=NetConfig(N=N, L=L, g=g, phi=phi, seed=net_seed, init=init),
         train=TrainConfig(
             n_epochs=n_epochs,
             lr=lr,

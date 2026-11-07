@@ -30,8 +30,12 @@ SHAPES = {
     3: [[2, 2, 2], [2, 2, 3], [2, 2, 2]],
     4: [[2, 2, 2, 2], [2, 2, 2, 3], [2, 2, 2, 2]],
 }
-# Section hash of the config in `_pinned_spatial`, from the code before `lambda_max` existed.
-PINNED_SPATIAL_HASH = "c93ee7958838"
+# Section hash of the config in `_pinned_spatial`. It was pinned with the code before
+# `lambda_max` existed and recomputed after `latent_range` was renamed to `latent_min` /
+# `latent_max` (that code never had the new fields, so it could not have written this value),
+# and again for LOSS_VERSION 5, which the config's default rate_lambda > 0 hashes (version 4
+# gave 1ef37eb7a218); neither recomputation changed any field.
+PINNED_SPATIAL_HASH = "55da84fd2ded"
 SECTIONS = ("data", "net", "train")
 
 

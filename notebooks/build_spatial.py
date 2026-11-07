@@ -65,9 +65,9 @@ what is plotted.
   stored (post, pre), are $W_1 = U$ of shape $(N, m)$, $W_l = J_{l-1}$, and $W_{L+1} = V^\top$.
   The rates are $r^{(l)}_{i\mu} = \phi(h^{(l)}_{i\mu})$.
 - Loss (`fct/train.py`):
-  $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \frac{\lambda_w}{2\beta} \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \lambda_r \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
+  $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \frac{\lambda_w}{2\beta} \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \frac{\lambda_r}{2\beta} \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
   with $\mathrm{mse} = \frac{1}{P m} \sum_\mu \lVert y_\mu - \hat y_\mu \rVert^2$,
-  $\lambda_w = 2\beta\,$`PRIOR_COEFF` (derived from the loss coefficient `PRIOR_COEFF` $= \lambda_w / 2\beta$, so SGLD and Adam train the same loss), $\lambda_r$ = `RATE_LAMBDA`, $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
+  $\lambda_w = 2\beta\,$`PRIOR_COEFF` (derived from the loss coefficient `PRIOR_COEFF` $= \lambda_w / 2\beta$, so SGLD and Adam train the same weight prior), $\lambda_r$ = `RATE_LAMBDA`, the rate coefficient $r$ of the stationary law (so $\beta\mathcal{L}$ carries $\frac{\lambda_r}{2} \sum (r^{(l)}_{i\mu})^2$ and the loss's rate term, unlike its weight prior, differs between SGLD and Adam), $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
   defined in the spatial prior section.
 
 Set `CACHE_ROOT` in the first cell. The run is cached under it in a directory named by a hash of
@@ -91,7 +91,9 @@ G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights
 PRIOR_COEFF = 3e-3  # coefficient of the spatial weight penalty in the loss
-RATE_LAMBDA = 1e-4  # multiplies the rate penalty
+# rate coefficient r of the stationary law, not of the loss: the loss carries r / (2 beta) sum phi^2.
+# Its value has not been re-tuned for that 1 / (2 beta) scaling of the loss's rate term.
+RATE_LAMBDA = 1e-4
 DEVICE = "cpu"  # "cpu", "cuda" or "auto"; these nets are tiny"""
 
 TRAINING_TEXT = r"""## Training
@@ -121,6 +123,7 @@ from IPython.display import Markdown, display
 from fct.analyse import example_outputs, pick_examples, r_squared
 from fct.exp_view import tuning_view
 from fct.meanfield import readout_activities
+from fct.model import effective_weights
 from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import (
     data_kernel,
@@ -170,19 +173,29 @@ they are a prior on the weights, not the mean-field kernels $\Phi^{(l)}$ over *s
 `fct/meanfield.py`. Under this prior those kernels gain a pair of unit indices; they are shown,
 built from the trained activity and these $K$, in their own section below."""
 
-SPATIAL = """from fct.spatial import SpatialConfig
+SPATIAL = """from fct.config import law_beta
+from fct.spatial import SpatialConfig
 from fct.spatial_view import population_spec
 
 D = 1  # embedding dimension: a ring for 1, a torus for 2 (a grid then needs a shape, d <= 2)
 BOX = 1.0  # side of the torus; length scales are in the same units
 MIN_REL_EIG = 1e-2  # eigenvalue floor of the penalty matrices, relative to the largest
+# "penalty" (M = floored K^{-1}) or "whitened" (W = S xi S with S = K^{1/2}: the exact prior)
+PARAMETRISATION = "penalty"
+INIT = "standard"  # initial law: "standard" N(0, 1), or "prior" (W from its prior; "whitened" needs it)
 # one embedding and kernel per population: "grid" (evenly spaced) or "random" (uniform)
 INPUT = population_spec("grid", length_scale=0.15, amplitude=1.0)
 HIDDEN = population_spec("grid", length_scale=0.15, amplitude=1.0)  # shared by all hidden layers
 OUTPUT = population_spec("grid", length_scale=0.15, amplitude=1.0)
 
 SPATIAL = SpatialConfig(
-    d=D, box=BOX, input=INPUT, hidden=HIDDEN, output=OUTPUT, min_rel_eig=MIN_REL_EIG
+    d=D,
+    box=BOX,
+    input=INPUT,
+    hidden=HIDDEN,
+    output=OUTPUT,
+    min_rel_eig=MIN_REL_EIG,
+    parametrisation=PARAMETRISATION,
 )
 CFG = make_config(
     P=P,
@@ -194,7 +207,7 @@ CFG = make_config(
     g=G,
     data_seed=DATA_SEED,
     net_seed=NET_SEED,
-    weight_lambda=PRIOR_COEFF * 2 * (1.0 if OPTIMIZER != "sgld" else BETA),
+    weight_lambda=PRIOR_COEFF * 2 * law_beta(OPTIMIZER, BETA),
     rate_lambda=RATE_LAMBDA,
     optimizer=OPTIMIZER,
     beta=BETA,
@@ -203,6 +216,7 @@ CFG = make_config(
     train_seed=TRAIN_SEED,
     spatial=SPATIAL,
     device=DEVICE,
+    init=INIT,
 )
 SPACES = layer_spaces(CFG)  # weight layer l = 1 .. L + 1 is SPACES[l - 1]"""
 
@@ -223,15 +237,34 @@ $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 10^{-2} \c
 both optimisers are stable and 2000 epochs take seconds on a CPU. The library default
 $\epsilon = 10^{-6}$ would make both $10^8$ times larger ($\lambda_{\max}(M_l) \approx 3.7 \cdot 10^{10}$,
 $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l) \approx 1.1 \cdot 10^6$); a larger network or a lower floor needs a
-smaller `LR` or `PRIOR_COEFF`. The tables give the numbers for the current settings."""
+smaller `LR` or `PRIOR_COEFF`. The tables give the numbers for the current settings.
+
+Under the whitened parametrisation (`PARAMETRISATION = "whitened"`) none of this applies: the
+trained parameters are $\xi_l$ with $W_l = S^{\mathrm{post}}_l \xi_l S^{\mathrm{pre}}_l$, $S = K^{1/2}$,
+nothing is floored (the prior is $K$ itself), the penalty is $\|\xi_l\|^2$ with stiffness 1 in
+every direction, and the bound is $\mathrm{lr}\, \lambda_w / (2\beta) < 1$ for every layer; the
+loss curvature is checked when training starts."""
 
 FLOOR = r"""def top_eigenvalue(matrix):
     return torch.linalg.eigvalsh(matrix)[-1].item()
 
 
 def stiffness(space):
-    # lambda_max(M_l): the Kronecker product's largest eigenvalue is the product of its factors'
+    # lambda_max(M_l): the Kronecker product's largest eigenvalue is the product of its factors'.
+    # The whitened prior |xi|^2 has stiffness 1 in every direction.
+    if CFG.is_whitened:
+        return 1.0
     return top_eigenvalue(space.M_post) * top_eigenvalue(space.M_pre)
+
+
+def floored(p):
+    if CFG.is_whitened:
+        return "not floored: exact prior"
+    return f"{p.report.n_floored} of {len(p.K)}"
+
+
+def penalty_top(p):
+    return "unused (whitened)" if CFG.is_whitened else f"{top_eigenvalue(p.M):.3g}"
 
 
 populations = [SPACES[0].pre, *(space.post for space in SPACES)]
@@ -239,15 +272,14 @@ population_table = [
     r"| population | eigenvalues floored | $\lambda_{\max}(K^p)$ | $\lambda_{\max}(M^p)$ |",
     "|---|---|---|---|",
     *(
-        f"| {p.name} | {p.report.n_floored} of {len(p.K)} | {top_eigenvalue(p.K):.3g} "
-        f"| {top_eigenvalue(p.M):.3g} |"
+        f"| {p.name} | {floored(p)} | {top_eigenvalue(p.K):.3g} | {penalty_top(p)} |"
         for p in populations
     ),
 ]
 layer_table = [
     (
-        r"| layer $l$ | $\lambda_{\max}(M_l)$ "
-        r"| $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\, \lambda_{\max}(M_l)$ (SGLD needs < 1) |"
+        r"| layer $l$ | stiffness: $\lambda_{\max}(M_l)$, or 1 whitened "
+        r"| $\mathrm{lr}\, \frac{\lambda_w}{2\beta}\,$ stiffness (SGLD needs < 1) |"
     ),
     "|---|---|---|",
     *(
@@ -321,7 +353,7 @@ for space in SPACES:
 plt.show()"""
 
 TRAIN = """RUN = train_run(CFG, RUNS_ROOT, log=print)
-# held-out set of the same teacher: one point per sign pattern of the k latents, 3^k in all
+# held-out set of the same teacher: the lattice {lo, mid, hi}^k of the k latents, 3^k points
 TEST_DATASET = get_latent_lattice_dataset(RUN.cache_dir, CFG)
 tc = CFG.train
 sampler = f"SGLD, beta = {tc.beta:g}" if tc.optimizer == "sgld" else "Adam"
@@ -338,7 +370,7 @@ display(
 LOSS_TEXT = r"""## Loss curves
 
 The loss and its three raw terms, as logged during training, against epoch on a log axis:
-$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \lambda_r\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
+$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \frac{\lambda_r}{2\beta}\, \Omega_r, \qquad \Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top), \qquad \Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2.$$
 The terms are drawn unweighted, so they do not add up to the $\mathcal{L}$ curve; a term that is zero at
 every epoch has no point on a log axis and is marked "(zero)" in the legend. Under SGLD the
 curves settle to a noisy stationary level rather than to a minimum."""
@@ -370,8 +402,10 @@ EXAMPLES_TEXT = r"""## Example outputs
 
 The trained network's output $\hat y_\mu = V^\top \phi(h^{(L)}_\mu) / N$ against the target
 $y_\mu = W_Y z_\mu$ for `N_EXAMPLES` points $\mu$ drawn at random from the **test set**: the $3^k$
-points of the latent lattice $z \in \{-a, 0, a\}^k$ ($a$ the latent range, one point per sign pattern
-of the latents, with inputs and targets from the training samples' own $W_X$ and $W_Y$), which the
+points of the latent lattice $z \in \{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}^k$ (the ends
+$z_\mathrm{lo}$ = `latent_min`, $z_\mathrm{hi}$ = `latent_max` of the latents' interval and its
+midpoint $z_\mathrm{mid} = (z_\mathrm{lo} + z_\mathrm{hi}) / 2$, with inputs and targets from the
+training samples' own $W_X$ and $W_Y$), which the
 net was not trained on. Left: one panel per sample
 with $y_{\mu a}$ (ring on a stem) and $\hat y_{\mu a}$ (diamond) for every output $a = 1, \dots, m$.
 Right: every entry $\hat y_{\mu a}$ against $y_{\mu a}$ of **all** $3^k$ test points (the examples
@@ -448,7 +482,12 @@ A smooth prior shows as a band along the diagonal; one weight matrix is a single
 $\hat K$ is noisy, and the data term pulls it away from the prior. Drawn for $d = 1$ only, since
 sorting by position needs a ring."""
 
-EMPIRICAL = r"""def plot_kernel_comparison(comparison, space):
+EMPIRICAL = r"""def first_layer_weights(net):
+    # The weight U the forward pass uses: under the whitened parametrisation net.U is xi.
+    return effective_weights(net)["U"].detach()
+
+
+def plot_kernel_comparison(comparison, space):
     # Prior K_post and K_pre beside the second moments of the weights, all sorted around the
     # ring; each panel has its own colour scale.
     panels = [
@@ -467,7 +506,7 @@ EMPIRICAL = r"""def plot_kernel_comparison(comparison, space):
 
 
 if D == 1:
-    plot_kernel_comparison(ordered_kernel_comparison(SPACES[0], RUN.net.U), SPACES[0])
+    plot_kernel_comparison(ordered_kernel_comparison(SPACES[0], first_layer_weights(RUN.net)), SPACES[0])
     plt.show()
 else:
     display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""
@@ -510,7 +549,7 @@ def plot_weights_by_position(W, space):
 
 
 if D == 1:
-    plot_weights_by_position(RUN.net.U, SPACES[0])
+    plot_weights_by_position(first_layer_weights(RUN.net), SPACES[0])
     plt.show()
 else:
     display(Markdown(f"Sorting units by position needs a ring (d = 1); here d = {D}."))"""
@@ -537,10 +576,11 @@ $(P, N)$, samples by rows, so the same matrix is `psi @ psi.T / n_pre` there). T
 (with $1/m$, over the input units) is not drawn.
 
 The activities $\psi$ are those of the **test set**: the $P_\mathrm{test} = 3^k$ points of the latent
-lattice $z \in \{-a, 0, a\}^k$ (one point per sign pattern of the $k$ latents, inputs from the
-training samples' own teacher map $W_X$; `fct.data.get_latent_lattice_dataset`), so $A^{(l)}$ is
-$(3^k \times 3^k)$ and every pair of sign patterns appears once, instead of whatever pairs the random
-training samples happen to give.
+lattice $z \in \{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}^k$ (each latent at an end of its
+interval [`latent_min`, `latent_max`] or at the midpoint $z_\mathrm{mid}$ between them; inputs from
+the training samples' own teacher map $W_X$; `fct.data.get_latent_lattice_dataset`), so $A^{(l)}$ is
+$(3^k \times 3^k)$ and every pair of lattice points appears once, instead of whatever pairs the
+random training samples happen to give.
 
 One panel per hidden layer: $A^{(l)}$ over the $P_\mathrm{test}$ points, with its own colour scale
 (symmetric about zero, since $A$ is signed) and titled with the kernel scale
@@ -549,11 +589,14 @@ $$B_{\mu\nu} = \frac{1}{k} \sum_{f=1}^{k} z_{f\mu}\, z_{f\nu} = \frac{1}{k}\, z_
 which a layer that is linear in the latents would have as its data kernel up to scale
 ($A \propto B$), so how much each $A^{(l)}$ resembles $B$ shows how far that layer is from linear.
 The points are **sorted** by the latent $z_f$ with $f$ =
-`PHI_SORT_LATENT` (0-based; `None` keeps lattice order), the ties of the three values $-a, 0, a$
-keeping lattice order. How to read it: a first layer that is
-nearly linear in $x = W_X z$ gives a dot-product-like kernel, $A_{\mu\nu} \propto z_\mu \cdot z_\nu$,
-which sorted by $z_0$ shows a rank-one $z_0 z_0^\top$ pattern: the same sign in the top-left and
-bottom-right quadrants, the opposite sign in the two off-diagonal ones. A band along the diagonal
+`PHI_SORT_LATENT` (0-based; `None` keeps lattice order), the ties of the three values
+$z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}$ keeping lattice order. How to read it: a first layer
+that is nearly linear in $x = W_X z$ gives a dot-product-like kernel,
+$A_{\mu\nu} \propto z_\mu \cdot z_\nu$, which sorted by $z_0$ shows a rank-one $z_0 z_0^\top$
+pattern. On an interval symmetric about zero (the default $[-1, 1]$) that is the same sign in the
+top-left and bottom-right quadrants and the opposite sign in the two off-diagonal ones; on an
+interval of one sign, such as $[0, a]$, every entry has the same sign and the pattern is a growth
+from the corner where $z_0$ is smallest. A band along the diagonal
 would instead mean that similarity falls with the distance $|z_{f\mu} - z_{f\nu}|$, as for
 localised tuning. This is the trained net's empirical kernel only: the library's solver has no
 spatial prior, so no theory $\Phi$ is computed here."""
@@ -630,9 +673,9 @@ sorting latent, from its smallest value to its largest:
 $$\mu_s = \pi\big(\mathrm{round}(s\, (P_\mathrm{test} - 1) / (S - 1))\big), \qquad s = 0, \dots, S - 1,$$
 with $\pi$ the sorting order of the figure above ($\mu_0 = \pi(0)$ for $S = 1$). With
 `PHI_SORT_LATENT = None`, $\pi$ is the dataset order, so the picks are evenly spaced dataset
-indices and their latents follow no order from bar group to bar group. Each test point is a sign
-pattern of the latents ($z_f \in \{-a, 0, a\}$), so the picks spread over the sign patterns, ordered by
-the sorting latent. The figure
+indices and their latents follow no order from bar group to bar group. Each test point is a
+lattice point of the latents ($z_f \in \{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}$), so the
+picks spread over the lattice, ordered by the sorting latent. The figure
 shows the latents $z_{f\mu_s}$ of the chosen samples, one group of $k$ bars per sample, labelled
 by its index $\mu_s$."""
 

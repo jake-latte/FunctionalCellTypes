@@ -5,7 +5,7 @@
   "L": 1,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "80ce51425c95"
+  "train_hash": "93fee21f39a6"
  },
  {
   "dir": "linear_teacher/L1_tanh_r0.001",
@@ -13,7 +13,7 @@
   "L": 1,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "8d19e80f274c"
+  "train_hash": "d71f40300566"
  },
  {
   "dir": "linear_teacher/L1_relu_r0",
@@ -21,7 +21,7 @@
   "L": 1,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "cdd4f94f2322"
+  "train_hash": "02ab17a89ed6"
  },
  {
   "dir": "linear_teacher/L1_relu_r0.001",
@@ -29,7 +29,7 @@
   "L": 1,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "342d8d84d0af"
+  "train_hash": "4058dc038402"
  },
  {
   "dir": "linear_teacher/L3_tanh_r0",
@@ -37,7 +37,7 @@
   "L": 3,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "715203e5bcc1"
+  "train_hash": "5454d1abdbe4"
  },
  {
   "dir": "linear_teacher/L3_tanh_r0.001",
@@ -45,7 +45,7 @@
   "L": 3,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "9776b285120a"
+  "train_hash": "9dc0bd1ec586"
  },
  {
   "dir": "linear_teacher/L3_relu_r0",
@@ -53,7 +53,7 @@
   "L": 3,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "48e72b45619f"
+  "train_hash": "d9e4b0885eba"
  },
  {
   "dir": "linear_teacher/L3_relu_r0.001",
@@ -61,7 +61,7 @@
   "L": 3,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "1e41e797a6ba"
+  "train_hash": "db9bd6a1126b"
  },
  {
   "dir": "linear_teacher/L5_tanh_r0",
@@ -69,7 +69,7 @@
   "L": 5,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "f4c9d936e5a3"
+  "train_hash": "d107928e2006"
  },
  {
   "dir": "linear_teacher/L5_tanh_r0.001",
@@ -77,7 +77,7 @@
   "L": 5,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "1fdec0e2ff99"
+  "train_hash": "de5f3223b2d8"
  },
  {
   "dir": "linear_teacher/L5_relu_r0",
@@ -85,7 +85,7 @@
   "L": 5,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "0191f56a6f6c"
+  "train_hash": "6c642eb5a269"
  },
  {
   "dir": "linear_teacher/L5_relu_r0.001",
@@ -93,7 +93,7 @@
   "L": 5,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "76bb6b0358cd"
+  "train_hash": "2a5fb6023828"
  },
  {
   "dir": "object_action/L1_tanh_r0",
@@ -101,7 +101,7 @@
   "L": 1,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "8b1c4656765d"
+  "train_hash": "1cf108019b1f"
  },
  {
   "dir": "object_action/L1_tanh_r0.001",
@@ -109,7 +109,7 @@
   "L": 1,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "e6bfc74dc17e"
+  "train_hash": "ccbe79d8c989"
  },
  {
   "dir": "object_action/L1_relu_r0",
@@ -117,7 +117,7 @@
   "L": 1,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "d3cf14a6d4ca"
+  "train_hash": "6f8b9f9ccde3"
  },
  {
   "dir": "object_action/L1_relu_r0.001",
@@ -125,7 +125,7 @@
   "L": 1,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "61117e1d15b6"
+  "train_hash": "0da7bf09932b"
  },
  {
   "dir": "object_action/L3_tanh_r0",
@@ -133,7 +133,7 @@
   "L": 3,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "4cbbc9d0244e"
+  "train_hash": "342f9aa179a1"
  },
  {
   "dir": "object_action/L3_tanh_r0.001",
@@ -141,7 +141,7 @@
   "L": 3,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "f81c5a39286e"
+  "train_hash": "2595ddd98b03"
  },
  {
   "dir": "object_action/L3_relu_r0",
@@ -149,7 +149,7 @@
   "L": 3,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "824ca001cb9a"
+  "train_hash": "e74c55585a24"
  },
  {
   "dir": "object_action/L3_relu_r0.001",
@@ -157,7 +157,7 @@
   "L": 3,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "424c5c792a4a"
+  "train_hash": "ff2d247b75ce"
  },
  {
   "dir": "object_action/L5_tanh_r0",
@@ -165,7 +165,7 @@
   "L": 5,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "6c5f084cfc75"
+  "train_hash": "d702bae2c6c9"
  },
  {
   "dir": "object_action/L5_tanh_r0.001",
@@ -173,7 +173,7 @@
   "L": 5,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "920dc84f947d"
+  "train_hash": "892bc9f4100d"
  },
  {
   "dir": "object_action/L5_relu_r0",
@@ -181,7 +181,7 @@
   "L": 5,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "ed4fc1288f2e"
+  "train_hash": "f73bc57965ff"
  },
  {
   "dir": "object_action/L5_relu_r0.001",
@@ -189,7 +189,7 @@
   "L": 5,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "6f9eeb8b8060"
+  "train_hash": "00cb6172a7c9"
  },
  {
   "dir": "what_where/L1_tanh_r0",
@@ -197,7 +197,7 @@
   "L": 1,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "36a616f922c4"
+  "train_hash": "901c2f9dd818"
  },
  {
   "dir": "what_where/L1_tanh_r0.001",
@@ -205,7 +205,7 @@
   "L": 1,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "c7d2add13a81"
+  "train_hash": "f38fb15311c8"
  },
  {
   "dir": "what_where/L1_relu_r0",
@@ -213,7 +213,7 @@
   "L": 1,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "e6041534e572"
+  "train_hash": "38c39fe8fbf3"
  },
  {
   "dir": "what_where/L1_relu_r0.001",
@@ -221,7 +221,7 @@
   "L": 1,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "f96793754e0d"
+  "train_hash": "121cf309b5e9"
  },
  {
   "dir": "what_where/L3_tanh_r0",
@@ -229,7 +229,7 @@
   "L": 3,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "94c413d2f8de"
+  "train_hash": "700343d0d3d9"
  },
  {
   "dir": "what_where/L3_tanh_r0.001",
@@ -237,7 +237,7 @@
   "L": 3,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "09d530504da9"
+  "train_hash": "9164c8475bb5"
  },
  {
   "dir": "what_where/L3_relu_r0",
@@ -245,7 +245,7 @@
   "L": 3,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "2053689733be"
+  "train_hash": "ec4fd0a0201f"
  },
  {
   "dir": "what_where/L3_relu_r0.001",
@@ -253,7 +253,7 @@
   "L": 3,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "8cf8a6e5b3ca"
+  "train_hash": "a14560980cc8"
  },
  {
   "dir": "what_where/L5_tanh_r0",
@@ -261,7 +261,7 @@
   "L": 5,
   "phi": "tanh",
   "rate_lambda": 0.0,
-  "train_hash": "0ba32b474df5"
+  "train_hash": "b8f7cf38a3f3"
  },
  {
   "dir": "what_where/L5_tanh_r0.001",
@@ -269,7 +269,7 @@
   "L": 5,
   "phi": "tanh",
   "rate_lambda": 0.001,
-  "train_hash": "dc561fc4de7a"
+  "train_hash": "2ac3e1579c61"
  },
  {
   "dir": "what_where/L5_relu_r0",
@@ -277,7 +277,7 @@
   "L": 5,
   "phi": "relu",
   "rate_lambda": 0.0,
-  "train_hash": "c6911619f30b"
+  "train_hash": "89513f118cde"
  },
  {
   "dir": "what_where/L5_relu_r0.001",
@@ -285,6 +285,6 @@
   "L": 5,
   "phi": "relu",
   "rate_lambda": 0.001,
-  "train_hash": "dd1f67d23eaa"
+  "train_hash": "ca5266e56671"
  }
 ]

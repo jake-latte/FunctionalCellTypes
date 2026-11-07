@@ -24,7 +24,7 @@ lwa = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = lwa  # dataclasses resolve postponed annotations through sys.modules
 spec.loader.exec_module(lwa)
 
-PARAMS = lwa.Params(k0=0.7, k1=1.3, sig2=0.2, g2=0.3, delta=0.5)
+PARAMS = lwa.Params(k0=0.7, k1=1.3, sig2=0.2, r=0.3, delta=0.5)
 N_SITES, P = 16, 4
 
 

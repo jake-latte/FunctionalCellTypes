@@ -361,7 +361,9 @@ def test_a_finished_setting_from_the_old_loss_is_listed_with_a_note(tmp_path, mo
     exp = preset("tiny")
     save_exp(exp, tmp_path)
     with monkeypatch.context() as old:
+        # setting 0 has rate_lambda = 0: an older loss of every config, not only rate-penalised ones
         old.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+        old.setattr(fct.config, "RATE_FREE_LOSS_VERSION", fct.config.RATE_FREE_LOSS_VERSION - 1)
         run_setting(exp, 0, tmp_path, **QUIET)
     run_setting(exp, 1, tmp_path, **QUIET)
 

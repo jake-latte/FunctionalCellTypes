@@ -3,7 +3,8 @@
 `modularity_exp.json` is the `tiny` preset of commit e1492ca (the last before the axes became
 configurable) as serialised, and `modularity_settings.json` holds, for each of the 36 settings it
 expanded to (in order), the directory and the varied values that code produced (extracted with
-`git archive e1492ca fct | tar -x -C tmp/old`, run with `PYTHONPATH=tmp/old`). Those, and
+`git archive e1492ca fct | tar -x -C tmp/old`, run with `PYTHONPATH=tmp/old`), except that its
+`latent_range: 1.0` is spelled `latent_min: -1.0, latent_max: 1.0`. Those, and
 `test_it_builds_the_same_configs`, are the independent check against the code that had fixed axes.
 
 Each row's `train_hash` is NOT from that code: it is the `section_hash("data", "net", "train")`

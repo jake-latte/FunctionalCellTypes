@@ -35,11 +35,12 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `report.py` | read-only loading of an experiment and everything the results notebook shows (final-MIR tables, prose generated from the numbers) |
 | `exp_view.py` | from an experiment ROOT to the figures of a `lambda_exp` experiment (the phase-transition notebook): snapping a setting to the axis values, MIR records of one depth and activation, tuning curves of one layer |
 | `spatial_view.py` | the spatial-prior notebook: its config and resumable run, ring / lattice layout of neurons and weights, empirical kernels (the notebook draws its own figures) |
+| `linear_theory.py` | the linear one-hidden-layer theory on a ring, trained by SGLD, as pure functions of a `Config` and a `Dataset`: per-mode spectra and their summaries for an orthonormal teacher, the ansatz-free kernel for any teacher (`latex/notes/linear_solution_limits.tex`, `linear_without_ansatz.tex`) |
 | `analyse.py`, `draw.py` | pure analysis functions and plotting (`plot_*` take an axis, `fig_*` build figures) |
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
-| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_exp.py`, `build_phase_transition_exp.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
+| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_exp.py`, `build_phase_transition_exp.py`, `build_linear_ring.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
 | `jobs/fct_exp.sh` | SLURM array script for the experiment (train stage) |
 | `jobs/fct_solve.sh` | the same array job at the solve stage (mean-field saddle points) |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
@@ -49,8 +50,8 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 **Tasks** (`fct/tasks.py`, selected with `data.task`; each returns the ground-truth factors used for scoring):
 
 - `linear_teacher`: inputs and targets are generated from latent variables through random linear maps
-  (`W_X`, `W_Y`, i.i.d. N(0, 1/k)); one factor group per latent.
-  `fct.data.get_latent_lattice_dataset` gives a structured test set for it: one sample per point of {-a, 0, a}^k.
+  (`W_X`, `W_Y`, i.i.d. N(0, 1/k), or with orthonormal columns for `data.teacher = "orthonormal"`); one factor group per latent.
+  `fct.data.get_latent_lattice_dataset` gives a structured test set for it: one sample per point of {lo, (lo + hi)/2, hi}^k, the latents being uniform on [lo, hi] = [`latent_min`, `latent_max`].
 - `object_action`: a G x G grid with an agent cell and an object map; the target is the optimal action
   (stay, up, down, left, right) toward the nearest object. Factor groups: agent position, object
   occupancy bits, action bits.
@@ -221,7 +222,7 @@ uv run python notebooks/build_spatial.py --no-execute                     # rebu
 
 The spatial-prior notebook draws its spatially indexed kernels Phi^(l) (the data kernels A^(l) next to the latent
 kernel B = Z Z^T / k, the chosen trials, the pair grids) and its example outputs (a few test points drawn as panels, the R^2 and the scatter over all of them) from the
-held-out test set, the 3^k points of the latent lattice (one per sign pattern), not from the training samples.
+held-out test set, the 3^k points of the latent lattice (each latent at `latent_min`, the midpoint or `latent_max`), not from the training samples.
 
 **Spatial-experiment notebook.** The same figures for one setting of an already-run spatial experiment (for instance
 `python -m fct exp init ROOT --preset spatial_n_scan`, then `exp run`): give the experiment ROOT and the axis values
@@ -244,6 +245,14 @@ uv run python notebooks/build_phase_transition_exp.py ROOT --set 'SETTING={"spat
 uv run python notebooks/build_phase_transition_exp.py --no-execute                                          # rebuild the committed source notebook
 ```
 
+**Linear-ring notebook** (`linear_ring.ipynb`; the viewer for the `linear_ring`, `linear_ring_equivalence` and `linear_ring_tiny` presets). Give the experiment ROOT and the axis values of one setting, `SETTING = {"train.beta": 10.0}`, and optionally the setting to show beside it, `TWIN_SETTING` in `TWIN_ROOT` (the other parametrisation; `None` shows one). The accuracy budget is computed at the B before any `exp extend` (the first extension records it in exp.json as `base_B`); `BASE_B`, a mapping `{"setting": B0, "twin": B0}`, overrides it, and must be set for an experiment extended before `base_B` existed or re-initialised with `exp init --force` (which drops `base_B`), whose extended B would otherwise pass for the base. It draws, per setting, the loss curves, the relaxation diagnostic of the records, the member-averaged final-state spectra against `predicted_spectra`, the band share across the experiment's trained settings, the mode ratio and R(Delta)/R(0), at K = 3 the angle histogram, and tabulates every statistic with its bootstrap SE over members against the prediction, the disagreement flags and, with two settings, their equivalence. Logic is in `fct/linear_ring.py` and `fct/ring_view.py`; only the source notebook is committed.
+
+```sh
+uv run python notebooks/build_linear_ring.py ROOT                                                        # the defaults: linear_ring_tiny settings 0 and 3 -> tmp/linear_ring.ipynb
+uv run python notebooks/build_linear_ring.py ROOT/p1 --set 'SETTING={"train.beta": 10.0}' --set "TWIN_ROOT='ROOT/p1-penalty'" --set 'TWIN_SETTING={"train.beta": 10.0}'
+uv run python notebooks/build_linear_ring.py --no-execute                                                # rebuild the committed source notebook
+```
+
 ## Python library: single runs and the mean-field solver
 
 A single run is one cache directory. `train` records the per-layer MIR during training when
@@ -257,8 +266,10 @@ uv run python -m fct plot CACHE_DIR           # figures that need results (--whi
 uv run python -m fct plot-example CACHE_DIR   # figure that needs no results
 ```
 
-`solve` uses `train.rate_lambda` as its rate tilt, the per-sample coefficient of the trained
-(summed) rate penalty; `--set meanfield.rate_tilt=...` overrides it. The `meanfield` section
+`solve` uses `train.rate_lambda` as its rate tilt: training puts the rate penalty
+`rate_lambda / (2 beta) * sum phi^2` in the loss (beta = `train.beta` under SGLD, 1 under Adam),
+so the law exp(-beta L) carries `(rate_lambda / 2) sum phi^2` for every beta; `--set
+meanfield.rate_tilt=...` overrides it. The `meanfield` section
 holds the problem (points, `beta`, prior, `alpha`, rate tilt); how it is solved lives in
 `meanfield.solver`, e.g. `--set meanfield.solver.sampler=importance` for importance sampling
 from the prior instead of HMC, or `--set meanfield.solver.n_chains=512`. A `config.json` in

@@ -140,9 +140,13 @@ def test_invalid_task_parameters_fail_at_load(tiny):
 
 # ---------------------------------------------------------------------------- status
 def _write_final(train_dir, exp, setting):
-    """A minimal final.pt carrying the config hash of `setting` under the current code."""
+    """A minimal final.pt carrying the config hash of `setting` under the current code and a
+    net of its net.B members (done needs both)."""
     cfg = setting_config(exp, setting)
-    save_artefact(train_dir / "final.pt", {"epoch": 0}, cfg.section_hash("data", "net", "train"))
+    N, D_in = cfg.net.N, cfg.data.D_in
+    U = torch.zeros(N, D_in) if cfg.net.B == 1 else torch.zeros(cfg.net.B, N, D_in)
+    payload = {"epoch": 0, "net_state_dict": {"U": U}}
+    save_artefact(train_dir / "final.pt", payload, cfg.section_hash("data", "net", "train"))
 
 
 def test_status_done_partial_missing(tiny, tmp_path):
@@ -412,7 +416,7 @@ def test_unexpected_error_in_a_single_run_keeps_its_traceback(tmp_path, capsys, 
         main(["exp", "run", str(tmp_path), "--index", "0"])
 
 
-def test_cli_run_index_then_status(tmp_path, capsys):
+def test_cli_run_index_then_status(tiny, tmp_path, capsys):
     _cli(capsys, "init", tmp_path, "--preset", "tiny")
     code, _, _ = _cli(capsys, "run", tmp_path, "--index", 0)
     assert code == 0
@@ -420,12 +424,33 @@ def test_cli_run_index_then_status(tmp_path, capsys):
     lines = status.strip().splitlines()
     assert lines[0].split()[:2] == ["0", "done"]
     assert lines[1].split()[:2] == ["1", "missing"]
-    assert "1 done, 0 partial, 35 missing, 0 stale" in lines[-1]
+    assert f"1 done, 0 partial, {len(expand(tiny)) - 1} missing, 0 stale" in lines[-1]
 
 
 # ---------------------------------------------------------------------------- stale results
 def _old_loss(monkeypatch):
+    """The code before a loss change that touches every config, with or without a rate penalty."""
     monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+    monkeypatch.setattr(fct.config, "RATE_FREE_LOSS_VERSION", fct.config.RATE_FREE_LOSS_VERSION - 1)
+
+
+def test_status_after_the_rate_rescaling_is_stale_only_with_a_rate_penalty(
+    tiny, tmp_path, capsys, monkeypatch
+):
+    """Settings run under LOSS_VERSION 4 (rate penalty not yet scaled by 1 / (2 beta)): the
+    rate_lambda = 0 one keeps its numbers and stays done, the rate_lambda > 0 one is stale."""
+    settings = expand(tiny)
+    assert [s.axes["train.rate_lambda"] for s in settings[:2]] == [0.0, 1e-3]
+    _cli(capsys, "init", tmp_path, "--preset", "tiny")
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "LOSS_VERSION", 4)
+        _cli(capsys, "run", tmp_path, "--index", 0)
+        _cli(capsys, "run", tmp_path, "--index", 1)
+    _, status, _ = _cli(capsys, "status", tmp_path)
+    lines = status.strip().splitlines()
+    assert lines[0].split()[:2] == ["0", "done"]
+    assert lines[1].split()[:2] == ["1", "stale"]
+    assert f"1 done, 0 partial, {len(settings) - 2} missing, 1 stale" in lines[-1]
 
 
 def test_finished_setting_from_the_old_loss_is_stale_not_done(tiny, tmp_path, monkeypatch):
@@ -461,7 +486,7 @@ def test_cli_status_counts_stale_settings_separately(tiny, tmp_path, capsys, mon
     lines = status.strip().splitlines()
     assert lines[0].split()[:2] == ["0", "stale"]
     assert lines[1].split()[:2] == ["1", "done"]
-    assert "1 done, 0 partial, 34 missing, 1 stale" in lines[-1]
+    assert f"1 done, 0 partial, {len(expand(tiny)) - 2} missing, 1 stale" in lines[-1]
 
 
 def test_an_unreadable_final_is_stale_not_a_crash(tiny, tmp_path):
@@ -477,3 +502,30 @@ def test_an_unreadable_final_is_stale_not_a_crash(tiny, tmp_path):
 def test_a_B_of_zero_is_rejected():
     with pytest.raises(ValidationError, match="B"):
         ExpConfig.model_validate({**preset("tiny").model_dump(), "B": 0})
+
+
+# --- linear-teacher parameters -------------------------------------------------------------
+
+
+def _with_teacher(exp: ExpConfig, **teacher) -> dict:
+    dump = exp.model_dump()
+    return {**dump, "linear_teacher": {**dump["linear_teacher"], **teacher}}
+
+
+def test_the_latent_interval_reaches_the_data_config(tiny):
+    exp = ExpConfig.model_validate(_with_teacher(tiny, latent_min=0.0, latent_max=2.0))
+    setting = next(s for s in expand(exp) if s.task == "linear_teacher")
+    data = setting_config(exp, setting).data
+    assert (data.latent_min, data.latent_max) == (0.0, 2.0)
+
+
+def test_an_experiment_with_latent_range_names_its_replacements(tiny):
+    teacher = {k: v for k, v in tiny.linear_teacher.model_dump().items() if "latent_m" not in k}
+    dump = {**tiny.model_dump(), "linear_teacher": {**teacher, "latent_range": 1.0}}
+    with pytest.raises(ValueError, match="latent_range.*latent_min.*latent_max"):
+        ExpConfig.model_validate(dump)
+
+
+def test_an_experiment_with_an_empty_latent_interval_is_refused(tiny):
+    with pytest.raises(ValueError, match="latent_min.*latent_max"):
+        ExpConfig.model_validate(_with_teacher(tiny, latent_min=1.0, latent_max=1.0))

@@ -119,6 +119,7 @@ import numpy as np
 import torch
 from IPython.display import Markdown, display
 
+from fct import draw
 from fct.analyse import pick_examples, r_squared
 from fct.exp_view import tuning_view
 from fct.phase_view import (
@@ -166,7 +167,7 @@ if not 0 <= MEMBER < N_MEMBERS:
 POPULATIONS = [SPACES[0].pre, *(space.post for space in SPACES)]
 ORDERS = [unit_order(pop.embedding.positions, SORT_DIM) for pop in POPULATIONS]
 print(f"units sorted by coordinate {SORT_DIM} of d = {D}")
-PRIORS = layer_priors(SPACES, WEIGHT_LAMBDA, N_EIG)
+PRIORS = layer_priors(SPACES, WEIGHT_LAMBDA, N_EIG, whitened=CFG.is_whitened)
 TRAINED = NET is not None
 # appended to every figure title of a setting that is still running
 STATUS_TAG = (
@@ -279,16 +280,17 @@ def draw_sorted_matrix(fig, ax, matrix, order, coordinate, sort_dim, what, bound
 
 def plot_prior_matrices(prior, space, order_post, order_pre, sort_dim, tag=""):
     # One weight layer's prior: rows are the pre and the post factor, columns the covariance, the
-    # effective covariance (the floored one the nets were trained under) and the penalty. The
-    # covariance and the effective covariance share one colour scale per row; the penalty has
-    # its own. Units are in the given orders.
+    # effective covariance (the one the nets were trained under: floored under the penalty, K
+    # itself under the whitened parametrisation) and the penalty. The covariance and the
+    # effective covariance share one colour scale per row; the penalty has its own. Units are
+    # in the given orders.
+    if prior.whitened:
+        effective = ("exact, as trained", r"$K^{{\rm {w}}} / \sqrt{{\lambda_w}}$")
+    else:
+        effective = ("floored, as trained", r"$(M^{{\rm {w}}})^{{-1}} / \sqrt{{\lambda_w}}$")
     columns = [
         ("covariance", prior.covariance, r"$K^{{\rm {w}}} / \sqrt{{\lambda_w}}$"),
-        (
-            "effective covariance (floored, as trained)",
-            prior.effective_covariance,
-            r"$(M^{{\rm {w}}})^{{-1}} / \sqrt{{\lambda_w}}$",
-        ),
+        (f"effective covariance ({effective[0]})", prior.effective_covariance, effective[1]),
         ("penalty", prior.penalty, r"$\sqrt{{\lambda_w}}\, M^{{\rm {w}}}$"),
     ]
     rows = [("pre", space.pre, order_pre), ("post", space.post, order_post)]
@@ -348,7 +350,12 @@ PRIOR_SPECTRA = r"""def plot_prior_spectra(prior, space, tag=""):
         top, bottom = axes[0, col], axes[1, col]
         j = np.arange(1, len(cov) + 1)
         top.plot(j, cov.numpy(), "o-", label=r"covariance $K / \sqrt{\lambda_w}$")
-        top.plot(j, eff.numpy(), "s--", label=r"effective covariance $M^{-1} / \sqrt{\lambda_w}$")
+        effective = (
+            r"effective covariance (exact) $K / \sqrt{\lambda_w}$"
+            if prior.whitened
+            else r"effective covariance (floored) $M^{-1} / \sqrt{\lambda_w}$"
+        )
+        top.plot(j, eff.numpy(), "s--", label=effective)
         top.axhline(floor.covariance_floor, color="C3", ls=":", label="floor")
         top.set(
             yscale="log",
@@ -394,46 +401,24 @@ The loss and its three raw terms as logged during training, against epoch on a l
 **mean over the $B$ members** with a band of one standard error of that mean,
 $$\bar f(t) = \frac{1}{B} \sum_{b=1}^{B} f_b(t), \qquad \mathrm{sem}(t) = \frac{1}{\sqrt{B}} \sqrt{\frac{1}{B - 1} \sum_{b=1}^{B} \big(f_b(t) - \bar f(t)\big)^2},$$
 for $f \in \{\mathcal{L}, \mathrm{mse}, \Omega_w, \Omega_r\}$ with
-$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \lambda_r\, \Omega_r,$$
+$$\mathcal{L} = \frac{N}{2}\, \mathrm{mse} + \frac{\lambda_w}{2\beta}\, \Omega_w + \frac{\lambda_r}{2\beta}\, \Omega_r,$$
 where $\Omega_w = \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top)$ and $\Omega_r = \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$.
 The terms are drawn unweighted, so they do not add up to the $\mathcal{L}$ curve; a term that is zero at
 every epoch has no point on a log y-axis and is marked "(zero)" in the legend. A band that reaches
 zero is cut off at the bottom of the log y-axis. Under SGLD the curves settle to a noisy stationary level
 rather than to a minimum."""
 
-LOSS = r"""def plot_ensemble_loss(stats, title):
-    # The mean over members of the logged loss and its raw terms, each with a +- sem band.
-    terms = {
-        "loss": r"loss $\mathcal{L}$",
-        "mse": "mse",
-        "weight_l2": r"weight penalty $\Omega_w$",
-        "rate_l2": r"rate penalty $\Omega_r$",
-    }
-    fig, ax = plt.subplots(figsize=(11, 4.5), layout="constrained")
-    for key, label in terms.items():
-        mean, sem = stats.mean[key], stats.sem[key]
-        if not np.any(mean > 0):
-            label += " (zero)"
-        (line,) = ax.plot(stats.epoch, mean, label=label)
-        ax.fill_between(
-            stats.epoch, mean - sem, mean + sem, color=line.get_color(), alpha=0.25, linewidth=0
-        )
-    ax.set(xlabel="epoch", ylabel=r"logged value, mean $\pm$ sem", yscale="log", title=title)
-    ax.grid(alpha=0.25)
-    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
-    return fig
-
-
-plot_ensemble_loss(
-    STATS, f"{OPTIMIZER}: training, mean $\\pm$ sem over {N_MEMBERS} members{STATUS_TAG}"
-)
+LOSS = r"""fig, ax = plt.subplots(figsize=(11, 4.5), layout="constrained")
+draw.plot_ensemble_loss(STATS.epoch, STATS.mean, STATS.sem, ax=ax)
+ax.set_title(f"{OPTIMIZER}: training, mean $\\pm$ sem over {N_MEMBERS} members{STATUS_TAG}")
 plt.show()"""
 
 EXAMPLES_TEXT = r"""## Example outputs
 
 Every member's output $\hat y^{b}_\mu = V_b^\top \phi(h^{(L)}_{b\mu}) / N$ against the target
 $y_\mu = W_Y z_\mu$ for `N_EXAMPLES` points $\mu$ drawn at random from the **lattice test set**: the
-$3^k$ points of the latent lattice $z \in \{-a, 0, a\}^k$, which the nets were not trained on.
+$3^k$ points of the latent lattice $z \in \{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}^k$
+(`latent_min`, the midpoint and `latent_max`), which the nets were not trained on.
 All members are on the same axes, **one palette colour per member** (member $b$ has the $b$-th
 colour of matplotlib's default cycle, the same in both panels, named in the legend); there are at most
 as many members as the palette has colours, and a larger ensemble raises an error rather than repeat
@@ -563,7 +548,7 @@ KERNELS = r"""def plot_weight_kernels(panels, space, order_post, order_pre, sort
 
 for space, prior in zip(SPACES, PRIORS):
     panels = [
-        ("effective prior", prior.effective_covariance),
+        (f"effective prior ({'exact' if prior.whitened else 'floored'})", prior.effective_covariance),
         (f"member {MEMBER}", MEMBER_VIEW.weight_kernels[space.layer]),
         (f"average of {N_MEMBERS} members", MEAN_VIEW.weight_kernels[space.layer]),
     ]

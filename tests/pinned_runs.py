@@ -13,9 +13,11 @@ net reads its output as V^T phi(h^L) / N (MODEL_VERSION 2) and whose tilt projec
 `fct.hmc.tilt_rule`: `hmc_solve_<problem>.pt` at the solver's default step control,
 `hmc_solve_<problem>_legacy_steps.pt` at `LEGACY_STEP_CONTROL` (the plain Algorithm 1).
 `write_fixtures` rewrites all of them. `legacy_config.json` is the flat layout of the code
-before the solver sub-section (commit d1d3091), edited by hand: the `readout` key deleted and
-the step-control fields added at their `LEGACY_STEP_CONTROL` values. `write_fixtures` would
-save it in the current nested layout, so restore it from git after running it.
+before the solver sub-section (commit d1d3091), edited by hand: the `readout` key deleted,
+the step-control fields added at their `LEGACY_STEP_CONTROL` values, and `latent_range: 1.0`
+replaced by `latent_max: 1.0, latent_min: -1.0`, which moved its `result` hash.
+`write_fixtures` would save it in the current nested layout, so restore it from git after
+running it.
 
 Only flat `MeanFieldConfig` keyword arguments are used here, which both the old flat schema and
 the split one accept, so the same code produced the fixtures and checks them.
@@ -58,7 +60,9 @@ PINNED_SOLVES = _PROBLEMS | {
     f"{name}_legacy_steps": spec | {"meanfield": spec["meanfield"] | LEGACY_STEP_CONTROL}
     for name, spec in _PROBLEMS.items()
 }
-LAMBDA_W, LAMBDA_R, P_PIN, D_IN_PIN = 1e-3, 1e-3, 6, 4
+# LAMBDA_R is the rate tilt itself (`fct.meanfield.network_constants`): 2.0 is the tilt the pinned
+# solves were written with, 2 * beta * rate_lambda at meanfield beta 1e3 and rate_lambda 1e-3.
+LAMBDA_W, LAMBDA_R, P_PIN, D_IN_PIN = 1e-3, 2.0, 6, 4
 
 # A config.json in the flat pre-split layout, with non-default values in both the problem
 # and the solver fields of the meanfield section. Its solver runs the plain Algorithm 1, so

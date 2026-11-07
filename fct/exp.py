@@ -6,7 +6,7 @@ that vary: each axis is a dotted `Config` path (`net.L`, `train.rate_lambda`, ..
 list of values. `expand` lists the Cartesian product in a stable order, so a SLURM array index
 and a local check name the same setting. Each setting is a normal fct cache directory that
 `run_setting` fills by the same path as `python -m fct train`: config.json, dataset, training
-with the MIR monitor.
+with the monitor `monitor_kind` picks (the MIR by default).
 `run_setting(..., stage="solve")` instead solves the mean-field saddle point of the same
 setting into its `meanfield/` directory, with the experiment's `meanfield` section (problem fields
 plus the `solver` group; it never enters a training hash, so the same exp.json defines both
@@ -33,10 +33,11 @@ from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, NamedTuple, Self
 
 import numpy as np
-from pydantic import Field, ValidationError, model_validator
+import torch
+from pydantic import Field, FiniteFloat, ValidationError, model_validator
 
 from fct.cache import (
     CachePaths,
@@ -49,7 +50,9 @@ from fct.cache import (
 from fct.config import (
     Config,
     DataConfig,
+    InitLaw,
     MeanFieldConfig,
+    MonitorKind,
     NetConfig,
     NonNegFloat,
     NonNegInt,
@@ -58,17 +61,31 @@ from fct.config import (
     PosFloat,
     PosInt,
     StrictModel,
+    Teacher,
     TrainConfig,
+    check_latent_interval,
     load_config,
+    reject_latent_range,
     resolve_device,
     resolve_dtype,
     save_config,
 )
-from fct.data import Dataset, get_dataset, task_dims
+from fct.data import Dataset, get_dataset, make_dataset, task_dims
 from fct.meanfield import meanfield_hash, run_meanfield
-from fct.monitor import make_mir_monitor
+from fct.monitor import make_monitor
+from fct.schema import exclude_at_default
 from fct.spatial import SpatialConfig
-from fct.train import load_trained, train_from_config
+from fct.spectrum import latent_basis
+from fct.train import (
+    extend_trained,
+    load_trained,
+    remove_staging,
+    remove_stale_checkpoints,
+    train_from_config,
+    train_hash,
+    trained_member_count,
+    with_ensemble_size,
+)
 
 EXP_FILE = "exp.json"
 # The file and keys that older code wrote for the same things. Only `load_exp` (to tell the user
@@ -76,6 +93,8 @@ EXP_FILE = "exp.json"
 LEGACY_EXP_FILE = "sweep.json"
 SETTING_FILE = "setting.json"
 TASK_AXIS = "data.task"
+# The ensemble size: `extend_experiment` grows the shared field B and refuses it as an axis.
+B_AXIS = "net.B"
 SPATIAL_PREFIX = "spatial."
 # Length of the hash that stands for a dict-, list- or long-valued axis value in a directory name.
 LABEL_HASH_LENGTH = 6
@@ -114,6 +133,7 @@ EXP_OWNED_AXES = {
     "train.monitor_int": "monitor_int",
     "train.monitor_bins": "monitor_bins",
     "train.monitor_shuffles": "monitor_shuffles",
+    "train.monitor_kind": "monitor_kind",
 }
 
 Status = Literal["done", "partial", "missing", "stale"]
@@ -152,7 +172,20 @@ class Setting:
 class LinearTeacherParams(StrictModel):
     n_features: PosInt  # m: dimension of both x and y
     n_latents: PosInt
-    latent_range: PosFloat
+    latent_min: FiniteFloat
+    latent_max: FiniteFloat
+    teacher: Teacher = "gaussian"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _latent_range_was_replaced(cls, data: Any) -> Any:
+        reject_latent_range(data)
+        return data
+
+    @model_validator(mode="after")
+    def _latent_interval_is_nonempty(self) -> Self:
+        check_latent_interval(self.latent_min, self.latent_max)
+        return self
 
 
 class ObjectActionParams(StrictModel):
@@ -175,8 +208,8 @@ class ExpConfig(StrictModel):
 
     `description` is free text saying what the experiment is. It is documentation only: it never
     enters a hash or a directory name, `same_experiment` ignores it, and exp.json omits it when
-    it is None. exp.json also omits `B` (the ensemble size) at its default, so an absent `B`
-    means the default.
+    it is None. exp.json also omits the other fields of `EXP_JSON_OMITTED_AT_DEFAULT` (`B`,
+    `init`, ...) at their defaults, so an absent one means the default.
 
     The same data, net and training seeds are used for every setting, so settings differ only
     in the axes. Everything else is the base `Config` a setting starts from (the shared
@@ -205,9 +238,13 @@ class ExpConfig(StrictModel):
     lr: PosFloat
     log_int: PosInt
     save_int: PosInt
-    monitor_int: PosInt  # the experiment always monitors: MIR over training is its point
-    monitor_bins: Annotated[int, Field(ge=2)]
-    monitor_shuffles: PosInt
+    monitor_int: PosInt  # the experiment always monitors: its results are what the monitor records
+    monitor_bins: Annotated[int, Field(ge=2)]  # MIR monitor only
+    monitor_shuffles: PosInt  # MIR monitor only
+    # The monitor every setting runs (`TrainConfig.monitor_kind`): "mir", or "spectrum", which
+    # needs the linear_teacher task with latents `fct.spectrum.latent_basis` accepts (z0..z{K-1}
+    # on [0, a]); checked at load by `_validate_spectrum_frames`.
+    monitor_kind: MonitorKind = TrainConfig().monitor_kind
     linear_teacher: LinearTeacherParams
     object_action: ObjectActionParams
     what_where: WhatWhereParams
@@ -220,6 +257,17 @@ class ExpConfig(StrictModel):
     L: PosInt = NetConfig().L
     g: PosFloat = NetConfig().g
     B: PosInt = NetConfig().B
+    # The B before the first `exp extend`, written by `extend_experiment` when it first grows B
+    # and never changed after: the size a setting was designed with, at which its accuracy
+    # budget is computed (`fct.linear_ring.budget_se`). None (omitted from exp.json) until the
+    # experiment is extended, when B is still the base. At most B: equal once an extension is
+    # backed out by setting B back by hand in exp.json, which leaves base_B as it was. Not an
+    # axis, and not given to `exp init`.
+    base_B: PosInt | None = None
+    # The initial law (`NetConfig.init`); "prior" is required by the whitened parametrisation,
+    # and a shared field (`--set init=prior`) because a `spatial.parametrisation` axis value is
+    # validated against the experiment's base, which must already start from the prior.
+    init: InitLaw = NetConfig().init
     phi: Phi = NetConfig().phi
     weight_lambda: NonNegFloat = TrainConfig().weight_lambda
     rate_lambda: NonNegFloat = TrainConfig().rate_lambda
@@ -248,6 +296,26 @@ class ExpConfig(StrictModel):
             _validate_combinations(self)
         return self
 
+    @model_validator(mode="after")
+    def _base_B_is_at_most_B(self) -> Self:
+        if self.base_B is not None:
+            if B_AXIS in (self.axes or {}):
+                raise ValueError(
+                    f"base_B is recorded only by extending B, which {B_AXIS} as an axis forbids"
+                )
+            # base_B == B is an extension backed out (B set back by hand): not extended now
+            if self.base_B > self.B:
+                raise ValueError(
+                    f"base_B ({self.base_B}) is the B before an extension, so it cannot exceed "
+                    f"B ({self.B})"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _spectrum_monitor_has_a_latent_frame(self) -> Self:
+        _validate_spectrum_frames(self)
+        return self
+
 
 def _task_fields(exp: ExpConfig, task: str) -> dict:
     """The DataConfig fields set by the task's parameters (D_in only where the task has it)."""
@@ -256,7 +324,9 @@ def _task_fields(exp: ExpConfig, task: str) -> dict:
         return {
             "D_in": params.n_features,
             "n_latents": params.n_latents,
-            "latent_range": params.latent_range,
+            "latent_min": params.latent_min,
+            "latent_max": params.latent_max,
+            "teacher": params.teacher,
         }
     return params.model_dump()
 
@@ -354,20 +424,75 @@ def preset(name: str, directory: Path | str | None = None) -> ExpConfig:
         raise PresetError(f"the preset file {path} is not a valid experiment: {err}") from err
 
 
+# ---------------------------------------------------------------------------- derived descriptions
+# An experiment made from a preset with overrides (`exp init --preset NAME --set ... --axis ...`)
+# no longer fits the preset's description, so it is given one that names the preset and the
+# overrides as they were typed. The writer and the parser below are the only two places that
+# know the format.
+_DERIVED = re.compile(rf"^Preset '({PRESET_NAME_RULE})' with overrides: (.+)$", re.DOTALL)
+_OVERRIDE_SEPARATOR = "; "
+_SET, _AXIS = "--set ", "--axis "
+
+
+class Overrides(NamedTuple):
+    """The preset an experiment was made from and the overrides given to `exp init`."""
+
+    preset: str
+    sets: list[str]  # "key=value" as typed
+    axes: list[str]  # "path=[values]" as typed
+
+
+def derived_description(preset_name: str, sets: list[str], axes: list[str]) -> str:
+    """What an experiment made from a preset with overrides says about itself: the preset and
+    each override as it was given (`parse_derived_description` reads it back)."""
+    given = [_SET + item for item in sets] + [_AXIS + item for item in axes]
+    return f"Preset {preset_name!r} with overrides: {_OVERRIDE_SEPARATOR.join(given)}"
+
+
+def parse_derived_description(description: str | None) -> Overrides | None:
+    """The `Overrides` of a description `derived_description` wrote; None for any other text.
+    ValueError for a description in that form whose overrides do not parse (an override whose
+    value contains the separator "; " cannot be read back)."""
+    match = _DERIVED.match(description or "")
+    if match is None:
+        return None
+    sets, axes = [], []
+    for item in match[2].split(_OVERRIDE_SEPARATOR):
+        if item.startswith(_SET):
+            sets.append(item.removeprefix(_SET))
+        elif item.startswith(_AXIS):
+            axes.append(item.removeprefix(_AXIS))
+        else:
+            raise ValueError(
+                f"cannot read the override {item!r} of the description {description!r}"
+            )
+    return Overrides(match[1], sets, axes)
+
+
 def exp_path(root: Path) -> Path:
     return Path(root) / EXP_FILE
 
 
+# Fields left out of exp.json while they hold the value every exp.json written before they
+# existed implies, so an absent field means that value: dotted path -> that value.
+EXP_JSON_OMITTED_AT_DEFAULT: dict[str, Any] = {
+    "description": None,
+    "B": NetConfig().B,
+    "base_B": None,
+    "init": NetConfig().init,
+    "linear_teacher.teacher": LinearTeacherParams.model_fields["teacher"].default,
+    "spatial.parametrisation": SpatialConfig().parametrisation,
+    "monitor_kind": TrainConfig().monitor_kind,
+}
+
+
 def exp_text(exp: ExpConfig) -> str:
-    """The text of exp.json. `description` is left out when None and `B` when it is the library
-    default, so exp.json files written before those fields existed (and the pinned texts in
-    test_phase_transition_preset.py) stay byte-identical; an absent `B` therefore means the
+    """The text of exp.json, without the fields of `EXP_JSON_OMITTED_AT_DEFAULT` that hold
+    their defaults (`fct.schema.exclude_at_default`): an exp.json holds only what departs from
+    them, files written before those fields existed (and the pinned texts in
+    test_phase_transition_preset.py) stay byte-identical, and an absent field means its
     default."""
-    exclude = set()
-    if exp.description is None:
-        exclude.add("description")
-    if exp.B == NetConfig().B:
-        exclude.add("B")
+    exclude = exclude_at_default(exp, EXP_JSON_OMITTED_AT_DEFAULT)
     return exp.model_dump_json(indent=2, exclude=exclude) + "\n"
 
 
@@ -388,7 +513,9 @@ def save_exp(exp: ExpConfig, root: Path) -> None:
 
 def same_experiment(a: ExpConfig, b: ExpConfig) -> bool:
     """Whether two experiments are the same one: every field equal except the description,
-    which is documentation and may be edited without changing what runs."""
+    which is documentation and may be edited without changing what runs. base_B is compared:
+    it is the size the settings were designed with, which sets their accuracy budget, so two
+    experiments that run the same B but were designed at different sizes are not the same."""
     return a.model_dump(exclude={"description"}) == b.model_dump(exclude={"description"})
 
 
@@ -479,7 +606,9 @@ def _base_config(exp: ExpConfig, task: str) -> Config:
     """The shared part of every setting's `Config`; the axes are written over it."""
     return Config(
         data=data_config(exp, task),
-        net=NetConfig(N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, B=exp.B, seed=exp.seeds.net),
+        net=NetConfig(
+            N=exp.N, L=exp.L, g=exp.g, phi=exp.phi, B=exp.B, init=exp.init, seed=exp.seeds.net
+        ),
         train=TrainConfig(
             n_epochs=exp.n_epochs,
             lr=exp.lr,
@@ -493,6 +622,7 @@ def _base_config(exp: ExpConfig, task: str) -> Config:
             monitor_int=exp.monitor_int,
             monitor_bins=exp.monitor_bins,
             monitor_shuffles=exp.monitor_shuffles,
+            monitor_kind=exp.monitor_kind,
         ),
         meanfield=exp.meanfield,
         spatial=exp.spatial,
@@ -548,6 +678,34 @@ def _validate_combinations(exp: ExpConfig) -> None:
     for setting in expand(exp):
         context = f"setting {setting.index} {setting.axes}"
         _config_or_value_error(exp, setting.axes, context)
+
+
+def _validate_spectrum_frames(exp: ExpConfig) -> None:
+    """Under the spectrum monitor, every setting's data has a latent frame: its task is
+    linear_teacher, and `latent_basis` accepts its latents. The latents are checked by building
+    each distinct dataset (on the CPU; small at linear-teacher sizes) and calling `latent_basis`
+    itself, so the rule is exactly the one the monitor applies when a setting starts training,
+    with no threshold copied here; an experiment that would fail there fails at load instead."""
+    if exp.monitor_kind != "spectrum":
+        return
+    checked: set[str] = set()
+    for setting in expand(exp):
+        cfg = _config_from(exp, setting.axes)
+        context = f'setting {setting.index} {setting.axes}: monitor_kind is "spectrum"'
+        if cfg.data.task != "linear_teacher":
+            raise ValueError(
+                f"{context}, which needs the latents of the linear_teacher task, but its task "
+                f"is {cfg.data.task!r}"
+            )
+        key = cfg.data.model_dump_json() + cfg.dtype
+        if key in checked:
+            continue
+        checked.add(key)
+        dataset = make_dataset(cfg.data, torch.device("cpu"), resolve_dtype(cfg.dtype))
+        try:
+            latent_basis(dataset.factors)
+        except ValueError as err:
+            raise ValueError(f"{context}: {err}") from err
 
 
 def _validate_axes(exp: ExpConfig, axes: dict[str, list]) -> None:
@@ -650,10 +808,6 @@ def exp_hash(exp: ExpConfig) -> str:
 
 
 # ---------------------------------------------------------------------------- disk
-def _train_hash(cfg: Config) -> str:
-    return cfg.section_hash("data", "net", "train")
-
-
 def _check_stage(stage: str) -> None:
     if stage not in STAGES:
         raise ValueError(f"unknown stage {stage!r}; valid: {list(STAGES)}")
@@ -678,15 +832,51 @@ def setting_status(root: Path, exp: ExpConfig, setting: Setting, stage: Stage = 
     written under those and the meanfield section. Otherwise as `_artefact_status`: stale
     is a final.pt written under another config (or unreadable), partial a checkpoint without a
     final.pt, else missing. A finished solve that ran without the net is also stale once the
-    net is trained (`_solved_without_net`): it lacks the comparison with the net."""
+    net is trained (`_solved_without_net`): it lacks the comparison with the net. "train" also
+    counts the members of final.pt against net.B (`_train_status`): a smaller ensemble of the
+    same config awaits its extension (partial), a larger one is stale."""
     _check_stage(stage)
     paths = cache_paths(setting_dir(root, setting))
     cfg = setting_config(exp, setting)
     if stage == "train":
-        return _artefact_status(paths.train, _train_hash(cfg))
+        return _train_status(paths.train, cfg)
     if _done_without_net(paths, cfg):
         return "stale"
     return _artefact_status(paths.meanfield, meanfield_hash(cfg))
+
+
+def _train_status(train_dir: Path, cfg: Config) -> Status:
+    """`_artefact_status` of the train stage, which also counts members: done needs final.pt to
+    carry this config's hash AND hold cfg.net.B members. A final.pt of fewer members, b,
+    written under this config with net.B = b is an ensemble awaiting the members an extension
+    added (`extend_experiment`): partial, and `run_setting` trains them. Any other final.pt,
+    one of more members included, is stale."""
+    status = _artefact_status(train_dir, train_hash(cfg))
+    final = train_dir / "final.pt"
+    if status not in ("done", "stale") or not final.exists():
+        return status
+    try:
+        members = trained_member_count(final)
+        found = read_config_hash(final)
+    except ValueError:  # unreadable, or not a net: nothing to reuse
+        return "stale"
+    if status == "done":
+        return "done" if members == cfg.net.B else "stale"
+    if members < cfg.net.B and found == train_hash(with_ensemble_size(cfg, members)):
+        return "partial"
+    return "stale"
+
+
+def setting_members(root: Path, exp: ExpConfig, setting: Setting) -> int | None:
+    """Members of the trained net in the setting's train/final.pt (1 for a single network);
+    None without a final.pt or for one that cannot be read."""
+    final = cache_paths(setting_dir(root, setting)).train / "final.pt"
+    if not final.exists():
+        return None
+    try:
+        return trained_member_count(final)
+    except ValueError:
+        return None
 
 
 def setting_statuses(
@@ -710,23 +900,58 @@ def _done_without_net(paths: CachePaths, cfg: Config) -> bool:
         return False
 
 
-def _write_config_once(cfg: Config, directory: Path) -> None:
-    """Write config.json for a new setting; fail if an existing one differs in anything but the
-    meanfield section, because the artefacts beside it belong to that config. The meanfield
-    section is the experiment's current solver (no training artefact depends on it, and `python -m
-    fct solve` reads it from here), so it is brought up to date."""
-    path = cache_paths(directory).config
-    if not path.exists():
-        save_config(cfg, path)
+def _write_or_reconcile_config(cfg: Config, directory: Path) -> None:
+    """Write config.json for a new setting. An existing one must equal `cfg` but for the
+    meanfield section and net.B, because the artefacts beside it belong to that config
+    (ExpError otherwise), and is then brought up to date. The meanfield section is the
+    experiment's current solver (no training artefact depends on it, and `python -m fct solve`
+    reads it from here). net.B follows exp.json unless `_net_B_refusal` objects (ExpError
+    naming net.B and the fix): it grows when the experiment is extended, and goes back if an
+    extension is backed out."""
+    paths = cache_paths(directory)
+    if not paths.config.exists():
+        save_config(cfg, paths.config)
         return
-    existing = load_config(path)
-    if existing.model_copy(update={"meanfield": cfg.meanfield}) != cfg:
+    existing = load_config(paths.config)
+    same_net = existing.net.model_copy(update={"B": cfg.net.B})
+    if existing.model_copy(update={"meanfield": cfg.meanfield, "net": same_net}) != cfg:
         raise ExpError(
-            f"{path} differs from the config exp.json builds for this setting; "
+            f"{paths.config} differs from the config exp.json builds for this setting; "
             "use a fresh ROOT or delete the setting directory"
         )
-    if existing.meanfield != cfg.meanfield:
-        save_config(cfg, path)
+    if existing.net.B != cfg.net.B:
+        refusal = _net_B_refusal(paths, existing.net.B, cfg.net.B)
+        if refusal is not None:
+            raise ExpError(
+                f"{paths.config}: net.B is {existing.net.B}, exp.json gives {cfg.net.B}; {refusal}"
+            )
+    if existing != cfg:
+        save_config(cfg, paths.config)
+
+
+def _net_B_refusal(paths: CachePaths, old_B: int, B: int) -> str | None:
+    """Why config.json may not take net.B = B (the fix included), or None if it may: an
+    original run part-way wrote its checkpoints for the old B (a finished run's leftover
+    checkpoint does not count), train/final.pt must be readable, and it must hold at most B
+    members (a smaller ensemble is extended, a larger one never shrinks)."""
+    final = paths.train / "final.pt"
+    if not final.exists():
+        if latest_checkpoint(paths.train) is None:
+            return None
+        return (
+            f"the training run in {paths.train} is part-way, with checkpoints for net.B={old_B}; "
+            f"set B back to {old_B} in exp.json and let the run finish, then grow it with "
+            "`fct exp extend`"
+        )
+    try:
+        members = trained_member_count(final)
+    except ValueError as err:
+        return f"its member count is unknown ({err}); delete {final} to train the setting again"
+    if members > B:
+        return (
+            f"{final} holds {members} members and an ensemble only grows; set B back to {members}"
+        )
+    return None
 
 
 def _setting_record(exp: ExpConfig, setting: Setting) -> dict:
@@ -814,6 +1039,40 @@ def find_setting_dir(root: Path, exp: ExpConfig, values: Mapping[str, Any]) -> P
     return matches[0]
 
 
+def extend_experiment(root: Path, by: int) -> ExpConfig:
+    """Grow every setting's ensemble by `by` members: rewrite ROOT/exp.json with B + by (and,
+    on the first extension, base_B = the B before it) and return the new experiment. Nothing
+    is trained here: `run_setting` (`exp run`, the SLURM array) then trains each done
+    setting's missing members and appends them to its final.pt;
+    settings not yet trained train all B + by from scratch.
+
+    ExpError, leaving exp.json as it was, if `by` < 1, if net.B is an axis (even of one value:
+    it names the setting directories), or if any setting's training is partial: a run part-way
+    wrote its checkpoints for the old B, and an extension part-way is a block of members that a
+    larger B would no longer match. Run those settings to the end first."""
+    if by < 1:
+        raise ExpError(f"extend by at least 1 member, got {by}")
+    exp = load_exp(root)
+    if B_AXIS in axes_of(exp):
+        # Even a one-valued axis: its value is in every setting's directory name and exp hash,
+        # so changing it would orphan the settings it is meant to grow.
+        raise ExpError(
+            f"{B_AXIS} is an axis of this experiment, so B is part of every setting's directory "
+            "name and exp hash and cannot change under existing settings; only the shared field "
+            "B can be extended"
+        )
+    partial = [i for i, _, status in setting_statuses(root, exp) if status == "partial"]
+    if partial:
+        raise ExpError(
+            f"cannot extend while training is partial in settings {partial}; run them to the "
+            f"end first (`python -m fct exp run {root}`)"
+        )
+    base_B = exp.B if exp.base_B is None else exp.base_B  # the first extension records it
+    extended = ExpConfig.model_validate({**exp.model_dump(), "B": exp.B + by, "base_B": base_B})
+    save_exp(extended, root)
+    return extended
+
+
 _STAGE_DIRS = {"train": "train", "solve": "meanfield"}
 _STAGE_SECTIONS = {
     "train": "(data, net or train sections, or model or loss definition)",
@@ -835,7 +1094,12 @@ def run_setting(
     StaleCacheError if the stage was finished under another config or loss definition: its
     results would silently stand in for a run of the current one. ExpError for the solve
     stage of an ensemble setting (net.B > 1), before anything is written, whether or not it is
-    trained yet: the solve compares with one trained network."""
+    trained yet: the solve compares with one trained network.
+
+    A train/final.pt of fewer members than net.B, written under this config otherwise (the
+    experiment was extended, `extend_experiment`), gains the members it lacks
+    (`fct.train.extend_trained`); ExpError, before anything is written, for one of more
+    members than net.B: an ensemble only grows."""
     _check_stage(stage)
     setting = get_setting(exp, index)
     directory = setting_dir(root, setting)
@@ -845,7 +1109,9 @@ def run_setting(
             f"setting {index}: the solve compares with one trained network, but the setting "
             f"is an ensemble of net.B={cfg.net.B}; solving ensembles is not supported"
         )
-    _write_config_once(cfg, directory)
+    if stage == "train":
+        _check_members_fit(root, exp, setting, cfg)
+    _write_or_reconcile_config(cfg, directory)
     _write_setting_once(exp, setting, directory)
     status = setting_status(root, exp, setting, stage)
     paths = cache_paths(directory)
@@ -862,6 +1128,9 @@ def run_setting(
             "ROOT or use a fresh one."
         )
     if status == "done":
+        if stage == "train":  # what an extension interrupted after its append (or backed out) left
+            remove_stale_checkpoints(paths.train, train_hash(cfg), log)
+            remove_staging(paths.train, log)
         log(f"setting {index} ({directory}) already done ({stage})")
         return
     if stage == "solve" and cfg.meanfield.n_points > cfg.data.P:
@@ -872,9 +1141,33 @@ def run_setting(
     log(f"setting {index}: {directory} ({stage})")
     dataset = get_dataset(directory, cfg)
     if stage == "train":
-        train_from_config(cfg, dataset, directory, log=log, monitor=make_mir_monitor(dataset, cfg))
+        _train_setting(cfg, dataset, directory, log)
     else:
         _solve_setting(cfg, dataset, directory, log)
+
+
+def _check_members_fit(root: Path, exp: ExpConfig, setting: Setting, cfg: Config) -> None:
+    """ExpError if train/final.pt holds more members than net.B: an ensemble only grows."""
+    members = setting_members(root, exp, setting)
+    if members is not None and members > cfg.net.B:
+        raise ExpError(
+            f"setting {setting.index}: {setting_dir(root, setting)}/train/final.pt holds "
+            f"{members} members but exp.json gives net.B={cfg.net.B}; an ensemble only grows "
+            f"(`fct exp extend`), so set B back to {members} or use a fresh ROOT"
+        )
+
+
+def _train_setting(
+    cfg: Config, dataset: Dataset, directory: Path, log: Callable[[str], None]
+) -> None:
+    """Train the setting's net with the monitor of train.monitor_kind: from scratch (resuming
+    a checkpoint), or, when train/final.pt already holds fewer members than net.B (the
+    experiment was extended), by training the members it lacks (`extend_trained`)."""
+    monitor = make_monitor(dataset, cfg)
+    if (cache_paths(directory).train / "final.pt").exists():
+        extend_trained(cfg, dataset, directory, log=log, monitor=monitor)
+    else:
+        train_from_config(cfg, dataset, directory, log=log, monitor=monitor)
 
 
 def _check_checkpoint_matches_net(directory: Path, net) -> None:

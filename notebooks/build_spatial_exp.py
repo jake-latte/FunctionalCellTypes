@@ -9,8 +9,8 @@ and loads its trained net and training set. It then shows the figures of the spa
 prior kernels, the eigenvalue floor, the loss curves, example outputs, the first-layer kernels and
 weights, the data kernels A next to the latent kernel B, the chosen trials' latents, the Phi pair
 grids, the tuning of every neuron and the information and rate overlaps). The Phi kernels and the
-example outputs come from the held-out latent-lattice test set (3^k points, one per sign pattern of
-the latents), the tuning and the loss curves from the training samples and history. A setting that
+example outputs come from the held-out latent-lattice test set (3^k points: each latent at an end
+of its interval or at the midpoint), the tuning and the loss curves from the training samples and history. A setting that
 is not trained is reported in the cells and only its prior is drawn.
 
 The cells are those of `build_spatial.py` (imported, so the two notebooks cannot drift) with
@@ -48,9 +48,10 @@ indexed kernels $\Phi^{(l)}$, and the tuning of every neuron.
 
 Two things differ from the spatial notebook. The kernels $\Phi^{(l)}$ (the data kernels $A^{(l)}$,
 the chosen trials and the pair grids) and the example outputs are computed on the **test set**: the
-$3^k$ points of the latent lattice $\{-a, 0, a\}^k$, one per sign pattern of the $k$ latents, with
-inputs and targets from the training samples' teacher, so every pair of patterns appears exactly
-once and none was trained on. The loss curves are the training history, and the tuning and
+$3^k$ points of the latent lattice $\{z_\mathrm{lo}, z_\mathrm{mid}, z_\mathrm{hi}\}^k$ ($z_\mathrm{lo}$ =
+`latent_min`, $z_\mathrm{hi}$ = `latent_max`, $z_\mathrm{mid}$ their midpoint), with inputs and
+targets from the training samples' teacher, so every pair of lattice points appears exactly once
+and none was trained on. The loss curves are the training history, and the tuning and
 information overlaps use the training samples, as in the spatial notebook. The readout is
 $\phi(h^{(L)})$ and $\psi^{(l)} = \phi(h^{(l)})$ on every hidden layer.
 

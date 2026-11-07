@@ -20,6 +20,7 @@ pre) orientation; the readout `V` is stored (pre, post), so layer L's weight is 
 """
 
 import math
+import pickle
 from collections.abc import Sequence
 from typing import NamedTuple
 
@@ -31,13 +32,13 @@ from fct.cache import cache_paths
 from fct.config import DataConfig, resolve_device, resolve_dtype
 from fct.data import Dataset, get_dataset, make_dataset
 from fct.exp_view import tuning_view
-from fct.model import MLP, EnsembleMLP
+from fct.model import MLP, EnsembleMLP, effective_weights
 from fct.modularity import information_overlap, rate_overlap
 from fct.spatial import LayerSpace
 from fct.spatial_exp import ExpSetting, select_setting
 from fct.spatial_view import data_kernels, empirical_kernels, layer_spaces
 from fct.tasks import resample
-from fct.train import History, load_weights
+from fct.train import History, load_trained_members, load_weights
 
 # History entries with a member axis that the notebook shows as mean +- sem.
 ENSEMBLE_KEYS = ("loss", "mse", "weight_l2", "rate_l2")
@@ -51,8 +52,10 @@ TEST_SEED_OFFSET = 1_000_003
 class PhaseRun(NamedTuple):
     """One setting of the experiment. `net` and `history` are None for a setting with no weights
     (status "missing" or "stale"); a "partial" one holds the latest checkpoint, `epoch` epochs
-    in. `dataset` is the training set (generated in memory, never written, when no usable file
-    is cached)."""
+    in, or, when its extension is pending (train/final.pt holds fewer members than net.B), the
+    members final.pt holds, all n_epochs in. `dataset` is the training set (generated in
+    memory, never written, when no usable file is cached). `note` says why a pending
+    extension's final.pt is not shown (unreadable or stale, as while an extension appends)."""
 
     setting: ExpSetting
     net: EnsembleMLP | None
@@ -60,14 +63,47 @@ class PhaseRun(NamedTuple):
     epoch: int  # epochs completed by `net`; 0 without weights
     spaces: list[LayerSpace]  # built from the config alone, so available for any setting
     dataset: Dataset
+    note: str | None = None
 
 
-def _load_weights(chosen: ExpSetting) -> tuple[EnsembleMLP | None, History | None, int]:
+# What torch.load and the artefact loader raise for a truncated, foreign or stale file
+# (StaleCacheError is a RuntimeError); anything else is a bug and propagates.
+_UNREADABLE = (OSError, ValueError, TypeError, RuntimeError, EOFError, pickle.UnpicklingError)
+
+Weights = tuple[EnsembleMLP | None, History | None, int, str | None]
+
+
+def _load_weights(chosen: ExpSetting) -> Weights:
+    """(net, history, epochs completed, note) of a setting; see `PhaseRun`."""
     if chosen.status not in ("done", "partial"):
-        return None, None, 0
+        return None, None, 0, None
     cfg = chosen.cfg
     device, dtype = resolve_device(cfg), resolve_dtype(cfg.dtype)
-    return load_weights(chosen.directory, cfg, device, dtype, chosen.status == "done")
+    if chosen.status == "partial" and (cache_paths(chosen.directory).train / "final.pt").exists():
+        return _load_pending_extension(chosen, device, dtype)
+    net, history, epoch = load_weights(
+        chosen.directory, cfg, device, dtype, chosen.status == "done"
+    )
+    return net, history, epoch, None
+
+
+def _load_pending_extension(chosen: ExpSetting, device, dtype) -> Weights:
+    """The members train/final.pt holds while an extension is pending, all n_epochs in. One
+    that cannot be read (or has just been replaced by the append) is a note, not an error: a
+    notebook reads while jobs run. ValueError for a single network: phase_view reads
+    ensembles."""
+    cfg = chosen.cfg
+    try:
+        net, history = load_trained_members(chosen.directory, cfg, device, dtype)
+    except _UNREADABLE as err:
+        return None, None, 0, f"train/final.pt not shown: {type(err).__name__}: {err}"
+    if not isinstance(net, EnsembleMLP):
+        # ValueError, as `load_phase_run` raises for any setting that is not an ensemble.
+        raise ValueError(  # noqa: TRY004
+            f"{chosen.directory}/train/final.pt holds a single network awaiting its extension "
+            f"to net.B={cfg.net.B}; phase_view reads ensembles, so run the extension first"
+        )
+    return net, history, cfg.train.n_epochs, None
 
 
 def _training_set(chosen: ExpSetting, has_weights: bool) -> Dataset:
@@ -93,9 +129,9 @@ def load_phase_run(root, values, device: str = "cpu") -> PhaseRun:
             f"phase_view reads ensembles, but net.B = {cfg.net.B} for {dict(values)}; use "
             "fct.spatial_exp for single networks"
         )
-    net, history, epoch = _load_weights(chosen)
+    net, history, epoch, note = _load_weights(chosen)
     dataset = _training_set(chosen, net is not None)
-    return PhaseRun(chosen, net, history, epoch, layer_spaces(cfg), dataset)
+    return PhaseRun(chosen, net, history, epoch, layer_spaces(cfg), dataset, note)
 
 
 # --------------------------------------------------------------------------- unit order
@@ -123,7 +159,8 @@ class RandomTestSet(NamedTuple):
 def _check_matches_training(data_cfg: DataConfig, train: Dataset) -> None:
     """ValueError unless `train` is exactly the set `data_cfg` generates: the same inputs and
     targets (the data depend on the config and dtype only, so they are regenerated in memory on
-    the CPU and compared), which fixes P, D_in, n_latents, latent range and seed at once."""
+    the CPU and compared), which fixes P, D_in, n_latents, the latent interval, the teacher map
+    type and seed at once."""
     expected = make_dataset(data_cfg, torch.device("cpu"), train.x.dtype)
     same = (
         expected.x.shape == train.x.shape
@@ -135,7 +172,8 @@ def _check_matches_training(data_cfg: DataConfig, train: Dataset) -> None:
         raise ValueError(
             "data_cfg does not match the training set: regenerating it from data_cfg "
             f"(P={data_cfg.P}, D_in={data_cfg.D_in}, n_latents={data_cfg.n_latents}, "
-            f"latent_range={data_cfg.latent_range}, seed={data_cfg.seed}) gives different data"
+            f"latent_min={data_cfg.latent_min}, latent_max={data_cfg.latent_max}, "
+            f"teacher={data_cfg.teacher}, seed={data_cfg.seed}) gives different data"
         )
 
 
@@ -143,7 +181,7 @@ def random_test_set(
     data_cfg: DataConfig, train: Dataset, n_points: int, seed: int | None = None
 ) -> RandomTestSet:
     """`n_points` new samples of the linear teacher `train` was drawn from (same W_X, W_Y,
-    fresh latents uniform on [-latent_range, latent_range]), for the tuning and MIR
+    fresh latents uniform on [latent_min, latent_max]), for the tuning and MIR
     calculation: more points lower the MIR's plug-in noise floor. `seed` defaults to the
     training data seed + `TEST_SEED_OFFSET`. ValueError if `data_cfg` is not the config of
     `train` (see `_check_matches_training`), if the seed equals the training seed, or if
@@ -198,11 +236,19 @@ def covariance_factors(space: LayerSpace, weight_lambda: float) -> FactorPair:
     return FactorPair(space.post.K / root, space.pre.K / root)
 
 
-def effective_covariance_factors(space: LayerSpace, weight_lambda: float) -> FactorPair:
-    """M^-1 / sqrt(lambda_w) on each side, whose Kronecker product is (lambda_w M^post (x)
-    M^pre)^-1: the weight covariance the training actually samples, since the loss penalises W
-    by exactly that quadratic form. It is K with its eigenvalues raised to the penalty's floor."""
+def effective_covariance_factors(
+    space: LayerSpace, weight_lambda: float, *, whitened: bool
+) -> FactorPair:
+    """The weight covariance the training actually samples, split as two factors / sqrt(lambda_w).
+    Under the penalty (`whitened` False) it is M^-1 on each side, whose Kronecker product is
+    (lambda_w M^post (x) M^pre)^-1, since the loss penalises W by exactly that quadratic form:
+    K with its eigenvalues raised to the penalty's floor. Under the whitened parametrisation it
+    is K itself, S^2 with S = K^{1/2} (eigenvalues clamped at 0, nothing floored), since W = S xi
+    S with xi ~ N(0, I / lambda_w). `whitened` is required (`Config.is_whitened` of the run) so
+    that no caller gets the floored kernel for a whitened run by default."""
     root = _check_lambda(weight_lambda)
+    if whitened:
+        return FactorPair(space.post.S @ space.post.S / root, space.pre.S @ space.pre.S / root)
     return FactorPair(space.post.M.inverse() / root, space.pre.M.inverse() / root)
 
 
@@ -237,7 +283,8 @@ class LayerPrior(NamedTuple):
     of each factor, descending. `penalty_spectra` holds the n_eig SMALLEST eigenvalues of the
     penalty factors, ascending: the penalty's largest eigenvalues are all the floor value
     (a flat line), while its smallest are the reciprocals of the covariance's largest.
-    `floors` says how many eigenvalues were floored and where the floor lies."""
+    `floors` says how many eigenvalues were floored and where the floor lies (the penalty's
+    floor; under `whitened` the effective covariance is the exact K and nothing is floored)."""
 
     layer: int
     covariance: FactorPair
@@ -247,6 +294,7 @@ class LayerPrior(NamedTuple):
     effective_covariance_spectra: FactorPair
     penalty_spectra: FactorPair
     floors: FloorPair
+    whitened: bool
 
 
 def _pair(f, factors: FactorPair) -> FactorPair:
@@ -261,15 +309,16 @@ def _population_floor(population, weight_lambda: float) -> PopulationFloor:
 
 
 def layer_priors(
-    spaces: Sequence[LayerSpace], weight_lambda: float, n_eig: int
+    spaces: Sequence[LayerSpace], weight_lambda: float, n_eig: int, *, whitened: bool
 ) -> list[LayerPrior]:
     """Every weight layer's covariance, effective covariance and penalty factors
-    (`covariance_factors`, `effective_covariance_factors`, `penalty_factors`) with their
-    leading spectra (see `LayerPrior` for which end each keeps) and the floor of each side."""
+    (`covariance_factors`, `effective_covariance_factors` under the run's parametrisation,
+    `penalty_factors`) with their leading spectra (see `LayerPrior` for which end each keeps)
+    and the floor of each side."""
 
     def prior(space: LayerSpace) -> LayerPrior:
         cov = covariance_factors(space, weight_lambda)
-        eff = effective_covariance_factors(space, weight_lambda)
+        eff = effective_covariance_factors(space, weight_lambda, whitened=whitened)
         pen = penalty_factors(space, weight_lambda)
         return LayerPrior(
             space.layer,
@@ -283,6 +332,7 @@ def layer_priors(
                 _population_floor(space.post, weight_lambda),
                 _population_floor(space.pre, weight_lambda),
             ),
+            whitened,
         )
 
     return [prior(space) for space in spaces]
@@ -362,10 +412,12 @@ def _overlaps(
 
 
 def weight_kernels(net: MLP) -> list[KernelPair]:
-    """`empirical_kernels` of every weight of `net` in (post, pre) orientation (layers 0..L; the
-    readout is `V.T`), in float64 on the CPU like the prior kernels they are compared with."""
-    weights = [net.U, *net.J, net.V.T]
-    return [KernelPair(*empirical_kernels(W.detach().cpu().to(torch.float64))) for W in weights]
+    """`empirical_kernels` of every effective weight of `net` (`fct.model.effective_weights`:
+    S xi S under the whitened prior) in (post, pre) orientation (layers 0..L; the readout is
+    `V.T`), in float64 on the CPU like the prior kernels they are compared with."""
+    W = effective_weights(net)
+    weights = [W["U"], *(W[f"J.{k}"] for k in range(net.L - 1)), W["V"].T]
+    return [KernelPair(*empirical_kernels(w.detach().cpu().to(torch.float64))) for w in weights]
 
 
 def member_view(
