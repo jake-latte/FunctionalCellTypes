@@ -469,12 +469,11 @@ Common setting unless stated: linear activation, one hidden layer on a ring of $
 \end{enumerate}
 
 \paragraph{What \texttt{fct} does not yet match.}
-The numbers above assume the notes' model as stated. Four conventions differ in the \path{fct} code, and the follow-up item that maps these predictions onto \path{fct} has to resolve each:
+The numbers above assume the notes' model as stated. Three conventions differ in the \path{fct} code, and the follow-up item that maps these predictions onto \path{fct} has to resolve each:
 \begin{enumerate}[nosep]
   \item \emph{Centred latents.} \path{fct/tasks.py} draws $z_k$ uniform on $[-a,a]$: no mean direction, all $K$ modes degenerate at $s^2 = Pa^2/3$. Predictions 1--3 and 8 use the mean direction as the strong mode; with centred latents every mode has the same spectrum, and only 4--7 carry over unchanged (with $u_1,u_2,u_3$ any orthonormal basis of $\col(Z)$).
   \item \emph{Gaussian teacher.} $W_X$ and $W_Y$ have i.i.d.\ $\mathcal N(0,1/K)$ entries rather than orthonormal columns, so the ansatz is approximate (Section~\ref{sec:rederive}: $0.2\%$ on $c$ for a mild skew).
   \item \emph{No activity noise.} The notes' first layer carries $\eta^\mu_i\sim\mathcal N(0,\sigma^2)$ per pattern and neuron (\texttt{eq:ff-network}, integrated out in \texttt{eq:single-site-reg}); the forward pass of \path{fct/model.py} is deterministic, and its parameter \texttt{g} is the gain $g/\sqrt N$ on the recurrent weights, not a rate penalty. Without $\eta$ the activity $h^{(1)} = W^{(0)}X^\top/\sqrt m$ of a linear layer lies exactly in $\col(Z)$: the null-direction power and the floor $\sigma_0^2$ of Lemma~\ref{lem:floor} are entirely $\eta$'s, so predictions 4 and 5 are untestable as the code stands and the $\sigma^2$ of 1--3 and 7 must be read as $0$ (the limit of Section~\ref{sec:sigma0}, regular for the latent modes). Implementing $\eta$ means adding $\sigma\xi^\mu_i$, $\xi\sim\mathcal N(0,1)$ drawn fresh per $(\mu,i)$, to $h^{(1)}$ at every forward pass during sampling.
-  \item \emph{Rate penalty.} The notes' loss carries $\frac1\beta\mathcal P_{\mathrm{rates}} = \frac1{2\beta}\sum_{l,\mu,i,j}\phi^{(l)\mu}_iG^{(l)}_{i,j}\phi^{(l)\mu}_j$ with $G^{(l)} = rI$, i.e.\ $\frac{r}{2\beta}\sum\phi^2$; \path{fct/train.py} adds $\texttt{rate\_lambda}\sum_{l,\mu,i}\phi(h^{(l)\mu}_i)^2$ to a loss whose data term $\frac N2\,\mathrm{mse}$ equals the notes' $\frac N{2Pn}\sum(f-y)^2$, and samples $e^{-\beta L}$. The two agree with $\texttt{rate\_lambda} = r/(2\beta)$ (the \texttt{rate\_tilt} $= 2\beta\,\texttt{rate\_lambda}$ of \path{docs/design.md} is $r$), with \texttt{train.beta} the notes' $\beta$.
 \end{enumerate}
 
 \appendix
