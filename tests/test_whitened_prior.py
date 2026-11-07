@@ -496,10 +496,11 @@ def test_the_standard_draw_under_the_penalty_is_the_pinned_one():
 
 
 def test_the_penalty_prior_draw_has_the_floored_covariance():
-    """10^4 members of an ensemble under the penalty with init "prior": the sample covariance of
-    each weight is (K_fl^post (x) K_fl^pre) / weight_lambda, K_fl = M^{-1} the floored kernel
-    the penalty encodes (5%, against a relative standard error of 1.4%), along every
-    eigenvector of the target and entry by entry, and the floor moves some mode by more."""
+    """10^4 members of a two-layer ensemble under the penalty with init "prior": the sample
+    covariance of each weight, U, the hidden-to-hidden J.0 and V, is
+    (K_fl^rows (x) K_fl^cols) / weight_lambda, K_fl = M^{-1} the floored kernel the penalty
+    encodes (`_assert_covariance`: every entry and every eigenvector of the target), and the
+    floor moves some mode of each by more than a factor of 2."""
     weight_lambda, n_draws = 2.0, 10_000
     wide = SpatialConfig(
         input=PopulationSpec(kernel=KernelSpec(length_scale=0.2)),
@@ -508,28 +509,26 @@ def test_the_penalty_prior_draw_has_the_floored_covariance():
         min_rel_eig=1e-2,
     )
     cfg = Config(
-        net=NetConfig(N=N, L=1, g=1.0, phi="tanh", seed=5, B=n_draws, init="prior"),
+        net=NetConfig(N=N, L=2, g=1.0, phi="tanh", seed=5, B=n_draws, init="prior"),
         train=TrainConfig(weight_lambda=weight_lambda),
         spatial=wide,
     )
     net = make_net_from_config(cfg, D_IN, D_OUT, CPU, F64)
-    spaces = build_spaces(wide, m=D_IN, N=N, L=1, n_out=D_OUT)
+    spaces = build_spaces(wide, m=D_IN, N=N, L=2, n_out=D_OUT)
     assert spaces[0].post.report.n_floored > 0
-    for name, (post, pre) in {
+    populations = {  # (rows, cols) in the stored orientation: U, J (post, pre), V (pre, post)
         "U": (spaces[0].post, spaces[0].pre),
-        "V": (spaces[1].pre, spaces[1].post),
-    }.items():
-        W = dict(net.named_parameters())[name].detach().reshape(n_draws, -1)
-        floored = torch.kron(torch.linalg.inv(post.M), torch.linalg.inv(pre.M)) / weight_lambda
-        mode_variance, modes = torch.linalg.eigh(floored)
-        sample = W.T @ W / n_draws
-        assert torch.allclose(sample.diagonal(), floored.diagonal(), rtol=0.05, atol=0), name
-        projected = modes.T @ sample @ modes
-        assert torch.allclose(projected.diagonal(), mode_variance, rtol=0.05, atol=0), name
-        off = projected - torch.diag(projected.diagonal())
-        scale = torch.sqrt(mode_variance[:, None] * mode_variance[None, :])
-        assert (off.abs() / scale).max() < 0.06, name  # uncorrelated modes: ~N(0, 1/100)
-        exact = torch.kron(post.K, pre.K) / weight_lambda
+        "J.0": (spaces[1].post, spaces[1].pre),
+        "V": (spaces[2].pre, spaces[2].post),
+    }
+    parameters = dict(net.named_parameters())
+    assert set(parameters) == set(populations)
+    for name, (rows, cols) in populations.items():
+        W = parameters[name].detach().reshape(n_draws, -1)
+        floored = torch.kron(torch.linalg.inv(rows.M), torch.linalg.inv(cols.M)) / weight_lambda
+        mode_variance = _assert_covariance(W, floored)
+        _, modes = torch.linalg.eigh(floored)
+        exact = torch.kron(rows.K, cols.K) / weight_lambda
         assert ((modes.T @ exact @ modes).diagonal() / mode_variance).min() < 0.5, name
 
 
