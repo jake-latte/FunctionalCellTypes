@@ -1339,8 +1339,9 @@ history keys and checkpoint layout; how their dynamics differ is below ("Dynamic
     vec xi` is linear, so a step `-lr grad_xi L + noise` is `-lr (K_post (x) K_pre) grad_W L` plus noise of covariance
     `(2 lr / beta) (K_post (x) K_pre)` in `W`. The stationary law is the same `exp(-beta L(W))`, up to the eigenvalue
     floor of the penalty path; the relaxation times differ. Under the penalty a prior mode of variance `lambda`
-    relaxes in about `beta lambda / (weight_lambda lr)` steps (the soft modes fastest, the stiff ones setting the step
-    bound); under whitening every prior mode relaxes in `beta / (weight_lambda lr)` steps.
+    relaxes in about `beta lambda / (weight_lambda lr)` steps: the fine modes (small `lambda_q`, the largest prior
+    curvature `weight_lambda / (beta lambda_q)`) relax fastest and set the step bound, and the coarse modes (large
+    `lambda_q`) relax slowest. Under whitening every prior mode relaxes in `beta / (weight_lambda lr)` steps.
   - The same `train.lr` is therefore a different step in `W` on the two paths (scaled by `K_post (x) K_pre` under
     whitening). Adam is not invariant under the reparametrisation (its moments are elementwise, in `xi` or in `W`), so
     its trajectories differ; only its fixed point, the MAP, agrees, up to the floor.
