@@ -267,7 +267,9 @@ def test_measure_final_refuses_a_single_member(law):
 
 # ------------------------------------------------------------------ the angles (K = 3 only)
 def test_at_k_below_3_there_are_no_angles_whatever_is_given(law):
-    m = lr.measure_final(law, _members(law, 8, seed=0), torch.zeros(8, 2), torch.ones(8, N_THETA_BINS))
+    m = lr.measure_final(
+        law, _members(law, 8, seed=0), torch.zeros(8, 2), torch.ones(8, N_THETA_BINS)
+    )
     assert m.angles is None
 
 

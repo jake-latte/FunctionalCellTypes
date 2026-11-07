@@ -402,7 +402,6 @@ def preset(name: str, directory: Path | str | None = None) -> ExpConfig:
         raise PresetError(f"the preset file {path} is not a valid experiment: {err}") from err
 
 
-
 # ---------------------------------------------------------------------------- derived descriptions
 # An experiment made from a preset with overrides (`exp init --preset NAME --set ... --axis ...`)
 # no longer fits the preset's description, so it is given one that names the preset and the
@@ -442,8 +441,11 @@ def parse_derived_description(description: str | None) -> Overrides | None:
         elif item.startswith(_AXIS):
             axes.append(item.removeprefix(_AXIS))
         else:
-            raise ValueError(f"cannot read the override {item!r} of the description {description!r}")
+            raise ValueError(
+                f"cannot read the override {item!r} of the description {description!r}"
+            )
     return Overrides(match[1], sets, axes)
+
 
 def exp_path(root: Path) -> Path:
     return Path(root) / EXP_FILE
