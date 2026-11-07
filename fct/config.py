@@ -26,7 +26,7 @@ from fct.tasks import TASK_SPECS
 # under another definition are rejected as stale instead of mixed with new ones. Increase it
 # whenever the loss changes in a way the TrainConfig fields do not express. History: 1 summed
 # the rate penalty over the samples, 2 averaged it over them, 3 sums it again, 4 scales the
-# weight prior by 1 / (2 beta) (beta = 1 for Adam), 5: rate penalty scaled by 1/(2 beta).
+# weight prior by 1 / (2 beta) (beta = 1 for Adam); 5: rate penalty scaled by 1/(2 beta).
 LOSS_VERSION = 5
 # The last LOSS_VERSION that changed the loss of a config without a rate penalty
 # (train.rate_lambda = 0), which is the version hashed for such a config (`hashed_loss_version`):
@@ -496,8 +496,9 @@ class Config(StrictModel):
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
         belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and the
-        loss version when "train" is (`hashed_loss_version`: version 4 without a rate penalty). `train.optimizer` / `train.beta` are left out of the
-        hash for the adam optimiser, and every field of `HASH_OMITTED_AT_DEFAULT` while it holds
+        loss version when "train" is (`hashed_loss_version`: `RATE_FREE_LOSS_VERSION` without a
+        rate penalty). `train.optimizer` / `train.beta` are left out of the hash for the adam
+        optimiser, and every field of `HASH_OMITTED_AT_DEFAULT` while it holds
         its default (`fct.schema.exclude_at_default`), so a config that does not set such a
         field hashes as it did before the field existed. The `spatial` section enters with
         "train" only when it is set. The meanfield section enters as
