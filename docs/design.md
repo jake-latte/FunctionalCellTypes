@@ -64,7 +64,7 @@ CACHE_DIR/config.json                # written by `init`; the single source of h
 CACHE_DIR/data/dataset.pt            # generated task data
 CACHE_DIR/train/ckpt_<epoch:06d>.pt  # periodic checkpoint (only the latest kept)
 CACHE_DIR/train/final.pt             # final trained model (+ history)
-CACHE_DIR/train/extend_<b0>-<b1>/    # members b0 .. b1-1 of an ensemble being extended (own ckpt_*.pt and final.pt); deleted once appended
+CACHE_DIR/train/extend_<b0>-<B>/     # members b0 .. B-1 of an ensemble being extended (own ckpt_*.pt and final.pt); deleted once appended
 CACHE_DIR/meanfield/ckpt_<outer:05d>.pt, CACHE_DIR/meanfield/final.pt
 CACHE_DIR/analysis/<name>.pt         # intermediate analysis results
 CACHE_DIR/figures/<name>.png
@@ -407,8 +407,11 @@ def extend_trained(cfg, dataset, cache_dir, log=print, monitor=None) -> tuple[Ne
 def append_members(old: dict, new: dict) -> dict        # pure: the payload of old's members followed by new's (state dict, Adam moments, every per-member history entry concatenated; epoch / monitor_epoch must agree; a single network counts as one member); ValueError if they do not fit
 def trained_member_count(path) -> int                   # members of a train artefact (1 for a single network), from its U alone; ValueError if unreadable or not a net
 def extension_seed(seed, b0) -> int                     # the global-RNG seed of an extension's staging run: first 8 bytes of sha256("fct.train.extension:<seed>:<b0>"); b0 >= 1
-def staging_dir(train_dir, b0, b1) -> Path; remove_staging(train_dir, keep=None)   # train/extend_<b0>-<b1>/ (half-open); delete every staging directory but `keep`
+def staging_dir(train_dir, b0, B) -> Path; remove_staging(train_dir, log=print, keep=None)   # train/extend_<b0>-<B>/ (half-open); delete, logging each, every staging directory but `keep`
 def with_ensemble_size(cfg, B) -> Config                # cfg with net.B = B
+def load_trained_members(cache_dir, cfg, device, dtype) -> tuple[Net, History]   # load_trained of the members final.pt holds, whatever cfg.net.B says (a pending extension's b0)
+def train_hash(cfg) -> str                              # section_hash("data", "net", "train"): the stamp of every train artefact (checkpoints, final.pt)
+SHARED_HISTORY_KEYS = ("epoch", "monitor_epoch")         # the history keys without a member axis
 ```
 
 Ensembles (`net.B > 1`). One run trains B copies of the network that share the dataset and differ in their initial
@@ -432,45 +435,54 @@ commands, `report.load_setting_result`, `exp_view.load_setting_data` and `lrtune
 mean-field `solve` raises for an ensemble, and the experiment's solve stage raises `ExpError` for an ensemble setting
 before writing anything, trained or not (its solve status stays "missing").
 
-Growing an ensemble. The members of an ensemble are its posterior samples (one network per member: a single SGLD chain
-is not trusted to give several independent ones), so an experiment that is done can be given more members without
-retraining the ones it has: `fct exp extend ROOT --by K` (`exp.extend_experiment`) rewrites exp.json with `B + K`, and
-`exp run` (or the SLURM array, unchanged) then calls `extend_trained` for every setting whose final.pt holds b0 < B
-members. The contract:
+Growing an ensemble. The members of an ensemble are its posterior samples (one network per member: a single SGLD
+chain is not trusted to give several independent ones), so an experiment that is done can be given more members
+without retraining the ones it has: `fct exp extend ROOT --by K` (`exp.extend_experiment`) rewrites exp.json with
+`B + K`, and `exp run` (or the SLURM array, unchanged) then calls `extend_trained` for every setting whose final.pt
+holds b0 < B members, adding K = B - b0. The contract:
 
 - Members b0 .. B-1 are built by `make_net_from_config(cfg, ..., members=range(b0, B))`, so their initial weights are
-  those of a from-scratch run of B (`member_seed` does not depend on B), and train as an ensemble of their own with
-  `train`'s machinery in `train/extend_<b0>-<b1>/` (b1 = B, half-open), under the staging config (`net.B = B - b0`,
+  those of a from-scratch run of B (`member_seed` does not depend on B), and train as an ensemble of their own (an
+  `MLP` for K = 1) with `train`'s machinery in `train/extend_<b0>-<B>/`, under the staging config (`net.B = K`,
   `train.seed = extension_seed(train.seed, b0)`) whose hash stamps the staging checkpoints: an interrupted extension
-  resumes from them exactly, RNG state included. The MIR monitor is built from the setting's config, so it sees each new
-  member exactly as a from-scratch run would.
+  resumes from them exactly, RNG state included. The monitor (`make_monitor`, of `train.monitor_kind`: MIR or
+  spectrum) is built from the setting's config, so it sees each new member exactly as a from-scratch run would.
 - Then `append_members` concatenates, along the member axis, the state dict (exactly the parameters: a whitened net's
-  factors are non-persistent buffers rebuilt from the config), Adam's moments, and every history entry but `epoch` and
-  `monitor_epoch` (which must agree), so each per-member list has B entries and each `monitor_<key>` entry a member axis
-  of B; the RNG state stays the old run's. final.pt is replaced (atomically) by the result stamped with the hash of the
-  new config: it IS the B-member artefact, and `net.B` stays in the train hash, so no existing cache changes hash. The
-  staging directory is deleted after; a crash in between leaves a done setting whose leftover staging directory the
-  next `run_setting` removes. A single network (b0 = 1) and a block of one (K = 1, trained as an `MLP`) gain their
-  member axis on append.
-- Equality with a from-scratch run of B. Under Adam (no noise) members b0 .. B-1 equal those of a from-scratch run bit for
-  bit, history and monitor records included (`tests/test_ensemble_extend.py`), for K >= 2; a block of one trains as an
-  `MLP`, whose forward pass equals the batched one to round-off. Under SGLD the noise is ONE global stream over the whole ensemble (the default; the
-  per-member streams of `tests/test_ensemble.py` exist only as an injected `noise` in tests), so a from-scratch run of
-  B gives member b a slice of draws of shape (B, ...) that no run of fewer members can reproduce. The staging run
-  therefore draws from a stream of its own (`extension_seed`; reseeding with `train.seed` would hand the new members the
-  old members' noise rearranged): the new members start from the same weights as the from-scratch ones (everything
-  recorded before the first step agrees bit for bit) and are independent samples of the same law, equal in
+  factors are non-persistent buffers rebuilt from the config), Adam's moments, and every history entry but
+  `SHARED_HISTORY_KEYS` (which must agree), so each per-member list has B entries and each `monitor_<key>` entry (MIR
+  or spectrum, per-layer lists of each member) a member axis of B; the RNG state stays the old run's. final.pt is
+  replaced (atomically) by the result stamped with `train_hash` of the new config: it IS the B-member artefact, and
+  `net.B` stays in the train hash, so no existing cache changes hash. Then the old run's leftover periodic
+  `train/ckpt_*.pt` (stamped with the b0 hash; nothing resumes from them) and the staging directory are deleted, each
+  removal logged; a crash in between leaves a done setting, whose leftover staging directory the next `run_setting`
+  removes (logged). A single network (b0 = 1) and a block of one (K = 1) gain their member axis on append.
+- Equality with a from-scratch run of B. Under Adam (no noise) the new members equal members b0 .. B-1 of a
+  from-scratch run bit for bit, history and monitor records included (`tests/test_ensemble_extend.py`), for K >= 2; a
+  block of one trains as an `MLP`, whose forward pass equals the batched one to round-off. Under SGLD the noise is ONE
+  global stream over the whole ensemble (the default; the per-member streams of `tests/test_ensemble.py` exist only as
+  an injected `noise` in tests), so a from-scratch run of B gives member b a slice of draws of shape (B, ...) that no
+  run of fewer members can reproduce. The staging run therefore draws from a stream of its own (`extension_seed`;
+  reseeding with `train.seed` would hand the new members the old members' noise rearranged, and with K = b0 their first
+  noise exactly, which a test checks): the new members start from the same weights as the from-scratch ones
+  (everything recorded before the first step agrees bit for bit) and are independent samples of the same law, equal in
   distribution, not bit for bit. The old members are bit for bit what they were.
 - Status. `setting_status` (train) counts members: done needs final.pt's hash to be the config's AND B members; a
-  final.pt of b < B members carrying the hash of the config with `net.B = b` is partial (awaiting its extension; it has
-  no `train/ckpt_*.pt`, so readers of partial settings that load the latest checkpoint find none); anything else,
-  more members than B included, is stale, and `run_setting` refuses a final.pt of more members than B with an
-  `ExpError` before writing anything (an ensemble only grows). config.json accepts a grown `net.B` (and is rewritten)
-  unless an original run is part-way.
+  final.pt of b0 < B members carrying the hash of the config with `net.B = b0` is partial (a pending extension);
+  anything else, more members than B included, is stale, and `run_setting` refuses a final.pt of more members than B
+  with an `ExpError` before writing anything (an ensemble only grows).
+- Readers. A pending extension is partial but is not a run part-way: its train/ may hold the old run's last periodic
+  checkpoint, stamped with the b0 hash. The readers of partial settings therefore check for final.pt first and show
+  the b0 members it holds (`load_trained_members`), all n_epochs in: `report.load_setting_result` (one network, so for
+  b0 = 1; provisional, with a note saying the extension is pending) and `phase_view.load_phase_run` (an ensemble;
+  ValueError if final.pt holds a single network).
+- config.json follows exp.json's `net.B` (`exp._write_or_reconcile_config`) unless an original run is part-way (its
+  checkpoints were written for the old B) or final.pt holds more members than the new B. So an extension can be
+  backed out: if it is interrupted and B is set back to b0 in exp.json, config.json goes back with it, the setting is
+  done again, and its abandoned staging directory is removed (logged).
 - `extend_experiment` refuses (ExpError, exp.json unchanged) `K < 1`, an experiment with a `net.B` axis (even one of a
-  single value, as in the `phase_transition` preset: the value is in every directory name and in the exp hash), and any
-  partial setting: a run part-way wrote its checkpoints for the old B, and a pending extension would no longer match a
-  larger B (run them first). Settings not yet trained simply train B + K members from scratch.
+  single value, as in the `phase_transition` preset: the value is in every directory name and in the exp hash), and
+  any partial setting: a run part-way wrote its checkpoints for the old B, and a pending extension would no longer
+  match a larger B (run them first). Settings not yet trained simply train B + K members from scratch.
 - Not covered: the solve stage refuses ensembles anyway, so a B = 1 setting's mean-field solve is stale once it is
   extended (the net section, with B, is in the solve hash).
 
@@ -1078,11 +1090,11 @@ def has_settings(root) -> bool                            # ROOT already holds a
 def run_setting(exp, index, root, log=print, stage="train") -> None
     # first validates/writes config.json and setting.json (ExpError if an existing one differs in data, net, train or the like: the experiment changed
     # under existing artefacts; this check comes BEFORE the done check, so a changed experiment raises even for a done setting; only the meanfield section
-    # may differ, and config.json is then updated to the experiment's, so `python -m fct solve DIR` solves what the experiment does),
+    # and net.B may differ (net.B as "Growing an ensemble" says), and config.json is then updated to the experiment's, so `python -m fct solve DIR` solves what the experiment does),
     # StaleCacheError if the stage's final.pt is stale, returns at once if done (log "already done (<stage>)"), else get_dataset and
-    #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_monitor(dataset, cfg)), the monitor of train.monitor_kind, built (and so failing on unsuitable data) before training; resumes a partial run exactly (see train.py);
+    #   stage "train" (`_train_setting`): train_from_config(cfg, dataset, dir, log, monitor=make_monitor(dataset, cfg)), the monitor of train.monitor_kind, built (and so failing on unsuitable data) before training; resumes a partial run exactly (see train.py);
     #     a partial setting WITH a final.pt (fewer members than net.B: the experiment was extended) runs extend_trained instead ("Growing an ensemble");
-    #     ExpError, before anything is written, for a final.pt of more members than net.B; a done train setting has any leftover staging directory removed
+    #     ExpError, before anything is written, for a final.pt of more members than net.B; a done train setting has any leftover staging directory removed (logged)
     #   stage "solve": run_meanfield(cfg, dataset, net, dir, log) into DIR/meanfield/, net = the trained net if train/final.pt exists (history gets the
     #     net-comparison keys), else None (keys absent; "no trained net" is logged). Resumes from a solver checkpoint; the net-or-not choice is fixed
     #     once a solve has started: a checkpoint written with the other choice raises ExpError (one line, naming the file; `exp run --index` prints it
