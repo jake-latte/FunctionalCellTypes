@@ -1545,6 +1545,33 @@ def _mark_zero(ax: Axes, label: str, **style) -> None:
     ax.plot([], [], label=f"{label} (zero)", **style)
 
 
+def _below_axis(value: float) -> str:
+    return f"at most {value:.1g}, below the axis"
+
+
+def _plot_null_row(
+    ax: Axes, q: np.ndarray, null: np.ndarray, se: np.ndarray, bottom: float | None
+) -> None:
+    """The null row dashed, or a legend entry saying it is zero or below the axis."""
+    positive = null[np.isfinite(null) & (null > 0)]
+    if positive.size == 0:
+        _mark_zero(ax, "null", **NULL_STYLE)
+    elif bottom is not None and positive.max() < bottom:
+        ax.plot([], [], label=f"null ({_below_axis(positive.max())})", **NULL_STYLE)
+    else:
+        _errorbar_where_positive(ax, q, null, se, "null", **NULL_STYLE)
+
+
+def _plot_null_floor(ax: Axes, floor: float, bottom: float | None) -> None:
+    """The predicted null floor as a dashed line, or a legend entry if it cannot be seen."""
+    if floor <= 0:
+        _mark_zero(ax, "null theory", color=_GREY, ls="--")
+    elif bottom is not None and floor < bottom:
+        ax.plot([], [], color=_GREY, ls="--", label=f"null theory ({_below_axis(floor)})")
+    else:
+        ax.axhline(floor, color=_GREY, ls="--", lw=1, label="null theory")
+
+
 def plot_spectrum(
     measured: ArrayLike,
     se: ArrayLike,
@@ -1559,7 +1586,9 @@ def plot_spectrum(
     as a line. A `measured` with K + 1 rows has the null row last, drawn dashed in grey, with
     the predicted null floor `null_theory` as a dashed horizontal line. Non-positive values are
     left out (a log axis cannot show them); a row with none left is named "(zero)" in the
-    legend. `excluded` (Q,) bool shades the frequencies the statistics leave out."""
+    legend. The axis ends a decade below the latent spectra, and a null row or floor wholly
+    below that is named in the legend with its largest value instead of drawn. `excluded` (Q,)
+    bool shades the frequencies the statistics leave out."""
     measured, se = _matrix(measured, "measured"), _matrix(se, "se")
     theory = _matrix(theory, "theory")
     _same_shape(measured, se=se)
@@ -1578,15 +1607,18 @@ def plot_spectrum(
             _mark_zero(ax, label, color=color, marker="o", ls="none")
         positive = theory[k] > 0
         ax.plot(q[positive], theory[k, positive], color=color, label=f"{label} theory")
-    if measured.shape[0] == K + 1 and not _errorbar_where_positive(
-        ax, q, measured[K], se[K], "null", **NULL_STYLE
-    ):
-        _mark_zero(ax, "null", **NULL_STYLE)
-    if null_theory is not None and null_theory > 0:
-        ax.axhline(null_theory, color=_GREY, ls="--", lw=1, label="null theory")
-    elif null_theory is not None:
-        _mark_zero(ax, "null theory", color=_GREY, ls="--")
+    # The axis ends a decade below the latent spectra: at sigma = 0 the null row is round-off
+    # (1e-30 and below), which would otherwise stretch the axis over thirty decades.
+    latent = np.concatenate([measured[:K].ravel(), theory.ravel()])
+    latent = latent[np.isfinite(latent) & (latent > 0)]
+    bottom = latent.min() / 10 if latent.size else None
+    if measured.shape[0] == K + 1:
+        _plot_null_row(ax, q, measured[K], se[K], bottom)
+    if null_theory is not None:
+        _plot_null_floor(ax, null_theory, bottom)
     ax.set(xlabel="|q|", ylabel="power  $d_q$", yscale="log")
+    if bottom is not None:
+        ax.set_ylim(bottom=bottom)
     ax.grid(alpha=0.25, lw=0.5)
     ax.legend(frameon=False, fontsize="small")
     return ax
@@ -1724,7 +1756,8 @@ def plot_relaxation(
     """A burn-in diagnostic: each statistic of the records (`values` (R, S) at `epochs` (R,))
     as a line, its fitted relaxation (`fitted` (T, S) at `fit_epochs` (T,)) dashed in the same
     colour, the start of the fit window dotted, and a grey band of half-width `band` around 0
-    (for statistics drawn relative to their asymptote in units of their accuracy budget)."""
+    (for statistics drawn relative to their asymptote in units of their accuracy budget). The
+    legend sits beside the axis, which assumes a constrained-layout figure."""
     epochs, fit_epochs = _vector(epochs, "epochs"), _vector(fit_epochs, "fit_epochs")
     values, fitted = _matrix(values, "values"), _matrix(fitted, "fitted")
     S = len(labels)
@@ -1738,12 +1771,16 @@ def plot_relaxation(
         ax.axhspan(-band, band, color=_GREY, alpha=EXCLUDED_ALPHA, lw=0, label="± budget")
     for s, label in enumerate(labels):
         (line,) = ax.plot(epochs, values[:, s], lw=1.2, label=label)
-        ax.plot(fit_epochs, fitted[:, s], ls="--", color=line.get_color(), label=f"{label} fit")
+        # one legend entry for every fit, not one per statistic; gid names the statistic
+        ax.plot(fit_epochs, fitted[:, s], ls="--", color=line.get_color(), gid=f"{label} fit",
+                label="_nolegend_")  # fmt: skip
+    ax.plot([], [], color="k", ls="--", label="fitted relaxation")
     if start is not None:
         ax.axvline(start, color="k", ls=":", lw=1, label="fit window start")
     ax.set(xlabel="epoch", ylabel=ylabel)
     ax.grid(alpha=0.25, lw=0.5)
-    ax.legend(frameon=False, fontsize="x-small", ncol=2)
+    # Beside the axis: with up to 3K + 1 statistics it would cover the curves.
+    ax.legend(frameon=False, fontsize="small", loc="center left", bbox_to_anchor=(1.01, 0.5))
     return ax
 
 

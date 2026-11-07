@@ -149,6 +149,18 @@ def test_spectrum_marks_a_null_row_of_zeros_instead_of_drawing_it():
     assert "null (zero)" in labels
 
 
+def test_spectrum_names_a_null_row_below_the_latent_spectra_instead_of_stretching_the_axis():
+    """Round-off null power (1e-32) would put thirty decades on the axis; it ends one decade
+    below the smallest latent value."""
+    measured = np.vstack([_spectra(), np.full((1, Q), 1e-32)])
+    ax = draw.plot_spectrum(measured, 0.1 * measured, _spectra(), null_theory=1e-30)
+    assert len(_errorbars(ax)) == K
+    assert ax.get_ylim()[0] == pytest.approx(_spectra().min() / 10)
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert "null (at most 1e-32, below the axis)" in labels
+    assert "null theory (at most 1e-30, below the axis)" in labels
+
+
 def test_spectrum_drops_the_non_positive_points_of_a_mode():
     measured = _spectra()
     measured[0, 3] = 0.0
@@ -292,10 +304,12 @@ def test_relaxation_draws_the_records_the_fit_the_window_and_the_band():
     measured = _line_labelled(ax, "lag1_1")
     np.testing.assert_allclose(measured.get_xdata(), epochs)
     np.testing.assert_allclose(measured.get_ydata(), values[:, 0])
-    fit = _line_labelled(ax, "lag1_1 fit")
+    (fit,) = [ln for ln in ax.lines if ln.get_gid() == "lag1_1 fit"]
     np.testing.assert_allclose(fit.get_xdata(), fit_epochs)
     np.testing.assert_allclose(fit.get_ydata(), fitted[:, 0])
     assert fit.get_linestyle() == "--" and fit.get_color() == measured.get_color()
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert "fitted relaxation" in labels and "lag1_1 fit" not in labels  # one entry for all fits
     start = _line_labelled(ax, "fit window start")
     np.testing.assert_allclose(start.get_xdata(), 50.0)
     (span,) = [p for p in ax.patches if p.get_label() == "± budget"]
