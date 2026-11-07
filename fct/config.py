@@ -137,6 +137,7 @@ class DataConfig(StrictModel):
 Phi = Literal["relu", "tanh", "sigmoid", "id"]
 InitLaw = Literal["standard", "prior"]
 Optimizer = Literal["adam", "sgld"]
+MonitorKind = Literal["mir", "spectrum"]
 
 
 class NetConfig(StrictModel):
@@ -169,16 +170,32 @@ class TrainConfig(StrictModel):
     log_int: PosInt = 100
     save_int: PosInt = 100
     seed: int = 0
-    # Modularity monitor: 0 disables it. The settings are hashed with the run so a cached
-    # run always matches the monitor settings that produced its history.
+    # Training monitor: monitor_int = 0 disables it; bins and shuffles are the MIR monitor's.
+    # The settings that shape the history are hashed with the run, so a cached run always
+    # matches the monitor that produced it (bins and shuffles not under the spectrum monitor).
     monitor_int: NonNegInt = 0
     monitor_bins: Annotated[int, Field(ge=2)] = 10
     monitor_shuffles: PosInt = 5
+    # Which monitor runs every monitor_int epochs (`fct.monitor.make_monitor`): the MIR, or the
+    # tuning-map spectra and angle statistics. Hashed only as "spectrum", so every cache made
+    # with the MIR monitor keeps its hash.
+    monitor_kind: MonitorKind = "mir"
     # "sgld" adds Gaussian noise of variance 2 * lr / beta to every step (see fct.sgld). `beta`
     # is read only by SGLD; both fields enter the hash only for SGLD (`section_hash`), so
     # adam runs keep the hashes they had before these fields existed.
     optimizer: Optimizer = "adam"
     beta: PosFloat = 1.0
+
+    @model_validator(mode="after")
+    def _the_spectrum_monitor_runs(self) -> Self:
+        # monitor_int = 0 runs no monitor, so a "spectrum" kind would be hashed into a run whose
+        # history holds no spectra.
+        if self.monitor_kind == "spectrum" and self.monitor_int == 0:
+            raise ValueError(
+                'train.monitor_kind is "spectrum" but train.monitor_int is 0, which disables the '
+                'monitor; set monitor_int > 0, or leave monitor_kind at "mir"'
+            )
+        return self
 
 
 def law_beta(optimizer: Optimizer, beta: float) -> float:
@@ -445,6 +462,7 @@ HASH_OMITTED_AT_DEFAULT: dict[str, Any] = {
     "data.teacher": DataConfig().teacher,
     "spatial.lambda_max": SpatialConfig().lambda_max,
     "spatial.parametrisation": SpatialConfig().parametrisation,
+    "train.monitor_kind": TrainConfig().monitor_kind,
 }
 
 
@@ -507,7 +525,8 @@ class Config(StrictModel):
         belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and the
         loss version when "train" is (`hashed_loss_version`: `RATE_FREE_LOSS_VERSION` without a
         rate penalty). `train.optimizer` / `train.beta` are left out of the hash for the adam
-        optimiser, and every field of `HASH_OMITTED_AT_DEFAULT` while it holds
+        optimiser, `train.monitor_bins` / `train.monitor_shuffles` for the spectrum monitor (they
+        configure the MIR monitor only), and every field of `HASH_OMITTED_AT_DEFAULT` while it holds
         its default (`fct.schema.exclude_at_default`), so a config that does not set such a
         field hashes as it did before the field existed. The `spatial` section enters with
         "train" only when it is set. The meanfield section enters as
@@ -529,6 +548,8 @@ class Config(StrictModel):
             hashed["loss_version"] = hashed_loss_version(self.train)
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes
                 del hashed["train"]["optimizer"], hashed["train"]["beta"]
+            if self.train.monitor_kind == "spectrum":  # MIR-only fields: no effect on spectra
+                del hashed["train"]["monitor_bins"], hashed["train"]["monitor_shuffles"]
             if self.spatial is not None:  # the weight prior is part of the training loss
                 hashed["spatial"] = self.spatial.model_dump(exclude=omitted.get("spatial"))
         canonical = json.dumps(hashed, sort_keys=True)

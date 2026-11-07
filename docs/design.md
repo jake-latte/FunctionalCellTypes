@@ -28,9 +28,9 @@ fct/
   tuning.py        # tuning_curves (MIR's bins) and select_neurons: pure helpers for the phase-transition notebook
   exp_report.py   # MirRecord and mir_matrix: experiment records -> (layer, lambda_r, lambda_w) MIR array
   exp_view.py     # experiment ROOT -> the figures of a lambda_exp experiment (the phase-transition notebook): setting snapping, MIR records of one depth/activation, tuning of one layer
-  monitor.py       # make_mir_monitor: the training hook that records per-layer MIR
+  monitor.py       # make_monitor picks the training hook by train.monitor_kind: make_mir_monitor (per-layer MIR) or make_spectrum_monitor (per-layer spectra, hexatic moment, theta histogram)
   spatial.py       # torus embeddings, wrapped Gaussian weight kernels K = K_post (x) K_pre, penalty matrices M = K^{-1}, the factorised weight quadratic form (pure)
-  spectrum.py      # tuning maps on the ring, unitary-DFT spectra per latent mode and the null mean, q_1/2 / share / lag-1, cos 4 theta, record and member errors (pure)
+  spectrum.py      # tuning maps on the ring, unitary-DFT spectra per latent mode and the null mean, q_1/2 / share / lag-1, cos 4 theta, the hexatic moment, theta histograms, record and member errors (pure)
   spatial_exp.py  # spatial-experiment notebook: pick one setting of a spatial experiment by axis values, load its trained net and the 3^k latent-lattice test set
   spatial_view.py  # spatial-prior notebook: config, resumable run, ring/lattice layout of neurons and weights, empirical kernels (pure + one I/O function)
   linear_theory.py # the linear one-hidden-layer theory on a ring from a Config and a Dataset: per-mode spectra for an orthonormal teacher, their summaries, the ansatz-free kernel for any teacher (pure)
@@ -98,15 +98,16 @@ delete the old ones. Likewise the hash of any set of sections that includes `net
 version of the forward pass of `MLP`. Version 2 reads the output from the post-activations, `Z = V^T phi(h^L) / N`
 (version 1 read it from the pre-activation `h^L`): every train and meanfield cache made under version 1 is rejected with
 `StaleCacheError`, and an experiment ROOT of version-1 runs shows them as `stale`. `train.optimizer` and `train.beta` (SGLD, below) are hashed only when `optimizer == "sgld"`: for Adam both are dropped from the
-hashed train section, so every pre-existing Adam hash and cache is unchanged. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Version 5 scales the rate penalty by `1 / (2 beta)` as well, which changes no number of a run with `rate_lambda = 0`, so the version folded in is `config.hashed_loss_version(train)`: `LOSS_VERSION` when `rate_lambda > 0` and `config.RATE_FREE_LOSS_VERSION` (4, the last version that changed a rate-free loss) when it is 0. Every `rate_lambda = 0` hash and cache is unchanged by version 5; a `rate_lambda > 0` one made under version 4 is rejected with `StaleCacheError` and listed `stale` by `exp status`. A later loss change that reaches rate-free configs must raise both constants. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
+hashed train section, so every pre-existing Adam hash and cache is unchanged. Likewise `train.monitor_bins` and `train.monitor_shuffles` configure only the MIR monitor and are dropped from the hash when `monitor_kind == "spectrum"`. The hash of any set of sections that includes `train` folds in `config.LOSS_VERSION`; version 4 scales the weight prior by `1 / (2 beta)` (see "Prior scaling convention" below), so every cache made under version 3 is rejected with `StaleCacheError`. Version 5 scales the rate penalty by `1 / (2 beta)` as well, which changes no number of a run with `rate_lambda = 0`, so the version folded in is `config.hashed_loss_version(train)`: `LOSS_VERSION` when `rate_lambda > 0` and `config.RATE_FREE_LOSS_VERSION` (4, the last version that changed a rate-free loss) when it is 0. Every `rate_lambda = 0` hash and cache is unchanged by version 5; a `rate_lambda > 0` one made under version 4 is rejected with `StaleCacheError` and listed `stale` by `exp status`. A later loss change that reaches rate-free configs must raise both constants. Changing a config value such as the `weight_lambda` default (now 2e-4) needs no version bump: it
 enters the hash by value.
 
 Fields added after artefacts existed. A field added to a hashed section or to exp.json is left out of it while it holds
 its default, the value every artefact written before the field existed implies, so those hashes and exp.json texts stay
 byte-identical and an absent field means its default; at any other value it enters, and the artefact is new. The fields
 are listed once, in two tables of dotted paths: `config.HASH_OMITTED_AT_DEFAULT` for `section_hash` (`net.B`,
-`net.init`, `data.teacher`, `spatial.lambda_max`, `spatial.parametrisation`) and `exp.EXP_JSON_OMITTED_AT_DEFAULT` for
-exp.json (`description`, `B`, `init`, `linear_teacher.teacher`, `spatial.parametrisation`). Both go through one helper,
+`net.init`, `data.teacher`, `spatial.lambda_max`, `spatial.parametrisation`, `train.monitor_kind`) and
+`exp.EXP_JSON_OMITTED_AT_DEFAULT` for exp.json (`description`, `B`, `init`, `linear_teacher.teacher`,
+`spatial.parametrisation`, `monitor_kind`). Both go through one helper,
 `schema.exclude_at_default(model, table) -> exclude`, which builds the nested pydantic `exclude` and skips a path whose
 parent is None (an unset `spatial` section). A new field of this kind is a new table entry, nothing else.
 
@@ -176,8 +177,9 @@ class TrainConfig(BaseModel):
     weight_lambda: float = 2e-4; rate_lambda: float = 1e-3
     log_int: int = 100; save_int: int = 100; seed: int = 0
     monitor_int: int = 0                # epochs between monitor calls (>= 0); 0 disables the monitor
-    monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2)
-    monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1)
+    monitor_bins: int = 10              # rate bins of the MIR monitor (>= 2); not hashed under the spectrum monitor
+    monitor_shuffles: int = 5           # label shuffles for the corrected MIR and the chance level (>= 1); not hashed under the spectrum monitor
+    monitor_kind: Literal["mir", "spectrum"] = "mir"   # which monitor runs (monitor.make_monitor); hashed only as "spectrum"; "spectrum" needs monitor_int > 0
     optimizer: Literal["adam", "sgld"] = "adam"
     beta: float = 1.0                   # SGLD inverse temperature (> 0); ignored, and not hashed, for adam
 class MeanFieldConfig(BaseModel):      # the problem: the equations being solved
@@ -474,8 +476,15 @@ With `monitor_int == 0` the history keys and values are those of an unmonitored 
 ## monitor.py
 
 ```python
-def make_mir_monitor(dataset: Dataset, cfg: Config) -> Callable[[MLP], dict[str, list]]   # ValueError if dataset.factors is None
+Monitor = Callable[[MLP], dict[str, list]]                      # train.Monitor
+def make_monitor(dataset: Dataset, cfg: Config) -> Monitor      # the maker train.monitor_kind names: "mir" or "spectrum"
+def make_mir_monitor(dataset: Dataset, cfg: Config) -> Monitor  # ValueError if dataset.factors is None
+def make_spectrum_monitor(dataset: Dataset, cfg: Config) -> Monitor   # ValueError if dataset.factors is None or latent_basis refuses them
+def spectrum_record(H (P, L, N), U (P, K)) -> dict[str, list[Tensor]]  # one record of the spectrum monitor, pure
+SPECTRUM_MONITOR_KEYS = ("spectrum", "hex", "theta_hist")
 ```
+
+`make_monitor` is how `run_setting` and `python -m fct train` build the monitor, so the choice is made in one place.
 
 The docstring of `make_mir_monitor` owns the contract (the keys `MIR_MONITOR_KEYS`, their meaning and the settings
 used); `MIR_MONITOR_KEYS` is exported from `monitor.py`. One call runs the net on `dataset.x`, takes the rates phi(H)
@@ -487,6 +496,31 @@ estimate plus one per shuffle, shared by the bias correction and the chance leve
 `monitor_shuffles`, P, N and the number of factors. Measured (CPU, float64, 16 torch threads, N=256, L=5, P=4096, relu,
 `monitor_bins=10`, `monitor_shuffles=5`): about 1.5 s per call on `object_action` (G=5; 3 factor groups) and 0.22 s on
 `what_where` (m=8).
+
+The spectrum monitor (`train.monitor_kind = "spectrum"`) measures what `spectrum.py` defines. It builds the latent
+frame `U = latent_basis(dataset.factors).U` once, when the monitor is made, so data without latents `z0..z{K-1}` or
+with symmetric latents (no mean direction) raise `latent_basis`'s ValueError before training starts. A call runs
+`net(dataset.x)` with no input noise and returns `spectrum_record(H, U)` of the pre-activations H (for `phi = "id"`
+equal to the rates). Every value is a list over hidden layers of CPU tensors:
+
+| key          | per layer                 | what                                                                    |
+|--------------|---------------------------|-------------------------------------------------------------------------|
+| `spectrum`   | (K+1, N) float32          | `mode_spectra`: rows 0..K-1 the latent modes, row K the null mean       |
+| `hex`        | (2,) float32, K >= 3 only | Re, Im of `hexatic_moment(t2, t3)`, the contrasts of the tuning maps     |
+| `theta_hist` | (36,) int64, K >= 3 only  | `theta_histogram(t2, t3)`                                               |
+
+So `monitor_spectrum` stacks to (records, layers, K+1, N), and to (records, members, layers, K+1, N) for an ensemble.
+`SPECTRUM_MONITOR_KEYS` lists the keys of a K >= 3 record; for K < 3 a record holds `spectrum` alone. `hex` and
+`theta_hist` are recorded for every K >= 3 but are meaningful only at K = 3: for K >= 4 the contrast directions
+u_2..u_K have near-degenerate singular values, so `(u_2, u_3)` is an arbitrary plane of that space.
+The moment is stored complex, not as its modulus, and the histogram as counts, because those average and sum across
+records and members; the statistic is |<e^{6 i theta}>| of a mean moment. Records are float32 because a
+full-size run holds (K+1) N L floats per record per member over thousands of records (4 x 64 x 4 x 4000 = 4.1 x 10^6,
+16 MB per member as float32); the powers are computed in the run's dtype and only stored in float32. The records
+along one run are a diagnostic of burn-in and mixing (`record_sem` with its `reliable` mask), not an estimator; the
+monitor only records. A call draws nothing from any RNG. The readers of the MIR history (`report.load_results`,
+`report.load_setting_result`, `lrtune.evaluate_setting`) refuse a spectrum experiment through
+`monitor.require_mir_monitor`, saying that it records spectra, not MIR.
 
 ## hmc.py
 
@@ -947,7 +981,7 @@ MODULARITY_EXP_AXES = {"data.task": EXP_TASKS, "net.L": LAYERS, "net.phi": PHIS,
 @dataclass(frozen=True) class Setting: index: int; axes: dict[axis, value] (axis order); task: str; relpath: Path
     # consumers read axes explicitly, e.g. setting.axes["net.L"]
 MODULARITY_AXES = ("net.L", "net.phi", "train.rate_lambda"); EXP_OWNED_AXES: dict[axis, the experiment field to change instead]
-class ExpConfig(StrictModel)   # description: str | None = None (what the experiment is; documentation only: in no hash, directory name, setting.json record or same_experiment check; omitted from exp.json when None), N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles,
+class ExpConfig(StrictModel)   # description: str | None = None (what the experiment is; documentation only: in no hash, directory name, setting.json record or same_experiment check; omitted from exp.json when None), N, P, n_epochs, lr, log_int, save_int, monitor_int (>=1), monitor_bins, monitor_shuffles, monitor_kind = "mir" (TrainConfig.monitor_kind of every setting; omitted from exp.json at "mir"; "spectrum" is rejected at load unless every setting is linear_teacher with latents latent_basis accepts, checked by building each distinct dataset and calling latent_basis),
                              # linear_teacher: LinearTeacherParams(n_features, n_latents, latent_min, latent_max, teacher = "gaussian"), object_action: ObjectActionParams(grid_size, max_objects),
                              # what_where: WhatWhereParams(n_motifs), seeds: Seeds(data, net, train) = 0, dtype = "float32", device = "auto",
                              # task = "linear_teacher" (the base task, used unless data.task is an axis), meanfield: MeanFieldConfig = MeanFieldConfig(), axes: dict[str, list] | None = None
@@ -964,7 +998,7 @@ class ExpConfig(StrictModel)   # description: str | None = None (what the experi
     # it is read by the solve stage only (a meanfield.* path is also valid as an axis, as any Config field)
     # axes: axis = dotted Config path (net.L, net.phi, train.rate_lambda, train.weight_lambda, data.task, ...), values = explicit lists; an axis
     # overrides the base value (net.N over N, train.lr over lr, ...), except the fields the experiment owns, which are rejected: data.P, data.D_in,
-    # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles (change the
+    # data.seed, net.seed, train.seed, train.log_int, train.save_int, train.monitor_int, train.monitor_bins, train.monitor_shuffles, train.monitor_kind (change the
     # experiment field instead). At load every axis is checked alone (a Config field, not a section; non-empty; each value valid; no two values
     # build the same Config, so [0, 0.0] is a repeat), then every combination is built into a Config, so a bad axis name or value fails
     # naming the axis. data.task picks that task's parameters and D_in; weight_lambda is the experiment's `weight_lambda` field (the TrainConfig default 2e-4 unless set) unless it is an axis
@@ -994,7 +1028,7 @@ def run_setting(exp, index, root, log=print, stage="train") -> None
     # under existing artefacts; this check comes BEFORE the done check, so a changed experiment raises even for a done setting; only the meanfield section
     # may differ, and config.json is then updated to the experiment's, so `python -m fct solve DIR` solves what the experiment does),
     # StaleCacheError if the stage's final.pt is stale, returns at once if done (log "already done (<stage>)"), else get_dataset and
-    #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_mir_monitor(dataset, cfg)); resumes a partial run exactly (see train.py)
+    #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_monitor(dataset, cfg)), the monitor of train.monitor_kind, built (and so failing on unsuitable data) before training; resumes a partial run exactly (see train.py)
     #   stage "solve": run_meanfield(cfg, dataset, net, dir, log) into DIR/meanfield/, net = the trained net if train/final.pt exists (history gets the
     #     net-comparison keys), else None (keys absent; "no trained net" is logged). Resumes from a solver checkpoint; the net-or-not choice is fixed
     #     once a solve has started: a checkpoint written with the other choice raises ExpError (one line, naming the file; `exp run --index` prints it
@@ -1155,7 +1189,7 @@ style; a diverged run is a red cross at the top of its panel.
 
 ```
 python -m fct init CACHE_DIR [--set data.P=512 --set net.L=2 ...]   # writes config.json from defaults; refuses to overwrite unless --force
-python -m fct train CACHE_DIR                                        # builds the MIR monitor (lazily, at its first call) when train.monitor_int > 0
+python -m fct train CACHE_DIR                                        # builds the monitor of train.monitor_kind (lazily, at its first call) when train.monitor_int > 0
 python -m fct solve CACHE_DIR
 python -m fct plot CACHE_DIR [--which all|learning|representation|neurons|training|solver|kernels]   # result-dependent figures -> CACHE_DIR/figures/
 python -m fct plot-example CACHE_DIR                                 # result-independent figure
@@ -1391,6 +1425,7 @@ spectrum_summary(d (..., N)) -> Summary(share0, lag1, d0, d_nyq, R (..., N))   #
 gaussian_width(R (..., N), ell) -> float | (...)               # sqrt(-ell^2 / (2 ln(R(ell)/R(0)))); ell an integer lag in 1..N-1
 contrast_angle_statistic(t2 (..., N), t3 (..., N)) -> float | (...)   # <cos 4 theta_i> over neurons, theta_i = atan2(t3_i, t2_i) on (-pi, pi]
 theta_histogram(t2 (..., N), t3 (..., N)) -> (..., 36) int64   # counts on the fixed bins (-pi + j w, -pi + (j+1) w], w = 2 pi / 36
+hexatic_moment(t2 (..., N), t3 (..., N)) -> complex (...)      # <e^{6 i theta_i}> over neurons; always a tensor (complex64 / complex128 as the input), 0-d for one map
 average_records(records (R, ...), burn_in) -> (...)            # mean over records[burn_in:] of one chain (diagnostic)
 integrated_autocorr_time(records (R, ...), burn_in) -> TauEstimate(tau (...), reliable (...) bool)   # 1 + 2 sum_k rho_k, Geyer's initial monotone sequence; NaN where not reliable
 record_sem(records (R, ...), burn_in) -> SemEstimate(sem, tau, reliable)   # sem = sqrt(C(0) tau / n), n_eff = n / tau; NaN exactly where not reliable
@@ -1430,6 +1465,16 @@ can return `-pi`; it is mapped to `pi`, so `theta_histogram` bins are right-clos
 records and members sum. A silent neuron (`t2 = t3 = 0`) has `theta = 0` and counts as axis-aligned. "Axis-aligned"
 means aligned with the SVD contrast axes `(u_2, u_3)`, not with the latents: at K = 3 the three latents project onto
 the contrast plane 120 degrees apart, so `cos 4 theta` does not detect tuning to individual latents.
+
+Tuning to single latents is measured by the frame-free statistic `|<e^{6 i theta}>|` instead. Three directions 120 degrees apart have the
+same `6 theta`, so neurons each tuned to one of three latents give a modulus near 1 (above 0.99 at P = 4096 with the
+frame of `latent_basis`), and a rotation-invariant `(t2, t3)` gives `O(N^-1/2)` (`|m|` is Rayleigh with `E|m|^2 = 1/N`).
+Rotating the tunings by phi, that is the frame `(u_2, u_3)` by -phi, multiplies the moment by `e^{6 i phi}`, so the
+modulus does not depend on where the SVD puts `u_2` in the contrast plane. `hexatic_moment` returns the complex mean:
+moments average across members and records, moduli do not (the modulus of a mean is not the mean of moduli). A
+silent neuron has `theta = 0` here too. The moment, like every angle statistic, is meaningful only at K = 3, where
+`(u_2, u_3)` spans the whole contrast space; for K >= 4 the contrasts u_2..u_K have near-degenerate singular values and
+`(u_2, u_3)` is whichever plane of them the SVD returned.
 
 `record_sem`: `rho_k = C(k) / C(0)` from the biased autocovariance of the records after burn-in (FFT, zero-padded
 to 2n). `tau` is Geyer's initial monotone sequence estimator (Geyer 1992): the pairs `Gamma_m = rho_{2m} +

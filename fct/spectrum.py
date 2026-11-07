@@ -16,6 +16,8 @@ The maths, with h (P, N) the activity of N neurons over P patterns (neuron i at 
   R(Delta)       (1/N) sum_q d_q e^{2 pi i q Delta / N} = ifft(d).real; lag-1 = R(1)/R(0)
   q_1/2          the largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2 (Nyquist as floor)
   angle          theta_i = atan2(t_{3,i}, t_{2,i}) in the orthonormal frame (u_2, u_3)
+  hexatic        m = <e^{6 i theta_i}> over neurons; |m| measures tuning to single latents
+                 independently of where the SVD puts u_2 in the contrast plane (K = 3 only)
 
 Every estimator is per network: one trained network (or one ensemble member) gives one sample
 of each spectrum and summary, and the spread is taken across members (`member_mean_sem`).
@@ -380,6 +382,27 @@ def contrast_angle_statistic(t2: Tensor, t3: Tensor) -> float | Tensor:
     """
     _check_angle_inputs(t2, t3)
     return _number_if_0d(torch.cos(4 * _theta(t2, t3)).mean(dim=-1))
+
+
+def hexatic_moment(t2: Tensor, t3: Tensor) -> Tensor:
+    """<e^{6 i theta_i}> over neurons, theta_i = atan2(t3_i, t2_i): (..., N) -> complex (...).
+
+    t2, t3 are rows 1 and 2 of `tuning_maps` of one network each. The statistic is the
+    modulus |<e^{6 i theta}>|, which is frame-free: rotating the tunings by phi (the frame
+    (u_2, u_3) by -phi) multiplies the moment by e^{6 i phi}. It is near 1 when every neuron
+    is tuned to a single latent (at K = 3 the latents project onto the contrast plane 120
+    degrees apart, the same angle under 6 theta), and O(N^-1/2) for a rotation-invariant
+    (t2, t3). The complex mean, not its modulus, is what averages across members and records:
+    the modulus of a mean is not the mean of moduli. Always a tensor (complex64 for float32
+    inputs, complex128 for float64), 0-d for one map. A silent neuron has theta = 0.
+
+    Meaningful only at K = 3, where (u_2, u_3) span the whole contrast space. For K >= 4 the
+    contrasts u_2..u_K have near-degenerate singular values, so (u_2, u_3) is an arbitrary
+    plane of that space and theta depends on which plane the SVD returned.
+    """
+    _check_angle_inputs(t2, t3)
+    theta = _theta(t2, t3)
+    return torch.polar(torch.ones_like(theta), 6 * theta).mean(dim=-1)
 
 
 def theta_histogram(t2: Tensor, t3: Tensor) -> Tensor:

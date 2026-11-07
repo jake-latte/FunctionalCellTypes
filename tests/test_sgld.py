@@ -154,6 +154,7 @@ def test_sgld_hash_is_canonical_json_of_the_train_section_with_optimiser_fields(
     cfg = Config(train=TrainConfig(optimizer="sgld", beta=2.0))
     payload = {**cfg.model_dump(include={"train", "dtype"}), "loss_version": LOSS_VERSION}
     assert payload["train"]["optimizer"] == "sgld" and payload["train"]["beta"] == 2.0
+    del payload["train"]["monitor_kind"]  # the MIR monitor: the monitor kind is not hashed
     expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
     assert cfg.section_hash("train") == expected
 
