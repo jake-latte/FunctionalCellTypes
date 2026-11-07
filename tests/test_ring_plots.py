@@ -7,6 +7,7 @@ drawn values are read back from the artists and compared with the inputs.
 
 import math
 
+import matplotlib.colors
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -14,6 +15,7 @@ import torch
 from matplotlib.container import ErrorbarContainer
 
 from fct import draw
+from fct.spectrum import N_THETA_BINS
 from tests.draw_helpers import assert_png
 
 K, N = 2, 16
@@ -66,7 +68,7 @@ def _call(name: str, ax=None):
             np.full((3, K), 0.5),
             ax=ax,
         ),
-        "plot_angle_histogram": lambda: draw.plot_angle_histogram(np.ones(36), ax=ax),
+        "plot_angle_histogram": lambda: draw.plot_angle_histogram(np.ones(N_THETA_BINS), ax=ax),
         "plot_relaxation": lambda: draw.plot_relaxation(
             np.arange(10.0),
             np.zeros((10, 3)),
@@ -268,25 +270,28 @@ def test_share_sweep_refuses_shares_not_one_row_per_value():
 
 # ------------------------------------------------------------------ angle histogram
 def test_angle_histogram_draws_the_density_with_the_uniform_level_and_the_marks():
-    counts = np.zeros(36)
-    counts[:18] = 2.0  # all mass on (-pi, 0]: density 2 / (36 x w) there, 0 elsewhere
+    half = N_THETA_BINS // 2
+    counts = np.zeros(N_THETA_BINS)
+    counts[:half] = 2.0  # all mass on (-pi, 0]: density 1 / (half x w) there, 0 elsewhere
     marks = [-math.pi / 3, math.pi / 2]
     ax = draw.plot_angle_histogram(counts, marks=marks)
     heights = np.array([p.get_height() for p in ax.containers[0]])
-    width = 2 * math.pi / 36
-    np.testing.assert_allclose(heights[:18], 1 / (18 * width))
-    np.testing.assert_allclose(heights[18:], 0.0)
+    width = 2 * math.pi / N_THETA_BINS
+    np.testing.assert_allclose(heights[:half], 1 / (half * width))
+    np.testing.assert_allclose(heights[half:], 0.0)
     np.testing.assert_allclose(sum(heights) * width, 1.0)
     lefts = np.array([p.get_x() for p in ax.containers[0]])
-    np.testing.assert_allclose(lefts, -math.pi + width * np.arange(36))
-    assert len(ax.containers[0]) == 36
+    np.testing.assert_allclose(lefts, -math.pi + width * np.arange(N_THETA_BINS))
+    assert len(ax.containers[0]) == N_THETA_BINS
     np.testing.assert_allclose(_line_labelled(ax, "uniform").get_ydata(), 1 / (2 * math.pi))
     mark_x = sorted(ln.get_xdata()[0] for ln in ax.lines if ln.get_gid() == "latent axis")
     np.testing.assert_allclose(mark_x, sorted(marks))
     assert ax.get_xlim() == pytest.approx((-math.pi, math.pi))
 
 
-@pytest.mark.parametrize("counts", [np.ones(35), np.zeros(36), -np.ones(36)])
+@pytest.mark.parametrize(
+    "counts", [np.ones(N_THETA_BINS - 1), np.zeros(N_THETA_BINS), -np.ones(N_THETA_BINS)]
+)
 def test_angle_histogram_refuses_wrong_bins_and_empty_or_negative_counts(counts):
     with pytest.raises(ValueError):
         draw.plot_angle_histogram(counts)
@@ -351,3 +356,60 @@ def test_ensemble_loss_marks_an_all_zero_series():
 def test_ensemble_loss_refuses_an_unknown_series():
     with pytest.raises(ValueError, match="unknown"):
         draw.plot_ensemble_loss(np.ones(2), {"other": np.ones(2)}, {"other": np.ones(2)})
+
+
+# ------------------------------------------------------------------ sweep scale, colour, panels
+def test_a_single_settings_theory_is_visible_as_a_marker():
+    ax = draw.plot_share_sweep([3.0], [[0.5, 0.4]], [[0.02, 0.02]], [[0.55, 0.45]])
+    line = _line_labelled(ax, "mode 1 theory")
+    assert line.get_marker() == "x" and line.get_xdata().tolist() == [3.0]
+
+
+@pytest.mark.parametrize(
+    "values, scale",
+    [
+        ([0.25, 1.0, 3.0, 10.0], "log"),  # a beta sweep: positive, 40-fold
+        ([0.0, 3.0], "linear"),  # setting indices start at 0
+        ([1.0, 2.0, 4.0], "linear"),  # under LOG_SWEEP_SPAN
+        ([-1.0, 20.0], "linear"),
+        ([5.0], "linear"),
+    ],
+)
+def test_the_sweep_scale_is_chosen_at_the_drawing_edge(values, scale):
+    assert draw.sweep_scale(values) == scale
+    n = len(values)
+    ax = draw.plot_share_sweep(values, np.full((n, 1), 0.5), np.zeros((n, 1)), np.full((n, 1), 0.5))
+    assert ax.get_xscale() == scale
+
+
+def test_the_angle_histogram_is_grey_not_a_modes_colour():
+    ax = draw.plot_angle_histogram(np.ones(N_THETA_BINS))
+    color = ax.containers[0][0].get_facecolor()[:3]
+    assert np.allclose(color, matplotlib.colors.to_rgb(draw._GREY))
+    for mode_color in draw.LATENT_COLORS[:3]:
+        assert not np.allclose(color, matplotlib.colors.to_rgb(mode_color))
+
+
+def test_fig_panels_draws_one_titled_panel_per_entry_side_by_side():
+    s = _spectra()
+    panels = [
+        {"measured": s, "se": 0.1 * s, "theory": s},
+        {"measured": 2 * s, "se": s, "theory": s},
+    ]
+    fig = draw.fig_panels(draw.plot_spectrum, panels, ["a", "b"], null_theory=0.0)
+    assert [ax.get_title() for ax in fig.axes] == ["a", "b"]
+    width, height = draw.PANEL_SIZE
+    assert tuple(fig.get_size_inches()) == pytest.approx((2 * width, height))
+    np.testing.assert_allclose(_points(_errorbars(fig.axes[1])[0])[1], 2 * s[0])
+    with pytest.raises(ValueError, match="one title per panel"):
+        draw.fig_panels(draw.plot_spectrum, panels, ["a"])
+
+
+def test_ensemble_loss_puts_its_legend_beside_the_axis_like_plot_loss_curves():
+    history = {"epoch": [1, 2], "loss": [1.0, 1.0], "mse": [1.0, 1.0],
+               "weight_l2": [1.0, 1.0], "rate_l2": [1.0, 1.0]}  # fmt: skip
+    reference = draw.plot_loss_curves(history).get_legend()
+    legend = draw.plot_ensemble_loss(
+        np.arange(1.0, 3.0), {"loss": np.ones(2)}, {"loss": np.ones(2)}
+    ).get_legend()
+    assert legend._loc == reference._loc

@@ -1484,6 +1484,14 @@ def fig_mir_vs_ratio(records: Iterable[MirRecord]) -> Figure:
 
 NULL_STYLE = {"color": _GREY, "ls": "--", "marker": "s"}  # the null row and its floor
 EXCLUDED_ALPHA = 0.12  # shading of the frequencies excluded from the statistics
+# The spectrum's log axis ends at this fraction of the smallest latent value (a decade below):
+# at sigma = 0 the null row is round-off, 1e-30 and below, and would stretch the axis over
+# thirty decades.
+SPECTRUM_AXIS_FLOOR = 0.1
+# A swept axis is drawn on a log scale when its values are positive and span at least this factor.
+LOG_SWEEP_SPAN = 10.0
+# Width and height (inches) of one panel of a side-by-side figure (`fig_panels`).
+PANEL_SIZE = (7.0, 4.5)
 
 
 def _matrix(x: ArrayLike, name: str) -> np.ndarray:
@@ -1607,11 +1615,9 @@ def plot_spectrum(
             _mark_zero(ax, label, color=color, marker="o", ls="none")
         positive = theory[k] > 0
         ax.plot(q[positive], theory[k, positive], color=color, label=f"{label} theory")
-    # The axis ends a decade below the latent spectra: at sigma = 0 the null row is round-off
-    # (1e-30 and below), which would otherwise stretch the axis over thirty decades.
     latent = np.concatenate([measured[:K].ravel(), theory.ravel()])
     latent = latent[np.isfinite(latent) & (latent > 0)]
-    bottom = latent.min() / 10 if latent.size else None
+    bottom = latent.min() * SPECTRUM_AXIS_FLOOR if latent.size else None
     if measured.shape[0] == K + 1:
         _plot_null_row(ax, q, measured[K], se[K], bottom)
     if null_theory is not None:
@@ -1680,6 +1686,14 @@ def plot_autocorrelation(
     return ax
 
 
+def sweep_scale(values: ArrayLike) -> str:
+    """ "log" when the swept values are positive and span at least LOG_SWEEP_SPAN, else
+    "linear" (a setting index, which starts at 0, is always linear)."""
+    values = _vector(values, "values")
+    positive = values.size > 0 and bool((values > 0).all())
+    return "log" if positive and values.max() / values.min() >= LOG_SWEEP_SPAN else "linear"
+
+
 def plot_share_sweep(
     values: ArrayLike,
     shares: ArrayLike,
@@ -1688,17 +1702,19 @@ def plot_share_sweep(
     ax: Axes | None = None,
     *,
     xlabel: str = "setting",
-    xscale: str = "linear",
+    xscale: str | None = None,
 ) -> Axes:
     """Band shares (n, K) of n settings against the swept value of each (n,), one colour per
-    latent mode: the measurement as points with error bars and the theory as a line through
-    the settings in order of the swept value."""
+    latent mode: the measurement as points with error bars and the theory as a line with
+    cross markers through the settings in order of the swept value (the markers keep a single
+    setting's theory visible). `xscale` None chooses `sweep_scale(values)`."""
     values = _vector(values, "values")
     shares, se = _matrix(shares, "shares"), _matrix(se, "se")
     theory = _matrix(theory, "theory")
     _same_shape(shares, se=se, theory=theory)
     if shares.shape[0] != len(values):
         raise ValueError(f"shares have {shares.shape[0]} rows for {len(values)} swept values")
+    xscale = sweep_scale(values) if xscale is None else xscale
     if xscale == "log" and not (values > 0).all():
         raise ValueError(f"a log axis needs positive swept values, got {values}")
     ax = _get_ax(ax)
@@ -1708,7 +1724,8 @@ def plot_share_sweep(
         ax.errorbar(
             values, shares[:, k], yerr=se[:, k], fmt="o", capsize=2, color=color, label=label
         )
-        ax.plot(values[order], theory[order, k], color=color, label=f"{label} theory")
+        ax.plot(values[order], theory[order, k], color=color, marker="x", ms=MARKER_SIZE * 1.2,
+                label=f"{label} theory")  # fmt: skip
     ax.set(xlabel=xlabel, ylabel="band share", xscale=xscale)
     ax.grid(alpha=0.25, lw=0.5)
     ax.legend(frameon=False, fontsize="small")
@@ -1730,8 +1747,8 @@ def plot_angle_histogram(
     left = -math.pi + width * np.arange(N_THETA_BINS)
     ax = _get_ax(ax)
     density = counts / (counts.sum() * width)
-    ax.bar(left, density, width=width, align="edge", color=_latent_color(2), alpha=0.7,
-           label="neurons")  # fmt: skip
+    # grey, not a latent mode's colour: the angle is of the contrast plane, not of one mode
+    ax.bar(left, density, width=width, align="edge", color=_GREY, alpha=0.5, label="neurons")
     ax.axhline(1 / (2 * math.pi), color="k", ls="--", lw=1, label="uniform")
     for i, angle in enumerate(_np(marks) if marks is not None else []):
         label = "latent axes" if i == 0 else "_nolegend_"
@@ -1792,8 +1809,9 @@ def plot_ensemble_loss(
 ) -> Axes:
     """The logged training terms of an ensemble against epoch on a log axis: the member mean of
     each series in `mean` (keys of LOSS_STYLES) with a band of +- its standard error `sem`. A
-    series that is zero at every epoch is marked "(zero)" in the legend, as in
-    `plot_loss_curves`."""
+    series that is zero at every epoch is marked "(zero)" in the legend. The labels, styles
+    and the legend beside the axis are those of `plot_loss_curves`; a band reaching zero is cut
+    off at the bottom of the log axis."""
     styles = {key: (label, color, ls) for key, label, color, ls in LOSS_STYLES}
     if unknown := sorted(set(mean) - set(styles)):
         raise ValueError(f"unknown series {unknown}; known: {list(styles)}")
@@ -1811,5 +1829,26 @@ def plot_ensemble_loss(
         ax.fill_between(epoch, values - err, values + err, color=color, alpha=0.25, lw=0)
     ax.set(xlabel="epoch", ylabel="logged value, member mean ± sem", yscale="log")
     ax.grid(alpha=0.25, lw=0.5)
-    ax.legend(frameon=False, fontsize="small")
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
     return ax
+
+
+def fig_panels(
+    plot: Callable[..., Axes],
+    panels: Sequence[Mapping],
+    titles: Sequence[str],
+    **common,
+) -> Figure:
+    """One `plot` per entry of `panels`, side by side on a constrained-layout figure of
+    PANEL_SIZE panels: `plot(**panel, **common, ax=ax)`, titled with `titles`."""
+    if len(panels) != len(titles) or not panels:
+        raise ValueError(f"need one title per panel and at least one, got {len(panels)} panels "
+                         f"and {len(titles)} titles")  # fmt: skip
+    width, height = PANEL_SIZE
+    fig, axes = plt.subplots(
+        1, len(panels), figsize=(width * len(panels), height), squeeze=False, layout="constrained"
+    )
+    for ax, panel, title in zip(axes[0], panels, titles, strict=True):
+        plot(**panel, **common, ax=ax)
+        ax.set_title(title)
+    return fig

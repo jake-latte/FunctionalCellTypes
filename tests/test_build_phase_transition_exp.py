@@ -15,6 +15,7 @@ import pytest
 import torch
 from nbclient.exceptions import CellExecutionError
 
+from fct import draw as fct_draw
 from fct.config import DataConfig, NetConfig
 from fct.data import make_dataset
 from fct.exp import expand, run_setting, save_exp, setting_dir
@@ -216,14 +217,16 @@ def test_the_penalty_spectrum_axis_says_it_starts_from_the_smallest_end(draw, sp
 # ---------------------------------------------------------------- change 7: loss mean and sem
 
 
-def test_loss_curves_are_the_member_mean_with_a_sem_band(draw):
+def test_loss_curves_are_the_member_mean_with_a_sem_band():
     epochs = np.array([0, 10, 20])
     members = np.array([[1.0, 3.0], [2.0, 4.0], [4.0, 8.0]])  # (epochs, B = 2)
     history = {"epoch": epochs, **{k: members * (i + 1) for i, k in enumerate(
         ("loss", "mse", "weight_l2", "rate_l2"))}}  # fmt: skip
     stats = ensemble_statistics(history)
-    fig = draw["plot_ensemble_loss"](stats, "t")
-    (ax,) = _visible(fig)
+    assert "draw.plot_ensemble_loss(STATS.epoch, STATS.mean, STATS.sem, ax=ax)" in _code(
+        build_notebook()
+    )
+    ax = fct_draw.plot_ensemble_loss(stats.epoch, stats.mean, stats.sem)
     assert len(ax.lines) == 4 and len(ax.collections) == 4  # a mean line and a band per term
     mean = members.mean(axis=1)
     assert np.allclose(ax.lines[0].get_ydata(), mean)
