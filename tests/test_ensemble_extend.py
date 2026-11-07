@@ -804,3 +804,38 @@ def test_the_slurm_array_task_trains_the_new_members_unchanged(tmp_path):
     assert run.returncode == 0, run.stderr
     assert _status(tmp_path) == "done"
     assert trained_member_count(_train_dir(tmp_path) / "final.pt") == 4
+
+
+# ---------------------------------------------------------------- the recorded base B
+def test_the_first_extension_records_the_base_b_and_later_ones_keep_it(tmp_path):
+    exp = preset("tiny").model_copy(update={"B": 3})
+    save_exp(exp, tmp_path)
+    assert load_exp(tmp_path).base_B is None
+    assert extend_experiment(tmp_path, by=2).base_B == 3
+    twice = extend_experiment(tmp_path, by=4)
+    assert (twice.B, twice.base_B) == (9, 3)
+    assert load_exp(tmp_path).base_B == 3  # written to exp.json
+
+
+def test_an_unextended_exp_json_omits_base_b_and_keeps_its_text(tmp_path):
+    """Files written before base_B existed load as unextended, and are written back unchanged."""
+    save_exp(preset("tiny"), tmp_path)
+    text = (tmp_path / "exp.json").read_text()
+    assert "base_B" not in text
+    loaded = load_exp(tmp_path)
+    assert loaded.base_B is None
+    save_exp(loaded, tmp_path)
+    assert (tmp_path / "exp.json").read_text() == text
+
+
+def test_a_base_b_must_be_below_b_and_not_beside_a_b_axis():
+    with pytest.raises(ValueError, match="must be below"):
+        ExpConfig.model_validate({**preset("tiny").model_dump(), "B": 4, "base_B": 4})
+    exp = with_axes(preset("tiny"), {"net.B": [2, 3]})
+    with pytest.raises(ValueError, match="base_B is recorded only by extending"):
+        ExpConfig.model_validate({**exp.model_dump(), "B": 4, "base_B": 2})
+
+
+def test_exp_init_refuses_a_base_b(tmp_path, capsys):
+    assert main(["exp", "init", str(tmp_path), "--preset", "tiny", "--set", "base_B=2"]) != 0
+    assert "recorded by `exp extend`" in capsys.readouterr().err

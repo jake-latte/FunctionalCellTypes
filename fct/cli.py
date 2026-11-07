@@ -377,6 +377,10 @@ def _reject_axes_overrides(overrides: Sequence[str]) -> None:
         key = item.partition("=")[0]
         if key == "axes" or key.startswith("axes."):
             raise CliError(f"--set {key}: the axes are edited with --axis PATH=[values]")
+        if key == "base_B":
+            raise CliError(
+                "--set base_B: it is recorded by `exp extend`, the B before the first extension"
+            )
 
 
 def cmd_exp_init(args: argparse.Namespace) -> int:

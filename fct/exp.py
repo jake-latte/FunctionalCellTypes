@@ -257,6 +257,11 @@ class ExpConfig(StrictModel):
     L: PosInt = NetConfig().L
     g: PosFloat = NetConfig().g
     B: PosInt = NetConfig().B
+    # The B before the first `exp extend`, written by `extend_experiment` when it first grows B
+    # and never changed after: the size a setting was designed with, at which its accuracy
+    # budget is computed (`fct.linear_ring.budget_se`). None (omitted from exp.json) until the
+    # experiment is extended, when B is still the base. Not an axis, never set by hand.
+    base_B: PosInt | None = None
     # The initial law (`NetConfig.init`); "prior" is required by the whitened parametrisation,
     # and a shared field (`--set init=prior`) because a `spatial.parametrisation` axis value is
     # validated against the experiment's base, which must already start from the prior.
@@ -287,6 +292,20 @@ class ExpConfig(StrictModel):
             # section ties weight_lambda to lambda_max). Experiments without one have no such
             # cross-field rule, so they are not checked here.
             _validate_combinations(self)
+        return self
+
+    @model_validator(mode="after")
+    def _base_B_is_below_B(self) -> Self:
+        if self.base_B is not None:
+            if self.base_B >= self.B:
+                raise ValueError(
+                    f"base_B ({self.base_B}) is the B before an extension, so it must be below "
+                    f"B ({self.B})"
+                )
+            if B_AXIS in (self.axes or {}):
+                raise ValueError(
+                    f"base_B is recorded only by extending B, which {B_AXIS} as an axis forbids"
+                )
         return self
 
     @model_validator(mode="after")
@@ -456,6 +475,7 @@ def exp_path(root: Path) -> Path:
 EXP_JSON_OMITTED_AT_DEFAULT: dict[str, Any] = {
     "description": None,
     "B": NetConfig().B,
+    "base_B": None,
     "init": NetConfig().init,
     "linear_teacher.teacher": LinearTeacherParams.model_fields["teacher"].default,
     "spatial.parametrisation": SpatialConfig().parametrisation,
@@ -1015,8 +1035,8 @@ def find_setting_dir(root: Path, exp: ExpConfig, values: Mapping[str, Any]) -> P
 
 
 def extend_experiment(root: Path, by: int) -> ExpConfig:
-    """Grow every setting's ensemble by `by` members: rewrite ROOT/exp.json with B + by and
-    return the new experiment. Nothing is trained here: `run_setting` (`exp run`, the SLURM
+    """Grow every setting's ensemble by `by` members: rewrite ROOT/exp.json with B + by (and,
+    on the first extension, base_B = the B before it) and return the new experiment. Nothing is trained here: `run_setting` (`exp run`, the SLURM
     array) then trains each done setting's missing members and appends them to its final.pt;
     settings not yet trained train all B + by from scratch.
 
@@ -1041,7 +1061,8 @@ def extend_experiment(root: Path, by: int) -> ExpConfig:
             f"cannot extend while training is partial in settings {partial}; run them to the "
             f"end first (`python -m fct exp run {root}`)"
         )
-    extended = ExpConfig.model_validate({**exp.model_dump(), "B": exp.B + by})
+    base_B = exp.B if exp.base_B is None else exp.base_B  # the first extension records it
+    extended = ExpConfig.model_validate({**exp.model_dump(), "B": exp.B + by, "base_B": base_B})
     save_exp(extended, root)
     return extended
 
