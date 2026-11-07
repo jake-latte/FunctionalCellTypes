@@ -350,10 +350,14 @@ def test_extending_by_less_than_one_is_refused(tmp_path, by):
         extend_experiment(tmp_path, by)
 
 
-def test_an_experiment_with_a_B_axis_cannot_be_extended(tmp_path):
-    save_exp(with_axes(preset("tiny"), {"net.B": [2, 3]}), tmp_path)
-    with pytest.raises(ExpError, match="net.B"):
+@pytest.mark.parametrize("values", [[2, 3], [8]], ids=["two values", "one value"])
+def test_an_experiment_with_a_B_axis_cannot_be_extended(tmp_path, values):
+    """Even one value (as in the phase_transition preset): it names the directories."""
+    save_exp(with_axes(preset("tiny"), {"net.B": values}), tmp_path)
+    before = (tmp_path / "exp.json").read_text()
+    with pytest.raises(ExpError, match="net.B is an axis.*directory name"):
         extend_experiment(tmp_path, 1)
+    assert (tmp_path / "exp.json").read_text() == before
 
 
 def test_a_B_smaller_than_the_cached_member_count_fails_loudly(tmp_path):

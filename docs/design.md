@@ -64,6 +64,7 @@ CACHE_DIR/config.json                # written by `init`; the single source of h
 CACHE_DIR/data/dataset.pt            # generated task data
 CACHE_DIR/train/ckpt_<epoch:06d>.pt  # periodic checkpoint (only the latest kept)
 CACHE_DIR/train/final.pt             # final trained model (+ history)
+CACHE_DIR/train/extend_<b0>-<b1>/    # members b0 .. b1-1 of an ensemble being extended (own ckpt_*.pt and final.pt); deleted once appended
 CACHE_DIR/meanfield/ckpt_<outer:05d>.pt, CACHE_DIR/meanfield/final.pt
 CACHE_DIR/analysis/<name>.pt         # intermediate analysis results
 CACHE_DIR/figures/<name>.png
@@ -360,9 +361,10 @@ class Whitening(nn.Module)                               # net.whitening: (S_row
 def effective_weights(net) -> {"U" | "J.k" | "V": W}    # the weights the forward pass uses: the parameters themselves (same tensors) for a plain net, S_rows xi S_cols under whitening; what every reader of trained weights reads
 MLP.from_weights(U, J, V, g, phi, whitening=None) -> MLP   # an MLP holding the given parameters (no copy, no random draw); member() uses it
 def member_seed(seed: int, b: int) -> int                # member 0: seed itself; b > 0: first 8 bytes (little-endian) of sha256("fct.model.member:<seed>:<b>")
-def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype, whitening=None, init_std=1.0) -> Net   # cfg.B = 1: an MLP, parameters N(0, init_std^2) drawn on CPU from a local torch.Generator seeded with cfg.seed;
+def make_net(cfg: NetConfig, D_in: int, D_out: int, device, dtype, whitening=None, init_std=1.0, members=None) -> Net   # cfg.B = 1: an MLP, parameters N(0, init_std^2) drawn on CPU from a local torch.Generator seeded with cfg.seed;
     # cfg.B > 1: an EnsembleMLP whose member b is drawn from a generator seeded with member_seed(cfg.seed, b); then moved to device (no global RNG touched); phi = get_phi(cfg.phi)
     # whitening: the factors of fct.spatial.whitening_factors; train.make_net_from_config passes them with init_std = weight_lambda ** -0.5 under spatial.parametrisation == "whitened"
+    # members: a range (default range(cfg.B)) of the members to build, in order: member j of the result is member members[j] of the whole ensemble bit for bit (an MLP if the range holds one); how an extension builds the members it adds
 ```
 
 ## train.py
@@ -381,7 +383,7 @@ def per_member(net, t, reduce=torch.sum) -> Tensor   # reduce over every axis bu
 def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l2 if cfg.spatial is None or its parametrisation is "whitened" (the plain |xi|^2), else the spatial prior for net's sizes, dtype and device
     # for SGLD refuses a step the prior's stiffest curvature cannot take, on either path; ValueError if the net's parametrisation is not the config's
 def prior_stiffness(factors) -> float   # max over parameters of lambda_max(M_rows) lambda_max(M_cols): the prior's curvature is 2 prior_coefficient times it along its stiffest direction (1 under whitening)
-def make_net_from_config(cfg: Config, D_in, D_out, device, dtype) -> Net   # the one place a Config becomes a net: make_net of cfg.net (standard-normal z), under net.init "prior" scaled by weight_lambda ** -0.5 and, under the penalty, correlated by floored_whitening_factors; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) as the net's factors
+def make_net_from_config(cfg: Config, D_in, D_out, device, dtype, members=None) -> Net   # members as in make_net; the one place a Config becomes a net: make_net of cfg.net (standard-normal z), under net.init "prior" scaled by weight_lambda ** -0.5 and, under the penalty, correlated by floored_whitening_factors; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) as the net's factors
 def largest_hessian_eigenvalue(loss_fn, params, max_iter=300, seed=0) -> float   # the most positive Hessian eigenvalue, by Lanczos with full reorthogonalisation on Hessian-vector products (double backward), in float64; converged when the top Ritz pair's residual is below HESSIAN_RTOL (1e-8, or 64 eps of the dtype) of the largest Ritz value, else ValueError ("did not converge"); an ensemble's block-diagonal Hessian gives the largest over members; local generator, parameters and .grad untouched
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
@@ -401,6 +403,12 @@ def load_trained(cache_dir: Path, cfg: Config, device, dtype) -> tuple[Net, Hist
 def select_member(net: Net, history, member: int | None = None) -> tuple[MLP, History]   # a single net passes through (member None or 0);
     # an ensemble needs member (ValueError if None, IndexError out of range) and gives net.member(member), member_history(history, member)
 def member_history(history, member) -> History          # every entry but epoch / monitor_epoch indexed by member: a single network's history
+def extend_trained(cfg, dataset, cache_dir, log=print, monitor=None) -> tuple[Net, History]   # grow train/final.pt (b0 members, written under cfg with net.B = b0) to cfg.net.B; see "Growing an ensemble"
+def append_members(old: dict, new: dict) -> dict        # pure: the payload of old's members followed by new's (state dict, Adam moments, every per-member history entry concatenated; epoch / monitor_epoch must agree; a single network counts as one member); ValueError if they do not fit
+def trained_member_count(path) -> int                   # members of a train artefact (1 for a single network), from its U alone; ValueError if unreadable or not a net
+def extension_seed(seed, b0) -> int                     # the global-RNG seed of an extension's staging run: first 8 bytes of sha256("fct.train.extension:<seed>:<b0>"); b0 >= 1
+def staging_dir(train_dir, b0, b1) -> Path; remove_staging(train_dir, keep=None)   # train/extend_<b0>-<b1>/ (half-open); delete every staging directory but `keep`
+def with_ensemble_size(cfg, B) -> Config                # cfg with net.B = B
 ```
 
 Ensembles (`net.B > 1`). One run trains B copies of the network that share the dataset and differ in their initial
@@ -423,6 +431,48 @@ ensemble unless given a member: `spatial_exp.load_exp_run(chosen, member=None)` 
 commands, `report.load_setting_result`, `exp_view.load_setting_data` and `lrtune.evaluate_setting` refuse; the
 mean-field `solve` raises for an ensemble, and the experiment's solve stage raises `ExpError` for an ensemble setting
 before writing anything, trained or not (its solve status stays "missing").
+
+Growing an ensemble. The members of an ensemble are its posterior samples (one network per member: a single SGLD chain
+is not trusted to give several independent ones), so an experiment that is done can be given more members without
+retraining the ones it has: `fct exp extend ROOT --by K` (`exp.extend_experiment`) rewrites exp.json with `B + K`, and
+`exp run` (or the SLURM array, unchanged) then calls `extend_trained` for every setting whose final.pt holds b0 < B
+members. The contract:
+
+- Members b0 .. B-1 are built by `make_net_from_config(cfg, ..., members=range(b0, B))`, so their initial weights are
+  those of a from-scratch run of B (`member_seed` does not depend on B), and train as an ensemble of their own with
+  `train`'s machinery in `train/extend_<b0>-<b1>/` (b1 = B, half-open), under the staging config (`net.B = B - b0`,
+  `train.seed = extension_seed(train.seed, b0)`) whose hash stamps the staging checkpoints: an interrupted extension
+  resumes from them exactly, RNG state included. The MIR monitor is built from the setting's config, so it sees each new
+  member exactly as a from-scratch run would.
+- Then `append_members` concatenates, along the member axis, the state dict (exactly the parameters: a whitened net's
+  factors are non-persistent buffers rebuilt from the config), Adam's moments, and every history entry but `epoch` and
+  `monitor_epoch` (which must agree), so each per-member list has B entries and each `monitor_<key>` entry a member axis
+  of B; the RNG state stays the old run's. final.pt is replaced (atomically) by the result stamped with the hash of the
+  new config: it IS the B-member artefact, and `net.B` stays in the train hash, so no existing cache changes hash. The
+  staging directory is deleted after; a crash in between leaves a done setting whose leftover staging directory the
+  next `run_setting` removes. A single network (b0 = 1) and a block of one (K = 1, trained as an `MLP`) gain their
+  member axis on append.
+- Equality with a from-scratch run of B. Under Adam (no noise) members b0 .. B-1 equal those of a from-scratch run bit for
+  bit, history and monitor records included (`tests/test_ensemble_extend.py`), for K >= 2; a block of one trains as an
+  `MLP`, whose forward pass equals the batched one to round-off. Under SGLD the noise is ONE global stream over the whole ensemble (the default; the
+  per-member streams of `tests/test_ensemble.py` exist only as an injected `noise` in tests), so a from-scratch run of
+  B gives member b a slice of draws of shape (B, ...) that no run of fewer members can reproduce. The staging run
+  therefore draws from a stream of its own (`extension_seed`; reseeding with `train.seed` would hand the new members the
+  old members' noise rearranged): the new members start from the same weights as the from-scratch ones (everything
+  recorded before the first step agrees bit for bit) and are independent samples of the same law, equal in
+  distribution, not bit for bit. The old members are bit for bit what they were.
+- Status. `setting_status` (train) counts members: done needs final.pt's hash to be the config's AND B members; a
+  final.pt of b < B members carrying the hash of the config with `net.B = b` is partial (awaiting its extension; it has
+  no `train/ckpt_*.pt`, so readers of partial settings that load the latest checkpoint find none); anything else,
+  more members than B included, is stale, and `run_setting` refuses a final.pt of more members than B with an
+  `ExpError` before writing anything (an ensemble only grows). config.json accepts a grown `net.B` (and is rewritten)
+  unless an original run is part-way.
+- `extend_experiment` refuses (ExpError, exp.json unchanged) `K < 1`, an experiment with a `net.B` axis (even one of a
+  single value, as in the `phase_transition` preset: the value is in every directory name and in the exp hash), and any
+  partial setting: a run part-way wrote its checkpoints for the old B, and a pending extension would no longer match a
+  larger B (run them first). Settings not yet trained simply train B + K members from scratch.
+- Not covered: the solve stage refuses ensembles anyway, so a B = 1 setting's mean-field solve is stale once it is
+  extended (the net section, with B, is in the solve hash).
 
 Cost: an ensemble is one batched run, measured in `docs/issues/ensemble-training.md` (`jobs/bench_ensemble.py`). It is
 faster than B singles on the GPU and at the phase-transition preset's sizes on the CPU, but SLOWER than a loop of B
@@ -1016,19 +1066,23 @@ def get_setting(exp, index) -> Setting                 # ExpError (a ValueError)
 def setting_dir(root, setting) -> Path                   # ROOT / setting.relpath (see Layout)
 def data_config(exp, task) -> DataConfig               # D_in from data.task_dims (2*G*G, 81, or n_features), never repeated in the experiment
 def setting_config(exp, setting) -> Config             # base config for the setting's task (net seed = seeds.net, monitor_* from the experiment) with each axis value written over it
-def setting_status(root, exp, setting, stage="train") -> "done" | "partial" | "missing" | "stale"   # stage "train": done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stage "solve": the same for meanfield/final.pt and the hash of data, net, train, meanfield (what run_meanfield writes); stale = a final.pt with another hash, or an unreadable one; partial = a ckpt_*.pt but no final.pt; missing otherwise (so also a run that has not yet reached its first checkpoint). The stages are independent: a solve is stale when the solver or the training config changed, a trained net never when only the solver did
+def setting_status(root, exp, setting, stage="train") -> "done" | "partial" | "missing" | "stale"   # stage "train": done = train/final.pt exists with the config hash of this setting (data, net, train, loss version; only the hash is read); stage "solve": the same for meanfield/final.pt and the hash of data, net, train, meanfield (what run_meanfield writes); stale = a final.pt with another hash, or an unreadable one; partial = a ckpt_*.pt but no final.pt, or (train) a final.pt of fewer members than net.B written under this config with that smaller B (an extended experiment; "Growing an ensemble"); done (train) also needs net.B members, and a final.pt of more is stale; missing otherwise (so also a run that has not yet reached its first checkpoint). The stages are independent: a solve is stale when the solver or the training config changed, a trained net never when only the solver did
 def exp_hash(exp) -> str                               # short hash of the built values of every axis (so [0, 1e-3] == [0.0, 1e-3]) plus the base task unless data.task is an axis; stored in setting.json
 def read_setting(directory, exp) -> {"index", "exp_hash", "axes"}   # a setting directory's setting.json; ExpError naming the directory if it was written under another experiment or has no exp hash
 def built_values(exp) -> {axis: [values as the built Config holds them]}   # used by exp_hash and the directory labels, so a value has one spelling in both
 def find_setting_dir(root, exp, values) -> Path         # the one run setting of `exp` whose axes equal `values` (same_value: numbers to 1e-9 relative, also in lists; a bool equals only a bool;
                                                           # a subset of the axes is enough if unambiguous); only the experiment's own directories are considered; LookupError if none, several, or an unknown axis
+def setting_members(root, exp, setting) -> int | None   # members of train/final.pt (1 for a single network); None without a readable one
+def extend_experiment(root, by) -> ExpConfig            # rewrite exp.json with B + by and return it; trains nothing (run_setting does); ExpError, exp.json unchanged, for by < 1, a net.B axis, or any partial setting (train)
 def has_settings(root) -> bool                            # ROOT already holds a setting directory; `exp init` refuses to write a new exp.json there without --force
 def run_setting(exp, index, root, log=print, stage="train") -> None
     # first validates/writes config.json and setting.json (ExpError if an existing one differs in data, net, train or the like: the experiment changed
     # under existing artefacts; this check comes BEFORE the done check, so a changed experiment raises even for a done setting; only the meanfield section
     # may differ, and config.json is then updated to the experiment's, so `python -m fct solve DIR` solves what the experiment does),
     # StaleCacheError if the stage's final.pt is stale, returns at once if done (log "already done (<stage>)"), else get_dataset and
-    #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_monitor(dataset, cfg)), the monitor of train.monitor_kind, built (and so failing on unsuitable data) before training; resumes a partial run exactly (see train.py)
+    #   stage "train": train_from_config(cfg, dataset, dir, log, monitor=make_monitor(dataset, cfg)), the monitor of train.monitor_kind, built (and so failing on unsuitable data) before training; resumes a partial run exactly (see train.py);
+    #     a partial setting WITH a final.pt (fewer members than net.B: the experiment was extended) runs extend_trained instead ("Growing an ensemble");
+    #     ExpError, before anything is written, for a final.pt of more members than net.B; a done train setting has any leftover staging directory removed
     #   stage "solve": run_meanfield(cfg, dataset, net, dir, log) into DIR/meanfield/, net = the trained net if train/final.pt exists (history gets the
     #     net-comparison keys), else None (keys absent; "no trained net" is logged). Resumes from a solver checkpoint; the net-or-not choice is fixed
     #     once a solve has started: a checkpoint written with the other choice raises ExpError (one line, naming the file; `exp run --index` prints it
@@ -1197,8 +1251,9 @@ python -m fct plot-example CACHE_DIR                                 # result-in
 python -m fct exp init ROOT [--preset tiny|full] [--set n_epochs=100 ...] [--force]   # writes ROOT/exp.json; --set takes dotted keys like `init`
 python -m fct exp list ROOT      # "<index> <task>/L{L}_{phi}_r{rate}" per setting
 python -m fct exp count ROOT     # 36
-python -m fct exp status ROOT [--stage train|solve]   # "<index> done|partial|missing|stale <dir>" per setting, then "N done, N partial, N missing, N stale"
-python -m fct exp run ROOT [--index i] [--stage train|solve]   # train (default) or solve setting i (a SLURM array task); without --index, all settings in order
+python -m fct exp status ROOT [--stage train|solve]   # "<index> done|partial|missing|stale <members>/<B> <dir>" per setting (members of train/final.pt, "-" without one; B the setting's net.B), then "N done, N partial, N missing, N stale"
+python -m fct exp run ROOT [--index i] [--stage train|solve]   # train (default) or solve setting i (a SLURM array task); without --index, all settings in order; trains the members an extended setting lacks
+python -m fct exp extend ROOT --by K   # rewrite exp.json with B + K ("wrote ...: B 2 -> 5; ..."); refusals (K < 1, a net.B axis, a partial setting) are one stderr line, exit 1
 ```
 
 The experiment subcommands exit 1 with one stderr line for a missing or invalid exp.json, an out-of-range index, or a setting whose
@@ -1224,6 +1279,8 @@ bash jobs/fct_exp.sh ROOT --list | --status      # `fct exp list` / `fct exp sta
 ```
 
 `ROOT` is the first argument or `$FCT_EXP_ROOT`; it must exist and hold a `exp.json`. Array size comes from `fct exp count`.
+After `fct exp extend ROOT --by K` the script is used unchanged: each array task's `exp run --index i` trains the members
+setting i lacks (`tests/test_ensemble_extend.py` runs one task through the script); `--status` shows `members/B`.
 `FCT_MAX_CONCURRENT` (default 4) caps running tasks; `FCT_PYTHON` overrides `<project>/.venv/bin/python`. Each task runs
 `python -m fct exp run ROOT --index $SLURM_ARRAY_TASK_ID --stage train` on one GPU of partition `gpu`, excluding `gpu-380-10,gpu-380-12,gpu-380-14`.
 `--index` applies to `--submit`/`--dry-run` only: `N` is one setting, `A:B` the half-open range of settings A .. B-1 (like a Python

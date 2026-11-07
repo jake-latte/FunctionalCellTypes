@@ -950,15 +950,21 @@ def extend_experiment(root: Path, by: int) -> ExpConfig:
     array) then trains each done setting's missing members and appends them to its final.pt;
     settings not yet trained train all B + by from scratch.
 
-    ExpError, leaving exp.json as it was, if `by` < 1, if net.B is an axis (the settings differ
-    in B, so there is no one B to grow), or if any setting's training is partial: a run part-way
+    ExpError, leaving exp.json as it was, if `by` < 1, if net.B is an axis (even of one value:
+    it names the setting directories), or if any setting's training is partial: a run part-way
     wrote its checkpoints for the old B, and an extension part-way is a block of members that a
     larger B would no longer match. Run those settings to the end first."""
     if by < 1:
         raise ExpError(f"extend by at least 1 member, got {by}")
     exp = load_exp(root)
     if B_AXIS in axes_of(exp):
-        raise ExpError(f"{B_AXIS} is an axis of this experiment; only a shared B can be extended")
+        # Even a one-valued axis: its value is in every setting's directory name and exp hash,
+        # so changing it would orphan the settings it is meant to grow.
+        raise ExpError(
+            f"{B_AXIS} is an axis of this experiment, so B is part of every setting's directory "
+            "name and exp hash and cannot change under existing settings; only the shared field "
+            "B can be extended"
+        )
     partial = [i for i, _, status in setting_statuses(root, exp) if status == "partial"]
     if partial:
         raise ExpError(
