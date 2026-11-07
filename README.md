@@ -40,7 +40,7 @@ unset VIRTUAL_ENV                        # if your shell carries another project
 | `hmc.py`, `importance.py`, `meanfield.py` | HMC and importance samplers, the mean-field saddle-point solver |
 | `exemplar.py` | the exemplar notebook's logic: config from flat settings, cached train and solve, live solver view |
 | `cache.py`, `cli.py` | cache layout with cache-or-compute helpers; the `python -m fct` command line |
-| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_exp.py`, `build_phase_transition_exp.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
+| `notebooks/` | `build_modularity.py`, `build_phase_transition.py`, `build_spatial.py`, `build_spatial_exp.py`, `build_phase_transition_exp.py`, `build_linear_ring.py` and `build_exemplar.py` build the notebooks; the `.ipynb` files are their sources (no outputs) |
 | `jobs/fct_exp.sh` | SLURM array script for the experiment (train stage) |
 | `jobs/fct_solve.sh` | the same array job at the solve stage (mean-field saddle points) |
 | `tests/` | pytest suite: synthetic fixtures, CPU only, tiny sizes |
@@ -243,6 +243,14 @@ uv run python notebooks/build_spatial_exp.py --no-execute                       
 ```sh
 uv run python notebooks/build_phase_transition_exp.py ROOT --set 'SETTING={"spatial.d": 2}' --set MEMBER=1   # execute -> tmp/phase_transition_exp.ipynb
 uv run python notebooks/build_phase_transition_exp.py --no-execute                                          # rebuild the committed source notebook
+```
+
+**Linear-ring notebook** (`linear_ring.ipynb`; the viewer for the `linear_ring`, `linear_ring_equivalence` and `linear_ring_tiny` presets). Give the experiment ROOT and the axis values of one setting, `SETTING = {"train.beta": 10.0}`, and optionally the setting to show beside it, `TWIN_SETTING` in `TWIN_ROOT` (the other parametrisation; `None` shows one). It draws, per setting, the loss curves, the relaxation diagnostic of the records, the member-averaged final-state spectra against `predicted_spectra`, the band share across the experiment's trained settings, the mode ratio and R(Delta)/R(0), and tabulates every statistic with its bootstrap SE over members against the prediction, the disagreement flags and, with two settings, their equivalence. Logic is in `fct/linear_ring.py` and `fct/ring_view.py`; only the source notebook is committed.
+
+```sh
+uv run python notebooks/build_linear_ring.py ROOT                                                        # the defaults: linear_ring_tiny settings 0 and 3 -> tmp/linear_ring.ipynb
+uv run python notebooks/build_linear_ring.py ROOT/p1 --set 'SETTING={"train.beta": 10.0}' --set "TWIN_ROOT='ROOT/p1-penalty'" --set 'TWIN_SETTING={"train.beta": 10.0}'
+uv run python notebooks/build_linear_ring.py --no-execute                                                # rebuild the committed source notebook
 ```
 
 ## Python library: single runs and the mean-field solver

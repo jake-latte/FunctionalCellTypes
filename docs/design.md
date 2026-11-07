@@ -34,6 +34,8 @@ fct/
   spatial_exp.py  # spatial-experiment notebook: pick one setting of a spatial experiment by axis values, load its trained net and the 3^k latent-lattice test set
   spatial_view.py  # spatial-prior notebook: config, resumable run, ring/lattice layout of neurons and weights, empirical kernels (pure + one I/O function)
   linear_theory.py # the linear one-hidden-layer theory on a ring from a Config and a Dataset: per-mode spectra for an orthonormal teacher, their summaries, the ansatz-free kernel for any teacher (pure)
+  linear_ring.py   # the linear-ring experiments: a setting's predicted law, ring-averaged statistics of the member-averaged final-state spectrum with bootstrap SEs, the comparison rules, the relaxation diagnostic, the notebook's measurements (pure, except predicted_law)
+  ring_view.py     # linear-ring notebook: load a setting's law and records, the band share across settings, markdown tables of the statistics, the equivalence and the relaxation fit
   draw.py          # plotting: plot_* take an ax, fig_* assemble figures; never plt.show()
   exp.py         # an experiment, a batch of runs over Config fields (its axes): ExpConfig, expand, run_setting, status, preset readers
   presets/       # one JSON file per preset: a complete base experiment (ExpConfig fields written out, with a description); see "Presets" under exp.py
@@ -43,7 +45,7 @@ fct/
   exemplar.py      # the exemplar notebook's logic: config from flat settings, cache layout, cached train / solve, live refresh
   cli.py           # argparse CLI: init / train / solve / plot / plot-example / experiment
   __main__.py      # `python -m fct ...` -> cli.main()
-notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_spatial_exp.py, build_phase_transition_exp.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
+notebooks/         # build_modularity.py, build_phase_transition.py, build_spatial.py, build_spatial_exp.py, build_phase_transition_exp.py, build_linear_ring.py, build_exemplar.py build + execute the notebooks (cells are one-line library calls, except build_spatial.py's figure cells, which define their own plotting functions)
 tests/             # pytest, synthetic fixtures only, CPU, tiny sizes
 docs/design.md     # this file
 docs/issues/*.md   # current work items (finished ones move to docs/issues/archive/)
@@ -1216,6 +1218,10 @@ regime_accurate(exact, law) -> (3K + 1,) bool                     # |exact - pre
 disagrees(values, se, predicted) -> (S,) bool                     # beyond FALSIFY_N_SE bootstrap SEs
 paths_disagree((values, se, predicted), (values, se, predicted)) -> (S,) bool   # deviations beyond EQUIVALENCE_N_SE combined SEs
 pipeline_bounds(law) -> (largest bootstrap SE, tolerance)         # PIPELINE_SE_MARGIN and PIPELINE_N_SE x that, in delta-method SEs
+# the notebook's measurements (Q = N/2 + 1 folded frequencies or lags)
+measure_final(law, final (B, K + 1, N), hex_moments (B, 2) | None, seed) -> FinalMeasurement   # statistics, disagree flags, folded spectra, ratio, R(Delta)/R(0), prior profile, secondary q_1/2 and q = 0 shares, |mean m|, each with its bootstrap SE
+measure_relaxation(law, epochs (R,), records (R, B, K, N), start=None, seed) -> RelaxationView # relaxation_fit from start (default n_epochs / 2), every series as (statistic - A) / budget_se
+lag_profile(D, keep) -> (..., N/2 + 1); folded_mode_ratio(D) -> (..., N/2 + 1); prior_profile(law); secondary_statistics(N, keep); hexatic_estimate(moments); latent_angles(Z, U) -> (6,); relaxation_curve(fit, t, t0)
 ```
 
 The pipeline test (`tests/test_linear_ring_smoke.py`, marked slow, about a minute on one CPU thread) runs both
@@ -1776,6 +1782,18 @@ The computation layer of the phase-transition notebook: one setting of a `phase_
 - `ensemble_statistics(history) -> EnsembleStatistics(epoch, mean, sem)` for `ENSEMBLE_KEYS` (loss, mse, weight_l2, rate_l2; `weight_l2` is the raw quadratic form, before its loss coefficient): sem = std(ddof=1) / sqrt(B), NaN for B = 1.
 - `member_view(net, lattice, test, spaces, n_bins, kind, n_shuffles, seed) -> MemberView(A, info_overlap, rate_overlap, weight_kernels)` for one `MLP`: the notebook's data kernels A^(l) (`spatial_view.data_kernels`, on the lattice set), `information_overlap` and `rate_overlap` of `tuning_view` (on the random test set) and `empirical_kernels` of each weight in (post, pre) orientation. `ensemble_views(net, ...)` maps it over `net.member(b)` with shuffle seed `seed + b`; `average_views` takes the elementwise mean in unit-index space (members share the embedding), after which the units are ordered for display. The averaged overlap is the mean over members of each member's own overlap matrix (a second moment over members; for the corrected MIR the per-member clamping at zero biases it upward), not the overlap of the mean tuning. `random_test_set` raises unless the training set is exactly what `data_cfg` regenerates (compared in memory, so P, D_in, n_latents, latent range and seed all count). `FloorReport.floor` records min_rel_eig times the top eigenvalue of K, the floor the penalty factors report. `load_phase_run` is read-only: a done setting whose dataset file is missing gets its training set generated in memory.
 - `ensemble_example_outputs(net, dataset, indices) -> EnsembleExamples`: `y_pred` is (B, n_examples, D_out), one colour per member; `y_true` and `x` are the dataset rows.
+
+## linear_ring.ipynb (a linear-ring setting against the theory)
+
+`notebooks/build_linear_ring.py` builds `linear_ring.ipynb` (source only; executed copies go to the ignored `tmp/`): one setting of a linear-ring experiment (`ROOT`, `SETTING`) and, beside it, `TWIN_SETTING` in `TWIN_ROOT` (default `ROOT`), normally the same point under the other parametrisation. The defaults are `linear_ring_tiny`'s diagonal (settings 0 and 3); for `linear_ring` against `linear_ring_equivalence` give the two ROOTs. Other parameters: `BURN_IN` (start of the relaxation fit, default half the run), `SWEEP_AXIS` (a numeric axis for the band-share figure, default the setting index), `EXACT` / `TWIN_EXACT` (the exact posterior's statistics, in `statistic_list` order, for `regime_accurate`), `SEED` (the bootstrap's).
+
+- The analysis is `fct.linear_ring` (`measure_final`, `measure_relaxation`); `fct.ring_view` loads (`load_ring_setting`, `band_share_sweep`) and writes the tables; every figure is a `fct.draw` `plot_*` (`plot_ensemble_loss`, `plot_relaxation`, `plot_spectrum`, `plot_share_sweep`, `plot_spectrum_ratio`, `plot_autocorrelation`, `plot_angle_histogram`), each drawn into one panel per shown setting.
+- One sample per member: everything is read off the member-averaged final-state spectrum (the last record) with the bootstrap over members; the records before it feed only the relaxation diagnostic. Per-member values are not shown.
+- The summary table lists every primary statistic with `disagrees`, the secondary q_1/2 (flagged beyond `Q_HALF_TOLERANCE`) and q = 0 shares, and at K = 3 the hexatic modulus (flagged above `HEXATIC_MAX`); the regime column is `regime_accurate` of `EXACT`, else "not assessed". With two settings, `equivalence_table` applies `paths_disagree` and states the number of statistics compared.
+- The intro states that `predicted_spectra` is the N -> infinity mean-field limit and that the whitened lr's bias on mode 1 exceeds the accuracy budget at `linear_ring`'s base point; the numbers are quoted from each experiment's description (`regime_sentences`), or from its preset's when `exp init` replaced the description with a note of overrides (`regime_markdown`).
+- It calls none of the MIR readers (they refuse spectrum experiments), only `fct.report.exp_root_from_env`, and of `fct.phase_view` only `ensemble_statistics` (its prior figures label the penalty's factors, which a whitened run does not train with).
+- An untrained setting is reported in the loader and left out of the figures; with no trained setting every later cell says so (`when_trained`).
+- `tests/test_build_linear_ring.py` executes it (marked slow) on `linear_ring_tiny` at B = 32 trained through the CLI: both settings side by side, one setting swept along `train.lr`, and an untrained setting.
 
 ## phase_transition_exp.ipynb (the phase_transition experiment, drawn)
 
