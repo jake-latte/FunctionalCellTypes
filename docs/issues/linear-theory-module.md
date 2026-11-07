@@ -1,7 +1,7 @@
 ---
 type: data-science
 complexity: complex
-status: in progress
+status: done
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -52,3 +52,6 @@ implementation to port (its `g2` argument becomes `r`).
   and checks it against an independent brute-force evaluation of the master
   equation for one small case ($N = 12$, as in the limits note's check).
 - Full suite and `ruff` pass.
+
+Note: the quoted plan text's `spectrum_summary` is `predicted_summary` in the module;
+`fct.spectrum` owns the name `spectrum_summary`.
