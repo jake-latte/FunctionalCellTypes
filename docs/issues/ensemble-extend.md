@@ -1,7 +1,7 @@
 ---
 type: infrastructure
 complexity: complex
-status: awaiting your confirmation
+status: todo
 ---
 
 <!-- status: todo | in progress | in review | done | blocked |
@@ -16,7 +16,7 @@ add samples without retraining, an experiment whose settings are done must
 be extendable: `B += K` in `exp.json`, train the K new members only, append
 them to each setting's cache.
 
-## Proposed design (to confirm)
+## Design (confirmed by the PI 2026-11-07: the `exp extend ROOT --by K` subcommand form)
 - CLI: `fct exp extend ROOT --by K` rewrites `exp.json` with `B + K`
   (refusing if any setting is `partial`), then `fct exp run ROOT --index i`
   (and the SLURM array) trains whatever members a setting is missing: a
@@ -46,6 +46,9 @@ them to each setting's cache.
   `B = 8`).
 - `exp status` gains a `members` column; `select_member` and every reader
   already index members, so analysis code is unchanged.
+
+Starts after `rate-penalty-code` merges (all three of `whitened-spatial-prior`,
+`rate-penalty-code` and this item edit `fct/train.py` and `fct/exp.py`).
 
 ## Inputs / outputs / interfaces
 - Inputs: `fct/exp.py` (`run_setting`, `setting_status`, `save_exp`),
