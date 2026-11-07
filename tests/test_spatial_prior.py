@@ -37,6 +37,7 @@ from fct.train import (
     load_trained,
     make_weight_penalty,
     prior_coefficient,
+    rate_coefficient,
     spatial_weight_penalty,
     train,
 )
@@ -45,8 +46,10 @@ CPU, F64 = torch.device("cpu"), torch.float64
 
 # ---------------------------------------------------------------- pins of runs without the prior
 
-# Section hashes of three configs without a spatial prior, from the LOSS_VERSION 4, MODEL_VERSION 2 code with
+# Section hashes of three configs without a spatial prior, from the LOSS_VERSION 5, MODEL_VERSION 2 code with
 # the latent interval as `latent_min` / `latent_max`: the spatial section must not enter them when it is unset.
+# All three have rate_lambda > 0, so they hash version 5; at LOSS_VERSION 4 they were the pins
+# 97e1aa717ba3 / d0626f9af4ff, b1a93046b4f5 / 63cd3997a68f and 2bf60c07341b / 4ed6c35ef5a8.
 SMALL = Config(
     data=DataConfig(P=16, D_in=4, d=2, embedding="linear", seed=1),
     net=NetConfig(N=8, L=2, g=1.0, phi="tanh", seed=2),
@@ -57,12 +60,12 @@ SMALL = Config(
 TRAIN = ("data", "net", "train")
 ANALYSIS = ("data", "net", "train", "analysis")
 HASH_PINS = [
-    (default_config(), {TRAIN: "97e1aa717ba3", ANALYSIS: "d0626f9af4ff"}),
+    (default_config(), {TRAIN: "629c7b68d953", ANALYSIS: "d9ebcb6c223f"}),
     (
         Config(train=TrainConfig(optimizer="sgld", beta=2.0)),
-        {TRAIN: "b1a93046b4f5", ANALYSIS: "63cd3997a68f"},
+        {TRAIN: "4ea21006c4d2", ANALYSIS: "7e321caab919"},
     ),
-    (SMALL, {TRAIN: "2bf60c07341b", ANALYSIS: "4ed6c35ef5a8"}),
+    (SMALL, {TRAIN: "722015e687f3", ANALYSIS: "85c7409629a0"}),
 ]
 # compute_loss on the SMALL net (prior coefficient 0.1, rate_lambda=1e-3) and the squared norm of
 # each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output V^T phi(h^L) / N).
@@ -381,7 +384,9 @@ def test_adam_training_with_the_prior_is_the_plain_adam_loop_on_the_spatial_loss
     optim = torch.optim.Adam(ref.parameters(), lr=tc.lr)
     for _ in range(tc.n_epochs):
         optim.zero_grad()
-        loss, _ = compute_loss(ref, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)
+        loss, _ = compute_loss(
+            ref, ds.x, ds.y, prior_coefficient(tc), rate_coefficient(tc), penalty
+        )
         loss.backward()
         optim.step()
     assert _same_params(trained, ref)
