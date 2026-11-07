@@ -8,6 +8,7 @@ import torch
 
 from fct import linear_ring as lr
 from fct.exp import preset
+from fct.spectrum import bootstrap_members
 from tests.spectrum_helpers import gaussian_field
 
 F64 = torch.float64
@@ -55,12 +56,42 @@ def test_ring_statistics_ignore_the_frequencies_outside_keep():
         stats(D[:, :16])
 
 
-def test_the_floored_frequencies_are_those_below_min_rel_eig_of_the_top_eigenvalue():
-    """On linear_ring_tiny (N = 16, ell = 2 sites, min_rel_eig 1e-3) lambda_q / lambda_0 is
-    4.5e-4 at |q| = 5, so |q| >= 5 are floored; on linear_ring (N = 512, 1e-6) |q| >= 215."""
-    law = lr.predicted_law(preset("linear_ring_tiny"), 0)
-    q = torch.minimum(torch.arange(16), 16 - torch.arange(16))
-    assert torch.equal(law.keep, q <= 4)
+@pytest.mark.parametrize(("name", "kept"), [("linear_ring_tiny", 4), ("linear_ring", 214)])
+def test_the_floored_frequencies_are_those_below_min_rel_eig_of_the_top_eigenvalue(name, kept):
+    """linear_ring_tiny (N = 16, ell = 2 sites, min_rel_eig 1e-3): lambda_q / lambda_0 is 4.5e-4
+    at |q| = 5, so |q| >= 5 are floored; linear_ring (N = 512, ell = 2, 1e-6): |q| >= 215."""
+    law = lr.predicted_law(preset(name), 0)
+    N = law.D.shape[-1]
+    q = torch.minimum(torch.arange(N), N - torch.arange(N))
+    assert torch.equal(law.keep, q <= kept)
+
+
+@pytest.fixture(scope="module")
+def tiny_law() -> lr.Law:
+    return lr.predicted_law(preset("linear_ring_tiny"), 3)
+
+
+def test_the_delta_method_se_falls_as_one_over_root_b(tiny_law):
+    at_b = lr.delta_method_se(tiny_law)
+    torch.testing.assert_close(lr.delta_method_se(tiny_law, B=4 * tiny_law.B), at_b / 2)
+    torch.testing.assert_close(lr.delta_method_se(tiny_law, B=tiny_law.B), at_b)
+
+
+def test_the_budget_is_one_se_at_the_follow_up_b(tiny_law):
+    torch.testing.assert_close(
+        lr.budget_se(tiny_law), lr.delta_method_se(tiny_law, B=lr.FOLLOW_UP_FACTOR * tiny_law.B)
+    )
+    predicted = lr.law_statistics(tiny_law)(tiny_law.D)
+    budget = lr.budget_se(tiny_law)
+    assert lr.regime_accurate(predicted + 0.9 * budget, tiny_law).all()
+    assert not lr.regime_accurate(predicted - 1.1 * budget, tiny_law).any()
+
+
+def test_the_pipeline_bounds_are_the_named_multiples_of_the_delta_method_se(tiny_law):
+    se_max, tolerance = lr.pipeline_bounds(tiny_law)
+    se = lr.delta_method_se(tiny_law)
+    torch.testing.assert_close(se_max, lr.PIPELINE_SE_MARGIN * se)
+    torch.testing.assert_close(tolerance, lr.PIPELINE_N_SE * lr.PIPELINE_SE_MARGIN * se)
 
 
 def test_member_covariance_doubles_q_zero_and_nyquist_and_ties_q_to_minus_q():
@@ -131,10 +162,21 @@ def test_a_late_window_of_a_relaxed_run_is_stationary_and_conclusive():
     assert lr.is_stationary(fit, final_se)[0]
 
 
-def test_the_deficit_se_is_never_below_the_window_means():
-    epochs, records = _relaxing_records(tau=300.0, depth=0.0, seed=5)
-    fit = lr.relaxation_fit(epochs, records, _low_q_power, n_boot=50)
-    assert float(fit.deficit_se[0]) > 0
+def test_the_deficit_se_is_never_below_the_window_means_se():
+    """Fitted over all records of a run relaxed within its first record spacing, the deficit is
+    0 in every resample; its SE is then the bootstrap SE of the window's mean statistic."""
+    epochs, records = _relaxing_records(tau=10.0, depth=0.6, seed=5)
+    fit = lr.relaxation_fit(epochs, records, _low_q_power, n_boot=50, seed=7)
+    _, window_se = bootstrap_members(
+        records.transpose(0, 1), lambda m: _low_q_power(m).mean(-2), 50, seed=7
+    )
+    assert float(fit.deficit_se[0]) >= float(window_se[0]) > 0
+
+
+def test_a_zero_deficit_with_an_se_above_the_budget_is_not_stationary():
+    fit = lr.RelaxationFit(*(torch.zeros(1, dtype=F64) for _ in range(4)), torch.ones(1, dtype=F64))
+    assert not lr.is_stationary(fit, torch.full((1,), 0.5, dtype=F64))[0]
+    assert lr.is_stationary(fit, torch.full((1,), 2.0, dtype=F64))[0]
 
 
 def test_the_relaxation_fit_needs_four_records():
@@ -143,8 +185,19 @@ def test_the_relaxation_fit_needs_four_records():
         lr.relaxation_fit(epochs[:3], records[:3], lr.ring_statistics(32, 2))
 
 
-def test_disagreement_is_three_standard_errors():
+def test_disagreement_is_falsify_n_se_standard_errors():
     predicted = torch.zeros(3, dtype=F64)
     se = torch.ones(3, dtype=F64)
-    values = torch.tensor([2.9, -3.1, 0.0], dtype=F64)
+    n = lr.FALSIFY_N_SE
+    values = torch.tensor([n - 0.1, -(n + 0.1), 0.0], dtype=F64)
     assert lr.disagrees(values, se, predicted).tolist() == [False, True, False]
+
+
+def test_two_paths_disagree_beyond_equivalence_n_se_combined_ses():
+    """Deviations from their own predictions (here 0 and 1) are compared, with the SEs combined
+    in quadrature (sqrt(0.6^2 + 0.8^2) = 1)."""
+    n = lr.EQUIVALENCE_N_SE
+    zero, one = torch.zeros(2, dtype=F64), torch.ones(2, dtype=F64)
+    first = (torch.tensor([n - 0.1, n + 0.1], dtype=F64), 0.6 * one, zero)
+    second = (one, 0.8 * one, one)
+    assert lr.paths_disagree(first, second).tolist() == [False, True]

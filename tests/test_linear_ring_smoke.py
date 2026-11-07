@@ -13,12 +13,12 @@ The estimator is per member: each of the B members contributes one sample, its f
 (the last record, taken after the last step); the statistics are of the member-averaged
 spectrum and their errors the bootstrap over members (fct.linear_ring; the thresholds are
 checked on the predicted law itself in tests/test_linear_ring_estimator.py). The thresholds are
-the pipeline rule, 3 x 1.35 delta-method SEs, deliberately not the experiments' rule (3
-bootstrap SEs at the run's B with a fourfold follow-up): a pipeline test must not depend on a
+the pipeline rule (`fct.linear_ring.pipeline_bounds`), deliberately not the experiments' rule
+(`disagrees` with its follow-up at FOLLOW_UP_FACTOR x B): a pipeline test must not depend on a
 follow-up run. The q = 0 shares and q_1/2 are printed, not asserted. The records before the
-last serve only the relaxation diagnostic (`fct.linear_ring.relaxation_fit`), which is weak by
-construction here: chains started in their stationary law show no relaxation whether or not
-they mix.
+last serve only the relaxation diagnostic (`relaxation_fit` of the second half of the run, its
+deficit consistent with zero), which is weak by construction here: chains started in their
+stationary law show no relaxation whether or not they mix.
 
 Both diagonal settings run, each at its own lr: setting 0 (penalty) and setting 3 (whitened).
 The run takes about a minute on one thread and is marked slow.
@@ -39,8 +39,6 @@ from fct.train import MONITOR_EPOCH, load_trained, make_net_from_config
 
 PRESET = "linear_ring_tiny"
 DIAGONAL = {0: "penalty", 3: "whitened"}
-DEFICIT_Z = 4.0  # the fitted remaining relaxation must be within this many of its SEs of zero
-EQUIVALENCE_Z = 4.0  # the two parametrisations' deviations must agree within this many SEs
 # Per member, the correlation of independent maps averages 0. Its spread is about
 # 1 / sqrt(K x n_eff): on the smoke ring (ell = 2 sites, N = 16) lambda_q / lambda_0 = 1, 0.73,
 # 0.29 at |q| = 0, 1, 2, so about three frequencies (q = 0, +-1) carry most of each map's power
@@ -63,7 +61,7 @@ class Measurement(NamedTuple):
     predicted: torch.Tensor  # (3K + 1,) the statistics of the predicted spectrum
     values: torch.Tensor  # (3K + 1,) of the member-averaged final-state spectrum
     se: torch.Tensor  # (3K + 1,) bootstrap over members
-    bounds: tuple[torch.Tensor, torch.Tensor]  # (SE_MAX, tolerance) at the run's N and B
+    bounds: tuple[torch.Tensor, torch.Tensor]  # pipeline (largest SE, tolerance), run's N, B
     shares: torch.Tensor  # (K,) q = 0 shares of the member-averaged spectrum (reported)
     shares_predicted: torch.Tensor  # (K,)
     q_half: list[int]  # of the member-averaged spectrum (reported)
@@ -95,7 +93,10 @@ def _measure(root, index: int) -> Measurement:
     # The diagnostic uses the records before the final one, so it does not reuse the sample
     # whose stationarity it vouches for.
     relaxation = lr.relaxation_fit(
-        torch.tensor(epochs[:-1]), records[:-1, :, :K], lr.law_statistics(law)
+        torch.tensor(epochs[:-1]),
+        records[:-1, :, :K],
+        lr.law_statistics(law),
+        start=law.cfg.train.n_epochs / 2,
     )
     x, y = law.dataset.x, law.dataset.y
     initial = make_net_from_config(law.cfg, x.shape[1], y.shape[1], CPU, F64)  # same seed
@@ -191,9 +192,14 @@ def test_the_final_state_spectra_agree_with_the_prediction(smoke, index):
 
 
 @pytest.mark.parametrize("index", DIAGONAL)
-def test_the_records_show_no_remaining_relaxation(smoke, index):
+def test_the_second_half_of_the_run_shows_no_relaxation_beyond_its_noise(smoke, index):
+    """The fitted deficit of the second half is zero within PIPELINE_N_SE of its own SEs. This
+    is weaker than `is_stationary`: with 20 records in the window, the deficit's SE is 0.6 to 0.8
+    of one SE at the run's B, so the diagnostic cannot show the deficit below that SE, which
+    `is_stationary` demands of a real run (there with an SE of about 0.1 of the budget)."""
     fit = smoke[index].relaxation
-    assert (fit.deficit.abs() <= DEFICIT_Z * fit.deficit_se).all(), _report(index, smoke[index])
+    within = fit.deficit.abs() <= lr.PIPELINE_N_SE * fit.deficit_se
+    assert within.all(), _report(index, smoke[index])
 
 
 @pytest.mark.parametrize("index", DIAGONAL)
@@ -202,8 +208,11 @@ def test_at_sigma_zero_the_activity_has_no_null_power(smoke, index):
 
 
 def test_the_two_parametrisations_agree(smoke):
-    """Each against its own prediction, the deviations agree within EQUIVALENCE_Z combined
-    standard errors (the floored frequencies are excluded from both)."""
+    """The experiments' equivalence rule (`fct.linear_ring.paths_disagree`), each path against
+    its own prediction (the floored frequencies are excluded from both)."""
     penalty, whitened = (smoke[index] for index in DIAGONAL)
-    gap = (penalty.values - penalty.predicted) - (whitened.values - whitened.predicted)
-    assert (gap.abs() <= EQUIVALENCE_Z * (penalty.se**2 + whitened.se**2).sqrt()).all()
+    disagree = lr.paths_disagree(
+        (penalty.values, penalty.se, penalty.predicted),
+        (whitened.values, whitened.se, whitened.predicted),
+    )
+    assert not disagree.any()

@@ -170,11 +170,11 @@ def map_correlation(first: Tensor, last: Tensor) -> Tensor:
 
 # ------------------------------------------------------------------ relaxation diagnostic
 class RelaxationFit(NamedTuple):
-    asymptote: Tensor  # (S,) A of y(t) = A - C exp(-t / tau)
+    asymptote: Tensor  # (S,) A of y(t) = A - C exp(-(t - t_0) / tau)
     amplitude: Tensor  # (S,) C
     tau: Tensor  # (S,) in the units of the epochs
-    deficit: Tensor  # (S,) C exp(-t_end / tau), what is still to relax at the last record
-    deficit_se: Tensor  # (S,) bootstrap over members (half the 16-84% range)
+    deficit: Tensor  # (S,) C exp(-(t_end - t_0) / tau), what is still to relax at the last record
+    deficit_se: Tensor  # (S,) bootstrap over members, floored at the window mean's SE
 
 
 # tau is searched on a log grid from TAU_MIN_FRACTION of the record spacing to TAU_MAX_FACTOR
@@ -185,11 +185,15 @@ class RelaxationFit(NamedTuple):
 TAU_GRID = 200
 TAU_MIN_FRACTION = 0.25
 TAU_MAX_FACTOR = 1.0
+# Resamples of the relaxation fit's bootstrap. Fewer than N_BOOT because each resample is a full
+# grid fit and the resampled means take n_boot x R x K x N floats (about 250 MB at R = 200 records
+# of linear_ring); the resampling error of the SE is 1 / sqrt(2 x 100) = 7%.
+RELAXATION_N_BOOT = 100
 
 
 def _fit_relaxation(t: Tensor, y: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-    """Least-squares A, C, tau of y (R, S) = A - C exp(-t / tau), t (R,): for each tau of the
-    grid the model is linear in (A, C), so it is solved exactly and the best tau kept."""
+    """Least-squares A, C, tau of y (R, S) = A - C exp(-(t - t_0) / tau), t (R,): for each tau
+    of the grid the model is linear in (A, C), so it is solved exactly and the best tau kept."""
     span = float(t[-1] - t[0])
     spacing = float((t[1:] - t[:-1]).min())
     taus = torch.logspace(
@@ -209,12 +213,44 @@ def _fit_relaxation(t: Tensor, y: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     return A, C, taus[best]
 
 
+def _deficit_and_mean(t: Tensor, statistics: Callable[[Tensor], Tensor]) -> Callable:
+    """The statistic `bootstrap_members` resamples: member-mean records (..., R, K, N) -> the
+    fitted deficit and the window mean of every statistic, (..., 2S)."""
+    end = float(t[-1] - t[0])
+
+    def deficit_and_mean(mean_records: Tensor) -> Tensor:
+        batch = mean_records.shape[:-3]
+        flat = mean_records.reshape(-1, *mean_records.shape[-3:])
+        rows = []
+        for one in flat:  # one grid fit per resample
+            y = statistics(one)  # (R, S)
+            _, C, tau = _fit_relaxation(t, y)
+            rows.append(torch.cat([C * torch.exp(-end / tau), y.mean(0)]))
+        return torch.stack(rows).reshape(*batch, -1)
+
+    return deficit_and_mean
+
+
+def _bootstrap_deficit(
+    t: Tensor, records: Tensor, statistics: Callable[[Tensor], Tensor], n_boot: int, seed: int
+) -> Tensor:
+    """(S,): the deficit's SE over resamples of the members, floored at the SE of the window's
+    mean statistic. A fit whose tau falls inside the first record spacing puts the deficit at
+    exactly 0 in every resample; the floor keeps it from claiming more precision than the
+    window's data has."""
+    members_first = records.transpose(0, 1)  # (B, R, K, N), resampled along the members
+    _, se = bootstrap_members(members_first, _deficit_and_mean(t, statistics), n_boot, seed)
+    S = se.shape[0] // 2
+    return torch.maximum(se[:S], se[S:])
+
+
 def relaxation_fit(
     epochs: Tensor,
     records: Tensor,
     statistics: Callable[[Tensor], Tensor],
     start: float | None = None,
-    n_boot: int = 200,
+    n_boot: int = RELAXATION_N_BOOT,
+    seed: int = 0,
 ) -> RelaxationFit:
     """Fit y(t) = A - C exp(-(t - t_0) / tau) to the member-averaged statistics of the records
     from epoch `start` on (all records if None).
@@ -222,52 +258,53 @@ def relaxation_fit(
     `records` (R, B, K, N) are the members' spectra at `epochs` (R,); `statistics` maps a mean
     spectrum (..., K, N) to (..., S). The deficit C exp(-(t_end - t_0) / tau) is what the fitted
     relaxation leaves at the last record. Fitting all records gives the time constant of the
-    main relaxation; to test the end of a run, fit a late window (`start`), where a relaxation
-    still under way shows as a drift that extrapolates to a deficit. The deficit's SE is the
-    larger of half the 16-84% range of the refitted deficit over `n_boot` resamples of the
-    members (the members are independent chains, so no autocorrelation time enters) and the
-    bootstrap SE of the window's mean statistic: a fit whose tau falls inside the first record
-    spacing puts the deficit at exactly 0 in every resample, and the floor keeps it from
-    claiming more precision than the window's data has.
+    main relaxation (of its fast phase, if records are sparse beside a slower tail); to test the
+    end of a run, fit a late window (`start`), where a relaxation still under way shows as a
+    drift that extrapolates to a deficit. The deficit's SE (`_bootstrap_deficit`) comes from
+    `n_boot` resamples of the members, seeded with `seed` (the members are independent chains,
+    so no autocorrelation time enters).
     """
     window = torch.ones_like(epochs, dtype=torch.bool) if start is None else epochs >= start
     if int(window.sum()) < 4:
         raise ValueError(f"need at least 4 records to fit a relaxation, got {int(window.sum())}")
     t = epochs[window].to(F64)
     records = records[window]
-    y = statistics(records.mean(1))  # (R, S)
-    A, C, tau = _fit_relaxation(t, y)
-    end = float(t[-1] - t[0])
-    deficit = C * torch.exp(-end / tau)
-    B = records.shape[1]
-    gen = torch.Generator().manual_seed(0)
-    deficits, means = [], []
-    for _ in range(n_boot):
-        resampled = statistics(records[:, torch.randint(B, (B,), generator=gen)].mean(1))
-        _, Cb, taub = _fit_relaxation(t, resampled)
-        deficits.append(Cb * torch.exp(-end / taub))
-        means.append(resampled.mean(0))
-    # Half the 16-84% range, the SD of a normal: a resample whose tau runs to the end of the
-    # grid makes the plain SD meaningless while leaving the quantiles alone.
-    q16, q84 = torch.quantile(torch.stack(deficits), torch.tensor([0.16, 0.84], dtype=F64), dim=0)
-    floor = torch.stack(means).std(0)
-    return RelaxationFit(A, C, tau, deficit, torch.maximum((q84 - q16) / 2, floor))
+    A, C, tau = _fit_relaxation(t, statistics(records.mean(1)))
+    deficit = C * torch.exp(-float(t[-1] - t[0]) / tau)
+    deficit_se = _bootstrap_deficit(t, records, statistics, n_boot, seed)
+    return RelaxationFit(A, C, tau, deficit, deficit_se)
 
 
-def is_stationary(fit: RelaxationFit, se_max_b: Tensor) -> Tensor:
-    """(S,) bool: the fitted deficit at the last record is below one standard error of the
-    statistic at B_max, the largest B that will be run (the accuracy budget of a regime), and
-    the fit can tell: its own SE is below that too (otherwise a small deficit is no evidence)."""
-    return (fit.deficit.abs() < se_max_b) & (fit.deficit_se < se_max_b)
+def budget_se(law: Law) -> Tensor:
+    """(3K + 1,): one delta-method SE of each statistic at B_max = FOLLOW_UP_FACTOR x B, the
+    largest B a setting is run at (its B and the follow-up extension): the accuracy budget of a
+    regime and the bound a stationary run's deficit must stay under."""
+    return delta_method_se(law, FOLLOW_UP_FACTOR * law.B)
+
+
+def is_stationary(fit: RelaxationFit, budget: Tensor) -> Tensor:
+    """(S,) bool: the fitted deficit at the last record is below `budget` (`budget_se` for a
+    real run) and the fit can tell, its own SE below `budget` too (otherwise a small deficit is
+    no evidence)."""
+    return (fit.deficit.abs() < budget) & (fit.deficit_se < budget)
+
+
+def regime_accurate(exact: Tensor, law: Law) -> Tensor:
+    """(3K + 1,) bool: the exact posterior's statistics `exact` are within `budget_se` of the
+    law's prediction, the plan's accuracy rule for a regime."""
+    return (exact - law_statistics(law)(law.D)).abs() <= budget_se(law)
 
 
 # ------------------------------------------------------------------ comparison rules
 # The experiments' rule: an agreement test fails when |observed - predicted| exceeds FALSIFY_N_SE
 # bootstrap SEs at the run's B, and a failure counts only if it persists after the setting is
-# extended to 4B members. A regime is accurate when |exact - predicted| is at most one SE at
-# B_max, the largest B run, the fourfold extension included.
+# extended to FOLLOW_UP_FACTOR times B members. Two parametrisations are equivalent on a
+# statistic unless their deviations from their own predictions differ by more than
+# EQUIVALENCE_N_SE combined bootstrap SEs (the plan's level, with the same follow-up; the shared
+# initial state correlates the two paths' members, which only makes the test conservative).
 FALSIFY_N_SE = 3.0
 FOLLOW_UP_FACTOR = 4
+EQUIVALENCE_N_SE = 3.0
 # The pipeline test's rule, deliberately different: its tolerance is fixed by the predicted law
 # rather than by the measured SE, PIPELINE_N_SE times PIPELINE_SE_MARGIN delta-method SEs, and its
 # bootstrap SE must stay below PIPELINE_SE_MARGIN delta-method SEs (the margin covers the spread
@@ -277,11 +314,22 @@ PIPELINE_N_SE = 3.0
 
 
 def disagrees(values: Tensor, se: Tensor, predicted: Tensor) -> Tensor:
-    """(S,) bool: the experiments' agreement test fails (|observed - predicted| > 3 SE)."""
+    """(S,) bool: the experiments' agreement test fails, |observed - predicted| beyond
+    FALSIFY_N_SE bootstrap SEs."""
     return (values - predicted).abs() > FALSIFY_N_SE * se
 
 
+def paths_disagree(
+    first: tuple[Tensor, Tensor, Tensor], second: tuple[Tensor, Tensor, Tensor]
+) -> Tensor:
+    """(S,) bool: two paths' (values, bootstrap SE, own prediction) disagree, their deviations
+    from their own predictions differing by more than EQUIVALENCE_N_SE combined SEs."""
+    (v1, se1, p1), (v2, se2, p2) = first, second
+    return ((v1 - p1) - (v2 - p2)).abs() > EQUIVALENCE_N_SE * (se1.square() + se2.square()).sqrt()
+
+
 def pipeline_bounds(law: Law) -> tuple[Tensor, Tensor]:
-    """(largest accepted bootstrap SE, tolerance), each (3K + 1,), of the pipeline test."""
+    """(largest accepted bootstrap SE, tolerance), each (3K + 1,), of the pipeline test:
+    PIPELINE_SE_MARGIN and PIPELINE_N_SE x PIPELINE_SE_MARGIN delta-method SEs."""
     se_max = PIPELINE_SE_MARGIN * delta_method_se(law)
     return se_max, PIPELINE_N_SE * se_max
