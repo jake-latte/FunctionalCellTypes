@@ -14,6 +14,19 @@ reads one consistent document. Blocked on the confirmation of
 `rate-penalty-latex-r`, `rate-penalty-code` and `ensemble-extend` (their
 outcomes change the dictionary and the sampling protocol).
 
+## PI decisions of 2026-11-07
+- Notation: keep $r$ for the rate; the ring distance and lag become $\Delta$
+  ($R(\Delta)$, $K(\Delta)$, $\Delta\le6$); the mode index in
+  `linear_without_ansatz.tex` becomes $s$; the rank in A1 becomes $\rho$ only
+  where it sits near a rate use (done on the `rate-penalty-latex-r` branch).
+- Prediction 6: the frame-free statistic $|\langle e^{6i\theta}\rangle|$
+  (sixfold: three projected latent axes with sign); no frame decision needed.
+- $q_{1/2}$: average the final-state spectra across the $B$ members, one
+  $q_{1/2}$ per setting, error bar by bootstrap over members.
+- Parametrisation equivalence: each setting at the largest lr its own run-start
+  check accepts, run to stationarity, compared on final-state statistics across
+  members (two experiments, or an lr axis paired with the parametrisation).
+
 ## Changes
 - $\sigma \to 0$ everywhere: D2 and W4 are replaced by a pointer to
   `input_noise_average.tex`; `input_noise_var` disappears from the presets,
