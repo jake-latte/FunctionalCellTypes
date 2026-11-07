@@ -446,7 +446,7 @@ def test_status_after_the_rate_rescaling_is_stale_only_with_a_rate_penalty(
     lines = status.strip().splitlines()
     assert lines[0].split()[:2] == ["0", "done"]
     assert lines[1].split()[:2] == ["1", "stale"]
-    assert "1 done, 0 partial, 34 missing, 1 stale" in lines[-1]
+    assert f"1 done, 0 partial, {len(settings) - 2} missing, 1 stale" in lines[-1]
 
 
 def test_finished_setting_from_the_old_loss_is_stale_not_done(tiny, tmp_path, monkeypatch):
@@ -482,7 +482,7 @@ def test_cli_status_counts_stale_settings_separately(tiny, tmp_path, capsys, mon
     lines = status.strip().splitlines()
     assert lines[0].split()[:2] == ["0", "stale"]
     assert lines[1].split()[:2] == ["1", "done"]
-    assert "1 done, 0 partial, 34 missing, 1 stale" in lines[-1]
+    assert f"1 done, 0 partial, {len(expand(tiny)) - 2} missing, 1 stale" in lines[-1]
 
 
 def test_an_unreadable_final_is_stale_not_a_crash(tiny, tmp_path):
