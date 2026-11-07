@@ -126,7 +126,10 @@ def test_solution_params_reject_c_below_the_pole(clc):
 def test_power_law_root_is_pinned_above_the_pole_at_accessible_cutoffs(clc):
     """d = 2 power law: c sits just above c_* and its log slope is far below the asymptote."""
     params = clc.SolutionParams(**clc.PARAMS_1D)
-    sols = [clc.solve_power_law_2d(params, **clc.POWER_LAW, cutoff_over_mass=r) for r in (2e2, 2e6)]
+    sols = [
+        clc.solve_power_law_2d(params, **clc.POWER_LAW, cutoff_over_mass=cutoff)
+        for cutoff in (2e2, 2e6)
+    ]
     asymptote = clc.log_asymptote_slope(params, clc.POWER_LAW["gamma"])
     assert 0 < sols[0].c - sols[0].c_star < 0.01
     assert sols[0].c < sols[1].c

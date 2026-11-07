@@ -83,9 +83,9 @@ def ring_kernel(n_sites: int, spacing: float, length: float, nugget: float = 0.0
 
 def torus_kernel_row(side: int, spacing: float, length: float) -> np.ndarray:
     """First row of the kernel on a side x side torus, as a side x side array."""
-    r = ring_distance(side, spacing)
-    r2 = r[:, None] ** 2 + r[None, :] ** 2
-    return np.exp(-r2 / (2 * length**2))
+    dist = ring_distance(side, spacing)
+    dist2 = dist[:, None] ** 2 + dist[None, :] ** 2
+    return np.exp(-dist2 / (2 * length**2))
 
 
 def lattice_spectrum(K: np.ndarray, spacing: float) -> tuple[np.ndarray, np.ndarray]:
@@ -476,7 +476,9 @@ def main() -> None:
         print_inverse(nugget, *inverse_kernel_check(nugget))
 
     # (vi) d = 2 power law: UV-sensitive, but pinned near the pole at accessible cutoffs
-    solutions = [solve_power_law_2d(p1, **POWER_LAW, cutoff_over_mass=r) for r in POWER_LAW_CUTOFFS]
+    solutions = [
+        solve_power_law_2d(p1, **POWER_LAW, cutoff_over_mass=cutoff) for cutoff in POWER_LAW_CUTOFFS
+    ]
     print_power_law(solutions, log_asymptote_slope(p1, POWER_LAW["gamma"]))
 
     if errors_1d[-1] > FLOOR_MARGIN * floor_1d or errors_2d[-1] > FLOOR_MARGIN * floor_2d:
