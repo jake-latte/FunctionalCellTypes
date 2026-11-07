@@ -582,7 +582,9 @@ def test_all_zero_values_get_a_non_degenerate_y_range():
 
 def test_evaluate_setting_says_stale_for_a_final_from_another_loss_version(tmp_path, monkeypatch):
     exp, setting = _finished_tiny(tmp_path)
+    # A loss change that reaches every config, with or without a rate penalty.
     monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION + 1)
+    monkeypatch.setattr(fct.config, "RATE_FREE_LOSS_VERSION", fct.config.RATE_FREE_LOSS_VERSION + 1)
     with pytest.raises(FileNotFoundError, match="stale"):
         evaluate_setting(tmp_path, exp, setting, held_out_seed=77)
 
