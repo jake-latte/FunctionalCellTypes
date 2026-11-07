@@ -425,7 +425,28 @@ def test_cli_run_index_then_status(tmp_path, capsys):
 
 # ---------------------------------------------------------------------------- stale results
 def _old_loss(monkeypatch):
+    """The code before a loss change that touches every config, with or without a rate penalty."""
     monkeypatch.setattr(fct.config, "LOSS_VERSION", fct.config.LOSS_VERSION - 1)
+    monkeypatch.setattr(fct.config, "RATE_FREE_LOSS_VERSION", fct.config.RATE_FREE_LOSS_VERSION - 1)
+
+
+def test_status_after_the_rate_rescaling_is_stale_only_with_a_rate_penalty(
+    tiny, tmp_path, capsys, monkeypatch
+):
+    """Settings run under LOSS_VERSION 4 (rate penalty not yet scaled by 1 / (2 beta)): the
+    rate_lambda = 0 one keeps its numbers and stays done, the rate_lambda > 0 one is stale."""
+    settings = expand(tiny)
+    assert [s.axes["train.rate_lambda"] for s in settings[:2]] == [0.0, 1e-3]
+    _cli(capsys, "init", tmp_path, "--preset", "tiny")
+    with monkeypatch.context() as old:
+        old.setattr(fct.config, "LOSS_VERSION", 4)
+        _cli(capsys, "run", tmp_path, "--index", 0)
+        _cli(capsys, "run", tmp_path, "--index", 1)
+    _, status, _ = _cli(capsys, "status", tmp_path)
+    lines = status.strip().splitlines()
+    assert lines[0].split()[:2] == ["0", "done"]
+    assert lines[1].split()[:2] == ["1", "stale"]
+    assert "1 done, 0 partial, 34 missing, 1 stale" in lines[-1]
 
 
 def test_finished_setting_from_the_old_loss_is_stale_not_done(tiny, tmp_path, monkeypatch):
