@@ -5,7 +5,8 @@ network on a ring (section A); every other section checks a closed form or an
 asymptotic statement of the note against the per-mode scalar equation
     1 - delta/c = (c/N) sum_q h_q / (c^2 - sY2 h_q),
     h_q = lam_q (lam_q sX2 + sig2) / (1 + r (lam_q sX2 + sig2)),
-solved on the branch c > sqrt(sY2 max_q h_q), and d_q = c^2 h_q / (lam_q (c^2 - sY2 h_q)).
+solved on the branch c > sqrt(sY2 max_q h_q), and d_q = c^2 h_q / (lam_q (c^2 - sY2 h_q)),
+with r the rate-penalty coefficient (the notes' G = r I).
 
 Sections (each `section_*` computes and returns the numbers, `report_*` prints them):
   A  re-derivation: ansatz-free fixed point vs the scalar equation (exact and approximate ansatz)
@@ -34,7 +35,7 @@ FIGURE = Path(__file__).resolve().parents[1] / "figures" / "linear_solution_limi
 # --- section A: ansatz-free fixed point (small, so the NP x NP inverse is cheap) --------------
 A_N, A_P, A_M, A_NOUT, A_K = 12, 5, 6, 6, 2  # sites, patterns, m, n, latents
 A_ELL = np.sqrt(2.0)  # K_ij = exp(-r^2 / (2 ell^2)), ring distance r
-A_K0, A_K1, A_SIG2, A_G2, A_DELTA = 0.7, 1.3, 0.2, 0.3, 0.5
+A_K0, A_K1, A_SIG2, A_R, A_DELTA = 0.7, 1.3, 0.2, 0.3, 0.5
 A_C_START, A_NEWTON_STEPS, A_TOL = 30.0, 100, 1e-12  # Newton from C = 30 I, well above the pole
 A_WY_SKEW = np.diag([1.0, 0.7])  # non-orthonormal W_Y for the approximate case
 FD_EPS = 1e-6  # finite-difference step of the Newton Jacobian
@@ -47,7 +48,8 @@ SY_CONTINUUM = [4.0, 8.0, 16.0, 32.0]  # moderate targets: Lorentzian width >> 1
 M_IN, N_OUT, KAPPA = 6, 6, 1.0  # m, n, kappa for the k0 = k1 sweep
 K_SWEEP = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 100.0]
 SY_SWEEP = [1.0, 10.0, 100.0, 1000.0]  # target strength sY for the condensation check
-BASE = {"sx2": 1.0, "sig2": 0.1, "r": 0.2, "delta": 0.5}  # a generic finite-everything mode
+# a generic finite-everything mode; r is the rate-penalty coefficient (the notes' G = r I)
+BASE = {"sx2": 1.0, "sig2": 0.1, "r": 0.2, "delta": 0.5}
 LATENT_P, LATENT_K, LATENT_A = 20000, 3, 1.0  # Z ~ U[0, a]^(P x K) for the law of large numbers
 LIMIT_EPS = 1e-8  # stands in for sig2 -> 0 or sY2 -> 0 (small enough for the precision quoted)
 NO_RIDGE = 1e-12  # delta small enough to stand in for delta -> 0
@@ -115,13 +117,15 @@ def ring_spectrum(n_sites, ell):
 
 
 def pi_of(lam, sx2, sig2, r):
-    """Prior-shrunk variance pi_q = alpha_q / (1 + r alpha_q), alpha_q = lam_q sX2 + sig2."""
+    """Prior-shrunk variance pi_q = alpha_q / (1 + r alpha_q), alpha_q = lam_q sX2 + sig2,
+    with r the rate-penalty coefficient (the notes' G = r I)."""
     alpha = lam * sx2 + sig2
     return alpha / (1 + r * alpha)
 
 
 def h_of(lam, sx2, sig2, r):
-    """h_q = lam_q pi_q = lam_q alpha_q / (1 + r alpha_q) (eq:hq of the note)."""
+    """h_q = lam_q pi_q = lam_q alpha_q / (1 + r alpha_q) (eq:hq of the note), with r
+    the rate-penalty coefficient (the notes' G = r I)."""
     return lam * pi_of(lam, sx2, sig2, r)
 
 
@@ -288,14 +292,14 @@ def fixed_point_case(rng, skew):
     X, Y = latent_task(rng, A_P, A_M, A_NOUT, A_K, wy_skew=skew)
     A, YY = A_K0 / A_M * X @ X.T, Y @ Y.T
     C = ansatz_free_fixed_point(
-        K, A, YY, A_K1, A_SIG2, A_G2, A_DELTA, A_C_START, A_NEWTON_STEPS, A_TOL
+        K, A, YY, A_K1, A_SIG2, A_R, A_DELTA, A_C_START, A_NEWTON_STEPS, A_TOL
     )
     Ct = C + A_DELTA * np.eye(A_P)
     U = np.linalg.eigh(X @ X.T)[1]
     rot = U.T @ Ct @ U
     exact = np.sort(np.linalg.eigvalsh(Ct))
-    roots = scalar_roots(lam, X, Y, A_K0, A_K1, A_M, A_SIG2, A_G2, A_DELTA)
-    precision = full_precision(C, K, A, YY, A_K1, A_SIG2, A_G2, A_DELTA)
+    roots = scalar_roots(lam, X, Y, A_K0, A_K1, A_M, A_SIG2, A_R, A_DELTA)
+    precision = full_precision(C, K, A, YY, A_K1, A_SIG2, A_R, A_DELTA)
     return {
         "commutator": np.abs(X @ X.T @ YY - YY @ X @ X.T).max(),
         "min_eig_precision": np.linalg.eigvalsh(precision).min(),
@@ -459,10 +463,10 @@ def report_b(res):
         f"    latent mode: |c({LIMIT_EPS:.0e}) - c(0)| = {s['latent_dc']:.1e}, "
         f"max |d_q({LIMIT_EPS:.0e}) - d_q(0)| = {s['latent_dd']:.1e}"
     )
-    z = res["r0"]
+    zero_rate = res["r0"]
     print(
         f"  r -> 0, weak target (sY2 = {LIMIT_EPS:.0e}): max |d_q - (lam_q sX2 + sig2)| = "
-        f"{z['max_dev_d']:.1e}, |c - delta - mean h| = {z['dev_c']:.1e}"
+        f"{zero_rate['max_dev_d']:.1e}, |c - delta - mean h| = {zero_rate['dev_c']:.1e}"
     )
     f = res["flat"]
     print(
@@ -709,11 +713,11 @@ def correlation_length_check(ell):
     """P7: setting P1 at length scale `ell`. For each mode, R(0) and the largest deviation
     of R(r)/R(0) from the kernel K(r) over 1 <= r <= 2 ell, plus the Gaussian width read off
     at r = ell, sqrt(-ell^2 / (2 ln(R(ell)/R(0))))."""
-    _, k0, k1, sig2, r, beta = PREDICTIONS["P1 prior-shaped (weak target, no rate penalty)"]
+    _, k0, k1, sig2, rate, beta = PREDICTIONS["P1 prior-shaped (weak target, no rate penalty)"]
     kernel = wrapped_gaussian(PRED_N, ell)
     lags = np.arange(1, int(2 * ell) + 1)
     rows = []
-    for d in prediction_spectra(ell, k0, k1, sig2, r, beta)[1]:
+    for d in prediction_spectra(ell, k0, k1, sig2, rate, beta)[1]:
         R = autocorrelation(d)
         rows.append(
             {
@@ -728,12 +732,12 @@ def correlation_length_check(ell):
 def section_e():
     """Regime numbers of the numbered predictions, the P3 beta sweep, the P7 length-scale
     sweep and the P8 k sweep."""
-    ell, k0, k1, sig2, r, beta = PREDICTIONS["P3 target condensation"]
+    ell, k0, k1, sig2, rate, beta = PREDICTIONS["P3 target condensation"]
     return {
         "predictions": {name: prediction_numbers(*p) for name, p in PREDICTIONS.items()},
-        "p3_beta_sweep": share0_sweep([(ell, k0, k1, sig2, r, b) for b in P3_BETA_SWEEP]),
+        "p3_beta_sweep": share0_sweep([(ell, k0, k1, sig2, rate, b) for b in P3_BETA_SWEEP]),
         "p7_ell_sweep": {ell7: correlation_length_check(ell7) for ell7 in P7_ELL_SWEEP},
-        "p8_k_sweep": share0_sweep([(ell, k, k, sig2, r, beta) for k in P8_K_SWEEP]),
+        "p8_k_sweep": share0_sweep([(ell, k, k, sig2, rate, beta) for k in P8_K_SWEEP]),
     }
 
 
@@ -743,10 +747,10 @@ def report_e(res):
         f"  ring N = {PRED_N}, K = {PRED_K}, a = {PRED_A}, m = n = {PRED_M}, P = {PRED_P}; "
         "modes: 1 = mean direction, 2 = contrast"
     )
-    for name, (ell, k0, k1, sig2, r, beta) in PREDICTIONS.items():
+    for name, (ell, k0, k1, sig2, rate, beta) in PREDICTIONS.items():
         pred = res["predictions"][name]
         print(
-            f"  {name}: ell = {ell}, k0 = {k0}, k1 = {k1}, sig2 = {sig2}, r = {r}, "
+            f"  {name}: ell = {ell}, k0 = {k0}, k1 = {k1}, sig2 = {sig2}, rate r = {rate}, "
             f"beta = {beta} (delta = {pred['delta']:.1f})"
         )
         for mode, m in enumerate(pred["modes"], start=1):
@@ -760,8 +764,8 @@ def report_e(res):
             )
         ratio = ", ".join(f"{x:.2f}" for x in pred["ratio"])
         print(f"    d_q(mode 1) / d_q(mode 2) at |q| = 0..{RATIO_Q_MAX}: {ratio}")
-    ell, k0, k1, sig2, r, beta = PREDICTIONS["P3 target condensation"]
-    print(f"  P3 beta sweep at sig2 = {sig2}, r = {r}: q = 0 share (mode 1, mode 2)")
+    ell, k0, k1, sig2, rate, beta = PREDICTIONS["P3 target condensation"]
+    print(f"  P3 beta sweep at sig2 = {sig2}, rate r = {rate}: q = 0 share (mode 1, mode 2)")
     for b, shares in zip(P3_BETA_SWEEP, res["p3_beta_sweep"]):
         print(f"    beta = {b:5.2f}: " + ", ".join(f"{s:.3f}" for s in shares))
     print("  P7 setting P1 at ell = " + ", ".join(f"{e:g}" for e in P7_ELL_SWEEP) + ":")
@@ -773,7 +777,7 @@ def report_e(res):
                 f"Gaussian width at r = ell: {m['width']:.3f}"
             )
     print(
-        f"  P8 common k sweep at sig2 = {sig2}, r = {r}, beta = {beta}: "
+        f"  P8 common k sweep at sig2 = {sig2}, rate r = {rate}, beta = {beta}: "
         "q = 0 share (mode 1, mode 2)"
     )
     for k, shares in zip(P8_K_SWEEP, res["p8_k_sweep"]):
