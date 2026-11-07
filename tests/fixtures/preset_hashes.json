@@ -1145,25 +1145,25 @@
   ]
  },
  "linear_ring": {
-  "exp_hash": "445f484fa4af",
+  "exp_hash": "92a38f1a8ff5",
   "n_settings": 4,
   "train": [
-   "d8ba858eb220",
-   "1c1b1af79f63",
-   "f581de1efade",
-   "1cab4634fa43"
+   "9e0a378ed4d1",
+   "ab5286b39bc9",
+   "f7a8836589ac",
+   "1d4e1033d4ba"
   ],
   "solve": [
-   "620fdd2c1376",
-   "21bcde2170c2",
-   "29435eaa9862",
-   "37d3a36eca7d"
+   "f7279834cf66",
+   "2e5d6173c167",
+   "653daa2b5c3e",
+   "e0ad6a56c6f6"
   ],
   "relpaths": [
-   "linear_teacher/s0000_parametrisationpenalty_lr0.00012",
-   "linear_teacher/s0001_parametrisationpenalty_lr0.005",
-   "linear_teacher/s0002_parametrisationwhitened_lr0.00012",
-   "linear_teacher/s0003_parametrisationwhitened_lr0.005"
+   "linear_teacher/s0000_parametrisationpenalty_lr9e-05",
+   "linear_teacher/s0001_parametrisationpenalty_lr0.96",
+   "linear_teacher/s0002_parametrisationwhitened_lr9e-05",
+   "linear_teacher/s0003_parametrisationwhitened_lr0.96"
   ]
  },
  "linear_ring_tiny": {

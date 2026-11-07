@@ -271,7 +271,7 @@ def test_an_ensemble_run_records_a_member_axis(tmp_path):
     net, history = train(cfg, dataset, net, tmp_path, monitor=make_monitor(dataset, cfg), **QUIET)
 
     assert history[MONITOR_EPOCH] == [0, 2, 4]
-    spectrum = _spectrum_history(history, f"{MONITOR_PREFIX}spectrum")
+    spectrum = spectrum_records(history)
     assert spectrum.shape == (3, B, L, K + 1, N) and spectrum.dtype == torch.float32
     assert _spectrum_history(history, f"{MONITOR_PREFIX}hex").shape == (3, B, L, 2)
     assert _spectrum_history(history, f"{MONITOR_PREFIX}theta_hist").shape == (3, B, L, 36)
@@ -286,10 +286,12 @@ def test_spectrum_records_stack_an_ensemble_history_with_its_member_axis(tmp_pat
     cfg = _cfg(_teacher(K=K), N=N, L=L, B=B, n_epochs=4, monitor_int=2, log_int=2, save_int=2)
     dataset = make_dataset(cfg.data, CPU, F64)
     net = make_net(cfg.net, dataset.x.shape[1], dataset.y.shape[1], CPU, F64)
-    _, history = train(cfg, dataset, net, tmp_path, monitor=make_monitor(dataset, cfg), **QUIET)
+    net, history = train(cfg, dataset, net, tmp_path, monitor=make_monitor(dataset, cfg), **QUIET)
     records = spectrum_records(history)
-    assert records.shape == (3, B, L, K + 1, N)
-    torch.testing.assert_close(records, _spectrum_history(history, f"{MONITOR_PREFIX}spectrum"))
+    assert records.shape == (3, B, L, K + 1, N) and records.dtype == torch.float32
+    monitor = make_spectrum_monitor(dataset, cfg)
+    for b in range(B):  # the last record is each trained member, seen as a single network
+        torch.testing.assert_close(records[-1, b], torch.stack(monitor(net.member(b))["spectrum"]))
 
 
 def test_spectrum_records_give_a_single_network_a_member_axis_of_one(tmp_path):
@@ -297,11 +299,11 @@ def test_spectrum_records_give_a_single_network_a_member_axis_of_one(tmp_path):
     cfg = _cfg(_teacher(K=K), N=N, L=L, n_epochs=2, monitor_int=1, log_int=1, save_int=1)
     dataset = make_dataset(cfg.data, CPU, F64)
     net = make_net(cfg.net, dataset.x.shape[1], dataset.y.shape[1], CPU, F64)
-    _, history = train(cfg, dataset, net, tmp_path, monitor=make_monitor(dataset, cfg), **QUIET)
+    net, history = train(cfg, dataset, net, tmp_path, monitor=make_monitor(dataset, cfg), **QUIET)
     records = spectrum_records(history)
     assert records.shape == (3, 1, L, K + 1, N)
-    single = history[f"{MONITOR_PREFIX}spectrum"]
-    torch.testing.assert_close(records[:, 0], torch.stack([torch.stack(r) for r in single]))
+    final = make_spectrum_monitor(dataset, cfg)(net)["spectrum"]
+    torch.testing.assert_close(records[-1, 0], torch.stack(final))
 
 
 def test_spectrum_records_need_a_spectrum_history():

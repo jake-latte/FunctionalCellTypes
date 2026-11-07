@@ -1156,38 +1156,44 @@ sets `figure.dpi = 100` (about 1300 px wide; the executed notebook of the 36-set
 
 ### The linear-ring presets
 
-`linear_ring` (N = 64, P = 256, m = 8, K = 3, length_scale 4 sites, B = 64, 2 x 10^5 epochs) and `linear_ring_tiny`
-(N = 16, P = 32, m = 4, K = 2, length_scale 2, B = 256, 10^4 epochs, CPU) are the linear theory of
-`linear_theory.py` at sigma = 0: linear_teacher with an orthonormal teacher and latents on [0, 1], phi id, L = 1,
-k0 = k1 = 1 (input and output kernels of length_scale 0, weight_lambda 1), r = rate_lambda = 0, beta 0.25, SGLD in
-float64, grid embeddings with box = N, `init = "prior"` and the spectrum monitor. Each file's description carries the
-predicted numbers and every choice below.
+`linear_ring` and `linear_ring_tiny` are the linear theory of `linear_theory.py` at sigma = 0 (linear_teacher with
+an orthonormal teacher and latents on [0, 1], phi id, L = 1, SGLD in float64, grid embeddings with box = N,
+`init = "prior"`, the spectrum monitor). Their sizes, lrs, predicted numbers and costs are in each file's
+description; what follows is the design they share.
 
-- Sampling: one sample per member, its final state; B is the sample size and a shared field, not an axis. Statistics
-  are of the member-averaged final-state spectrum with bootstrap errors over members (`bootstrap_members`); the
-  records are a burn-in diagnostic only.
-- `spatial.parametrisation` and `train.lr` are crossed (axes are a product; nothing pairs them), and the diagonal is
-  the experiment: setting 0 is the penalty at its lr, setting 3 the whitened net at its own; run them with
+- Sampling: one sample per member, its final state; B is the sample size and a shared field, not an axis.
+  Statistics are of the member-averaged final-state spectrum with bootstrap errors over members
+  (`bootstrap_members`); the records feed only a drift check.
+- Falsifiers are ring-averaged: R(Delta)/R(0) (Delta = 1 and the kernel width ell), the Gaussian width at ell, the
+  band share (`band_share`, |q| <= round(3N/64)) and the ratio of the two leading modes' band powers. The q = 0
+  share and q_1/2 rest on one or two frequencies and are reported, not used as falsifiers. Thresholds are stated
+  relative to the prediction at the run's N and to the statistic's delta-method SE at the run's B.
+- `predicted_spectra` is the N -> infinity mean-field limit: it leaves out the readout's (n/2) log det C~ term, an
+  O(n/N) correction that converges slowly (exact over predicted q = 0 power of mode 1 at the smoke geometry and
+  beta = 10: 0.53, 0.69, 0.81, 0.90, 0.94 at N = 16, 32, 64, 128, 256). `linear_ring` is sized so that the exact
+  posterior (an off-repo Gibbs sampler) and the prediction differ on every falsifier by less than one third of
+  its 3-SE margin at the preset's B, while the data term moves each statistic from the prior by several SEs.
+- `spatial.parametrisation` and `train.lr` are crossed (axes are a product; nothing pairs them), and the diagonal
+  is the experiment: setting 0 is the penalty at its lr, setting 3 the whitened net at its own; run them with
   `exp run ROOT --index 0` and `--index 3`. Setting 1 (penalty at the whitened lr) is refused at run start by the
-  penalty's step check; setting 2 (whitened at the penalty lr) runs and shows the whitened result does not depend on lr.
-- Each lr comes from its own run-start check. Penalty: lr k_max = 0.48 with k_max = weight_lambda / (beta
-  min_rel_eig lambda_0), the curvature of the floored modes (the check refuses lr k_max >= 2); their Euler
-  inflation (1.3x) carries a negligible part of the power. Whitened: lr lambda_max(loss Hessian) = 0.03 (tiny) and
-  0.025 (full), the value the check logs (it refuses 1). `min_rel_eig` is 1e-3 on the smoke ring and 1e-4 at full
-  size, small enough that the floor moves R(1)/R(0) by 3e-3 and 9e-4, large enough that the penalty's soft modes relax
-  in 2 x 10^3 and 2 x 10^4 epochs; under the default 1e-6 the check would refuse any lr above 2.5e-6 and 5e-6.
+  penalty's step check; setting 2 (whitened at the penalty lr) runs and measures the whitened result's lr
+  dependence.
+- `linear_ring` runs each parametrisation at 0.9 of what its own run-start check accepts (penalty: lr
+  weight_lambda stiffness / (2 beta) < 1; whitened: lr lambda_max(loss Hessian) < 1) with `min_rel_eig` 1e-6; its
+  description records the resulting variance inflation 1/(1 - lr k / 2) of the stiffest modes. The pipeline preset
+  keeps both checks far inside their bounds and `min_rel_eig` 1e-3, and is compared with its own floored
+  prediction.
 
-The smoke test (`tests/test_linear_ring_smoke.py`, about a minute on one CPU thread) runs both diagonal settings of
-`linear_ring_tiny` through the CLI. Its estimator and tolerances (`tests/linear_ring_helpers.py`) follow from the
-predicted law: a member's tuning map is a real stationary Gaussian field, so its power is D(q) chi^2_1 at q = 0, N/2
-and D(q) Exp(1) elsewhere, shared by q and -q (folding +-q gains nothing). The delta method on the member mean then
-gives at B = 256 the standard errors 0.021 (q = 0 share), 0.0042 (R(1)/R(0)), 4.2% (power over |q| <= 3) and 0.44 (the
-ratio of the two modes' band powers, predicted 7.37). The tolerance is three times SE_MAX = 1.35 x these (the 99th
-percentile of a bootstrap SE over the true one is 1.30), and the test fails if a bootstrap SE exceeds SE_MAX.
-`tests/test_linear_ring_estimator.py` checks all of this on ensembles drawn from the predicted law before it is
-trusted on SGLD. At beta 0.25 the prediction is within 0.11 SE of the prior alone, so the smoke test checks the
-sampler and the measurement, not the data term. At beta = 10 the smoke ring is too small for the theory: SGLD gives
-mode 1 about half the predicted q = 0 power (0.72 of it at N = 64, 1.00 at N = 256, the theory's large-N limit).
+The pipeline test (`tests/test_linear_ring_smoke.py`, marked slow, about a minute on one CPU thread) runs both
+diagonal settings of `linear_ring_tiny` through the CLI. It checks the CLI, both parametrisations, the monitor and
+the estimator, not the theory's data term: at beta 0.25 the prediction is within 0.15 SE of the prior alone, and
+both settings start from the prior, so it also requires every member's final tuning maps to have decorrelated from
+its initial ones (a frozen sampler would otherwise pass). Its estimator and thresholds (`tests/linear_ring_helpers.py`)
+follow from the predicted law: a member's tuning map is a real stationary Gaussian field, so its power is D(q)
+chi^2_1 at q = 0, N/2 and D(q) Exp(1) elsewhere, shared by q and -q (folding +-q gains nothing), and the delta
+method on the member mean gives each statistic's SE. A statistic must lie within 3 SE_MAX of the prediction and its
+bootstrap SE below SE_MAX = 1.35 SE; `tests/test_linear_ring_estimator.py` checks this on ensembles drawn from the
+predicted law first (and pins the 99th percentile of bootstrap SE over true SE below 1.35).
 
 ## report.py and notebooks/
 
@@ -1542,6 +1548,8 @@ average_records(records (R, ...), burn_in) -> (...)            # mean over recor
 integrated_autocorr_time(records (R, ...), burn_in) -> TauEstimate(tau (...), reliable (...) bool)   # 1 + 2 sum_k rho_k, Geyer's initial monotone sequence; NaN where not reliable
 record_sem(records (R, ...), burn_in) -> SemEstimate(sem, tau, reliable)   # sem = sqrt(C(0) tau / n), n_eff = n / tau; NaN exactly where not reliable
 member_mean_sem(values (B, ...)) -> (mean (...), sem (...))   # across independent members: std (ddof 1) / sqrt(B), B >= 2
+band_half_width(N) -> int                                      # q_b = round(3 N / 64): |q| <= 3 at N = 64
+band_share(d (..., N), q_band=None) -> float | (...)            # sum_{|q| <= q_b} d_q / sum_q d_q, unfolded; q_b = band_half_width(N) unless given
 bootstrap_members(values (B, ...), statistic, n_boot=1000, seed=0) -> (estimate, sem)   # statistic(values.mean(0)) and the std (ddof 1) of the
     # statistic over n_boot resamples of the members with replacement; statistic must batch over leading dims; own generator, B >= 2
 ```

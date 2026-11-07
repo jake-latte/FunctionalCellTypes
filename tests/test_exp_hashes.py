@@ -112,20 +112,19 @@ def _data_hash_without_teacher(cfg: Config) -> str:
     return hashlib.sha256(json.dumps(hashed, sort_keys=True).encode()).hexdigest()[:12]
 
 
-# The presets on the default (Gaussian) teacher; the linear-ring presets use the orthonormal one.
-GAUSSIAN_TEACHER = [n for n in sorted(PINNED) if preset(n).linear_teacher.teacher == "gaussian"]
-
-
-@pytest.mark.parametrize("name", [*GAUSSIAN_TEACHER, "legacy_config"])
-def test_the_gaussian_teacher_hashes_as_a_data_section_without_the_field(name):
-    # Fails if section_hash keeps `teacher` for the Gaussian teacher. The train, solve and
-    # result hashes that include the data are guarded by the pins (preset_hashes.json,
-    # meanfield_hashes.json), which hold no `teacher`.
+@pytest.mark.parametrize("name", [*sorted(PINNED), "legacy_config"])
+def test_only_an_orthonormal_teacher_enters_the_data_hash(name):
+    # Fails if section_hash keeps `teacher` for the Gaussian teacher, or drops it for the
+    # orthonormal one (the linear-ring presets). The train, solve and result hashes that include
+    # the data are guarded by the pins (preset_hashes.json, meanfield_hashes.json).
     if name == "legacy_config":
         configs = [load_config(LEGACY_CONFIG_FILE)]
     else:
         configs = [setting_config(preset(name), s) for s in expand(preset(name))]
     for cfg in configs:
+        if cfg.data.teacher == "orthonormal":
+            assert cfg.section_hash("data") != _data_hash_without_teacher(cfg)
+            continue
         assert cfg.data.teacher == "gaussian"
         assert cfg.section_hash("data") == _data_hash_without_teacher(cfg)
 

@@ -7,9 +7,11 @@ import shutil
 from pathlib import Path
 
 import pytest
+import torch
 
 import fct.exp
 from fct.cli import main
+from fct.data import make_dataset
 from fct.exp import (
     ExpConfig,
     PresetError,
@@ -30,7 +32,15 @@ from fct.exp import (
 )
 from fct.exp_migrate import migrate_exp
 from fct.spatial import build_spaces, parameter_factors
-from fct.train import prior_coefficient, prior_stiffness
+from fct.train import (
+    compute_loss,
+    largest_hessian_eigenvalue,
+    loss_coefficients,
+    make_net_from_config,
+    make_weight_penalty,
+    prior_coefficient,
+    prior_stiffness,
+)
 from tests.report_helpers import QUIET
 
 PACKAGED = [
@@ -105,8 +115,8 @@ PARAMETRISATION = "spatial.parametrisation"
 
 @pytest.mark.parametrize("name", LINEAR_RING)
 def test_the_linear_ring_presets_are_the_linear_theory_at_sigma_zero(name):
-    """The dictionary of the experiment plan with the 2026-11-06 decisions: no input noise
-    field, deterministic grids, latents on [0, 1], an orthonormal teacher, the spectrum monitor,
+    """The dictionary of the experiment plan at sigma = 0: no input noise field, deterministic
+    grids, latents on [0, 1], an orthonormal teacher, the spectrum monitor,
     both parametrisations started from the prior, B a shared field of at least 16."""
     exp = preset(name)
     assert "noise" not in json.dumps(exp.model_dump())
@@ -130,42 +140,50 @@ def test_the_linear_ring_presets_are_the_linear_theory_at_sigma_zero(name):
     assert exp.axes[PARAMETRISATION] == ["penalty", "whitened"]
 
 
+# The value each run-start check computes, as a fraction of the value it refuses (1), on the
+# diagonal: penalty lr * weight_lambda / (2 beta) * stiffness, whitened lr * lambda_max(loss
+# Hessian) at the prior initial state. linear_ring runs each at 0.9 of its bound; the smoke
+# preset keeps both far inside (its description gives the Euler inflation either way).
+CHECK_FRACTIONS = {
+    "linear_ring": ((0.89, 0.9), (0.85, 0.9)),
+    "linear_ring_tiny": ((0.2, 0.25), (0.0, 0.05)),
+}
+
+
+def _whitened_check_value(exp: ExpConfig) -> float:
+    """lr * lambda_max(loss Hessian) of setting 3 at its initial net, the quantity
+    `fct.train` checks when the run starts (the ensemble's largest member value)."""
+    cfg = setting_config(exp, expand(exp)[3])
+    dataset = make_dataset(cfg.data, torch.device("cpu"), torch.float64)
+    x, y = dataset.x, dataset.y
+    net = make_net_from_config(cfg, x.shape[1], y.shape[1], torch.device("cpu"), torch.float64)
+    penalty = make_weight_penalty(cfg, net)
+    coefficients = loss_coefficients(cfg.train)
+    lam = largest_hessian_eigenvalue(
+        lambda: compute_loss(net, x, y, coefficients, penalty)[0], net.parameters()
+    )
+    return cfg.train.lr * lam
+
+
 @pytest.mark.parametrize("name", LINEAR_RING)
 def test_each_parametrisation_runs_at_the_lr_its_own_check_sets(name, tmp_path):
-    """The lr axis is paired with the parametrisation: on the diagonal the penalty runs at half
-    the stiffest step its check accepts (lr k_max = 2 c stiffness lr just under 0.5) and the
-    whitened net at its own lr; off the diagonal the penalty at the whitened lr is refused
-    when the run starts."""
+    """The lr axis is paired with the parametrisation: on the diagonal each runs at the stated
+    fraction of what its own run-start check accepts; off the diagonal the penalty at the
+    whitened lr is refused when the run starts."""
     exp = preset(name)
     settings = expand(exp)
-    penalty, refused = (setting_config(exp, settings[i]) for i in (0, 1))
+    penalty = setting_config(exp, settings[0])
     assert settings[0].axes == {PARAMETRISATION: "penalty", "train.lr": exp.axes["train.lr"][0]}
     assert settings[3].axes == {PARAMETRISATION: "whitened", "train.lr": exp.axes["train.lr"][1]}
-    stiffness = prior_stiffness(
-        parameter_factors(
-            build_spaces(
-                penalty.spatial, m=penalty.data.D_in, N=exp.N, L=1, n_out=penalty.data.D_in
-            )
-        )
+    factors = parameter_factors(
+        build_spaces(penalty.spatial, m=penalty.data.D_in, N=exp.N, L=1, n_out=penalty.data.D_in)
     )
-    lr_k_max = penalty.train.lr * 2 * prior_coefficient(penalty.train) * stiffness
-    assert 0.4 < lr_k_max <= 0.5
+    penalty_value = penalty.train.lr * prior_coefficient(penalty.train) * prior_stiffness(factors)
+    (low, high), (white_low, white_high) = CHECK_FRACTIONS[name]
+    assert low <= penalty_value <= high
+    assert white_low <= _whitened_check_value(exp) <= white_high
     with pytest.raises(ValueError, match="diverges on the spatial prior"):
         run_setting(exp.model_copy(update={"device": "cpu"}), 1, tmp_path, **QUIET)
-    assert refused.train.lr == exp.axes["train.lr"][1]
-
-
-@pytest.mark.parametrize("name", LINEAR_RING)
-def test_the_whitened_diagonal_setting_passes_its_step_check_with_a_tenfold_margin(name, tmp_path):
-    """One epoch of setting 3 logs the run-start check: lr lambda_max(loss Hessian) at the
-    prior initial state, which the presets keep below 0.1 (at most 5% inflation of the
-    stiffest mode; the check itself refuses 1)."""
-    exp = preset(name).model_copy(update={"n_epochs": 1, "device": "cpu"})
-    lines: list[str] = []
-    run_setting(exp, 3, tmp_path, log=lines.append)
-    (check,) = [line for line in lines if line.startswith("SGLD step check")]
-    step = float(check.split("= ")[1].split()[0])
-    assert step <= 0.1
 
 
 # ---------------------------------------------------------------------------- editing a folder

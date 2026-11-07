@@ -1,17 +1,17 @@
 {
-  "description": "The linear ring of latex/notes/fct_experiment_plan.tex (sec:presets, the dictionary tab:dictionary) at sigma^2 = 0: N = 64 hidden units on a ring, hidden kernel length_scale 4 sites (box = N = 64), P = 256 patterns; linear_teacher with m = n = 8 features, K = 3 latents uniform on [0, 1] and an orthonormal teacher; L = 1, phi id, g 1; k0 = k1 = 1 (input and output kernels of length_scale 0 and amplitude 1, weight_lambda 1, so k = 1 / weight_lambda); r = rate_lambda = 0; beta 0.25 (prediction 1, regime a1); SGLD, float64; every population on the deterministic grid. B = 64 members and one sample per member, its final state after 2 x 10^5 epochs: statistics are of the member-averaged final-state spectrum, with errors from the spread across members (at B = 64 a q = 0 share has standard error 0.025 and R(1)/R(0) 0.0015); the spectrum records (every 500 epochs) are only a burn-in diagnostic, with the first 10^4 epochs as burn-in. Predicted by fct.linear_theory.predicted_spectra on the seed-0 data (whitened): q_1/2 = 2, q = 0 shares 0.157, R(1)/R(0) 0.969 for every mode, d_0 ratio of mode 1 to mode 2 9.36 (the measured s_k^2; 10.08 from the formula values). The axes cross spatial.parametrisation [penalty, whitened] with train.lr [1.2e-4, 0.005], and the diagonal is the experiment: setting 0 (penalty, lr 1.2e-4) and setting 3 (whitened, lr 0.005), run with `exp run ROOT --index 0` and `--index 3` (`bash jobs/fct_exp.sh ROOT --submit --index 0`, `--index 3`). Setting 1 (penalty at 0.005) is refused at run start by the penalty's step check; setting 2 (whitened at 1.2e-4) runs and shows the whitened result does not depend on lr. Each lr comes from its own run-start check. Penalty: lr k_max = 0.48, k_max = weight_lambda / (beta min_rel_eig lambda_0) = 3988 the curvature of the floored modes (the check refuses lr k_max >= 2), which inflates their variance by 1.3x and moves R(1)/R(0) by 3e-4. Whitened: lr lambda_max(loss Hessian) = 0.025 (lambda_max = 4.9 at the prior initial state, the logged check value; refused at >= 1), a 1% inflation of every prior mode. min_rel_eig 1e-4 floors |q| >= 11 (a 9e-4 change in R(1)/R(0); 1e-3 would move it by 9e-3, six standard errors) and lets the penalty's softest data-carrying mode relax in about 2 x 10^4 epochs; under the default 1e-6 the check would refuse any lr above 5e-6. Both parametrisations start from the prior (init prior, which whitened requires). Every other beta or weight_lambda needs its own lr pair: set beta with --set beta= and the pair with --axis 'train.lr=[...]' by the same two rules, and check that the run-start log of the whitened setting reports lr lambda_max <= 0.1.",
-  "N": 64,
+  "description": "The linear ring of latex/notes/fct_experiment_plan.tex at sigma^2 = 0, sized for the large-N regime of fct.linear_theory: N = 512 hidden units, hidden kernel length_scale 2 sites (box = N), P = 256 patterns; linear_teacher with m = n = 4 features, K = 3 latents uniform on [0, 1] and an orthonormal teacher; L = 1, phi id, g 1; k0 = k1 = 1 (input and output kernels of length_scale 0 and amplitude 1, weight_lambda 1); r = rate_lambda = 0; beta 10 (target condensation, tau = 0.77, 0.21, 0.15); SGLD, float64; every population on the deterministic grid. B = 64 members, one sample per member (its final state); the records (every 10^4 epochs) feed only a drift check. predicted_spectra is the N -> infinity mean-field limit: it leaves out the readout's (n/2) log det term, an O(n/N) correction, so N/n is set by the falsifiers. Exact posterior (a Gibbs sampler, 512 chains) against the prediction, modes 1/2/3: R(1)/R(0) 0.9343/0.8916/0.8890 against 0.9350/0.8924/0.8896, R(2)/R(0) 0.7736/0.6352/0.6268 against 0.7757/0.6378/0.6289, band share (|q| <= 24) 0.664/0.483/0.474 against 0.668/0.486/0.476, Gaussian width at 2 sites 2.79/2.10/2.07 against 2.81/2.11/2.08, mode-1/mode-2 band power ratio 25.7 against 25.6: every primary statistic within 0.3 to 0.6 of its SE at B = 64, below one third of its 3-SE margin (at N = 256 the errors reach 0.8 SE; at N = 16 the q = 0 power is half the predicted). The data term moves the same statistics from the prior by 47/7/5 SE (R(1)/R(0)), 45/7/5 (R(2)/R(0)), 30/4/3 (band share) and 18 (ratio). Falsified if a primary statistic of the member-averaged final-state spectrum lies further than 3 x 1.35 of its delta-method SE at this N and B from the prediction. The axes cross spatial.parametrisation [penalty, whitened] with train.lr [9e-5, 0.96], and the diagonal is the experiment: settings 0 and 3 (`exp run ROOT --index 0`, `--index 3`, or `bash jobs/fct_exp.sh ROOT --submit --index 0`); setting 1 (penalty at 0.96) is refused at run start; setting 2 (whitened at 9e-5) runs and is the lr check of the whitened result. Each lr is 0.9 of what its own run-start check accepts. Penalty (min_rel_eig 1e-6): lr weight_lambda stiffness / (2 beta) = 0.90, stiffness 1 / (min_rel_eig lambda_0) (refused at 1), which inflates the variance of the floored modes (|q| >= 215, prior variance 1e-6 lambda_0 each) by 1/(1 - 0.90) = 10x, a negligible part of the power. Whitened: lr lambda_max(loss Hessian) = 0.89 at the prior initial state (lambda_max 0.93; refused at 1), which inflates the stiffest mode, a data-carrying one, by 1/(1 - 0.45) = 1.8x and every prior-dominated mode by 1/(1 - lr / (2 beta)) = 1.05x; setting 2 measures what this does to the statistics. Run length: the whitened net relaxes within about 10^3 epochs; the penalty's slowest data-carrying direction has curvature about 1 / (beta lambda_0) = 0.02 and relaxes in about 1 / (lr x 0.02) = 6 x 10^5 epochs (an estimate, to be confirmed by the drift check), so n_epochs is 2 x 10^6. Both start from the prior (init prior, which whitened requires). Measured cost per epoch for all 64 members: about 16 ms (penalty) and 24 ms (whitened) on an RTX 4500 Ada GPU in float64, 92 and 59 ms on 8 CPU threads, so 2 x 10^6 epochs take about 9 and 13 GPU hours. Another beta or weight_lambda needs its own lr pair by the same rule (--set beta=, --axis 'train.lr=[...]') and a new regime check.",
+  "N": 512,
   "P": 256,
-  "n_epochs": 200000,
-  "lr": 0.005,
-  "log_int": 1000,
-  "save_int": 10000,
-  "monitor_int": 500,
+  "n_epochs": 2000000,
+  "lr": 0.96,
+  "log_int": 10000,
+  "save_int": 100000,
+  "monitor_int": 10000,
   "monitor_bins": 2,
   "monitor_shuffles": 1,
   "monitor_kind": "spectrum",
   "linear_teacher": {
-    "n_features": 8,
+    "n_features": 4,
     "n_latents": 3,
     "latent_min": 0.0,
     "latent_max": 1.0,
@@ -40,10 +40,10 @@
   "weight_lambda": 1.0,
   "rate_lambda": 0.0,
   "optimizer": "sgld",
-  "beta": 0.25,
+  "beta": 10.0,
   "spatial": {
     "d": 1,
-    "box": 64.0,
+    "box": 512.0,
     "input": {
       "embedding": {
         "kind": "grid",
@@ -62,7 +62,7 @@
         "seed": 0
       },
       "kernel": {
-        "length_scale": 4.0,
+        "length_scale": 2.0,
         "amplitude": 1.0
       }
     },
@@ -77,7 +77,7 @@
         "amplitude": 1.0
       }
     },
-    "min_rel_eig": 0.0001,
+    "min_rel_eig": 1e-06,
     "lambda_max": null,
     "parametrisation": "penalty"
   },
@@ -144,8 +144,8 @@
       "whitened"
     ],
     "train.lr": [
-      0.00012,
-      0.005
+      9e-05,
+      0.96
     ]
   }
 }
