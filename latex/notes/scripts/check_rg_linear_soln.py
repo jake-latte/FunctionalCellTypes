@@ -21,7 +21,7 @@ N, P, M_IN, N_OUT, N_LATENT = 12, 4, 6, 5, 3   # sites, patterns, m, n, latents
 KERNEL_WIDTH = np.sqrt(2.0)                    # K_ij = exp(-r_ij^2 / (2 w^2)), ring distance r
 Z_MAX = 1.0                                    # Z_{mu,k} ~ U[0, Z_MAX]
 WY_SCALE = 0.6                                 # W_Y = 0.6 * (orthonormal columns)
-K0, K1, SIG2, R, DELTA = 0.7, 1.3, 0.2, 0.3, 0.5
+K0, K1, SIG2, R, DELTA = 0.7, 1.3, 0.2, 0.3, 0.5  # R: the rate-penalty coefficient r (the notes' G = r I)
 DAMPING, N_ITER = 0.5, 4000
 C_START = 5.0                                  # iterate from C = C_START * I (large C, small B)
 

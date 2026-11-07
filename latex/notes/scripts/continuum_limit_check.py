@@ -58,7 +58,8 @@ Weight = Callable[[np.ndarray], np.ndarray]
 
 @dataclass(frozen=True)
 class SolutionParams:
-    """Scalars of one data mode in the corrected eq:linear-soln."""
+    """Scalars of one data mode in the corrected eq:linear-soln; r is the rate-penalty
+    coefficient (the notes' G = r I)."""
 
     sx2: float
     sy2: float
