@@ -554,6 +554,42 @@ def member_mean_sem(values: Tensor) -> tuple[Tensor, Tensor]:
     return values.mean(dim=0), values.std(dim=0) / math.sqrt(B)
 
 
+def bootstrap_resamples(
+    values: Tensor,
+    statistic: Callable[[Tensor], Tensor | float | int],
+    n_boot: int = 1000,
+    seed: int = 0,
+) -> Tensor:
+    """(n_boot, ...): `statistic` of the member mean of each of `n_boot` resamples of the B
+    members of `values` (B, ...) with replacement, for a caller that needs more than the SD of
+    `bootstrap_members` (a quantile range, say). Same rules: `statistic` batches over leading
+    dims, the generator is seeded with `seed`, and a resample is a row of member counts, so
+    the means are counts @ values / B."""
+    _check_float("values", values, 1)
+    B = values.shape[0]
+    if B < 2:
+        raise ValueError(f"need at least 2 members to resample, got {B}")
+    if n_boot < 2:
+        raise ValueError(f"n_boot must be at least 2 for a standard error, got {n_boot}")
+    gen = torch.Generator().manual_seed(seed)
+    index = torch.randint(B, (n_boot, B), generator=gen)
+    counts = torch.zeros((n_boot, B), dtype=values.dtype).scatter_add_(
+        1, index, torch.ones((n_boot, B), dtype=values.dtype)
+    )
+    means = (counts.to(values.device) @ values.reshape(B, -1) / B).reshape(
+        n_boot, *values.shape[1:]
+    )
+    resampled = torch.as_tensor(statistic(means), device=values.device)
+    if resampled.ndim == 0 or resampled.shape[0] != n_boot:
+        raise ValueError(
+            f"the statistic must batch over leading dims: {n_boot} resampled means of shape "
+            f"{tuple(values.shape[1:])} gave shape {tuple(resampled.shape)}"
+        )
+    if not resampled.is_floating_point():
+        resampled = resampled.to(values.dtype)
+    return resampled
+
+
 def bootstrap_members(
     values: Tensor,
     statistic: Callable[[Tensor], Tensor | float | int],
@@ -570,30 +606,15 @@ def bootstrap_members(
     replacement. `statistic` must batch over leading dims ((n_boot, ...) means in, (n_boot, ...)
     out), as every summary of this module does. Resampling draws from a generator seeded with
     `seed`, never from the global RNG. A resample is a row of member counts (n_boot, B), so
-    the resampled means are counts @ values / B, never the (n_boot, B, ...) resampled values.
+    the resampled means are counts @ values / B, never the (n_boot, B, ...) resampled values
+    (`bootstrap_resamples`).
     """
-    _check_float("values", values, 1)
-    B = values.shape[0]
-    if B < 2:
-        raise ValueError(f"need at least 2 members to resample, got {B}")
-    if n_boot < 2:
-        raise ValueError(f"n_boot must be at least 2 for a standard error, got {n_boot}")
+    resampled = bootstrap_resamples(values, statistic, n_boot, seed)
     estimate = torch.as_tensor(statistic(values.mean(dim=0)), device=values.device)
-    gen = torch.Generator().manual_seed(seed)
-    index = torch.randint(B, (n_boot, B), generator=gen)
-    counts = torch.zeros((n_boot, B), dtype=values.dtype).scatter_add_(
-        1, index, torch.ones((n_boot, B), dtype=values.dtype)
-    )
-    means = (counts.to(values.device) @ values.reshape(B, -1) / B).reshape(
-        n_boot, *values.shape[1:]
-    )
-    resampled = torch.as_tensor(statistic(means), device=values.device)
     if resampled.shape != (n_boot, *estimate.shape):
         raise ValueError(
             f"the statistic must batch over leading dims: it maps a mean of shape "
             f"{tuple(values.shape[1:])} to {tuple(estimate.shape)} but {n_boot} resampled means "
             f"to {tuple(resampled.shape)}, not {(n_boot, *estimate.shape)}"
         )
-    if not resampled.is_floating_point():
-        resampled = resampled.to(values.dtype)
     return estimate, resampled.std(dim=0)

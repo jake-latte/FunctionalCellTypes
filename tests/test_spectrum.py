@@ -803,3 +803,11 @@ def test_bootstrap_resamples_are_the_means_of_resampled_members():
     assert torch.equal(sem, torch.zeros(2, dtype=F64))
     _, sem = sp.bootstrap_members(values, lambda m: m, 4000, seed=3)
     torch.testing.assert_close(sem, values.std(0, correction=0) / 20**0.5, rtol=0.05, atol=0)
+
+
+def test_bootstrap_resamples_are_what_bootstrap_members_summarises():
+    values = torch.randn((30, 4), dtype=F64, generator=torch.Generator().manual_seed(6))
+    resampled = sp.bootstrap_resamples(values, lambda m: m.sum(-1), n_boot=200, seed=2)
+    _, sem = sp.bootstrap_members(values, lambda m: m.sum(-1), n_boot=200, seed=2)
+    assert resampled.shape == (200,)
+    torch.testing.assert_close(resampled.std(0), sem)

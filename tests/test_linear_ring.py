@@ -170,7 +170,8 @@ def test_the_deficit_se_is_never_below_the_window_means_se():
     _, window_se = bootstrap_members(
         records.transpose(0, 1), lambda m: _low_q_power(m).mean(-2), 50, seed=7
     )
-    assert float(fit.deficit_se[0]) >= float(window_se[0]) > 0
+    assert float(window_se[0]) > 0
+    assert float(fit.deficit_se[0]) >= float(window_se[0]) * (1 - 1e-12)  # equal here, the floor
 
 
 def test_a_zero_deficit_with_an_se_above_the_budget_is_not_stationary():

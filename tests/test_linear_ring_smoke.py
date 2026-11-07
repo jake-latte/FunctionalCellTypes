@@ -194,9 +194,11 @@ def test_the_final_state_spectra_agree_with_the_prediction(smoke, index):
 @pytest.mark.parametrize("index", DIAGONAL)
 def test_the_second_half_of_the_run_shows_no_relaxation_beyond_its_noise(smoke, index):
     """The fitted deficit of the second half is zero within PIPELINE_N_SE of its own SEs. This
-    is weaker than `is_stationary`: with 20 records in the window, the deficit's SE is 0.6 to 0.8
-    of one SE at the run's B, so the diagnostic cannot show the deficit below that SE, which
-    `is_stationary` demands of a real run (there with an SE of about 0.1 of the budget)."""
+    is weaker than `is_stationary`: with 20 records in the window, the deficit's SE is 0.63 to
+    0.87 of one SE at the run's B on the penalty path and 0.23 to 0.37 on the whitened path
+    (where the window-mean floor binds), so the diagnostic cannot reliably show the deficit
+    below that SE, which `is_stationary` demands of a real run (there with an SE of about 0.1
+    of the budget)."""
     fit = smoke[index].relaxation
     within = fit.deficit.abs() <= lr.PIPELINE_N_SE * fit.deficit_se
     assert within.all(), _report(index, smoke[index])

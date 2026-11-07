@@ -44,6 +44,7 @@ from fct.spectrum import (
     autocorrelation,
     band_mask,
     bootstrap_members,
+    bootstrap_resamples,
     latent_basis,
 )
 
@@ -174,7 +175,7 @@ class RelaxationFit(NamedTuple):
     amplitude: Tensor  # (S,) C
     tau: Tensor  # (S,) in the units of the epochs
     deficit: Tensor  # (S,) C exp(-(t_end - t_0) / tau), what is still to relax at the last record
-    deficit_se: Tensor  # (S,) bootstrap over members, floored at the window mean's SE
+    deficit_se: Tensor  # (S,) bootstrap half 16-84% range, floored at the window mean's SE
 
 
 # tau is searched on a log grid from TAU_MIN_FRACTION of the record spacing to TAU_MAX_FACTOR
@@ -187,7 +188,8 @@ TAU_MIN_FRACTION = 0.25
 TAU_MAX_FACTOR = 1.0
 # Resamples of the relaxation fit's bootstrap. Fewer than N_BOOT because each resample is a full
 # grid fit and the resampled means take n_boot x R x K x N floats (about 250 MB at R = 200 records
-# of linear_ring); the resampling error of the SE is 1 / sqrt(2 x 100) = 7%.
+# of linear_ring); the resampling error of a 16-84% half-range from 100 resamples is about 10%,
+# that of the SD floor 1 / sqrt(2 x 100) = 7%.
 RELAXATION_N_BOOT = 100
 
 
@@ -214,7 +216,7 @@ def _fit_relaxation(t: Tensor, y: Tensor) -> tuple[Tensor, Tensor, Tensor]:
 
 
 def _deficit_and_mean(t: Tensor, statistics: Callable[[Tensor], Tensor]) -> Callable:
-    """The statistic `bootstrap_members` resamples: member-mean records (..., R, K, N) -> the
+    """The statistic `bootstrap_resamples` resamples: member-mean records (..., R, K, N) -> the
     fitted deficit and the window mean of every statistic, (..., 2S)."""
     end = float(t[-1] - t[0])
 
@@ -234,14 +236,19 @@ def _deficit_and_mean(t: Tensor, statistics: Callable[[Tensor], Tensor]) -> Call
 def _bootstrap_deficit(
     t: Tensor, records: Tensor, statistics: Callable[[Tensor], Tensor], n_boot: int, seed: int
 ) -> Tensor:
-    """(S,): the deficit's SE over resamples of the members, floored at the SE of the window's
-    mean statistic. A fit whose tau falls inside the first record spacing puts the deficit at
-    exactly 0 in every resample; the floor keeps it from claiming more precision than the
-    window's data has."""
+    """(S,): the deficit's spread over resamples of the members, half the 16-84% range of the
+    refitted deficits (the SD of a normal), floored at the SD of the window's mean statistic.
+    The quantiles, not the SD: a few resamples whose tau runs to the edge of the grid set the
+    SD (0.072 against a half-range of 0.0027 at tau = 400). The floor: a fit whose tau falls
+    inside the first record spacing puts the deficit at exactly 0 in every resample, and the
+    floor keeps it from claiming more precision than the window's data has."""
     members_first = records.transpose(0, 1)  # (B, R, K, N), resampled along the members
-    _, se = bootstrap_members(members_first, _deficit_and_mean(t, statistics), n_boot, seed)
-    S = se.shape[0] // 2
-    return torch.maximum(se[:S], se[S:])
+    resampled = bootstrap_resamples(members_first, _deficit_and_mean(t, statistics), n_boot, seed)
+    S = resampled.shape[-1] // 2
+    q16, q84 = torch.quantile(
+        resampled[:, :S], torch.tensor([0.16, 0.84], dtype=resampled.dtype), dim=0
+    )
+    return torch.maximum((q84 - q16) / 2, resampled[:, S:].std(0))
 
 
 def relaxation_fit(
@@ -300,8 +307,11 @@ def regime_accurate(exact: Tensor, law: Law) -> Tensor:
 # bootstrap SEs at the run's B, and a failure counts only if it persists after the setting is
 # extended to FOLLOW_UP_FACTOR times B members. Two parametrisations are equivalent on a
 # statistic unless their deviations from their own predictions differ by more than
-# EQUIVALENCE_N_SE combined bootstrap SEs (the plan's level, with the same follow-up; the shared
-# initial state correlates the two paths' members, which only makes the test conservative).
+# EQUIVALENCE_N_SE combined bootstrap SEs (the plan's level, with the same follow-up). Paths that
+# share the initial state have correlated members: that is conservative against a false
+# disagreement but lowers the test's power, so passing is weaker evidence of equivalence. Here
+# it is negligible, because the final state has forgotten the initial one (member-mean map
+# correlations +0.007 and -0.034 on the pipeline ring).
 FALSIFY_N_SE = 3.0
 FOLLOW_UP_FACTOR = 4
 EQUIVALENCE_N_SE = 3.0
