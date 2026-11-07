@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, NamedTuple, Self
 
 import numpy as np
 import torch
@@ -401,6 +401,49 @@ def preset(name: str, directory: Path | str | None = None) -> ExpConfig:
     except ValidationError as err:  # also covers JSON that does not parse
         raise PresetError(f"the preset file {path} is not a valid experiment: {err}") from err
 
+
+
+# ---------------------------------------------------------------------------- derived descriptions
+# An experiment made from a preset with overrides (`exp init --preset NAME --set ... --axis ...`)
+# no longer fits the preset's description, so it is given one that names the preset and the
+# overrides as they were typed. The writer and the parser below are the only two places that
+# know the format.
+_DERIVED = re.compile(rf"^Preset '({PRESET_NAME_RULE})' with overrides: (.+)$", re.DOTALL)
+_OVERRIDE_SEPARATOR = "; "
+_SET, _AXIS = "--set ", "--axis "
+
+
+class Overrides(NamedTuple):
+    """The preset an experiment was made from and the overrides given to `exp init`."""
+
+    preset: str
+    sets: list[str]  # "key=value" as typed
+    axes: list[str]  # "path=[values]" as typed
+
+
+def derived_description(preset_name: str, sets: list[str], axes: list[str]) -> str:
+    """What an experiment made from a preset with overrides says about itself: the preset and
+    each override as it was given (`parse_derived_description` reads it back)."""
+    given = [_SET + item for item in sets] + [_AXIS + item for item in axes]
+    return f"Preset {preset_name!r} with overrides: {_OVERRIDE_SEPARATOR.join(given)}"
+
+
+def parse_derived_description(description: str | None) -> Overrides | None:
+    """The `Overrides` of a description `derived_description` wrote; None for any other text.
+    ValueError for a description in that form whose overrides do not parse (an override whose
+    value contains the separator "; " cannot be read back)."""
+    match = _DERIVED.match(description or "")
+    if match is None:
+        return None
+    sets, axes = [], []
+    for item in match[2].split(_OVERRIDE_SEPARATOR):
+        if item.startswith(_SET):
+            sets.append(item.removeprefix(_SET))
+        elif item.startswith(_AXIS):
+            axes.append(item.removeprefix(_AXIS))
+        else:
+            raise ValueError(f"cannot read the override {item!r} of the description {description!r}")
+    return Overrides(match[1], sets, axes)
 
 def exp_path(root: Path) -> Path:
     return Path(root) / EXP_FILE

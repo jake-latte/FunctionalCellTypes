@@ -49,6 +49,7 @@ from fct.exp import (
     PresetError,
     Stage,
     UnmigratedExpError,
+    derived_description,
     exp_path,
     expand,
     extend_experiment,
@@ -371,13 +372,6 @@ def _sets_description(sets: Sequence[str]) -> bool:
     return any(item.partition("=")[0] == "description" for item in sets)
 
 
-def _derived_description(preset_name: str, sets: Sequence[str], axes: Sequence[str]) -> str:
-    """What an experiment made from a preset with overrides says about itself: the preset and
-    each override as it was given."""
-    given = [f"--set {item}" for item in sets] + [f"--axis {item}" for item in axes]
-    return f"Preset {preset_name!r} with overrides: {'; '.join(given)}"
-
-
 def _reject_axes_overrides(overrides: Sequence[str]) -> None:
     for item in overrides:
         key = item.partition("=")[0]
@@ -404,7 +398,7 @@ def cmd_exp_init(args: argparse.Namespace) -> int:
         # With overrides the preset's description would no longer be true; an explicit
         # `--set description=...` (even null) is the user's own and stays.
         if (args.set or args.axis) and not _sets_description(args.set):
-            tree["description"] = _derived_description(args.preset, args.set, args.axis)
+            tree["description"] = derived_description(args.preset, list(args.set), list(args.axis))
         exp = ExpConfig.model_validate(tree)
     except ValidationError as err:
         raise CliError(str(err)) from err
