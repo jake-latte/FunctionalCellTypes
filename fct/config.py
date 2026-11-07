@@ -181,7 +181,7 @@ class TrainConfig(StrictModel):
     beta: PosFloat = 1.0
 
 
-def law_beta(optimizer: str, beta: float) -> float:
+def law_beta(optimizer: Optimizer, beta: float) -> float:
     """The inverse temperature of the law exp(-beta L) the optimiser targets: `beta` under SGLD,
     1 under Adam, which has no temperature. It takes the two fields rather than a TrainConfig so
     the notebooks can derive weight_lambda from their loss coefficient before building one."""

@@ -412,7 +412,7 @@ def test_unexpected_error_in_a_single_run_keeps_its_traceback(tmp_path, capsys, 
         main(["exp", "run", str(tmp_path), "--index", "0"])
 
 
-def test_cli_run_index_then_status(tmp_path, capsys):
+def test_cli_run_index_then_status(tiny, tmp_path, capsys):
     _cli(capsys, "init", tmp_path, "--preset", "tiny")
     code, _, _ = _cli(capsys, "run", tmp_path, "--index", 0)
     assert code == 0
@@ -420,7 +420,7 @@ def test_cli_run_index_then_status(tmp_path, capsys):
     lines = status.strip().splitlines()
     assert lines[0].split()[:2] == ["0", "done"]
     assert lines[1].split()[:2] == ["1", "missing"]
-    assert "1 done, 0 partial, 35 missing, 0 stale" in lines[-1]
+    assert f"1 done, 0 partial, {len(expand(tiny)) - 1} missing, 0 stale" in lines[-1]
 
 
 # ---------------------------------------------------------------------------- stale results

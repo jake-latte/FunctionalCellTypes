@@ -48,7 +48,7 @@ results, then submits the full runs. Work only inside `Projects/`; scratch in `F
   The loss carries the weight prior as `weight_lambda / (2 beta) * tr(M_post W M_pre W^T)` (`beta = train.beta` under SGLD, 1
   under Adam; `LOSS_VERSION` 4), so the SGLD stationary law exp(-beta L) has `vec(W) ~ N(0, K / weight_lambda)` for every beta.
   Every earlier `weight_lambda` maps to the same effective loss by x 2 beta (SGLD) or x 2 (Adam); the library default is now 2e-4
-  and the spatial and exemplar notebooks take the loss coefficient `PRIOR_COEFF` (3e-3, 1e-2) and derive `weight_lambda = 2 beta PRIOR_COEFF` (beta = 1 for Adam), so SGLD and Adam train the same loss. DECIDED: the mean-field solver's defaults follow the network
+  and the spatial and exemplar notebooks take the loss coefficient `PRIOR_COEFF` (3e-3, 1e-2) and derive `weight_lambda = 2 beta PRIOR_COEFF` (beta = 1 for Adam), so SGLD and Adam train the same weight prior. DECIDED: the mean-field solver's defaults follow the network
   (`fct.meanfield.network_constants`): `prior_scale = 1/weight_lambda`, `alpha = weight_lambda P d_out / beta`,
   `rate_tilt = rate_lambda` (the loss carries `rate_lambda / (2 beta) * sum phi^2`, `LOSS_VERSION` 5), `learning_prefactor = weight_lambda/2`, `beta = train.beta` (SGLD) or 1 (Adam); explicit
   `MeanFieldConfig` fields win. All four are exact for SGLD (a test on the exemplar's weight variance per beta, and one on `run_meanfield`'s defaults with the
