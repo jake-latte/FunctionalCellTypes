@@ -26,8 +26,13 @@ from fct.tasks import TASK_SPECS
 # under another definition are rejected as stale instead of mixed with new ones. Increase it
 # whenever the loss changes in a way the TrainConfig fields do not express. History: 1 summed
 # the rate penalty over the samples, 2 averaged it over them, 3 sums it again, 4 scales the
-# weight prior by 1 / (2 beta) (beta = 1 for Adam).
-LOSS_VERSION = 4
+# weight prior by 1 / (2 beta) (beta = 1 for Adam), 5: rate penalty scaled by 1/(2 beta).
+LOSS_VERSION = 5
+# The last LOSS_VERSION that changed the loss of a config without a rate penalty
+# (train.rate_lambda = 0), which is the version hashed for such a config (`hashed_loss_version`):
+# version 5 rescales only the rate penalty, so their numbers and caches are those of version 4.
+# A loss change that reaches rate-free configs too must raise both constants.
+RATE_FREE_LOSS_VERSION = 4
 
 # Version of the network definition (`fct.model.MLP`), folded into every hash that holds the
 # net section, for the same reason: a trained net or a mean-field result made with another
@@ -155,8 +160,10 @@ class NetConfig(StrictModel):
 class TrainConfig(StrictModel):
     n_epochs: NonNegInt = 15_000
     lr: PosFloat = 1e-3
-    # The loss carries the weight prior as weight_lambda / (2 beta) * quadratic form, with beta
-    # = `beta` for SGLD and 1 for Adam (`fct.train.prior_coefficient`).
+    # The loss carries the weight prior as weight_lambda / (2 beta) * quadratic form and the rate
+    # penalty as rate_lambda / (2 beta) * sum phi^2, with beta = `beta` for SGLD and 1 for Adam
+    # (`fct.train.prior_coefficient`, `fct.train.rate_coefficient`), so beta L carries
+    # (rate_lambda / 2) sum phi^2: rate_lambda is the notes' r.
     weight_lambda: NonNegFloat = 2e-4
     rate_lambda: NonNegFloat = 1e-3
     log_int: PosInt = 100
@@ -172,6 +179,12 @@ class TrainConfig(StrictModel):
     # adam runs keep the hashes they had before these fields existed.
     optimizer: Optimizer = "adam"
     beta: PosFloat = 1.0
+
+
+def hashed_loss_version(train: TrainConfig) -> int:
+    """The loss version folded into a hash that holds `train`: `LOSS_VERSION`, or
+    `RATE_FREE_LOSS_VERSION` when the config has no rate penalty, whose loss it still defines."""
+    return LOSS_VERSION if train.rate_lambda > 0 else RATE_FREE_LOSS_VERSION
 
 
 # Solver fields that no longer exist, at the value every hash written while they did holds
@@ -482,8 +495,8 @@ class Config(StrictModel):
         """Hash of the named sections, so an artefact can tell which config it came from.
 
         The top-level `dtype` is always folded in: it changes every artefact's numbers but
-        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and
-        `LOSS_VERSION` when "train" is. `train.optimizer` / `train.beta` are left out of the
+        belongs to no section. So is `MODEL_VERSION` when "net" is among the sections, and the
+        loss version when "train" is (`hashed_loss_version`: version 4 without a rate penalty). `train.optimizer` / `train.beta` are left out of the
         hash for the adam optimiser, and every field of `HASH_OMITTED_AT_DEFAULT` while it holds
         its default (`fct.schema.exclude_at_default`), so a config that does not set such a
         field hashes as it did before the field existed. The `spatial` section enters with
@@ -503,7 +516,7 @@ class Config(StrictModel):
         if "net" in sections:  # the forward pass belongs to the net section
             hashed["model_version"] = MODEL_VERSION
         if "train" in sections:  # the loss definition lives in the train section
-            hashed["loss_version"] = LOSS_VERSION
+            hashed["loss_version"] = hashed_loss_version(self.train)
             if self.train.optimizer == "adam":  # SGLD-only fields must not move adam hashes
                 del hashed["train"]["optimizer"], hashed["train"]["beta"]
             if self.spatial is not None:  # the weight prior is part of the training loss

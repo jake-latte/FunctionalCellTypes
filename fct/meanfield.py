@@ -17,13 +17,14 @@ expectation under that density, which a per-layer sampler provides: `SingleSiteH
     ∂S/∂Φ_L = -½ Φ̂_L - c A Y Yᵀ A,  A = (αI + Φ_L)⁻¹      (Eq. 31c)
 
 Mapping of the network's (β, λ_w, λ_r) onto the action (`network_constants`; each constant can be
-overridden in MeanFieldConfig): prior_scale = 1/λ_w, α = λ_w P D_out / β, rate tilt 2βλ_r,
+overridden in MeanFieldConfig): prior_scale = 1/λ_w, α = λ_w P D_out / β, rate tilt λ_r,
 c = learning_prefactor = λ_w/2, with β = train.beta for SGLD and 1 for Adam
 (`resolve_beta`).  The loss carries the weight prior as λ_w/(2β)‖θ‖² (`fct.train.prior_coefficient`),
 so the stationary law exp(-βL) of SGLD has weights N(0, 1/λ_w) for every β; the readout is a
-Gaussian likelihood of precision βN/(P D_out); the rate penalty λ_r Σφ² enters the law as
-exp(-βλ_r Σφ²), a tilt of 2βλ_r (the tilt multiplies φᵀφ summed over the P solved points, a
-per-sample coefficient, as the rate penalty is); and the kernels are unscaled (Σ = prior_scale Φ0),
+Gaussian likelihood of precision βN/(P D_out); the rate penalty λ_r/(2β) Σφ²
+(`fct.train.rate_coefficient`) enters the law as exp(-½λ_r Σφ²), a tilt of λ_r for every β (the
+tilt multiplies φᵀφ summed over the P solved points, a per-sample coefficient, as the rate
+penalty is); and the kernels are unscaled (Σ = prior_scale Φ0),
 so the data-term prefactor is 1/(2 prior_scale).  Under Adam there is no Gibbs distribution and
 β = 1 is the convention of the loss.
 
@@ -264,12 +265,13 @@ def network_constants(
     beta: float, weight_lambda: float, rate_lambda: float, n_points: int, d_out: int
 ) -> dict[str, float]:
     """The action's constants (prior_scale, alpha, rate_tilt, learning_prefactor) under which the
-    theory describes the stationary law exp(-beta L) of the repo loss L (see the module docstring
-    and `fct.train.prior_coefficient`); `beta` is the network's (`resolve_beta`)."""
+    theory describes the stationary law exp(-beta L) of the repo loss L (see the module docstring,
+    `fct.train.prior_coefficient` and `fct.train.rate_coefficient`); `beta` is the network's
+    (`resolve_beta`). The rate tilt is rate_lambda itself, whatever beta."""
     return {
         "prior_scale": 1.0 / weight_lambda,
         "alpha": weight_lambda * n_points * d_out / beta,
-        "rate_tilt": 2.0 * beta * rate_lambda,
+        "rate_tilt": rate_lambda,
         "learning_prefactor": 0.5 * weight_lambda,
     }
 

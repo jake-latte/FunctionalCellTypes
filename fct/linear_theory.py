@@ -121,10 +121,10 @@ def _check_sgld(cfg: Config) -> None:
 
 def theory_rate(cfg: Config) -> float:
     """The rate-penalty coefficient r of the theory, (r/2) sum phi^2 in beta L. The loss carries
-    rate_lambda * sum phi^2 and the SGLD law is exp(-beta L), so r = 2 beta rate_lambda under
-    today's loss convention."""
+    rate_lambda / (2 beta) * sum phi^2 (`fct.train.rate_coefficient`) and the SGLD law is
+    exp(-beta L), so r = rate_lambda."""
     _check_sgld(cfg)
-    return 2.0 * cfg.train.beta * cfg.train.rate_lambda
+    return cfg.train.rate_lambda
 
 
 def _ring_spaces(cfg: Config) -> list[LayerSpace]:

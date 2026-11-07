@@ -43,11 +43,12 @@ def test_the_config_carries_every_setting():
 def test_network_constants_follow_the_stationary_law_of_the_loss():
     """The loss prior weight_lambda / (2 beta) ||theta||^2 makes exp(-beta L) put variance
     1 / weight_lambda on each weight; the likelihood precision beta N / (P d_out) gives the ridge
-    weight_lambda P d_out / beta; the tilt is 2 beta lambda_r and the prefactor weight_lambda / 2."""
+    weight_lambda P d_out / beta; the loss's rate penalty rate_lambda / (2 beta) sum phi^2 makes the
+    tilt rate_lambda; the prefactor is weight_lambda / 2."""
     c = network_constants(beta=5.0, weight_lambda=1e-2, rate_lambda=1e-3, n_points=8, d_out=4)
     assert c["prior_scale"] == pytest.approx(100.0)
     assert c["alpha"] == pytest.approx(0.064)
-    assert c["rate_tilt"] == pytest.approx(1e-2)
+    assert c["rate_tilt"] == 1e-3
     assert c["learning_prefactor"] == pytest.approx(0.005)
     assert c["learning_prefactor"] == pytest.approx(1 / (2 * c["prior_scale"]))
     assert c["alpha"] == pytest.approx(8 * 4 / (5.0 * c["prior_scale"]))  # P d_out / (beta s)

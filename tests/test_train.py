@@ -12,7 +12,14 @@ from fct.cache import (
 from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset
 from fct.model import make_net
-from fct.train import _restore_rng, compute_loss, load_trained, prior_coefficient, train
+from fct.train import (
+    _restore_rng,
+    compute_loss,
+    load_trained,
+    prior_coefficient,
+    rate_coefficient,
+    train,
+)
 
 CPU, F64 = torch.device("cpu"), torch.float64
 
@@ -270,7 +277,7 @@ def test_rate_l2_is_the_sum_over_samples_neurons_and_layers():
     net = _two_sample_net()
     x = torch.tensor([[3.0], [-2.0]], dtype=F64)  # h = [[3, -3], [-2, 2]]; relu -> [[3,0],[0,2]]
     y = torch.zeros(2, 1, dtype=F64)
-    loss, parts = compute_loss(net, x, y, prior_coefficient=0.0, rate_lambda=0.5)
+    loss, parts = compute_loss(net, x, y, prior_coefficient=0.0, rate_coefficient=0.5)
     assert parts["rate_l2"].item() == pytest.approx(9 + 4)
     assert parts["mse"].item() == 0.0  # V = 0 and y = 0
     assert loss.item() == pytest.approx(0.5 * 13)  # only the rate term remains
@@ -280,7 +287,7 @@ def test_loss_golden_value_is_tied_to_the_loss_and_model_versions():
     # Change the expected value and LOSS_VERSION (MODEL_VERSION) together whenever the loss
     # (the forward pass) changes: the versions are what reject caches made under the previous
     # definition.
-    assert fct.config.LOSS_VERSION == 4
+    assert fct.config.LOSS_VERSION == 5
     assert fct.config.MODEL_VERSION == 2
     net = _two_sample_net()
     with torch.no_grad():
@@ -289,14 +296,15 @@ def test_loss_golden_value_is_tied_to_the_loss_and_model_versions():
     y = torch.tensor([[1.0], [0.0]], dtype=F64)
     # relu(h) = [[3, 0], [0, 2]], z = relu(h) V / 2 = [1.5, 0.5], mse = (0.25 + 0.25) / 2 = 0.25,
     # weight_l2 = 2 + 1.25 = 3.25, rate_l2 = 9 + 4 = 13. Training minimises this loss with
-    # prior_coefficient = weight_lambda / (2 beta): 0.4 / (2 * 2) under SGLD at beta = 2 and
-    # 0.2 / 2 under Adam are both 0.1, so both give 0.25 + 0.1 * 3.25 + 0.2 * 13 = 3.175.
+    # coefficients weight_lambda / (2 beta) and rate_lambda / (2 beta): 0.4 / (2 * 2) under SGLD
+    # at beta = 2 and 0.2 / 2 under Adam are both 0.1, so both give
+    # 0.25 + 0.1 * 3.25 + 0.1 * 13 = 1.875.
     for tc in (
-        TrainConfig(optimizer="sgld", beta=2.0, weight_lambda=0.4, rate_lambda=0.2),
+        TrainConfig(optimizer="sgld", beta=2.0, weight_lambda=0.4, rate_lambda=0.4),
         TrainConfig(optimizer="adam", weight_lambda=0.2, rate_lambda=0.2),
     ):
-        loss, _ = compute_loss(net, x, y, prior_coefficient(tc), tc.rate_lambda)
-        assert loss.item() == pytest.approx(3.175)
+        loss, _ = compute_loss(net, x, y, prior_coefficient(tc), rate_coefficient(tc))
+        assert loss.item() == pytest.approx(1.875)
 
 
 def test_loss_is_assembled_from_the_parts():

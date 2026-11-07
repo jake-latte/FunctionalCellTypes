@@ -36,6 +36,7 @@ from fct.train import (
     make_weight_penalty,
     prior_coefficient,
     prior_stiffness,
+    rate_coefficient,
     train,
     train_from_config,
 )
@@ -540,10 +541,12 @@ def test_the_whitened_penalty_is_the_plain_sum_of_squares_of_xi():
     hand = sum(p.square().sum() for p in net.parameters())
     torch.testing.assert_close(penalty(net), hand, rtol=1e-15, atol=0)
     tc = cfg.train
-    loss, parts = compute_loss(net, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)
+    loss, parts = compute_loss(
+        net, ds.x, ds.y, prior_coefficient(tc), rate_coefficient(tc), penalty
+    )
     data = 0.5 * net.N * (ds.y - net(ds.x)[1]).square().mean()
     rates = net.phi(net(ds.x)[0]).square().sum()
-    want = data + tc.weight_lambda / (2 * tc.beta) * hand + tc.rate_lambda * rates
+    want = data + (tc.weight_lambda * hand + tc.rate_lambda * rates) / (2 * tc.beta)
     assert loss.item() == pytest.approx(want.item(), rel=1e-12)
     assert parts["weight_l2"].item() == pytest.approx(hand.item(), rel=1e-12)
 
@@ -669,8 +672,8 @@ def test_largest_hessian_eigenvalue_of_an_ensemble_is_the_largest_over_its_membe
 
     def loss_of(net, weight_penalty):
         x, y = ds.x, ds.y
-        coefficient = prior_coefficient(tc)
-        return lambda: compute_loss(net, x, y, coefficient, tc.rate_lambda, weight_penalty)[0]
+        coefficient, rate = prior_coefficient(tc), rate_coefficient(tc)
+        return lambda: compute_loss(net, x, y, coefficient, rate, weight_penalty)[0]
 
     joint = largest_hessian_eigenvalue(loss_of(ens, penalty), ens.parameters())
     members = [ens.member(b) for b in range(3)]
@@ -696,7 +699,8 @@ def test_sgld_under_whitening_refuses_a_step_the_loss_curvature_cannot_take(tmp_
     penalty = make_weight_penalty(cfg, net)
 
     def loss():
-        return compute_loss(net, ds.x, ds.y, prior_coefficient(tc), tc.rate_lambda, penalty)[0]
+        coefficients = prior_coefficient(tc), rate_coefficient(tc)
+        return compute_loss(net, ds.x, ds.y, *coefficients, penalty)[0]
 
     lam = largest_hessian_eigenvalue(loss, net.parameters())
     assert lam > 0

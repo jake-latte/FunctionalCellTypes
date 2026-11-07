@@ -59,6 +59,7 @@ from fct.train import (
     load_trained,
     make_weight_penalty,
     prior_coefficient,
+    rate_coefficient,
     select_member,
 )
 
@@ -425,7 +426,7 @@ def evaluate_setting(root: Path, exp: ExpConfig, setting: Setting, held_out_seed
     with torch.no_grad():
         penalty = make_weight_penalty(cfg, net)
         loss, parts = compute_loss(
-            net, train.x, train.y, prior_coefficient(tc), tc.rate_lambda, penalty
+            net, train.x, train.y, prior_coefficient(tc), rate_coefficient(tc), penalty
         )
     stats = loss_curve_stats(history)
     train_mse, held_mse = parts["mse"].item(), mse(net, held)

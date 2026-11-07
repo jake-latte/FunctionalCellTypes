@@ -115,8 +115,22 @@ def prior_coefficient(tc: TrainConfig) -> float:
     exp(-weight_lambda/2 * form), i.e. weights N(0, K / weight_lambda), for every beta, while
     the data and rate terms of the law carry the factor beta.
     """
-    beta = tc.beta if tc.optimizer == "sgld" else 1.0
-    return tc.weight_lambda / (2.0 * beta)
+    return tc.weight_lambda / (2.0 * _law_beta(tc))
+
+
+def rate_coefficient(tc: TrainConfig) -> float:
+    """rate_lambda / (2 beta): the coefficient of the rate penalty sum phi^2 in the loss.
+
+    beta as in `prior_coefficient`. The law exp(-beta L) then carries the tilt
+    exp(-rate_lambda/2 * sum phi^2) for every beta, so `tc.rate_lambda` is the notes' rate
+    coefficient r (G = r I) and the mean-field solver's `rate_tilt`.
+    """
+    return tc.rate_lambda / (2.0 * _law_beta(tc))
+
+
+def _law_beta(tc: TrainConfig) -> float:
+    """The inverse temperature of the law exp(-beta L): `tc.beta` under SGLD, 1 under Adam."""
+    return tc.beta if tc.optimizer == "sgld" else 1.0
 
 
 def compute_loss(
@@ -124,19 +138,20 @@ def compute_loss(
     x: Tensor,
     y: Tensor,
     prior_coefficient: float,
-    rate_lambda: float,
+    rate_coefficient: float,
     weight_penalty: WeightPenalty | None = None,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    """0.5*N*mse + prior_coefficient*weight_l2 + rate_lambda*rate_l2, plus its parts.
+    """0.5*N*mse + prior_coefficient*weight_l2 + rate_coefficient*rate_l2, plus its parts.
 
     For an ensemble every part is (B,), member b's own value, and the returned loss is the
     SUM of the members' losses: member b's parameters enter only its own term, so the
     gradient with respect to them is exactly that of its loss (not 1/B of it).
     `weight_penalty` None is the net's own `weight_l2`.
 
-    `prior_coefficient` multiplies the prior's quadratic form: callers pass
-    `prior_coefficient(train_config)` (= weight_lambda / (2 beta)), never the raw
-    `train.weight_lambda`.
+    `prior_coefficient` multiplies the prior's quadratic form and `rate_coefficient` the rate
+    penalty: callers pass `prior_coefficient(train_config)` (= weight_lambda / (2 beta)) and
+    `rate_coefficient(train_config)` (= rate_lambda / (2 beta)), never the raw
+    `train.weight_lambda` or `train.rate_lambda`.
 
     `rate_l2` is the squared rates phi(h) summed over samples, neurons and layers, so it grows
     with the number of samples P. `weight_l2` is `weight_penalty(net)`: by default the plain
@@ -155,7 +170,7 @@ def compute_loss(
             f"the weight penalty has shape {tuple(weight_l2.shape)} but the loss needs "
             f"{tuple(mse.shape)} (one value per member for an ensemble)"
         )
-    loss = 0.5 * net.N * mse + prior_coefficient * weight_l2 + rate_lambda * rate_l2
+    loss = 0.5 * net.N * mse + prior_coefficient * weight_l2 + rate_coefficient * rate_l2
     parts = {"mse": mse, "weight_l2": weight_l2, "rate_l2": rate_l2, "loss": loss}
     return loss.sum(), {k: v.detach() for k, v in parts.items()}
 
@@ -297,11 +312,11 @@ def _check_sgld_step_resolves_the_loss(
     value is logged otherwise. A step with lr * lambda_max <= 0.1 inflates the stationary
     variance of the stiffest mode by at most 5% (1 / (1 - lr c / 2) on a quadratic of
     curvature c)."""
-    coefficient = prior_coefficient(tc)
+    coefficient, rate = prior_coefficient(tc), rate_coefficient(tc)
 
     def loss() -> Tensor:
         x, y = dataset.x, dataset.y
-        return compute_loss(net, x, y, coefficient, tc.rate_lambda, weight_penalty)[0]
+        return compute_loss(net, x, y, coefficient, rate, weight_penalty)[0]
 
     lam = largest_hessian_eigenvalue(loss, net.parameters())
     step = tc.lr * lam
@@ -479,7 +494,7 @@ def _step(
     also the gradient norm and the step's mean squared displacement), (B,) for an ensemble."""
     optim.zero_grad()
     loss, parts = compute_loss(
-        net, dataset.x, dataset.y, prior_coefficient(tc), tc.rate_lambda, weight_penalty
+        net, dataset.x, dataset.y, prior_coefficient(tc), rate_coefficient(tc), weight_penalty
     )
     loss.backward()
     if isinstance(optim, SGLD):
