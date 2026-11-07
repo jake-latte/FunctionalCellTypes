@@ -14,7 +14,7 @@ import torch
 
 import fct.train
 from fct import phase_view, report
-from fct.cache import cache_paths, latest_checkpoint, save_artefact
+from fct.cache import StaleCacheError, cache_paths, latest_checkpoint, save_artefact
 from fct.cli import main
 from fct.config import NetConfig, load_config
 from fct.exp import (
@@ -656,6 +656,99 @@ def test_phase_view_shows_the_members_a_pending_extension_has(tmp_path):
     assert run.setting.status == "partial"
     assert run.net.B == 2 and run.epoch == run.setting.cfg.train.n_epochs
     assert len(run.history["loss"][0]) == 2
+
+
+# ---------------------------------------------------------------------------- B changes and crashes
+def test_a_B_changed_under_a_partial_original_run_names_net_B_and_the_fix(tmp_path, monkeypatch):
+    save_exp(_exp(2), tmp_path)
+    with interrupted_after_checkpoint(monkeypatch, epoch=2):
+        run_setting(load_exp(tmp_path), 0, tmp_path, **QUIET)
+    save_exp(_exp(3), tmp_path)
+    fix = r"net.B is 2, exp.json gives 3; .*set B back to 2 .*let the run finish.*exp extend"
+    with pytest.raises(ExpError, match=fix):
+        run_setting(load_exp(tmp_path), 0, tmp_path, **QUIET)
+    config = load_config(cache_paths(setting_dir(tmp_path, expand(_exp(2))[0])).config)
+    assert config.net.B == 2
+
+
+def test_a_B_change_beside_an_unreadable_final_is_refused(tmp_path):
+    _run(tmp_path, _exp(2))
+    (_train_dir(tmp_path) / "final.pt").write_bytes(b"truncated")
+    save_exp(_exp(3), tmp_path)
+    with pytest.raises(ExpError, match="net.B is 2.*member count is unknown"):
+        run_setting(load_exp(tmp_path), 0, tmp_path, **QUIET)
+
+
+def test_B_and_another_net_field_changed_together_are_refused(tmp_path):
+    _run(tmp_path, _exp(2))
+    save_exp(_exp(3, g=1.5), tmp_path)
+    with pytest.raises(ExpError, match="differs from the config exp.json builds"):
+        run_setting(load_exp(tmp_path), 0, tmp_path, **QUIET)
+
+
+def test_a_crash_after_the_append_leaves_stale_checkpoints_that_the_next_run_removes(
+    tmp_path, monkeypatch
+):
+    _run(tmp_path, _exp(2))
+    old_checkpoints = sorted(_train_dir(tmp_path).glob("ckpt_*.pt"))
+    extend_experiment(tmp_path, 1)
+
+    def crash(*args, **kwargs):
+        raise Interrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fct.train, "remove_stale_checkpoints", crash)
+        with pytest.raises(Interrupt):
+            run_setting(load_exp(tmp_path), 0, tmp_path, **QUIET)
+    assert old_checkpoints and all(p.exists() for p in old_checkpoints)
+    assert _status(tmp_path) == "done"
+    lines: list[str] = []
+    run_setting(load_exp(tmp_path), 0, tmp_path, log=lines.append)
+    assert not any(p.exists() for p in old_checkpoints)
+    assert not list(_train_dir(tmp_path).glob("extend_*"))
+    for ckpt in old_checkpoints:
+        assert any("removed the checkpoint" in s and ckpt.name in s for s in lines), ckpt
+
+
+def test_a_finished_runs_own_checkpoint_is_kept_by_the_done_path(tmp_path):
+    _run(tmp_path, _exp(2))
+    kept = sorted(_train_dir(tmp_path).glob("ckpt_*.pt"))
+    run_setting(load_exp(tmp_path), 0, tmp_path, **QUIET)
+    assert kept and all(p.exists() for p in kept)
+
+
+@pytest.mark.parametrize("error", [StaleCacheError("replaced"), ValueError("truncated")])
+def test_the_report_notes_a_pending_final_it_cannot_read(tmp_path, monkeypatch, error):
+    _run(tmp_path, _exp(1))
+    extend_experiment(tmp_path, 1)
+
+    def unreadable(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(report, "load_trained_members", unreadable)
+    exp = load_exp(tmp_path)
+    result = report.load_setting_result(tmp_path, exp, expand(exp)[0])
+    assert result.status == "partial" and result.history is None
+    assert "final.pt not shown" in result.note and str(error) in result.note
+
+
+def test_a_pending_rows_origin_names_final_pt_not_a_checkpoint():
+    assert "final.pt" in report._origin(4, 6, 6) and "checkpoint" not in report._origin(4, 6, 6)
+    assert "ckpt" not in report._origin(4, 6, 6, short=True)
+    assert "checkpoint at epoch 4 of 6" in report._origin(2, 4, 6)
+
+
+def test_phase_view_notes_a_pending_final_it_cannot_read(tmp_path, monkeypatch):
+    _run(tmp_path, _phase_exp(2))
+    extend_experiment(tmp_path, 2)
+
+    def unreadable(*args, **kwargs):
+        raise StaleCacheError("replaced by the append")
+
+    monkeypatch.setattr(phase_view, "load_trained_members", unreadable)
+    run = phase_view.load_phase_run(tmp_path, {"spatial.d": 2})
+    assert run.net is None and run.history is None and run.epoch == 0
+    assert "replaced by the append" in run.note
 
 
 # ---------------------------------------------------------------------------- the command line
