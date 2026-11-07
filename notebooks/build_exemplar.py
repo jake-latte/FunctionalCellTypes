@@ -46,7 +46,6 @@ interrupted one, and changing a solver setting re-solves without retraining.
 `weight_lambda` is $\\lambda_w = 2\\beta\\,\\texttt{PRIOR\\_COEFF}$ ($\\beta = 1$ for Adam), so SGLD and Adam train the same weight prior.
 That holds for the weight prior only: `RATE_LAMBDA` is $r$, the rate coefficient of the stationary law, so the loss's
 rate term is $\\frac{\\texttt{RATE\\_LAMBDA}}{2\\beta}\\sum\\phi^2$ and differs between SGLD ($\\beta$ = `BETA`) and Adam ($\\beta = 1$).
-The value of `RATE_LAMBDA` was kept from before the loss divided the rate term by $2\\beta$, so that term is now $2\\beta$ times smaller than it was.
 The loss puts the prior $\\frac{\\lambda_w}{2\\beta}\\sum W^2$
 on the squared weights, so at equilibrium each weight has variance $1 / \\lambda_w$
 for every $\\beta$; the readout acts as a Gaussian likelihood whose ridge is
@@ -90,7 +89,7 @@ NET_SEED = 0
 # loss weights
 PRIOR_COEFF = 1e-2  # loss coefficient of the sum of squared weights: weight_lambda = 2 beta PRIOR_COEFF
 # rate coefficient r of the stationary law, not of the loss: the loss carries r / (2 beta) sum phi^2.
-# The value was kept from before that rescaling, so the loss's rate term is 2 beta times smaller.
+# Its value has not been re-tuned for that 1 / (2 beta) scaling of the loss's rate term.
 RATE_LAMBDA = 1e-3"""
 
 TRAINING = """OPTIMIZER = "sgld"  # "sgld" (Langevin noise of variance 2 * LR / BETA per step) or "adam"
