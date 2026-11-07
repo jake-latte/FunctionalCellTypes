@@ -622,6 +622,64 @@ def test_largest_hessian_eigenvalue_is_the_top_of_the_spectrum_not_the_largest_m
     assert concave == pytest.approx(-3.0, rel=1e-6)
 
 
+def _quadratic_top(H: torch.Tensor, seed: int = 0) -> float:
+    """`largest_hessian_eigenvalue` of the loss 0.5 x^T H x at x = 0."""
+    x = torch.zeros(H.shape[0], dtype=F64, requires_grad=True)
+    return largest_hessian_eigenvalue(lambda: 0.5 * x @ H @ x, [x], seed=seed)
+
+
+@pytest.mark.parametrize(
+    ("diagonal", "seed"), [([10.0, -10.9, 0.0], 0), ([10.0, -9.5, 0.0, 0.0], 5)]
+)
+def test_largest_hessian_eigenvalue_does_not_depend_on_a_converged_first_pass(diagonal, seed):
+    """Power iteration with a shifted second pass returned -9.81 and 6.5 here: a negative
+    eigenvalue of nearly the top's magnitude kept the first pass from converging."""
+    H = torch.diag(torch.tensor(diagonal, dtype=F64))
+    assert _quadratic_top(H, seed) == pytest.approx(10.0, rel=1e-6)
+
+
+def test_largest_hessian_eigenvalue_agrees_with_eigvalsh_on_random_symmetric_matrices():
+    """200 seeded symmetric matrices of size 2-40, half shifted down so that the spectrum's
+    largest magnitude is negative: the estimate is the top eigenvalue to 1e-6 relative."""
+    gen = torch.Generator().manual_seed(123)
+    for case in range(200):
+        n = int(torch.randint(2, 41, (1,), generator=gen))
+        A = torch.randn(n, n, dtype=F64, generator=gen)
+        H = (A + A.T) / 2
+        if case % 2:
+            H = H - 3 * torch.linalg.eigvalsh(H).abs().max() * torch.eye(n, dtype=F64) / 2
+        want = torch.linalg.eigvalsh(H)[-1].item()
+        got = _quadratic_top(H, seed=case)
+        assert got == pytest.approx(want, rel=1e-6, abs=1e-9), (case, n)
+
+
+def test_largest_hessian_eigenvalue_refuses_to_return_an_unconverged_estimate():
+    H = torch.diag(torch.linspace(0.0, 1.0, 50, dtype=F64))
+    x = torch.zeros(50, dtype=F64, requires_grad=True)
+    with pytest.raises(ValueError, match="did not converge"):
+        largest_hessian_eigenvalue(lambda: 0.5 * x @ H @ x, [x], max_iter=3)
+
+
+def test_largest_hessian_eigenvalue_of_an_ensemble_is_the_largest_over_its_members():
+    """The ensemble loss is the sum of its members', so the Hessian is block-diagonal and its
+    top eigenvalue the largest of the members' top eigenvalues."""
+    cfg = _cfg(B=3)
+    ds, ens = _setup(cfg)
+    penalty = make_weight_penalty(cfg, ens)
+    tc = cfg.train
+
+    def loss_of(net, weight_penalty):
+        x, y = ds.x, ds.y
+        coefficient = prior_coefficient(tc)
+        return lambda: compute_loss(net, x, y, coefficient, tc.rate_lambda, weight_penalty)[0]
+
+    joint = largest_hessian_eigenvalue(loss_of(ens, penalty), ens.parameters())
+    members = [ens.member(b) for b in range(3)]
+    single = make_weight_penalty(_with_B(cfg, 1), members[0])
+    tops = [largest_hessian_eigenvalue(loss_of(m, single), m.parameters()) for m in members]
+    assert joint == pytest.approx(max(tops), rel=1e-6)
+
+
 def test_largest_hessian_eigenvalue_leaves_the_global_rng_alone():
     cfg = _cfg()
     ds, net = _setup(cfg)

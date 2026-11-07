@@ -8,7 +8,6 @@ prior: the weights under "penalty", xi under "whitened" (`make_net_from_config` 
 whitening factors from the config, as `make_weight_penalty` rebuilds the penalty matrices).
 """
 
-import math
 import pickle
 from collections.abc import Callable, Iterable
 from functools import partial
@@ -50,8 +49,12 @@ _HISTORY_KEYS = ("epoch", "mse", "weight_l2", "rate_l2", "loss")
 # displacement per step (see `SGLD.last_msd`), both of the step taken at the logged epoch.
 _SGLD_KEYS = ("grad_norm", "param_msd")
 _REQUIRED_KEYS = ("epoch", "net_state_dict", "optim_state_dict", "history", "rng_state")
-# Hessian-vector products of the run-start curvature check under whitening (`train`).
-N_HESSIAN_ITERATIONS = 20
+# Lanczos for the run-start curvature check under whitening (`largest_hessian_eigenvalue`): at
+# most this many Hessian-vector products, and convergence once the top Ritz pair's residual is
+# below this fraction of the largest Ritz value's magnitude (or 64 machine epsilons of the
+# parameters' dtype, if larger).
+HESSIAN_MAX_ITERATIONS = 300
+HESSIAN_RTOL = 1e-8
 
 
 def make_net_from_config(
@@ -204,49 +207,81 @@ def _check_sgld_step_resolves_the_prior(stiffness: float, prior: str, tc: TrainC
 def largest_hessian_eigenvalue(
     loss_fn: Callable[[], Tensor],
     params: Iterable[Tensor],
-    n_iter: int = N_HESSIAN_ITERATIONS,
+    max_iter: int = HESSIAN_MAX_ITERATIONS,
     seed: int = 0,
 ) -> float:
     """The largest (most positive) eigenvalue of the Hessian H of `loss_fn()` with respect to
-    `params`, from Hessian-vector products (double backward through the gradient of one
-    evaluation). `n_iter` power iterations on H converge to the eigenvalue of largest
-    magnitude, lambda_1; if that is negative, a second `n_iter` on H + |lambda_1| I, whose
-    spectrum is then (up to the error of lambda_1) non-negative with lambda_max + |lambda_1| on
-    top, give lambda_max after the shift is subtracted. Each pass returns a Rayleigh quotient,
-    so the estimate does not exceed lambda_max beyond round-off and the error of the shift.
-    The start vectors come from a local generator, so the global RNG is untouched; the
-    parameters and their `.grad` are left as they were."""
+    `params`, by Lanczos with full reorthogonalisation on Hessian-vector products (double
+    backward through the gradient of one evaluation), in float64.
+
+    Lanczos builds the Krylov space of a random start vector and takes the top eigenvalue of
+    the projected tridiagonal matrix (the top Ritz value). It stops when the top Ritz pair's
+    residual |beta_k s_k| falls below `HESSIAN_RTOL` (or 64 epsilons of the parameters' dtype)
+    times the largest Ritz value's magnitude, or when the Krylov space is invariant (beta_k ~ 0,
+    at the latest after as many steps as there are parameters); the Ritz value is then within
+    that residual of an eigenvalue of H and, from a random start, it is the top one. A run that
+    has not converged after `max_iter` products raises ValueError instead of returning an
+    estimate. For an ensemble the loss is the sum of the members' and H is block-diagonal, so
+    this is the largest of the members' top eigenvalues. The start vector comes from a local
+    generator, so the global RNG is untouched; the parameters and their `.grad` are left as
+    they were."""
     params = list(params)
     grads = torch.autograd.grad(loss_fn(), params, create_graph=True)
-    gen = torch.Generator().manual_seed(seed)
+    sizes = [p.numel() for p in params]
+    n = sum(sizes)
+    rtol = max(HESSIAN_RTOL, 64 * torch.finfo(params[0].dtype).eps)
 
-    def hvp(v: list[Tensor]) -> list[Tensor]:
-        dot = sum((g * x).sum() for g, x in zip(grads, v, strict=True))
-        return [h.detach() for h in torch.autograd.grad(dot, params, retain_graph=True)]
+    def hvp(v: Tensor) -> Tensor:
+        """H v for v (n,) float64, through the parameters' own dtype and device."""
+        parts = [
+            x.reshape(p.shape).to(p.device, p.dtype)
+            for x, p in zip(v.split(sizes), params, strict=True)
+        ]
+        dot = sum((g * x).sum() for g, x in zip(grads, parts, strict=True))
+        hv = torch.autograd.grad(dot, params, retain_graph=True)
+        out = torch.cat([h.detach().reshape(-1).to("cpu", torch.float64) for h in hv])
+        if not torch.isfinite(out).all():
+            raise ValueError("the loss Hessian has non-finite entries at the current net")
+        return out
 
-    def top_magnitude(shift: float) -> float:
-        """Power iteration on H + shift I: its eigenvalue of largest magnitude."""
-        v = _normalised([torch.randn(p.shape, generator=gen, dtype=p.dtype) for p in params])
-        v = [x.to(p.device) for x, p in zip(v, params, strict=True)]
-        lam = 0.0
-        for _ in range(n_iter):
-            av = [h + shift * x for h, x in zip(hvp(v), v, strict=True)]
-            lam = sum((a * x).sum().item() for a, x in zip(av, v, strict=True))
-            v = _normalised(av)
-        return lam
-
-    lam = top_magnitude(0.0)
-    if lam < 0:
-        lam = top_magnitude(-lam) + lam
-    return lam
+    start = torch.randn(n, generator=torch.Generator().manual_seed(seed), dtype=torch.float64)
+    return _lanczos_top_eigenvalue(hvp, start, min(max_iter, n), rtol)
 
 
-def _normalised(vs: list[Tensor]) -> list[Tensor]:
-    """`vs` scaled to unit norm as one vector."""
-    norm = math.sqrt(sum(x.square().sum().item() for x in vs))
-    if not norm > 0:  # also catches NaN: a non-finite loss would otherwise hide here
-        raise ValueError(f"power iteration found a Hessian-vector product of norm {norm}")
-    return [x / norm for x in vs]
+def _lanczos_top_eigenvalue(
+    matvec: Callable[[Tensor], Tensor], start: Tensor, max_iter: int, rtol: float
+) -> float:
+    """The top eigenvalue of the symmetric operator `matvec` (n,) -> (n,), by `max_iter` or
+    fewer Lanczos steps from `start`, with full reorthogonalisation (each new vector is
+    orthogonalised twice against all previous ones, so the basis stays orthonormal and no
+    spurious copies of converged Ritz values appear). See `largest_hessian_eigenvalue`."""
+    basis = [start / torch.linalg.norm(start)]
+    alphas: list[float] = []
+    betas: list[float] = []
+    for _ in range(max_iter):
+        q = basis[-1]
+        w = matvec(q)
+        alphas.append(torch.dot(w, q).item())
+        Q = torch.stack(basis)
+        for _ in range(2):
+            w = w - Q.T @ (Q @ w)
+        beta = torch.linalg.norm(w).item()
+        T = torch.diag(torch.tensor(alphas, dtype=torch.float64))
+        if betas:
+            off = torch.tensor(betas, dtype=torch.float64)
+            T = T + torch.diag(off, 1) + torch.diag(off, -1)
+        ritz, vectors = torch.linalg.eigh(T)
+        scale = ritz.abs().max().item()
+        residual = beta * abs(vectors[-1, -1].item())
+        if residual <= rtol * scale or beta <= rtol * scale or scale == 0.0:
+            return ritz[-1].item()
+        betas.append(beta)
+        basis.append(w / beta)
+    raise ValueError(
+        f"Lanczos for the largest Hessian eigenvalue did not converge in {max_iter} "
+        f"Hessian-vector products (top Ritz value {ritz[-1].item():.6g}, residual "
+        f"{residual:.3g} against a tolerance of {rtol * scale:.3g})"
+    )
 
 
 def _check_sgld_step_resolves_the_loss(
@@ -274,7 +309,7 @@ def _check_sgld_step_resolves_the_loss(
         raise ValueError(
             f"SGLD with lr={tc.lr:g} is unstable on the loss at the initial net: lr * "
             f"lambda_max(loss Hessian) = {step:.3g} must be < 1 (lambda_max = {lam:.3g} from "
-            f"{N_HESSIAN_ITERATIONS} power iterations); lower lr"
+            "Lanczos); lower lr"
         )
     log(f"SGLD step check: lr * lambda_max(loss Hessian) = {step:.3g} (lambda_max = {lam:.3g})")
 

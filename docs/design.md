@@ -379,7 +379,7 @@ def make_weight_penalty(cfg: Config, net: MLP) -> WeightPenalty   # MLP.weight_l
     # for SGLD refuses a step the prior's stiffest curvature cannot take, on either path; ValueError if the net's parametrisation is not the config's
 def prior_stiffness(factors) -> float   # max over parameters of lambda_max(M_rows) lambda_max(M_cols): the prior's curvature is 2 prior_coefficient times it along its stiffest direction (1 under whitening)
 def make_net_from_config(cfg: Config, D_in, D_out, device, dtype) -> Net   # the one place a Config becomes a net: make_net of cfg.net (standard-normal z), under net.init "prior" scaled by weight_lambda ** -0.5 and, under the penalty, correlated by floored_whitening_factors; under whitening with whitening_factors(build_spaces(cfg.spatial, ...)) as the net's factors
-def largest_hessian_eigenvalue(loss_fn, params, n_iter=20, seed=0) -> float   # the most positive Hessian eigenvalue: power iteration on Hessian-vector products (double backward) finds the largest magnitude lambda_1, and if that is negative a second pass on H + |lambda_1| I finds the top; local generator, parameters and .grad untouched
+def largest_hessian_eigenvalue(loss_fn, params, max_iter=300, seed=0) -> float   # the most positive Hessian eigenvalue, by Lanczos with full reorthogonalisation on Hessian-vector products (double backward), in float64; converged when the top Ritz pair's residual is below HESSIAN_RTOL (1e-8, or 64 eps of the dtype) of the largest Ritz value, else ValueError ("did not converge"); an ensemble's block-diagonal Hessian gives the largest over members; local generator, parameters and .grad untouched
 def spatial_weight_penalty(net, factors: dict[str, tuple[Tensor, Tensor]]) -> Tensor   # sum over parameters of tr(M_rows P M_cols P^T)
     # returns a dict of detached 0-d tensors: mse, weight_l2, rate_l2, loss (`train` calls .item() only on log epochs)
 History = dict[str, list]     # keys: epoch, mse, weight_l2, rate_l2, loss  (logged every log_int epochs); plus grad_norm, param_msd for SGLD; plus the monitor_* keys below when monitored
@@ -1328,9 +1328,9 @@ history keys and checkpoint layout; how their dynamics differ is below ("Dynamic
   take, with the curvature of the parameters actually trained: `lr * weight_lambda / (2 beta) * lambda_max(M_post)
   lambda_max(M_pre) >= 1` under the penalty, `lr * weight_lambda / (2 beta) >= 1` under whitening. That bound misses
   the data term's curvature, so a whitened run additionally estimates `lambda_max` of the loss Hessian at the initial
-  net on the dataset (`largest_hessian_eigenvalue`: 20 power iterations of Hessian-vector products from a local
-  generator, so the training RNG stream is untouched; plain power iteration finds the eigenvalue of largest
-  magnitude, so when that is negative a second 20 on `H + |lambda_1| I` find the most positive one), refuses `lr * lambda_max >= 1` (half the divergence limit, naming
+  net on the dataset (`largest_hessian_eigenvalue`: Lanczos on Hessian-vector products from a local generator, so the
+  training RNG stream is untouched, which raises rather than return an unconverged value; power iteration would find
+  the eigenvalue of largest magnitude, which may be negative, and converges slowly when two are close), refuses `lr * lambda_max >= 1` (half the divergence limit, naming
   `lr` and `lambda_max`) and logs the value otherwise (`SGLD step check: ...`). It runs on a fresh start only; a
   resumed run passed it when it started.
 - Dynamics. The two paths sample the same law by different dynamics, and nothing here fixes how runs on them are
