@@ -13,7 +13,7 @@ from fct.config import LOSS_VERSION, Config, DataConfig, NetConfig, TrainConfig,
 from fct.data import make_dataset
 from fct.model import make_net
 from fct.sgld import SGLD
-from fct.train import compute_loss, prior_coefficient, rate_coefficient, train
+from fct.train import compute_loss, loss_coefficients, train
 
 CPU, F64 = torch.device("cpu"), torch.float64
 
@@ -206,9 +206,7 @@ def test_adam_training_is_bit_for_bit_the_plain_adam_loop(tmp_path):
     optim = torch.optim.Adam(ref.parameters(), lr=cfg.train.lr)
     for _ in range(cfg.train.n_epochs):
         optim.zero_grad()
-        loss, _ = compute_loss(
-            ref, ds.x, ds.y, prior_coefficient(cfg.train), rate_coefficient(cfg.train)
-        )
+        loss, _ = compute_loss(ref, ds.x, ds.y, loss_coefficients(cfg.train))
         loss.backward()
         optim.step()
     assert _same_params(trained, ref)
@@ -248,9 +246,7 @@ def test_sgld_is_gradient_descent_as_beta_grows(tmp_path):
     ds, ref = _setup(cfg)
     for _ in range(10):
         ref.zero_grad()
-        loss, _ = compute_loss(
-            ref, ds.x, ds.y, prior_coefficient(cfg.train), rate_coefficient(cfg.train)
-        )
+        loss, _ = compute_loss(ref, ds.x, ds.y, loss_coefficients(cfg.train))
         loss.backward()
         with torch.no_grad():
             for p in ref.parameters():

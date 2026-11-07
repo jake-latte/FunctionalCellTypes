@@ -3,19 +3,26 @@ rate penalty as rate_lambda / (2 beta) times sum phi^2, with beta = train.beta u
 under Adam, so that SGLD's stationary law exp(-beta L) has the prior N(0, K / weight_lambda) and
 the rate tilt (rate_lambda / 2) sum phi^2 for every beta. The tests build the penalty by hand."""
 
-import hashlib
-import json
-
 import pytest
 import torch
 
 import fct.config
 from fct.cache import StaleCacheError
-from fct.config import LOSS_VERSION, RATE_FREE_LOSS_VERSION, Config, NetConfig, TrainConfig
+from fct.config import (
+    LOSS_VERSION,
+    RATE_FREE_LOSS_VERSION,
+    Config,
+    NetConfig,
+    TrainConfig,
+    hashed_loss_version,
+    law_beta,
+)
 from fct.spatial import build_spaces
 from fct.train import (
+    LossCoefficients,
     compute_loss,
     load_trained,
+    loss_coefficients,
     make_weight_penalty,
     prior_coefficient,
     rate_coefficient,
@@ -50,13 +57,40 @@ def test_the_rate_coefficient_is_rate_lambda_over_two_beta(name):
 
 
 @pytest.mark.parametrize("name", OPTIMISERS)
+def test_the_law_beta_is_train_beta_under_sgld_and_one_under_adam(name):
+    tc = OPTIMISERS[name]
+    assert law_beta(tc.optimizer, tc.beta) == LAW_BETA[name]
+
+
+def test_the_law_beta_refuses_an_unknown_optimizer():
+    with pytest.raises(ValueError, match="optimizer"):
+        law_beta("sgd", 4.0)
+
+
+@pytest.mark.parametrize("name", OPTIMISERS)
+def test_the_loss_coefficients_are_the_prior_and_rate_coefficients(name):
+    coefficients = loss_coefficients(OPTIMISERS[name])
+    assert coefficients.prior == pytest.approx(HAND_COEFFICIENTS[name])
+    assert coefficients.rate == pytest.approx(HAND_RATE_COEFFICIENTS[name])
+
+
+def test_the_loss_refuses_bare_numbers_for_its_coefficients():
+    """A bare (prior, rate) pair could be (weight_lambda, rate_lambda) unscaled; the loss takes
+    only `LossCoefficients`, which `loss_coefficients` builds from the train config."""
+    net = _tiny_net()
+    x, y = _randn(5, 3, seed=1), _randn(5, 2, seed=2)
+    with pytest.raises(TypeError, match="LossCoefficients"):
+        compute_loss(net, x, y, (0.3, 0.2))
+
+
+@pytest.mark.parametrize("name", OPTIMISERS)
 def test_beta_times_the_loss_is_the_action_of_the_notes(name):
     """beta L = (beta N / 2) mse + (weight_lambda / 2) form + (rate_lambda / 2) sum phi^2 at fixed
     weights: rate_lambda is the notes' r and weight_lambda their prior precision, for every beta."""
     tc, beta = OPTIMISERS[name], LAW_BETA[name]
     net = _tiny_net()
     x, y = _randn(5, 3, seed=1), _randn(5, 2, seed=2)
-    loss, _ = compute_loss(net, x, y, prior_coefficient(tc), rate_coefficient(tc))
+    loss, _ = compute_loss(net, x, y, loss_coefficients(tc))
     with torch.no_grad():
         h, z = net(x)
         mse = (y - z).square().mean().item()
@@ -77,7 +111,7 @@ def test_the_l2_prior_term_is_the_coefficient_times_the_sum_of_squares(name):
     penalty = make_weight_penalty(cfg, net)(net)
     assert prior_coefficient(tc) * penalty.item() == pytest.approx(hand, rel=1e-12)
     x, y = _randn(5, 3, seed=1), _randn(5, 2, seed=2)
-    loss, _ = compute_loss(net, x, y, prior_coefficient(tc), 0.0)
+    loss, _ = compute_loss(net, x, y, LossCoefficients(prior=prior_coefficient(tc), rate=0.0))
     data = 0.5 * net.N * (y - net(x)[1]).square().mean().item()
     assert loss.item() == pytest.approx(data + hand, rel=1e-12)
 
@@ -103,7 +137,7 @@ def test_training_minimises_the_loss_with_that_coefficient(tmp_path):
     """The loss logged at the first epoch is the initial loss under the convention."""
     cfg = _cfg(n_epochs=1, log_int=1, save_int=1, optimizer="sgld", beta=4.0, weight_lambda=0.3)
     ds, net = _setup(cfg)
-    first, _ = compute_loss(net, ds.x, ds.y, 0.3 / 8, cfg.train.rate_lambda / 8)
+    first, _ = compute_loss(net, ds.x, ds.y, LossCoefficients(0.3 / 8, cfg.train.rate_lambda / 8))
     _, hist = train(cfg, ds, net, tmp_path, log=lambda s: None)
     assert hist["loss"][0] == pytest.approx(first.item(), rel=1e-12)
 
@@ -198,9 +232,9 @@ def test_a_config_with_a_rate_penalty_hashed_under_version_4_is_the_old_hash(nam
     )
 
 
-@pytest.mark.parametrize(("rate_lambda", "version"), [(0.0, 4), (1e-3, 5), (2.0, 5)])
-def test_the_hash_holds_version_5_only_with_a_rate_penalty(rate_lambda, version):
-    cfg = Config(train=TrainConfig(optimizer="sgld", beta=4.0, rate_lambda=rate_lambda))
-    payload = {**cfg.model_dump(include={"train", "dtype"}), "loss_version": version}
-    expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
-    assert cfg.section_hash("train") == expected
+@pytest.mark.parametrize(
+    ("rate_lambda", "version"),
+    [(0.0, RATE_FREE_LOSS_VERSION), (1e-3, LOSS_VERSION), (2.0, LOSS_VERSION)],
+)
+def test_only_a_config_with_a_rate_penalty_hashes_the_current_loss_version(rate_lambda, version):
+    assert hashed_loss_version(TrainConfig(optimizer="sgld", rate_lambda=rate_lambda)) == version

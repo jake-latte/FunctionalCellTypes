@@ -33,11 +33,11 @@ from fct.spatial import (
     weight_quadratic_form,
 )
 from fct.train import (
+    LossCoefficients,
     compute_loss,
     load_trained,
+    loss_coefficients,
     make_weight_penalty,
-    prior_coefficient,
-    rate_coefficient,
     spatial_weight_penalty,
     train,
 )
@@ -67,8 +67,9 @@ HASH_PINS = [
     ),
     (SMALL, {TRAIN: "722015e687f3", ANALYSIS: "85c7409629a0"}),
 ]
-# compute_loss on the SMALL net (prior coefficient 0.1, rate_lambda=1e-3) and the squared norm of
-# each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output V^T phi(h^L) / N).
+# compute_loss on the SMALL net (prior coefficient 0.1, rate coefficient 1e-3) and the squared
+# norm of each parameter's gradient, as float.hex, from the MODEL_VERSION 2 net (output
+# V^T phi(h^L) / N).
 LOSS_PIN = "0x1.f4f7158364a70p+5"
 GRAD_SQ_PINS = {
     "U": "0x1.043d22892c3e3p+2",
@@ -91,7 +92,7 @@ def test_hashes_without_a_spatial_prior_are_unchanged():
 
 def test_default_loss_and_gradient_are_bit_for_bit_unchanged():
     net, ds = _small_net_and_data()
-    loss, _ = compute_loss(net, ds.x, ds.y, 0.1, 1e-3)
+    loss, _ = compute_loss(net, ds.x, ds.y, LossCoefficients(0.1, 1e-3))
     loss.backward()
     assert loss.item().hex() == LOSS_PIN
     for name, p in net.named_parameters():
@@ -200,7 +201,7 @@ def test_spatial_loss_gradient_matches_finite_differences():
     x, y = _randn(6, 3, seed=7), _randn(6, 2, seed=8)
 
     def loss_fn():
-        return compute_loss(net, x, y, 0.3, 0.1, weight_penalty=penalty)[0]
+        return compute_loss(net, x, y, LossCoefficients(0.3, 0.1), weight_penalty=penalty)[0]
 
     loss_fn().backward()
     for name, p in net.named_parameters():
@@ -210,7 +211,7 @@ def test_spatial_loss_gradient_matches_finite_differences():
 
 def _loss_and_grads(net, ds, weight_penalty=MLP.weight_l2):
     net.zero_grad()
-    loss, parts = compute_loss(net, ds.x, ds.y, 0.1, 1e-3, weight_penalty)
+    loss, parts = compute_loss(net, ds.x, ds.y, LossCoefficients(0.1, 1e-3), weight_penalty)
     loss.backward()
     return loss.detach(), parts, {n: p.grad.clone() for n, p in net.named_parameters()}
 
@@ -384,9 +385,7 @@ def test_adam_training_with_the_prior_is_the_plain_adam_loop_on_the_spatial_loss
     optim = torch.optim.Adam(ref.parameters(), lr=tc.lr)
     for _ in range(tc.n_epochs):
         optim.zero_grad()
-        loss, _ = compute_loss(
-            ref, ds.x, ds.y, prior_coefficient(tc), rate_coefficient(tc), penalty
-        )
+        loss, _ = compute_loss(ref, ds.x, ds.y, loss_coefficients(tc), penalty)
         loss.backward()
         optim.step()
     assert _same_params(trained, ref)

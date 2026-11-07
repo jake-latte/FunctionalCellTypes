@@ -10,6 +10,7 @@ whitening factors from the config, as `make_weight_penalty` rebuilds the penalty
 
 import pickle
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from fct.cache import (
     save_artefact,
     write_checkpoint,
 )
-from fct.config import Config, TrainConfig, resolve_device, resolve_dtype
+from fct.config import Config, TrainConfig, law_beta, resolve_device, resolve_dtype
 from fct.data import Dataset
 from fct.model import MLP, EnsembleMLP, Net, make_net
 from fct.sgld import SGLD
@@ -116,7 +117,7 @@ def prior_coefficient(tc: TrainConfig) -> float:
     the data term of the law carries the factor beta (the rate term is scaled the same way,
     `rate_coefficient`).
     """
-    return tc.weight_lambda / (2.0 * _law_beta(tc))
+    return tc.weight_lambda / (2.0 * law_beta(tc.optimizer, tc.beta))
 
 
 def rate_coefficient(tc: TrainConfig) -> float:
@@ -126,33 +127,41 @@ def rate_coefficient(tc: TrainConfig) -> float:
     exp(-rate_lambda/2 * sum phi^2) for every beta, so `tc.rate_lambda` is the notes' rate
     coefficient r (G = r I) and the mean-field solver's `rate_tilt`.
     """
-    return tc.rate_lambda / (2.0 * _law_beta(tc))
+    return tc.rate_lambda / (2.0 * law_beta(tc.optimizer, tc.beta))
 
 
-def _law_beta(tc: TrainConfig) -> float:
-    """The inverse temperature of the law exp(-beta L): `tc.beta` under SGLD, 1 under Adam."""
-    return tc.beta if tc.optimizer == "sgld" else 1.0
+@dataclass(frozen=True)
+class LossCoefficients:
+    """The loss's two penalty coefficients: `prior` multiplies the weight prior's quadratic form
+    and `rate` the rate penalty sum phi^2. A type of its own, so a bare (weight_lambda,
+    rate_lambda) pair cannot be passed to `compute_loss` unscaled: build it with
+    `loss_coefficients`, or by name where a test wants chosen values."""
+
+    prior: float
+    rate: float
+
+
+def loss_coefficients(tc: TrainConfig) -> LossCoefficients:
+    """The coefficients the config's loss carries: `prior_coefficient` and `rate_coefficient`."""
+    return LossCoefficients(prior=prior_coefficient(tc), rate=rate_coefficient(tc))
 
 
 def compute_loss(
     net: Net,
     x: Tensor,
     y: Tensor,
-    prior_coefficient: float,
-    rate_coefficient: float,
+    coefficients: LossCoefficients,
     weight_penalty: WeightPenalty | None = None,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    """0.5*N*mse + prior_coefficient*weight_l2 + rate_coefficient*rate_l2, plus its parts.
+    """0.5*N*mse + coefficients.prior*weight_l2 + coefficients.rate*rate_l2, plus its parts.
 
     For an ensemble every part is (B,), member b's own value, and the returned loss is the
     SUM of the members' losses: member b's parameters enter only its own term, so the
     gradient with respect to them is exactly that of its loss (not 1/B of it).
     `weight_penalty` None is the net's own `weight_l2`.
 
-    `prior_coefficient` multiplies the prior's quadratic form and `rate_coefficient` the rate
-    penalty: callers pass `prior_coefficient(train_config)` (= weight_lambda / (2 beta)) and
-    `rate_coefficient(train_config)` (= rate_lambda / (2 beta)), never the raw
-    `train.weight_lambda` or `train.rate_lambda`.
+    Callers pass `loss_coefficients(train_config)`: weight_lambda / (2 beta) and
+    rate_lambda / (2 beta), never the raw `train.weight_lambda` or `train.rate_lambda`.
 
     `rate_l2` is the squared rates phi(h) summed over samples, neurons and layers, so it grows
     with the number of samples P. `weight_l2` is `weight_penalty(net)`: by default the plain
@@ -162,6 +171,11 @@ def compute_loss(
     The parts are detached 0-d tensors: calling `.item()` here would force a host-device
     sync every epoch, so the caller converts only when it logs.
     """
+    if not isinstance(coefficients, LossCoefficients):
+        raise TypeError(
+            f"coefficients must be LossCoefficients (`loss_coefficients(train_config)`), got "
+            f"{coefficients!r}"
+        )
     h, z = net(x)
     mse = per_member(net, (y - z).square(), torch.mean)
     rate_l2 = per_member(net, net.phi(h).square())
@@ -171,7 +185,7 @@ def compute_loss(
             f"the weight penalty has shape {tuple(weight_l2.shape)} but the loss needs "
             f"{tuple(mse.shape)} (one value per member for an ensemble)"
         )
-    loss = 0.5 * net.N * mse + prior_coefficient * weight_l2 + rate_coefficient * rate_l2
+    loss = 0.5 * net.N * mse + coefficients.prior * weight_l2 + coefficients.rate * rate_l2
     parts = {"mse": mse, "weight_l2": weight_l2, "rate_l2": rate_l2, "loss": loss}
     return loss.sum(), {k: v.detach() for k, v in parts.items()}
 
@@ -313,11 +327,10 @@ def _check_sgld_step_resolves_the_loss(
     value is logged otherwise. A step with lr * lambda_max <= 0.1 inflates the stationary
     variance of the stiffest mode by at most 5% (1 / (1 - lr c / 2) on a quadratic of
     curvature c)."""
-    coefficient, rate = prior_coefficient(tc), rate_coefficient(tc)
+    coefficients = loss_coefficients(tc)
 
     def loss() -> Tensor:
-        x, y = dataset.x, dataset.y
-        return compute_loss(net, x, y, coefficient, rate, weight_penalty)[0]
+        return compute_loss(net, dataset.x, dataset.y, coefficients, weight_penalty)[0]
 
     lam = largest_hessian_eigenvalue(loss, net.parameters())
     step = tc.lr * lam
@@ -494,9 +507,7 @@ def _step(
     """One full-batch optimiser step; returns the loss parts from before the step (for SGLD
     also the gradient norm and the step's mean squared displacement), (B,) for an ensemble."""
     optim.zero_grad()
-    loss, parts = compute_loss(
-        net, dataset.x, dataset.y, prior_coefficient(tc), rate_coefficient(tc), weight_penalty
-    )
+    loss, parts = compute_loss(net, dataset.x, dataset.y, loss_coefficients(tc), weight_penalty)
     loss.backward()
     if isinstance(optim, SGLD):
         parts["grad_norm"] = _grad_norm(net).detach()

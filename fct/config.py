@@ -11,7 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, get_args
 
 import torch
 from pydantic import Field, FiniteFloat, model_validator
@@ -179,6 +179,15 @@ class TrainConfig(StrictModel):
     # adam runs keep the hashes they had before these fields existed.
     optimizer: Optimizer = "adam"
     beta: PosFloat = 1.0
+
+
+def law_beta(optimizer: str, beta: float) -> float:
+    """The inverse temperature of the law exp(-beta L) the optimiser targets: `beta` under SGLD,
+    1 under Adam, which has no temperature. It takes the two fields rather than a TrainConfig so
+    the notebooks can derive weight_lambda from their loss coefficient before building one."""
+    if optimizer not in get_args(Optimizer):
+        raise ValueError(f"unknown optimizer {optimizer!r}; expected one of {get_args(Optimizer)}")
+    return beta if optimizer == "sgld" else 1.0
 
 
 def hashed_loss_version(train: TrainConfig) -> int:

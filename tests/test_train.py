@@ -13,11 +13,11 @@ from fct.config import Config, DataConfig, NetConfig, TrainConfig
 from fct.data import make_dataset
 from fct.model import make_net
 from fct.train import (
+    LossCoefficients,
     _restore_rng,
     compute_loss,
     load_trained,
-    prior_coefficient,
-    rate_coefficient,
+    loss_coefficients,
     train,
 )
 
@@ -72,7 +72,7 @@ def test_compute_loss_matches_hand_computation():
     r2 = torch.relu(h).square().sum()  # sum over samples and neurons
     expected = 0.5 * 3 * mse + lw * w2 + lr_ * r2
 
-    loss, parts = compute_loss(net, x, y, lw, lr_)
+    loss, parts = compute_loss(net, x, y, LossCoefficients(lw, lr_))
     assert loss.item() == pytest.approx(expected.item())
     assert loss.requires_grad
     assert set(parts) == {"mse", "weight_l2", "rate_l2", "loss"}
@@ -97,7 +97,7 @@ def test_compute_loss_two_layers_sums_every_layer_and_every_weight():
     r2 = torch.tanh(h1).square().sum() + torch.tanh(h2).square().sum()  # all samples and layers
     expected = 0.5 * 3 * mse + lw * w2 + lr_ * r2
 
-    loss, parts = compute_loss(net, x, y, lw, lr_)
+    loss, parts = compute_loss(net, x, y, LossCoefficients(lw, lr_))
     assert loss.item() == pytest.approx(expected.item())
     assert parts["weight_l2"].item() == pytest.approx(w2.item())
     assert parts["rate_l2"].item() == pytest.approx(r2.item())
@@ -277,7 +277,7 @@ def test_rate_l2_is_the_sum_over_samples_neurons_and_layers():
     net = _two_sample_net()
     x = torch.tensor([[3.0], [-2.0]], dtype=F64)  # h = [[3, -3], [-2, 2]]; relu -> [[3,0],[0,2]]
     y = torch.zeros(2, 1, dtype=F64)
-    loss, parts = compute_loss(net, x, y, prior_coefficient=0.0, rate_coefficient=0.5)
+    loss, parts = compute_loss(net, x, y, LossCoefficients(prior=0.0, rate=0.5))
     assert parts["rate_l2"].item() == pytest.approx(9 + 4)
     assert parts["mse"].item() == 0.0  # V = 0 and y = 0
     assert loss.item() == pytest.approx(0.5 * 13)  # only the rate term remains
@@ -303,7 +303,7 @@ def test_loss_golden_value_is_tied_to_the_loss_and_model_versions():
         TrainConfig(optimizer="sgld", beta=2.0, weight_lambda=0.4, rate_lambda=0.4),
         TrainConfig(optimizer="adam", weight_lambda=0.2, rate_lambda=0.2),
     ):
-        loss, _ = compute_loss(net, x, y, prior_coefficient(tc), rate_coefficient(tc))
+        loss, _ = compute_loss(net, x, y, loss_coefficients(tc))
         assert loss.item() == pytest.approx(1.875)
 
 
@@ -314,7 +314,7 @@ def test_loss_is_assembled_from_the_parts():
     x = torch.tensor([[3.0], [-2.0]], dtype=F64)
     y = torch.tensor([[1.0], [0.0]], dtype=F64)
     lw, lr_ = 0.1, 0.2
-    loss, p = compute_loss(net, x, y, lw, lr_)
+    loss, p = compute_loss(net, x, y, LossCoefficients(lw, lr_))
     assert loss.item() == pytest.approx(
         0.5 * net.N * p["mse"].item() + lw * p["weight_l2"].item() + lr_ * p["rate_l2"].item()
     )
@@ -324,8 +324,8 @@ def test_loss_is_assembled_from_the_parts():
 def test_rate_l2_grows_with_the_number_of_samples():
     cfg = _cfg()
     ds, net = _setup(cfg)
-    _, once = compute_loss(net, ds.x, ds.y, 1e-3, 1e-3)
-    _, twice = compute_loss(net, ds.x.repeat(2, 1), ds.y.repeat(2, 1), 1e-3, 1e-3)
+    _, once = compute_loss(net, ds.x, ds.y, LossCoefficients(1e-3, 1e-3))
+    _, twice = compute_loss(net, ds.x.repeat(2, 1), ds.y.repeat(2, 1), LossCoefficients(1e-3, 1e-3))
     assert once["rate_l2"].item() > 0
     assert twice["rate_l2"].item() == pytest.approx(2 * once["rate_l2"].item())
     assert twice["mse"].item() == pytest.approx(once["mse"].item())

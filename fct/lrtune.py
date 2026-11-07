@@ -57,9 +57,8 @@ from fct.tasks import Dataset, resample
 from fct.train import (
     compute_loss,
     load_trained,
+    loss_coefficients,
     make_weight_penalty,
-    prior_coefficient,
-    rate_coefficient,
     select_member,
 )
 
@@ -422,12 +421,9 @@ def evaluate_setting(root: Path, exp: ExpConfig, setting: Setting, held_out_seed
             f"{directory}: the training history lacks {missing}; was the run monitored?"
         )
     held = resample(cfg.data, train, held_out_seed, device, dtype)
-    tc = cfg.train
     with torch.no_grad():
         penalty = make_weight_penalty(cfg, net)
-        loss, parts = compute_loss(
-            net, train.x, train.y, prior_coefficient(tc), rate_coefficient(tc), penalty
-        )
+        loss, parts = compute_loss(net, train.x, train.y, loss_coefficients(cfg.train), penalty)
     stats = loss_curve_stats(history)
     train_mse, held_mse = parts["mse"].item(), mse(net, held)
     null_mse = held.y.square().mean().item()

@@ -54,7 +54,7 @@ from fct.cache import (
     save_artefact,
     write_checkpoint,
 )
-from fct.config import Config, MeanFieldConfig, SolverConfig, resolve_dtype
+from fct.config import Config, MeanFieldConfig, SolverConfig, law_beta, resolve_dtype
 from fct.data import Dataset
 from fct.hmc import (
     SingleSiteHMC,
@@ -281,7 +281,7 @@ def resolve_beta(cfg: Config) -> float:
     (train.beta for SGLD, 1 for Adam)."""
     if cfg.meanfield.beta is not None:
         return cfg.meanfield.beta
-    return cfg.train.beta if cfg.train.optimizer == "sgld" else 1.0
+    return law_beta(cfg.train.optimizer, cfg.train.beta)
 
 
 def _prior_cov(prob: _Problem, l: int, Phi: torch.Tensor) -> torch.Tensor:
