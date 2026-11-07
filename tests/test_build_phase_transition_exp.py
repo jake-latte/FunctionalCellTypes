@@ -151,7 +151,7 @@ def test_the_u_weight_plot_and_the_trial_and_pair_sections_are_gone():
 
 
 def test_prior_figure_shows_covariance_effective_covariance_and_penalty_side_by_side(draw, spaces):
-    prior = layer_priors(spaces, 4.0, n_eig=3)[0]
+    prior = layer_priors(spaces, 4.0, n_eig=3, whitened=False)[0]
     fig = draw["plot_prior_matrices"](prior, spaces[0], np.arange(6), np.arange(8), 1)
     axes = _visible(fig)
     assert len(axes) == 6  # pre and post of three matrices
@@ -162,8 +162,19 @@ def test_prior_figure_shows_covariance_effective_covariance_and_penalty_side_by_
     assert all("lambda_w" in t for t in titles)
 
 
+@pytest.mark.parametrize(("whitened", "word"), [(False, "floored"), (True, "exact")])
+def test_the_effective_covariance_is_labelled_floored_or_exact(draw, spaces, whitened, word):
+    prior = layer_priors(spaces, 4.0, n_eig=3, whitened=whitened)[0]
+    fig = draw["plot_prior_matrices"](prior, spaces[0], np.arange(6), np.arange(8), 1)
+    titles = [ax.get_title() for ax in _visible(fig) if "effective" in ax.get_title()]
+    assert len(titles) == 2 and all(word in t for t in titles)
+    spectra = draw["plot_prior_spectra"](prior, spaces[0])
+    labels = [line.get_label() for ax in _visible(spectra) for line in ax.lines]
+    assert any("effective covariance" in label and word in label for label in labels)
+
+
 def test_prior_matrices_are_drawn_in_the_given_unit_order(draw, spaces):
-    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    prior = layer_priors(spaces, 1.0, n_eig=3, whitened=False)[0]
     order_post, order_pre = np.array([5, 4, 3, 2, 1, 0]), np.arange(8)[::-1].copy()
     fig = draw["plot_prior_matrices"](prior, spaces[0], order_post, order_pre, 0)
     first_row = next(ax for ax in _visible(fig) if "covariance" in ax.get_title())
@@ -178,7 +189,7 @@ def test_prior_matrices_are_drawn_in_the_given_unit_order(draw, spaces):
 
 @pytest.mark.parametrize("n_eig", [2, 4])
 def test_spectra_are_truncated_to_n_eig_and_the_floor_is_drawn(draw, spaces, n_eig):
-    prior = layer_priors(spaces, 4.0, n_eig=n_eig)[0]
+    prior = layer_priors(spaces, 4.0, n_eig=n_eig, whitened=False)[0]
     fig = draw["plot_prior_spectra"](prior, spaces[0])
     axes = _visible(fig)
     assert len(axes) == 4
@@ -197,7 +208,7 @@ def test_spectra_are_truncated_to_n_eig_and_the_floor_is_drawn(draw, spaces, n_e
 
 
 def test_the_penalty_spectrum_axis_says_it_starts_from_the_smallest_end(draw, spaces):
-    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    prior = layer_priors(spaces, 1.0, n_eig=3, whitened=False)[0]
     axes = _visible(draw["plot_prior_spectra"](prior, spaces[0]))
     assert "smallest" in axes[2].get_xlabel() and "largest" in axes[0].get_xlabel()
 
@@ -258,7 +269,7 @@ def test_more_members_than_palette_colours_raises(draw, ensemble):
 
 
 def test_weight_kernels_show_the_prior_the_member_and_the_average(draw, spaces):
-    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    prior = layer_priors(spaces, 1.0, n_eig=3, whitened=False)[0]
     pair = prior.covariance
     panels = [("prior", pair), ("member 1", pair), ("average", pair)]
     fig = draw["plot_weight_kernels"](panels, spaces[0], np.arange(6), np.arange(8), 0)
@@ -551,13 +562,15 @@ def test_wiring_data_kernels_are_the_member_then_the_average(session, reference)
 
 def test_wiring_weight_kernels_are_the_prior_the_member_and_the_average(session, reference):
     figs = session.figs("plot_weight_kernels(", "MEAN_VIEW")
-    priors = layer_priors(reference.run.spaces, reference.cfg.train.weight_lambda, 3)
+    priors = layer_priors(
+        reference.run.spaces, reference.cfg.train.weight_lambda, 3, whitened=False
+    )
     assert len(figs) == len(priors)
     for layer, fig in enumerate(figs):
         order = {"post": reference.orders[layer + 1], "pre": reference.orders[layer]}
         for which in ("post", "pre"):
             for prefix, pair in [
-                ("effective prior", priors[layer].effective_covariance),
+                ("effective prior (floored)", priors[layer].effective_covariance),
                 (f"member {MEMBER}", reference.views[MEMBER].weight_kernels[layer]),
                 (f"average of {reference.run.net.B} members", reference.mean.weight_kernels[layer]),
             ]:
@@ -566,7 +579,9 @@ def test_wiring_weight_kernels_are_the_prior_the_member_and_the_average(session,
 
 
 def test_wiring_prior_matrices_use_the_order_of_their_own_population(session, reference):
-    priors = layer_priors(reference.run.spaces, reference.cfg.train.weight_lambda, 3)
+    priors = layer_priors(
+        reference.run.spaces, reference.cfg.train.weight_lambda, 3, whitened=False
+    )
     figs = session.figs("def plot_prior_matrices")
     assert len(figs) == len(priors)
     for layer, fig in enumerate(figs):
@@ -617,7 +632,7 @@ def test_example_outputs_show_a_subset_of_the_outputs_with_a_member_legend(draw,
 
 
 def test_sorted_matrices_are_antialiased_and_ticked_with_the_coordinate(draw, spaces):
-    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    prior = layer_priors(spaces, 1.0, n_eig=3, whitened=False)[0]
     order_post, order_pre = unit_order(spaces[0].post.embedding.positions, 1), np.arange(8)
     fig = draw["plot_prior_matrices"](prior, spaces[0], order_post, order_pre, 1)
     fig.canvas.draw()
@@ -648,7 +663,7 @@ def test_the_overlap_figure_uses_the_same_tick_convention(draw):
 
 @pytest.mark.parametrize("name", ["plot_prior_matrices", "plot_weight_kernels", "plot_overlaps"])
 def test_an_order_that_is_not_a_permutation_of_the_units_raises(draw, spaces, name):
-    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    prior = layer_priors(spaces, 1.0, n_eig=3, whitened=False)[0]
     good_post, good_pre = np.arange(6), np.arange(8)
     bad_post = np.array([0, 1, 2, 3, 4, 4])
     with pytest.raises(ValueError, match="permutation"):
@@ -663,7 +678,7 @@ def test_an_order_that_is_not_a_permutation_of_the_units_raises(draw, spaces, na
 
 
 def test_member_and_average_of_the_weight_kernels_share_a_symmetric_scale(draw, spaces):
-    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    prior = layer_priors(spaces, 1.0, n_eig=3, whitened=False)[0]
     small = prior.covariance
     big = type(small)(small.post * 3, small.pre * 3)
     panels = [("prior", small), ("member", small), ("average", big)]
@@ -685,7 +700,9 @@ def test_member_and_average_overlaps_share_their_colour_scales(session):
 
 
 def test_spectra_figure_has_integer_ticks_and_counts_each_population(draw, spaces):
-    prior = layer_priors(spaces, 1.0, n_eig=10)[0]  # 8 input units, 6 hidden: 8 and 6 drawn
+    prior = layer_priors(spaces, 1.0, n_eig=10, whitened=False)[
+        0
+    ]  # 8 input units, 6 hidden: 8 and 6 drawn
     fig = draw["plot_prior_spectra"](prior, spaces[0])
     for ax in _visible(fig):
         assert all(float(t).is_integer() for t in ax.get_xticks())
@@ -694,7 +711,7 @@ def test_spectra_figure_has_integer_ticks_and_counts_each_population(draw, space
 
 
 def test_the_figure_titles_carry_the_status_tag_when_given(draw, spaces):
-    prior = layer_priors(spaces, 1.0, n_eig=3)[0]
+    prior = layer_priors(spaces, 1.0, n_eig=3, whitened=False)[0]
     tag = " [PROVISIONAL]"
     figs = [
         draw["plot_prior_matrices"](prior, spaces[0], np.arange(6), np.arange(8), 0, tag),

@@ -206,7 +206,7 @@ def test_descending_spectrum_handles_n_eig_beyond_the_size_and_refuses_zero():
 
 def test_layer_priors_give_every_layer_both_factor_pairs_and_their_spectra(small):
     _, _, _, spaces = small
-    priors = layer_priors(spaces, LAMBDA_W, n_eig=4)
+    priors = layer_priors(spaces, LAMBDA_W, n_eig=4, whitened=False)
     assert [p.layer for p in priors] == [0, 1, 2]
     for p, space in zip(priors, spaces, strict=True):
         assert p.covariance.post.shape == (space.post.K.shape[0],) * 2
@@ -418,7 +418,7 @@ def test_every_function_runs_on_the_trained_setting(root):
     mean = average_views(views)
     assert mean.A.shape == (cfg.net.L, 3**cfg.data.n_latents, 3**cfg.data.n_latents)
 
-    priors = layer_priors(run.spaces, cfg.train.weight_lambda, n_eig=3)
+    priors = layer_priors(run.spaces, cfg.train.weight_lambda, n_eig=3, whitened=False)
     assert len(priors) == cfg.net.L + 1 and len(priors[0].penalty_spectra.post) == 3
 
     stats = ensemble_statistics(run.history)
@@ -440,7 +440,7 @@ def _floored_space():
 def test_penalty_spectrum_holds_the_smallest_eigenvalues_ascending_not_the_flat_floor():
     space = _floored_space()
     assert space.post.report.n_floored > 1  # the largest M eigenvalues are all the floor
-    prior = layer_priors([space], 1.0, n_eig=4)[0]
+    prior = layer_priors([space], 1.0, n_eig=4, whitened=False)[0]
     expected = torch.linalg.eigvalsh(space.post.M)[:4]
     assert torch.allclose(prior.penalty_spectra.post, expected)
     assert torch.all(prior.penalty_spectra.post[:-1] <= prior.penalty_spectra.post[1:])
@@ -460,7 +460,7 @@ def test_ascending_spectrum_is_sorted_truncated_and_refuses_zero():
 
 def test_layer_priors_report_the_floor_of_each_population():
     space = _floored_space()
-    prior = layer_priors([space], LAMBDA_W, n_eig=3)[0]
+    prior = layer_priors([space], LAMBDA_W, n_eig=3, whitened=False)[0]
     floor_value = 1 / torch.linalg.eigvalsh(space.post.M)[-1].item()  # M's top = 1 / floor
     assert prior.floors.post.n_floored == space.post.report.n_floored
     assert prior.floors.post.fraction_floored == space.post.report.fraction_floored
@@ -471,16 +471,42 @@ def test_layer_priors_report_the_floor_of_each_population():
 
 def test_effective_covariance_is_the_floored_inverse_penalty_the_nets_trained_under():
     space = _floored_space()
-    f = effective_covariance_factors(space, LAMBDA_W)
+    f = effective_covariance_factors(space, LAMBDA_W, whitened=False)
     expected = torch.kron(space.post.M.inverse(), space.pre.M.inverse()) / LAMBDA_W
     assert torch.allclose(torch.kron(f.post, f.pre), expected, rtol=1e-8, atol=1e-12)
     # unlike K / lambda_w, its spectrum never falls below the floor
-    prior = layer_priors([space], LAMBDA_W, n_eig=12)[0]
+    prior = layer_priors([space], LAMBDA_W, n_eig=12, whitened=False)[0]
     floor = prior.floors.post.covariance_floor
     assert prior.effective_covariance_spectra.post.min() >= floor * (1 - 1e-9)
     assert prior.covariance_spectra.post.min() < floor
     spectrum = prior.effective_covariance_spectra.post
     assert torch.all(spectrum[:-1] >= spectrum[1:])
+
+
+def test_a_whitened_run_trains_under_the_exact_kernel_not_the_floored_one():
+    """Under the whitened parametrisation W = S xi S with S = K^{1/2} and xi ~ N(0, I /
+    lambda_w), so the covariance trained under is K itself (S^2, nothing floored)."""
+    space = _floored_space()
+    assert space.post.report.n_floored > 0
+    whitened = effective_covariance_factors(space, LAMBDA_W, whitened=True)
+    root = LAMBDA_W**0.5
+    for got, pop in ((whitened.post, space.post), (whitened.pre, space.pre)):
+        assert torch.allclose(got, pop.S @ pop.S / root, rtol=0, atol=1e-12)
+        assert torch.allclose(got, pop.K / root, rtol=0, atol=1e-12)
+    penalty = effective_covariance_factors(space, LAMBDA_W, whitened=False)
+    assert torch.allclose(penalty.post, space.post.M.inverse() / root, rtol=1e-10, atol=0)
+    assert not torch.allclose(penalty.post, whitened.post, rtol=0, atol=1e-6)
+    prior = layer_priors([space], LAMBDA_W, n_eig=12, whitened=True)[0]
+    assert prior.whitened and not layer_priors([space], LAMBDA_W, 12, whitened=False)[0].whitened
+    torch.testing.assert_close(prior.effective_covariance_spectra, prior.covariance_spectra)
+
+
+def test_the_parametrisation_must_be_named():
+    space = _floored_space()
+    with pytest.raises(TypeError, match="whitened"):
+        effective_covariance_factors(space, LAMBDA_W)
+    with pytest.raises(TypeError, match="whitened"):
+        layer_priors([space], LAMBDA_W, n_eig=3)
 
 
 def test_covariance_factors_refuse_a_zero_lambda_w(small):
@@ -684,6 +710,6 @@ def test_floor_is_min_rel_eig_times_top_even_when_nothing_was_floored():
     space = build_spaces(spatial, m=8, N=8, L=1, n_out=8)[0]
     assert space.post.report.n_floored == 0
     top = np.linalg.eigvalsh(space.post.K.numpy())[-1]  # numpy, independent of torch's path
-    prior = layer_priors([space], LAMBDA_W, n_eig=3)[0]
+    prior = layer_priors([space], LAMBDA_W, n_eig=3, whitened=False)[0]
     assert prior.floors.post.covariance_floor == pytest.approx(1e-6 * top / LAMBDA_W**0.5)
     assert prior.floors.post.penalty_ceiling == pytest.approx(LAMBDA_W**0.5 / (1e-6 * top))

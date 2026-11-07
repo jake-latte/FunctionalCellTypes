@@ -200,11 +200,19 @@ def covariance_factors(space: LayerSpace, weight_lambda: float) -> FactorPair:
     return FactorPair(space.post.K / root, space.pre.K / root)
 
 
-def effective_covariance_factors(space: LayerSpace, weight_lambda: float) -> FactorPair:
-    """M^-1 / sqrt(lambda_w) on each side, whose Kronecker product is (lambda_w M^post (x)
-    M^pre)^-1: the weight covariance the training actually samples, since the loss penalises W
-    by exactly that quadratic form. It is K with its eigenvalues raised to the penalty's floor."""
+def effective_covariance_factors(
+    space: LayerSpace, weight_lambda: float, *, whitened: bool
+) -> FactorPair:
+    """The weight covariance the training actually samples, split as two factors / sqrt(lambda_w).
+    Under the penalty (`whitened` False) it is M^-1 on each side, whose Kronecker product is
+    (lambda_w M^post (x) M^pre)^-1, since the loss penalises W by exactly that quadratic form:
+    K with its eigenvalues raised to the penalty's floor. Under the whitened parametrisation it
+    is K itself, S^2 with S = K^{1/2} (eigenvalues clamped at 0, nothing floored), since W = S xi
+    S with xi ~ N(0, I / lambda_w). `whitened` is required (`Config.is_whitened` of the run) so
+    that no caller gets the floored kernel for a whitened run by default."""
     root = _check_lambda(weight_lambda)
+    if whitened:
+        return FactorPair(space.post.S @ space.post.S / root, space.pre.S @ space.pre.S / root)
     return FactorPair(space.post.M.inverse() / root, space.pre.M.inverse() / root)
 
 
@@ -239,7 +247,8 @@ class LayerPrior(NamedTuple):
     of each factor, descending. `penalty_spectra` holds the n_eig SMALLEST eigenvalues of the
     penalty factors, ascending: the penalty's largest eigenvalues are all the floor value
     (a flat line), while its smallest are the reciprocals of the covariance's largest.
-    `floors` says how many eigenvalues were floored and where the floor lies."""
+    `floors` says how many eigenvalues were floored and where the floor lies (the penalty's
+    floor; under `whitened` the effective covariance is the exact K and nothing is floored)."""
 
     layer: int
     covariance: FactorPair
@@ -249,6 +258,7 @@ class LayerPrior(NamedTuple):
     effective_covariance_spectra: FactorPair
     penalty_spectra: FactorPair
     floors: FloorPair
+    whitened: bool
 
 
 def _pair(f, factors: FactorPair) -> FactorPair:
@@ -263,15 +273,16 @@ def _population_floor(population, weight_lambda: float) -> PopulationFloor:
 
 
 def layer_priors(
-    spaces: Sequence[LayerSpace], weight_lambda: float, n_eig: int
+    spaces: Sequence[LayerSpace], weight_lambda: float, n_eig: int, *, whitened: bool
 ) -> list[LayerPrior]:
     """Every weight layer's covariance, effective covariance and penalty factors
-    (`covariance_factors`, `effective_covariance_factors`, `penalty_factors`) with their
-    leading spectra (see `LayerPrior` for which end each keeps) and the floor of each side."""
+    (`covariance_factors`, `effective_covariance_factors` under the run's parametrisation,
+    `penalty_factors`) with their leading spectra (see `LayerPrior` for which end each keeps)
+    and the floor of each side."""
 
     def prior(space: LayerSpace) -> LayerPrior:
         cov = covariance_factors(space, weight_lambda)
-        eff = effective_covariance_factors(space, weight_lambda)
+        eff = effective_covariance_factors(space, weight_lambda, whitened=whitened)
         pen = penalty_factors(space, weight_lambda)
         return LayerPrior(
             space.layer,
@@ -285,6 +296,7 @@ def layer_priors(
                 _population_floor(space.post, weight_lambda),
                 _population_floor(space.pre, weight_lambda),
             ),
+            whitened,
         )
 
     return [prior(space) for space in spaces]
