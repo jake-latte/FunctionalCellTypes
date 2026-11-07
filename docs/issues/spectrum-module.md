@@ -20,7 +20,7 @@ pooling.
 
 Read Section `sec:measure` of the plan ("Measurement: functions, inputs,
 outputs, maths") for the definitions (tuning maps, the latent basis, per-mode
-spectra, the null mean, $R(r)$, $q_{1/2}$, the $q = 0$ share, lag-1, the
+spectra, the null mean, $R(\Delta)$, $q_{1/2}$, the $q = 0$ share, lag-1, the
 angle statistic $\cos 4\theta$ in the orthonormal frame). The plan's W6
 entry is copied verbatim below.
 

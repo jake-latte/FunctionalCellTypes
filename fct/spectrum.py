@@ -13,7 +13,7 @@ The maths, with h (P, N) the activity of N neurons over P patterns (neuron i at 
                  0, 1, .., N/2, .., -1); no mean is subtracted
   null mean      sum_p |r~_p(q)|^2 / (P - K) with r = h - U U^T h: the mean spectrum of the
                  P - K directions orthogonal to col(Z), by Parseval over any basis of col(Z)^perp
-  R(r)           (1/N) sum_q d_q e^{2 pi i q r / N} = ifft(d).real; lag-1 = R(1)/R(0)
+  R(Delta)       (1/N) sum_q d_q e^{2 pi i q Delta / N} = ifft(d).real; lag-1 = R(1)/R(0)
   q_1/2          the largest |q| with d_q - d_{N/2} >= (d_0 - d_{N/2}) / 2 (Nyquist as floor)
   angle          theta_i = atan2(t_{3,i}, t_{2,i}) in the orthonormal frame (u_2, u_3)
 
@@ -89,7 +89,7 @@ class Summary(NamedTuple):
     lag1: float | Tensor  # R(1) / R(0)
     d0: float | Tensor  # d_0
     d_nyq: float | Tensor  # d_{N/2}, the floor of half_power_q
-    R: Tensor  # (..., N) autocorrelation R(r), r = 0..N-1
+    R: Tensor  # (..., N) autocorrelation R(Delta), Delta = 0..N-1
 
 
 # ------------------------------------------------------------------ validation
@@ -282,7 +282,8 @@ def fold_q(d: Tensor) -> Tensor:
 
 
 def autocorrelation(d: Tensor) -> Tensor:
-    """R(r) = ifft(d).real over the last axis: (..., N) spectrum -> (..., N) at r = 0..N-1."""
+    """R(Delta) = ifft(d).real over the last axis: (..., N) spectrum -> (..., N) at lags
+    Delta = 0..N-1."""
     _check_float("d", d, 1)
     return torch.fft.ifft(d, dim=-1).real
 
