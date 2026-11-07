@@ -137,6 +137,7 @@ class DataConfig(StrictModel):
 Phi = Literal["relu", "tanh", "sigmoid", "id"]
 InitLaw = Literal["standard", "prior"]
 Optimizer = Literal["adam", "sgld"]
+MonitorKind = Literal["mir", "spectrum"]
 
 
 class NetConfig(StrictModel):
@@ -169,11 +170,16 @@ class TrainConfig(StrictModel):
     log_int: PosInt = 100
     save_int: PosInt = 100
     seed: int = 0
-    # Modularity monitor: 0 disables it. The settings are hashed with the run so a cached
-    # run always matches the monitor settings that produced its history.
+    # Training monitor: monitor_int = 0 disables it; bins and shuffles are the MIR monitor's.
+    # The settings are hashed with the run so a cached run always matches the monitor settings
+    # that produced its history.
     monitor_int: NonNegInt = 0
     monitor_bins: Annotated[int, Field(ge=2)] = 10
     monitor_shuffles: PosInt = 5
+    # Which monitor runs every monitor_int epochs (`fct.monitor.make_monitor`): the MIR, or the
+    # tuning-map spectra and angle statistics. Hashed only as "spectrum", so every cache made
+    # with the MIR monitor keeps its hash.
+    monitor_kind: MonitorKind = "mir"
     # "sgld" adds Gaussian noise of variance 2 * lr / beta to every step (see fct.sgld). `beta`
     # is read only by SGLD; both fields enter the hash only for SGLD (`section_hash`), so
     # adam runs keep the hashes they had before these fields existed.
@@ -445,6 +451,7 @@ HASH_OMITTED_AT_DEFAULT: dict[str, Any] = {
     "data.teacher": DataConfig().teacher,
     "spatial.lambda_max": SpatialConfig().lambda_max,
     "spatial.parametrisation": SpatialConfig().parametrisation,
+    "train.monitor_kind": TrainConfig().monitor_kind,
 }
 
 

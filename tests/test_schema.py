@@ -54,5 +54,6 @@ def test_the_config_hash_table_leaves_out_exactly_the_default_valued_fields():
         "net": {"init": True},
         "data": {"teacher": True},
         "spatial": {"lambda_max": True, "parametrisation": True},
+        "train": {"monitor_kind": True},
     }
     assert "spatial" not in exclude_at_default(Config(), HASH_OMITTED_AT_DEFAULT)
