@@ -26,6 +26,11 @@ modes. A real map has d(-q) = d(q) exactly, so folding +-q averages a value with
 gains nothing: the independent samples are the B members, nothing else. The delta method on
 the member mean (`delta_method_se`) gives each statistic's SE at a given B.
 
+The figures of a setting (`measure_final`, `measure_relaxation`) are built from the same
+member-averaged final-state spectrum: the folded spectra, the mode ratio and the lag profile
+R(Delta)/R(0) per |q| or lag, each with its bootstrap SE, and the secondary statistics (q_1/2
+and the q = 0 share, which rest on one or two frequencies and are reported, not falsifiers).
+
 Pure functions on tensors, except `predicted_law`, which builds the setting's dataset in memory.
 """
 
@@ -39,12 +44,14 @@ from torch import Tensor
 from fct.config import Config
 from fct.data import Dataset, make_dataset
 from fct.exp import ExpConfig, expand, setting_config
-from fct.linear_theory import network_parameters, predicted_spectra
+from fct.linear_theory import network_parameters, noise_floor, predicted_spectra, theory_rate
 from fct.spectrum import (
     autocorrelation,
     band_mask,
     bootstrap_members,
     bootstrap_resamples,
+    fold_q,
+    half_power_q,
     latent_basis,
 )
 
@@ -343,3 +350,222 @@ def pipeline_bounds(law: Law) -> tuple[Tensor, Tensor]:
     PIPELINE_SE_MARGIN and PIPELINE_N_SE x PIPELINE_SE_MARGIN delta-method SEs."""
     se_max = PIPELINE_SE_MARGIN * delta_method_se(law)
     return se_max, PIPELINE_N_SE * se_max
+
+
+# ------------------------------------------------------------------ the figures' measurements
+# Secondary criteria (reported beside the falsifiers, never falsifiers themselves): q_1/2 is
+# flagged when it differs from the prediction by more than Q_HALF_TOLERANCE, a q = 0 share by
+# `disagrees`, and the hexatic modulus |mean_b m_b| when it exceeds HEXATIC_MAX (prediction 6:
+# rotation-invariant tuning has |m| near 0).
+Q_HALF_TOLERANCE = 1
+HEXATIC_MAX = 0.1
+SECONDARY_KINDS = ("q_half", "share0")
+
+
+def statistic_label(stat: Statistic) -> str:
+    """A short name: the kind and the 1-based mode (`lag1_1`), or `ratio`."""
+    return stat.kind if stat.mode is None else f"{stat.kind}_{stat.mode}"
+
+
+def _kept(D: Tensor, keep: Tensor | None) -> Tensor:
+    return D if keep is None else D * keep.to(D.dtype)
+
+
+def lag_profile(D: Tensor, keep: Tensor | None = None) -> Tensor:
+    """(..., N/2 + 1): R(Delta)/R(0) at Delta = 0..N/2 of spectra D (..., N), after zeroing the
+    frequencies outside `keep`. R is even in Delta on the ring, so half of it is all of it."""
+    R = autocorrelation(_kept(D, keep))
+    return (R / R[..., :1])[..., : D.shape[-1] // 2 + 1]
+
+
+def folded_mode_ratio(D: Tensor) -> Tensor:
+    """(..., N/2 + 1): the folded power of mode 1 over that of mode 2, D (..., K, N), K >= 2."""
+    if D.ndim < 2 or D.shape[-2] < 2:
+        raise ValueError(f"the mode ratio needs spectra (..., K >= 2, N), got {tuple(D.shape)}")
+    folded = fold_q(D)
+    return folded[..., 0, :] / folded[..., 1, :]
+
+
+def prior_profile(law: Law) -> Tensor:
+    """(N/2 + 1,): `lag_profile` of the hidden prior's exact eigenvalues lambda_q over the kept
+    band: the shape every mode would have if the data did not act on it."""
+    lam = torch.from_numpy(network_parameters(law.cfg, law.dataset, exact_kernel=True).lam)
+    return lag_profile(lam, law.keep)
+
+
+def secondary_names(K: int) -> list[str]:
+    """The names of `secondary_statistics`' vector: q_1/2 of modes 1..K, then their q = 0 share."""
+    return [f"{kind}_{k}" for kind in SECONDARY_KINDS for k in range(1, K + 1)]
+
+
+def secondary_statistics(N: int, keep: Tensor | None = None) -> Callable[[Tensor], Tensor]:
+    """Mean spectra D (..., K, N) -> (..., 2K): `half_power_q` of each mode, then its q = 0
+    share, after zeroing the frequencies outside `keep` (so the half-power floor d_{N/2} is 0
+    where the floor excludes N/2, in the prediction and the measurement alike)."""
+
+    def statistics(D: Tensor) -> Tensor:
+        if D.shape[-1] != N:
+            raise ValueError(f"spectra have {D.shape[-1]} frequencies, the ring has N = {N}")
+        D = _kept(D, keep)
+        q_half = torch.as_tensor(half_power_q(D), device=D.device).to(D.dtype)
+        return torch.cat([q_half, D[..., 0] / D.sum(-1)], dim=-1)
+
+    return statistics
+
+
+def hexatic_estimate(moments: Tensor, seed: int = 0) -> tuple[Tensor, Tensor]:
+    """|mean_b m_b| of the members' complex hexatic moments (B, 2) (real, imaginary parts, as
+    the spectrum monitor records them) and its bootstrap SE over members: the complex moment is
+    what averages, not its modulus."""
+    if moments.ndim != 2 or moments.shape[-1] != 2:
+        raise ValueError(
+            f"hexatic moments must be (B, 2), real and imaginary part per member, got "
+            f"{tuple(moments.shape)}"
+        )
+    return bootstrap_members(moments, lambda m: torch.linalg.vector_norm(m, dim=-1), N_BOOT, seed)
+
+
+def latent_angles(Z: Tensor, U: Tensor) -> Tensor:
+    """(6,): the contrast-plane angles atan2(u_3 . z_j, u_2 . z_j) of the three latents and of
+    their opposites, where a neuron whose activity is +-z_j lies (the marks of prediction 6)."""
+    if Z.shape[-1] != 3 or U.shape[-1] != 3:
+        raise ValueError(
+            f"the contrast plane is the whole contrast space only at K = 3, got Z "
+            f"{tuple(Z.shape)} and U {tuple(U.shape)}"
+        )
+    c = U[:, 1:3].T @ Z  # (2, 3): each latent's coordinates in (u_2, u_3)
+    return torch.cat([torch.atan2(c[1], c[0]), torch.atan2(-c[1], -c[0])])
+
+
+def relaxation_curve(fit: RelaxationFit, t: Tensor, t0: float) -> Tensor:
+    """(T, S): the fitted A - C exp(-(t - t0) / tau) at epochs t (T,), t0 the window's first."""
+    return fit.asymptote - fit.amplitude * torch.exp(-(t[:, None] - t0) / fit.tau)
+
+
+class FinalMeasurement(NamedTuple):
+    """One setting read off its members' final states: the statistics against the prediction,
+    and the per-|q| or per-lag curves the figures draw, each with a bootstrap SE over members.
+    Q = N/2 + 1 folded frequencies (or lags)."""
+
+    stats: list[Statistic]
+    predicted: Tensor  # (3K + 1,) of the predicted spectrum
+    values: Tensor  # (3K + 1,) of the member-averaged final-state spectrum
+    se: Tensor  # (3K + 1,)
+    disagree: Tensor  # (3K + 1,) bool, `disagrees`
+    spectrum: Tensor  # (K + 1, Q) folded member-mean spectra, the null row last
+    spectrum_se: Tensor  # (K + 1, Q)
+    spectrum_theory: Tensor  # (K, Q)
+    null_theory: float  # the predicted null floor (0 at sigma = 0)
+    excluded: Tensor  # (Q,) bool, the folded frequencies the statistics leave out
+    ratio: Tensor  # (Q,) folded mode 1 / mode 2
+    ratio_se: Tensor
+    ratio_theory: Tensor
+    profile: Tensor  # (K, Q) R(Delta)/R(0) over the kept band
+    profile_se: Tensor
+    profile_theory: Tensor
+    kernel_profile: Tensor  # (Q,) `prior_profile`
+    secondary_names: list[str]
+    secondary: Tensor  # (2K,)
+    secondary_se: Tensor
+    secondary_predicted: Tensor
+    secondary_disagree: Tensor  # (2K,) bool
+    hexatic: tuple[Tensor, Tensor] | None  # |mean m| and its SE, when the moments were given
+    B: int
+
+
+def measure_final(
+    law: Law, final: Tensor, hex_moments: Tensor | None = None, seed: int = 0
+) -> FinalMeasurement:
+    """Everything the notebook shows of one setting's final states: `final` (B, K + 1, N) the
+    members' last records (`mode_spectra`, the null row last), and optionally their hexatic
+    moments (B, 2). Every curve and statistic is of the member mean, with the bootstrap over
+    members seeded by `seed`."""
+    K, N = law.D.shape
+    if final.ndim != 3 or tuple(final.shape[1:]) != (K + 1, N):
+        raise ValueError(
+            f"final spectra must be (B, K + 1, N) = (B, {K + 1}, {N}), got {tuple(final.shape)}"
+        )
+    final = final.to(F64)
+    latent = final[:, :K]
+    values, se = estimate(latent, law, seed)
+    predicted = law_statistics(law)(law.D)
+    spectrum, spectrum_se = bootstrap_members(final, fold_q, N_BOOT, seed)
+    ratio, ratio_se = bootstrap_members(latent, folded_mode_ratio, N_BOOT, seed)
+    profile, profile_se = bootstrap_members(
+        latent, lambda D: lag_profile(D, law.keep), N_BOOT, seed
+    )
+    secondary = secondary_statistics(N, law.keep)
+    secondary_values, secondary_se = bootstrap_members(latent, secondary, N_BOOT, seed)
+    secondary_predicted = secondary(law.D)
+    secondary_disagree = torch.cat(
+        [
+            (secondary_values[:K] - secondary_predicted[:K]).abs() > Q_HALF_TOLERANCE,
+            disagrees(secondary_values[K:], secondary_se[K:], secondary_predicted[K:]),
+        ]
+    )
+    return FinalMeasurement(
+        stats=statistic_list(K),
+        predicted=predicted,
+        values=values,
+        se=se,
+        disagree=disagrees(values, se, predicted),
+        spectrum=spectrum,
+        spectrum_se=spectrum_se,
+        spectrum_theory=fold_q(law.D),
+        null_theory=noise_floor(0.0, theory_rate(law.cfg)),
+        excluded=~law.keep[: N // 2 + 1],
+        ratio=ratio,
+        ratio_se=ratio_se,
+        ratio_theory=folded_mode_ratio(law.D),
+        profile=profile,
+        profile_se=profile_se,
+        profile_theory=lag_profile(law.D, law.keep),
+        kernel_profile=prior_profile(law),
+        secondary_names=secondary_names(K),
+        secondary=secondary_values,
+        secondary_se=secondary_se,
+        secondary_predicted=secondary_predicted,
+        secondary_disagree=secondary_disagree,
+        hexatic=None if hex_moments is None else hexatic_estimate(hex_moments.to(F64), seed),
+        B=final.shape[0],
+    )
+
+
+class RelaxationView(NamedTuple):
+    """The burn-in diagnostic of one setting, every statistic relative to its fitted asymptote
+    in units of its accuracy budget (`budget_se`), so all of them share one axis."""
+
+    fit: RelaxationFit
+    epochs: Tensor  # (R,) the records'
+    values: Tensor  # (R, S) (statistic of the member-mean record - asymptote) / budget
+    fit_epochs: Tensor  # (T,) the fit window's
+    fitted: Tensor  # (T, S) the fitted curve, normalised the same way
+    labels: list[str]
+    start: float  # the window's start epoch
+    budget: Tensor  # (S,)
+    stationary: Tensor  # (S,) bool, `is_stationary`
+
+
+def measure_relaxation(
+    law: Law, epochs: Tensor, records: Tensor, start: float | None = None, seed: int = 0
+) -> RelaxationView:
+    """`relaxation_fit` of the records (R, B, K, N) at `epochs` (R,) from epoch `start` on
+    (default: the second half of the run, which tests its end), and the series to draw."""
+    start = law.cfg.train.n_epochs / 2 if start is None else float(start)
+    statistics = law_statistics(law)
+    epochs, records = epochs.to(F64), records.to(F64)
+    fit = relaxation_fit(epochs, records, statistics, start, seed=seed)
+    budget = budget_se(law)
+    fit_epochs = epochs[epochs >= start]
+    curve = relaxation_curve(fit, fit_epochs, float(fit_epochs[0]))
+    return RelaxationView(
+        fit=fit,
+        epochs=epochs,
+        values=(statistics(records.mean(1)) - fit.asymptote) / budget,
+        fit_epochs=fit_epochs,
+        fitted=(curve - fit.asymptote) / budget,
+        labels=[statistic_label(s) for s in statistic_list(law.D.shape[0])],
+        start=start,
+        budget=budget,
+        stationary=is_stationary(fit, budget),
+    )
