@@ -196,12 +196,14 @@ class FinalMIR:
 
 def _origin(mir_epoch: int | None, epoch: int, n_epochs: int, short: bool = False) -> str:
     """Where a provisional row's MIR comes from: the epoch of its last monitor call, which is
-    not the checkpoint's epoch."""
+    not the checkpoint's epoch. A row at epoch n_epochs comes from train/final.pt (a checkpoint
+    is always written before the last epoch): its extension is pending."""
+    source = "final.pt, extension pending" if epoch == n_epochs else None
     if short:
         measured = f"MIR@{mir_epoch}" if mir_epoch is not None else "no MIR"
-        return f"{measured}, ckpt {epoch}/{n_epochs}"
+        return f"{measured}, {source or f'ckpt {epoch}/{n_epochs}'}"
     measured = f"MIR from epoch {mir_epoch}" if mir_epoch is not None else "no MIR yet"
-    return f"{measured}; checkpoint at epoch {epoch} of {n_epochs}"
+    return f"{measured}; {source or f'checkpoint at epoch {epoch} of {n_epochs}'}"
 
 
 # How the modularity axes read in a label: `L3 relu r=0.001`.
@@ -296,13 +298,22 @@ def _load_pending_extension(
 ) -> SettingResult:
     """A partial setting whose train/final.pt holds fewer members than net.B (the experiment
     was extended and the new members are not trained yet), from the members final.pt holds,
-    with a note saying so. Like a checkpoint, it is shown as provisional."""
+    with a note saying so. Like a checkpoint, it is shown as provisional. As in
+    `_load_partial`, a dataset or final.pt that is unreadable or stale (a running extension
+    replaces final.pt when it appends) is reported in `note` instead of raised."""
     missing = _dataset_missing(directory, relative, setting, "train/final.pt")
     if missing:
         return missing
     cpu, dtype = torch.device("cpu"), resolve_dtype(cfg.dtype)
-    net, history = select_member(*load_trained_members(directory, cfg, cpu, dtype))
-    dataset = get_dataset(directory, cfg)
+    try:
+        dataset = get_dataset(directory, cfg)
+    except _UNREADABLE as err:
+        return _not_shown(setting, relative, f"dataset not readable: {err}")
+    try:
+        net, history = load_trained_members(directory, cfg, cpu, dtype)
+    except _UNREADABLE as err:  # StaleCacheError is a RuntimeError
+        return _not_shown(setting, relative, f"train/final.pt not shown: {err}")
+    net, history = select_member(net, history)  # an ensemble raises: the report takes one net
     result = _with_data(
         setting, "partial", relative, cfg, net, history, dataset, cfg.train.n_epochs
     )
@@ -333,8 +344,10 @@ def _load_partial(directory: Path, relative: Path, setting: Setting, cfg: Config
 
 def load_setting_result(root: Path, exp: ExpConfig, setting: Setting) -> SettingResult:
     """Load one setting: a done one from train/final.pt, a partial one from its latest
-    checkpoint (then `provisional`, with the epoch reached), a missing one not at all, and a
-    stale one (finished under another config or loss definition) not at all, with a note.
+    checkpoint (then `provisional`, with the epoch reached) or, when its extension is pending
+    (train/final.pt holds fewer members than net.B), from final.pt (provisional, all epochs,
+    with a note), a missing one not at all, and a stale one (finished under another config or
+    loss definition) not at all, with a note.
 
     Read-only: a setting whose data/dataset.pt is missing is reported as "partial" with a note,
     because loading it through `get_dataset` would generate and write the file. A finished
