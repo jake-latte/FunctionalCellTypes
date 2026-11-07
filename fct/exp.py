@@ -80,6 +80,7 @@ from fct.train import (
     extend_trained,
     load_trained,
     remove_staging,
+    remove_stale_checkpoints,
     train_from_config,
     train_hash,
     trained_member_count,
@@ -834,37 +835,53 @@ def _write_or_reconcile_config(cfg: Config, directory: Path) -> None:
     meanfield section and net.B, because the artefacts beside it belong to that config
     (ExpError otherwise), and is then brought up to date. The meanfield section is the
     experiment's current solver (no training artefact depends on it, and `python -m fct solve`
-    reads it from here). net.B follows exp.json (`_net_B_may_change`): it grows when the
-    experiment is extended, and goes back if an extension is backed out."""
+    reads it from here). net.B follows exp.json unless `_net_B_refusal` objects (ExpError
+    naming net.B and the fix): it grows when the experiment is extended, and goes back if an
+    extension is backed out."""
     paths = cache_paths(directory)
     if not paths.config.exists():
         save_config(cfg, paths.config)
         return
     existing = load_config(paths.config)
-    accepted = {"meanfield": cfg.meanfield}
-    if existing.net.B != cfg.net.B and _net_B_may_change(paths, cfg.net.B):
-        accepted["net"] = existing.net.model_copy(update={"B": cfg.net.B})
-    if existing.model_copy(update=accepted) != cfg:
+    same_net = existing.net.model_copy(update={"B": cfg.net.B})
+    if existing.model_copy(update={"meanfield": cfg.meanfield, "net": same_net}) != cfg:
         raise ExpError(
             f"{paths.config} differs from the config exp.json builds for this setting; "
             "use a fresh ROOT or delete the setting directory"
         )
+    if existing.net.B != cfg.net.B:
+        refusal = _net_B_refusal(paths, existing.net.B, cfg.net.B)
+        if refusal is not None:
+            raise ExpError(
+                f"{paths.config}: net.B is {existing.net.B}, exp.json gives {cfg.net.B}; {refusal}"
+            )
     if existing != cfg:
         save_config(cfg, paths.config)
 
 
-def _net_B_may_change(paths: CachePaths, B: int) -> bool:
-    """Whether config.json may take net.B = B: no original run is part-way (its checkpoints
-    were written for the old B; a finished run's leftover checkpoint does not count) and
-    train/final.pt, if any, holds at most B members (a smaller ensemble is extended, a larger
-    one never shrinks)."""
+def _net_B_refusal(paths: CachePaths, old_B: int, B: int) -> str | None:
+    """Why config.json may not take net.B = B (the fix included), or None if it may: an
+    original run part-way wrote its checkpoints for the old B (a finished run's leftover
+    checkpoint does not count), train/final.pt must be readable, and it must hold at most B
+    members (a smaller ensemble is extended, a larger one never shrinks)."""
     final = paths.train / "final.pt"
     if not final.exists():
-        return latest_checkpoint(paths.train) is None
+        if latest_checkpoint(paths.train) is None:
+            return None
+        return (
+            f"the training run in {paths.train} is part-way, with checkpoints for net.B={old_B}; "
+            f"set B back to {old_B} in exp.json and let the run finish, then grow it with "
+            "`fct exp extend`"
+        )
     try:
-        return trained_member_count(final) <= B
-    except ValueError:  # unreadable: its status is stale, and run_setting says so
-        return False
+        members = trained_member_count(final)
+    except ValueError as err:
+        return f"its member count is unknown ({err}); delete {final} to train the setting again"
+    if members > B:
+        return (
+            f"{final} holds {members} members and an ensemble only grows; set B back to {members}"
+        )
+    return None
 
 
 def _setting_record(exp: ExpConfig, setting: Setting) -> dict:
@@ -1039,7 +1056,8 @@ def run_setting(
             "ROOT or use a fresh one."
         )
     if status == "done":
-        if stage == "train":  # an extension interrupted after its append, or backed out
+        if stage == "train":  # what an extension interrupted after its append (or backed out) left
+            remove_stale_checkpoints(paths.train, train_hash(cfg), log)
             remove_staging(paths.train, log)
         log(f"setting {index} ({directory}) already done ({stage})")
         return

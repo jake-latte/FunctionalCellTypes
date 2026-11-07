@@ -24,6 +24,7 @@ from fct.cache import (
     cache_paths,
     latest_checkpoint,
     load_artefact,
+    read_config_hash,
     read_field,
     save_artefact,
     write_checkpoint,
@@ -859,13 +860,21 @@ def remove_staging(
             log(f"removed the staging directory {directory}")
 
 
-def _remove_checkpoints(train_dir: Path, log: Callable[[str], None]) -> None:
-    """Delete, logging each, the periodic checkpoints of the run that wrote final.pt: once
-    final.pt holds more members they carry the hash of a config that is no longer the
-    setting's, and nothing resumes from them."""
+def remove_stale_checkpoints(
+    train_dir: Path, current_hash: str, log: Callable[[str], None] = print
+) -> None:
+    """Delete, logging each, the periodic checkpoints in `train_dir` stamped with another hash
+    than `current_hash`, the hash of the final.pt beside them. After an extension these are the
+    old run's (stamped for b0 members): nothing resumes from them. A checkpoint of the current
+    hash (a finished run's last) and one that cannot be read are left alone."""
     for ckpt in sorted(Path(train_dir).glob("ckpt_*.pt")):
-        ckpt.unlink()
-        log(f"removed the checkpoint {ckpt}, stamped for the ensemble before the extension")
+        try:
+            found = read_config_hash(ckpt)
+        except ValueError:  # unreadable: not known to be another run's, so not ours to delete
+            continue
+        if found != current_hash:
+            ckpt.unlink()
+            log(f"removed the checkpoint {ckpt}, stamped for another config than final.pt's")
 
 
 def extension_seed(seed: int, b0: int) -> int:
@@ -1083,8 +1092,10 @@ def extend_trained(
     `extension_seed`, so the new members are new samples of the same law, not bit for bit.
 
     Then final.pt is replaced by `append_members` stamped with `cfg`'s hash, the old run's
-    periodic checkpoints (stamped with the b0 hash) and the staging directory are deleted, each
-    logged, and the ensemble of B and its history are returned."""
+    periodic checkpoints (stamped with the b0 hash; `remove_stale_checkpoints`) and the staging
+    directory are deleted, each logged, and the ensemble of B and its history are returned. A
+    crash after the replacement leaves a done setting with some of these behind; `run_setting`
+    removes them the next time it finds the setting done."""
     train_dir = cache_paths(cache_dir).train
     final = train_dir / "final.pt"
     b0, B = trained_member_count(final), cfg.net.B
@@ -1100,7 +1111,7 @@ def extend_trained(
     staged = _load_payload(staging / "final.pt", staging_cfg, cpu)
     merged = append_members(_without_hash(old), _without_hash(staged))
     save_artefact(final, merged, train_hash(cfg))
-    _remove_checkpoints(train_dir, log)
+    remove_stale_checkpoints(train_dir, train_hash(cfg), log)
     remove_staging(train_dir, log)
     device, dtype = resolve_device(cfg), resolve_dtype(cfg.dtype)
     return _net_from_payload(merged, cfg, device, dtype), merged["history"]
