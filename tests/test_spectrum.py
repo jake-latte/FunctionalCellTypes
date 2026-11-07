@@ -15,7 +15,7 @@ import pytest
 import torch
 
 from fct import spectrum as sp
-from tests.spectrum_helpers import uniform_factors
+from tests.spectrum_helpers import gaussian_field, uniform_factors
 
 # The script that produced the limits note's numbers is the reference implementation of
 # half_power_q, autocorrelation and lag-1; it is a standalone check outside the fct package,
@@ -36,17 +36,6 @@ def limits():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def gaussian_field(d: torch.Tensor, n_draws: int, gen: torch.Generator) -> torch.Tensor:
-    """(n_draws, N) real stationary Gaussian fields on the ring with unitary-DFT power d_q.
-
-    t = C^{1/2} xi for white xi and the circulant C of eigenvalues d_q: in Fourier space
-    t~(q) = sqrt(d_q) xi~(q) with E|xi~(q)|^2 = 1 (random phases), so E|t~(q)|^2 = d_q. d must
-    be even in q (d_q = d_{-q}) for t to be real.
-    """
-    xi = torch.randn((n_draws, d.shape[-1]), dtype=F64, generator=gen)
-    return torch.fft.ifft(d.sqrt() * torch.fft.fft(xi, dim=-1), dim=-1).real
 
 
 def smooth_spectrum(N: int, ell: float, floor: float) -> torch.Tensor:
@@ -699,3 +688,126 @@ def test_member_mean_sem_is_the_spread_across_networks():
     torch.testing.assert_close(sem, torch.tensor([2.0 / math.sqrt(3), 0.0], dtype=F64))
     with pytest.raises(ValueError, match="at least 2"):
         sp.member_mean_sem(values[:1])
+
+
+# ------------------------------------------------------------------ bootstrap over members
+def test_bootstrap_of_the_member_mean_is_its_standard_error():
+    """For the mean itself the bootstrap SE is the plug-in std (ddof 0) / sqrt(B), so it is the
+    `member_mean_sem` of the same members times sqrt((B - 1) / B), up to resampling noise
+    (relative sqrt(1 / (2 n_boot)) = 1.1% at n_boot = 4000)."""
+    B = 200
+    values = torch.randn((B, 3), dtype=F64, generator=torch.Generator().manual_seed(0))
+    estimate, sem = sp.bootstrap_members(values, lambda m: m, n_boot=4000, seed=1)
+    mean, member_sem = sp.member_mean_sem(values)
+    torch.testing.assert_close(estimate, mean)
+    torch.testing.assert_close(sem, member_sem * math.sqrt((B - 1) / B), rtol=0.05, atol=0)
+
+
+def test_bootstrap_takes_a_statistic_of_the_mean_spectrum_batched_over_resamples():
+    """The estimate is the statistic of the member-averaged spectrum (not the mean of the
+    members' statistics); an integer statistic such as q_1/2 gets a floating SE."""
+    gen = torch.Generator().manual_seed(2)
+    d = smooth_spectrum(16, 2.0, 0.01)
+    spectra = sp.power_spectrum(gaussian_field(d, 64, gen))  # (64, 16), one per member
+    estimate, sem = sp.bootstrap_members(spectra, sp.half_power_q, n_boot=200)
+    assert int(estimate) == sp.half_power_q(spectra.mean(0))
+    assert sem.is_floating_point() and sem.shape == ()
+
+    def share0(m: torch.Tensor) -> torch.Tensor:
+        return m[..., 0] / m.sum(-1)
+
+    estimate, _ = sp.bootstrap_members(spectra, share0, n_boot=200)
+    torch.testing.assert_close(estimate, share0(spectra.mean(0)))
+
+
+def test_bootstrap_is_seeded_and_leaves_the_global_rng_alone():
+    values = torch.randn((10, 4), dtype=F64, generator=torch.Generator().manual_seed(3))
+    state = torch.get_rng_state()
+    first = sp.bootstrap_members(values, lambda m: m.sum(-1), n_boot=50, seed=7)
+    assert torch.equal(torch.get_rng_state(), state)
+    again = sp.bootstrap_members(values, lambda m: m.sum(-1), n_boot=50, seed=7)
+    other = sp.bootstrap_members(values, lambda m: m.sum(-1), n_boot=50, seed=8)
+    assert torch.equal(first[1], again[1]) and not torch.equal(first[1], other[1])
+
+
+@pytest.mark.parametrize(
+    ("values", "statistic", "n_boot", "match"),
+    [
+        (torch.ones((1, 3), dtype=F64), lambda m: m, 10, "at least 2"),
+        (torch.ones((4, 3), dtype=F64), lambda m: m, 1, "n_boot"),
+        (torch.ones((4, 3), dtype=F64), lambda m: m.sum(), 10, "batch"),
+        (torch.ones(4, dtype=torch.int64), lambda m: m, 10, "floating"),
+    ],
+    ids=["one-member", "one-resample", "unbatched-statistic", "integer-values"],
+)
+def test_bootstrap_rejects_bad_inputs(values, statistic, n_boot, match):
+    with pytest.raises(ValueError, match=match):
+        sp.bootstrap_members(values, statistic, n_boot=n_boot)
+
+
+# ------------------------------------------------------------------ band share
+def test_band_share_is_the_power_within_q_b_over_the_total():
+    d = torch.arange(1.0, 9.0, dtype=F64)  # N = 8, FFT order q = 0, 1, 2, 3, 4, -3, -2, -1
+    # q_b = round(3 * 8 / 64) = 0 for N = 8, so give q_b explicitly here
+    assert sp.band_share(d, q_band=1) == pytest.approx((1 + 2 + 8) / 36)
+    assert sp.band_share(d, q_band=0) == pytest.approx(1 / 36)
+    assert sp.band_share(d, q_band=4) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("N", "q_band"), [(16, 1), (32, 2), (64, 3), (96, 5), (128, 6), (256, 12), (512, 24)]
+)
+def test_band_share_scales_its_band_with_the_ring(N, q_band):
+    """q_b = floor(3 N / 64 + 1/2): |q| <= 3 at N = 64, the same fraction of the ring at every
+    N, rounded half up (3 N / 64 = 1.5 at N = 32 and 4.5 at N = 96)."""
+    assert sp.band_half_width(N) == q_band
+    d = smooth_spectrum(N, 2.0, 0.0)
+    assert sp.band_share(d) == pytest.approx(sp.band_share(d, q_band=q_band))
+
+
+def test_band_share_batches_over_leading_dims_and_keeps_the_dtype():
+    gen = torch.Generator().manual_seed(4)
+    d = torch.rand((3, 2, 64), dtype=torch.float32, generator=gen)
+    shares = sp.band_share(d)
+    assert shares.shape == (3, 2) and shares.dtype == torch.float32
+    torch.testing.assert_close(shares[1, 0], torch.as_tensor(sp.band_share(d[1, 0])))
+
+
+@pytest.mark.parametrize(
+    ("d", "q_band", "match"),
+    [
+        (torch.ones(7, dtype=F64), None, "even"),
+        (torch.zeros(8, dtype=F64), None, "positive total"),
+        (torch.ones(8, dtype=F64), -1, "q_band"),
+        (torch.ones(8, dtype=F64), 5, "q_band"),
+    ],
+    ids=["odd-N", "zero-power", "negative-band", "band-past-nyquist"],
+)
+def test_band_share_rejects_bad_inputs(d, q_band, match):
+    with pytest.raises(ValueError, match=match):
+        sp.band_share(d, q_band=q_band)
+
+
+def test_the_band_mask_is_the_band_of_band_share():
+    mask = sp.band_mask(64)
+    assert mask.sum() == 7 and mask[[0, 1, 2, 3, 61, 62, 63]].all()
+    d = smooth_spectrum(64, 2.0, 0.1)
+    assert sp.band_share(d) == pytest.approx(float(d[mask].sum() / d.sum()))
+
+
+def test_bootstrap_resamples_are_the_means_of_resampled_members():
+    """The counts-matrix resampling gives what indexing the members would: resampled means of
+    the identity statistic have the members' spread, and equal members give zero SE."""
+    values = torch.arange(40.0, dtype=F64).reshape(20, 2)
+    _, sem = sp.bootstrap_members(torch.ones((20, 2), dtype=F64) * 3.0, lambda m: m, 50)
+    assert torch.equal(sem, torch.zeros(2, dtype=F64))
+    _, sem = sp.bootstrap_members(values, lambda m: m, 4000, seed=3)
+    torch.testing.assert_close(sem, values.std(0, correction=0) / 20**0.5, rtol=0.05, atol=0)
+
+
+def test_bootstrap_resamples_are_what_bootstrap_members_summarises():
+    values = torch.randn((30, 4), dtype=F64, generator=torch.Generator().manual_seed(6))
+    resampled = sp.bootstrap_resamples(values, lambda m: m.sum(-1), n_boot=200, seed=2)
+    _, sem = sp.bootstrap_members(values, lambda m: m.sum(-1), n_boot=200, seed=2)
+    assert resampled.shape == (200,)
+    torch.testing.assert_close(resampled.std(0), sem)

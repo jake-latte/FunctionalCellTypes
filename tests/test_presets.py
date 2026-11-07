@@ -7,9 +7,11 @@ import shutil
 from pathlib import Path
 
 import pytest
+import torch
 
 import fct.exp
 from fct.cli import main
+from fct.data import make_dataset
 from fct.exp import (
     ExpConfig,
     PresetError,
@@ -29,11 +31,24 @@ from fct.exp import (
     with_axes,
 )
 from fct.exp_migrate import migrate_exp
+from fct.spatial import build_spaces, parameter_factors
+from fct.train import (
+    compute_loss,
+    largest_hessian_eigenvalue,
+    loss_coefficients,
+    make_net_from_config,
+    make_weight_penalty,
+    prior_coefficient,
+    prior_stiffness,
+)
 from tests.report_helpers import QUIET
 
 PACKAGED = [
     "full",
     "lambda_exp",
+    "linear_ring",
+    "linear_ring_equivalence",
+    "linear_ring_tiny",
     "modularity",
     "phase_transition",
     "spatial_exp",
@@ -74,7 +89,7 @@ def _edit(path: Path, **changes) -> None:
 
 
 # ---------------------------------------------------------------------------- the packaged files
-def test_the_packaged_presets_are_the_eight_base_experiments():
+def test_the_packaged_presets_are_the_eleven_base_experiments():
     assert preset_names() == PACKAGED
 
 
@@ -93,6 +108,105 @@ def test_lambda_exp_is_four_axes_of_which_two_hold_seven_log_spaced_values():
     exp = preset("lambda_exp")
     assert len(expand(exp)) == 2 * 2 * 7 * 7
     assert [len(v) for v in exp.axes.values()] == [2, 2, 7, 7]
+
+
+LINEAR_RING = ["linear_ring", "linear_ring_equivalence", "linear_ring_tiny"]
+PARAMETRISATION = "spatial.parametrisation"
+
+
+@pytest.mark.parametrize("name", LINEAR_RING)
+def test_the_linear_ring_presets_are_the_linear_theory_at_sigma_zero(name):
+    """The dictionary of the experiment plan at sigma = 0: no input noise field, deterministic
+    grids, latents on [0, 1], an orthonormal teacher, the spectrum monitor, every path started
+    from the prior, B a shared field of at least 16."""
+    exp = preset(name)
+    assert "noise" not in json.dumps(exp.model_dump())
+    assert (exp.task, exp.phi, exp.L, exp.g, exp.dtype) == (
+        "linear_teacher",
+        "id",
+        1,
+        1.0,
+        "float64",
+    )
+    assert (exp.optimizer, exp.monitor_kind, exp.init) == ("sgld", "spectrum", "prior")
+    assert (exp.weight_lambda, exp.rate_lambda) == (1.0, 0.0)
+    teacher = exp.linear_teacher
+    assert (teacher.latent_min, teacher.latent_max, teacher.teacher) == (0.0, 1.0, "orthonormal")
+    assert exp.B >= 16 and "net.B" not in exp.axes
+    assert exp.spatial.box == exp.N  # length scales in sites
+    for population in (exp.spatial.input, exp.spatial.hidden, exp.spatial.output):
+        assert population.embedding.kind == "grid"
+    assert exp.spatial.input.kernel.length_scale == exp.spatial.output.kernel.length_scale == 0
+
+
+def test_linear_ring_and_its_penalty_twin_differ_only_in_the_path_lr_and_run_length():
+    """Two ROOTs for the equivalence of the parametrisations at the base point: the same setting
+    (one beta axis, same data, net and loss) on the whitened and the penalty path."""
+    whitened, penalty = preset("linear_ring"), preset("linear_ring_equivalence")
+    assert whitened.spatial.parametrisation == "whitened"
+    assert penalty.spatial.parametrisation == "penalty"
+    assert whitened.axes == penalty.axes == {"train.beta": [10.0]}
+    path_fields = {"spatial", "lr", "n_epochs", "log_int", "save_int", "monitor_int"}
+    shared = {"description", *path_fields}
+    assert whitened.model_dump(exclude=shared) == penalty.model_dump(exclude=shared)
+    assert whitened.spatial.model_copy(update={"parametrisation": "penalty"}) == penalty.spatial
+
+
+def test_the_pipeline_preset_pairs_lr_with_the_parametrisation():
+    exp = preset("linear_ring_tiny")
+    settings = expand(exp)
+    assert list(exp.axes) == [PARAMETRISATION, "train.lr"]
+    assert settings[0].axes == {PARAMETRISATION: "penalty", "train.lr": exp.axes["train.lr"][0]}
+    assert settings[3].axes == {PARAMETRISATION: "whitened", "train.lr": exp.axes["train.lr"][1]}
+
+
+# Each path's run-start check value as a fraction of the value it refuses (1): penalty lr *
+# weight_lambda / (2 beta) * stiffness, whitened lr * lambda_max(loss Hessian) at the prior
+# initial state (the only state it is checked at; at stationarity linear_ring's is 1.14, the
+# description says so). The real runs take 0.9 of each bound; the pipeline preset keeps both
+# far inside. Keys: (preset, setting index).
+PENALTY_CHECK = {("linear_ring_equivalence", 0): (0.89, 0.9), ("linear_ring_tiny", 0): (0.2, 0.25)}
+WHITENED_CHECK = {("linear_ring", 0): (0.85, 0.9), ("linear_ring_tiny", 3): (0.0, 0.05)}
+
+
+def _whitened_check_value(exp: ExpConfig, index: int) -> float:
+    """lr * lambda_max(loss Hessian) of a setting at its initial net, the quantity `fct.train`
+    checks when the run starts (the ensemble's largest member value)."""
+    cfg = setting_config(exp, expand(exp)[index])
+    dataset = make_dataset(cfg.data, torch.device("cpu"), torch.float64)
+    x, y = dataset.x, dataset.y
+    net = make_net_from_config(cfg, x.shape[1], y.shape[1], torch.device("cpu"), torch.float64)
+    penalty = make_weight_penalty(cfg, net)
+    coefficients = loss_coefficients(cfg.train)
+    lam = largest_hessian_eigenvalue(
+        lambda: compute_loss(net, x, y, coefficients, penalty)[0], net.parameters()
+    )
+    return cfg.train.lr * lam
+
+
+@pytest.mark.parametrize(("name", "index"), sorted(PENALTY_CHECK))
+def test_the_penalty_path_runs_at_its_stated_fraction_of_its_check(name, index):
+    cfg = setting_config(preset(name), expand(preset(name))[index])
+    assert cfg.spatial.parametrisation == "penalty"
+    factors = parameter_factors(
+        build_spaces(cfg.spatial, m=cfg.data.D_in, N=cfg.net.N, L=1, n_out=cfg.data.D_in)
+    )
+    value = cfg.train.lr * prior_coefficient(cfg.train) * prior_stiffness(factors)
+    low, high = PENALTY_CHECK[(name, index)]
+    assert low <= value <= high
+
+
+@pytest.mark.parametrize(("name", "index"), sorted(WHITENED_CHECK))
+def test_the_whitened_path_runs_at_its_stated_fraction_of_its_check(name, index):
+    exp = preset(name)
+    assert setting_config(exp, expand(exp)[index]).spatial.parametrisation == "whitened"
+    low, high = WHITENED_CHECK[(name, index)]
+    assert low <= _whitened_check_value(exp, index) <= high
+
+
+def test_off_the_diagonal_the_penalty_at_the_whitened_lr_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="diverges on the spatial prior"):
+        run_setting(preset("linear_ring_tiny"), 1, tmp_path, **QUIET)
 
 
 # ---------------------------------------------------------------------------- editing a folder

@@ -1075,7 +1075,7 @@
   ]
  },
  "phase_transition": {
-  "exp_hash": "4869d26c07d2",
+  "exp_hash": "3b95e63b2256",
   "n_settings": 20,
   "train": [
    "f524ed04557f",
@@ -1122,26 +1122,74 @@
    "2927df141d7a"
   ],
   "relpaths": [
-   "linear_teacher/s0000_d1_lambda_max0.1_B8",
-   "linear_teacher/s0001_d1_lambda_max0.5_B8",
-   "linear_teacher/s0002_d1_lambda_max0.75_B8",
-   "linear_teacher/s0003_d1_lambda_max0.9_B8",
-   "linear_teacher/s0004_d1_lambda_max0.99_B8",
-   "linear_teacher/s0005_d2_lambda_max0.1_B8",
-   "linear_teacher/s0006_d2_lambda_max0.5_B8",
-   "linear_teacher/s0007_d2_lambda_max0.75_B8",
-   "linear_teacher/s0008_d2_lambda_max0.9_B8",
-   "linear_teacher/s0009_d2_lambda_max0.99_B8",
-   "linear_teacher/s0010_d3_lambda_max0.1_B8",
-   "linear_teacher/s0011_d3_lambda_max0.5_B8",
-   "linear_teacher/s0012_d3_lambda_max0.75_B8",
-   "linear_teacher/s0013_d3_lambda_max0.9_B8",
-   "linear_teacher/s0014_d3_lambda_max0.99_B8",
-   "linear_teacher/s0015_d4_lambda_max0.1_B8",
-   "linear_teacher/s0016_d4_lambda_max0.5_B8",
-   "linear_teacher/s0017_d4_lambda_max0.75_B8",
-   "linear_teacher/s0018_d4_lambda_max0.9_B8",
-   "linear_teacher/s0019_d4_lambda_max0.99_B8"
+   "linear_teacher/s0000_d1_lambda_max0.1",
+   "linear_teacher/s0001_d1_lambda_max0.5",
+   "linear_teacher/s0002_d1_lambda_max0.75",
+   "linear_teacher/s0003_d1_lambda_max0.9",
+   "linear_teacher/s0004_d1_lambda_max0.99",
+   "linear_teacher/s0005_d2_lambda_max0.1",
+   "linear_teacher/s0006_d2_lambda_max0.5",
+   "linear_teacher/s0007_d2_lambda_max0.75",
+   "linear_teacher/s0008_d2_lambda_max0.9",
+   "linear_teacher/s0009_d2_lambda_max0.99",
+   "linear_teacher/s0010_d3_lambda_max0.1",
+   "linear_teacher/s0011_d3_lambda_max0.5",
+   "linear_teacher/s0012_d3_lambda_max0.75",
+   "linear_teacher/s0013_d3_lambda_max0.9",
+   "linear_teacher/s0014_d3_lambda_max0.99",
+   "linear_teacher/s0015_d4_lambda_max0.1",
+   "linear_teacher/s0016_d4_lambda_max0.5",
+   "linear_teacher/s0017_d4_lambda_max0.75",
+   "linear_teacher/s0018_d4_lambda_max0.9",
+   "linear_teacher/s0019_d4_lambda_max0.99"
+  ]
+ },
+ "linear_ring": {
+  "exp_hash": "3b5402e181f5",
+  "n_settings": 1,
+  "train": [
+   "feefd18a847a"
+  ],
+  "solve": [
+   "83d5fe88b6fe"
+  ],
+  "relpaths": [
+   "linear_teacher/s0000_beta10"
+  ]
+ },
+ "linear_ring_tiny": {
+  "exp_hash": "95912920ff67",
+  "n_settings": 4,
+  "train": [
+   "69da152bf346",
+   "c85ae3f97282",
+   "4ccf74e7b02e",
+   "05837c5d1430"
+  ],
+  "solve": [
+   "d65fb10b357b",
+   "a81c18186a9a",
+   "39c74c8583ea",
+   "e458220f13b5"
+  ],
+  "relpaths": [
+   "linear_teacher/s0000_parametrisationpenalty_lr0.0006",
+   "linear_teacher/s0001_parametrisationpenalty_lr0.005",
+   "linear_teacher/s0002_parametrisationwhitened_lr0.0006",
+   "linear_teacher/s0003_parametrisationwhitened_lr0.005"
+  ]
+ },
+ "linear_ring_equivalence": {
+  "exp_hash": "3b5402e181f5",
+  "n_settings": 1,
+  "train": [
+   "1cc16a7d2162"
+  ],
+  "solve": [
+   "72bb5609e5af"
+  ],
+  "relpaths": [
+   "linear_teacher/s0000_beta10"
   ]
  }
 }

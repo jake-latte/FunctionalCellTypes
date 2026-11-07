@@ -18,7 +18,7 @@ from fct.config import Config
 from fct.model import MLP
 from fct.modularity import LayerMIRReport, layer_mir_report
 from fct.tasks import Dataset
-from fct.train import Monitor
+from fct.train import MONITOR_PREFIX, History, Monitor
 
 MIR_MONITOR_KEYS = LayerMIRReport._fields  # one source of truth for the history keys
 # The keys of a record at K >= 3 latents. The angle keys "hex" and "theta_hist" use the
@@ -120,6 +120,30 @@ def make_spectrum_monitor(dataset: Dataset, cfg: Config) -> Monitor:
             return spectrum_record(net(dataset.x)[0], U)
 
     return monitor
+
+
+def spectrum_records(history: History) -> Tensor:
+    """The spectra a spectrum-monitored run recorded, as one (R, B, L, K + 1, N) tensor.
+
+    R records in `monitor_epoch` order, B members (1 for a single network, whose history has
+    no member axis), L hidden layers, rows 0..K-1 the latent modes and row K the null mean,
+    q in FFT order; float32, as recorded. The last record is the final state (`fct.train.train`
+    monitors once more after the last step).
+    """
+    key = f"{MONITOR_PREFIX}spectrum"
+    if key not in history:
+        raise ValueError(
+            f"the history has no {key!r}: it was not recorded by the spectrum monitor "
+            '(train.monitor_kind = "spectrum")'
+        )
+    entries = history[key]
+    if not entries:
+        raise ValueError(f"the history's {key!r} holds no records")
+    if isinstance(entries[0][0], Tensor):  # a single network: a list over layers per record
+        entries = [[layers] for layers in entries]
+    return torch.stack(
+        [torch.stack([torch.stack(layers) for layers in members]) for members in entries]
+    )
 
 
 _MONITOR_MAKERS: dict[str, Callable[[Dataset, Config], Monitor]] = {

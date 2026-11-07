@@ -1,15 +1,19 @@
 """Every preset file keeps the hashes the Python presets gave.
 
 `fixtures/preset_hashes.json` was computed with the code that defined the presets in Python
-(`lambda_exp` at its 7 log-spaced points per axis): for each preset the
-experiment hash, and for each setting its train hash (`section_hash("data", "net", "train")`),
-its mean-field (solve) hash and its directory. The train and solve hashes were recomputed when
-the data section's `latent_range` became `latent_min` / `latent_max` (a field rename, so every
-hash holding the data section moved), and those of every setting with train.rate_lambda > 0
-when LOSS_VERSION 5 scaled the rate penalty by 1 / (2 beta) (a rate_lambda = 0 setting hashes
-version 4, `fct.config.hashed_loss_version`, and kept its hashes); the experiment hashes and
-directories are the original ones. A renamed or restructured experiment must not move any of them, or finished runs would be
-taken for stale.
+(`lambda_exp` at its 7 log-spaced points per axis): for each preset the experiment hash, and
+for each setting its train hash (`section_hash("data", "net", "train")`), its mean-field
+(solve) hash and its directory. The train and solve hashes were recomputed when the data
+section's `latent_range` became `latent_min` / `latent_max` (a field rename, so every hash
+holding the data section moved), and those of every setting with train.rate_lambda > 0 when
+LOSS_VERSION 5 scaled the rate penalty by 1 / (2 beta) (a rate_lambda = 0 setting hashes
+version 4, `fct.config.hashed_loss_version`, and kept its hashes). The experiment hashes and
+directories are the original ones, except phase_transition's: its ensemble size moved from a
+one-value `net.B` axis to the shared field `B` so that `exp extend` can grow it, which moved its
+experiment hash and dropped `_B8` from its directory names, while every train and solve hash
+stayed. The linear-ring presets, which never had a Python definition, are pinned as their files
+first built them. A renamed or restructured experiment must not move any of them, or finished
+runs would be taken for stale.
 """
 
 import hashlib
@@ -34,16 +38,21 @@ from fct.exp import (
 from fct.meanfield import meanfield_hash
 from tests.pinned_runs import LEGACY_CONFIG_FILE
 
-PINNED = json.loads((Path(__file__).parent / "fixtures" / "preset_hashes.json").read_text())
+PINS_FILE = Path(__file__).parent / "fixtures" / "preset_hashes.json"
 
 
-def test_the_pins_cover_every_preset():
-    assert set(PINNED) == set(preset_names())
+@pytest.fixture(scope="module")
+def pins() -> dict:
+    return json.loads(PINS_FILE.read_text())
 
 
-@pytest.mark.parametrize("name", sorted(PINNED))
-def test_a_preset_keeps_its_hashes(name):
-    pinned = PINNED[name]
+def test_the_pins_cover_every_preset(pins):
+    assert sorted(pins) == preset_names()
+
+
+@pytest.mark.parametrize("name", preset_names())
+def test_a_preset_keeps_its_hashes(name, pins):
+    pinned = pins[name]
     exp = preset(name)
     settings = expand(exp)
     configs = [setting_config(exp, s) for s in settings]
@@ -111,16 +120,19 @@ def _data_hash_without_teacher(cfg: Config) -> str:
     return hashlib.sha256(json.dumps(hashed, sort_keys=True).encode()).hexdigest()[:12]
 
 
-@pytest.mark.parametrize("name", [*sorted(PINNED), "legacy_config"])
-def test_the_gaussian_teacher_hashes_as_a_data_section_without_the_field(name):
-    # Fails if section_hash keeps `teacher` for the Gaussian teacher. The train, solve and
-    # result hashes that include the data are guarded by the pins (preset_hashes.json,
-    # meanfield_hashes.json), which hold no `teacher`.
+@pytest.mark.parametrize("name", [*preset_names(), "legacy_config"])
+def test_only_an_orthonormal_teacher_enters_the_data_hash(name):
+    # Fails if section_hash keeps `teacher` for the Gaussian teacher, or drops it for the
+    # orthonormal one (the linear-ring presets). The train, solve and result hashes that include
+    # the data are guarded by the pins (preset_hashes.json, meanfield_hashes.json).
     if name == "legacy_config":
         configs = [load_config(LEGACY_CONFIG_FILE)]
     else:
         configs = [setting_config(preset(name), s) for s in expand(preset(name))]
     for cfg in configs:
+        if cfg.data.teacher == "orthonormal":
+            assert cfg.section_hash("data") != _data_hash_without_teacher(cfg)
+            continue
         assert cfg.data.teacher == "gaussian"
         assert cfg.section_hash("data") == _data_hash_without_teacher(cfg)
 
