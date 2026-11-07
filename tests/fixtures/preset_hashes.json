@@ -1183,10 +1183,10 @@
   "exp_hash": "3b5402e181f5",
   "n_settings": 1,
   "train": [
-   "59f431d22e83"
+   "1cc16a7d2162"
   ],
   "solve": [
-   "525176ccec08"
+   "72bb5609e5af"
   ],
   "relpaths": [
    "linear_teacher/s0000_beta10"

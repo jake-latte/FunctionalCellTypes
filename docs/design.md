@@ -1181,10 +1181,12 @@ The analysis is `fct/linear_ring.py`.
   powers. The q = 0 share and q_1/2 rest on one or two frequencies and are reported only. The frequencies the
   penalty floor raises are removed from both paths' spectra first (`linear_ring.unfloored_frequencies`): the
   penalty path inflates them by its Euler factor, which `predicted_spectra` does not model.
-- The rules (`linear_ring.FALSIFY_N_SE`, `FOLLOW_UP_FACTOR`, `disagrees`): an agreement test fails when
-  |observed - predicted| exceeds 3 bootstrap SEs at the run's B, and the failure counts only if it persists after
-  `exp extend` to 4B members. A regime is accurate when |exact - predicted| is at most one SE at B_max, the largest B
-  run, the fourfold extension included. The pipeline test deliberately uses a fixed rule instead
+- The rules (`linear_ring.disagrees`, `paths_disagree`, `budget_se`, `regime_accurate`): an agreement test fails
+  when |observed - predicted| exceeds FALSIFY_N_SE bootstrap SEs at the run's B, and the failure counts only if it
+  persists after `exp extend` to FOLLOW_UP_FACTOR times B; two paths disagree when their deviations from their own
+  predictions differ by more than EQUIVALENCE_N_SE combined SEs. A regime is accurate when |exact - predicted| is at
+  most one SE at B_max, the largest B run, the follow-up extension included (`budget_se`), which is also the bound a
+  run's remaining relaxation must stay under. The pipeline test deliberately uses a fixed rule instead
   (`pipeline_bounds`: tolerance and largest accepted bootstrap SE in delta-method SEs), so that it needs no
   follow-up run.
 - `predicted_spectra` is the N -> infinity mean-field limit: it leaves out the readout's (n/2) log det C~ term, an
@@ -1207,8 +1209,13 @@ ring_statistics(N, ell, keep=None) -> f((..., K, N)) -> (..., 3K + 1);  law_stat
 member_covariance(D) -> (K, N, N); delta_method_se(law, B=None) -> (3K + 1,)
 estimate(member_spectra (B, K, N), law, seed=0) -> (values, bootstrap SE)
 map_correlation(first (B, K, N), last) -> (B,)                    # 1 for a frozen sampler, 0 for independent maps
-relaxation_fit(epochs (R,), records (R, B, K, N), statistics, start=None, n_boot=200) -> RelaxationFit(asymptote, amplitude, tau, deficit, deficit_se)
-is_stationary(fit, se_max_b) -> (S,) bool  # |deficit| and its SE both below se_max_b; disagrees(values, se, predicted) -> (S,) bool; pipeline_bounds(law)
+relaxation_fit(epochs (R,), records (R, B, K, N), statistics, start=None, n_boot=RELAXATION_N_BOOT, seed=0) -> RelaxationFit(asymptote, amplitude, tau, deficit, deficit_se)
+budget_se(law) -> (3K + 1,)                                       # one delta-method SE at B_max = FOLLOW_UP_FACTOR x B
+is_stationary(fit, budget) -> (S,) bool                           # |deficit| and its SE both below budget
+regime_accurate(exact, law) -> (3K + 1,) bool                     # |exact - predicted| <= budget_se(law)
+disagrees(values, se, predicted) -> (S,) bool                     # beyond FALSIFY_N_SE bootstrap SEs
+paths_disagree((values, se, predicted), (values, se, predicted)) -> (S,) bool   # deviations beyond EQUIVALENCE_N_SE combined SEs
+pipeline_bounds(law) -> (largest bootstrap SE, tolerance)         # PIPELINE_SE_MARGIN and PIPELINE_N_SE x that, in delta-method SEs
 ```
 
 The pipeline test (`tests/test_linear_ring_smoke.py`, marked slow, about a minute on one CPU thread) runs both

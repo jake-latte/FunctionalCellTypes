@@ -39,32 +39,16 @@ from fct.meanfield import meanfield_hash
 from tests.pinned_runs import LEGACY_CONFIG_FILE
 
 PINS_FILE = Path(__file__).parent / "fixtures" / "preset_hashes.json"
-# The pinned presets, listed here so that collecting the tests reads no file.
-PINNED_PRESETS = [
-    "full",
-    "lambda_exp",
-    "linear_ring",
-    "linear_ring_equivalence",
-    "linear_ring_tiny",
-    "modularity",
-    "phase_transition",
-    "spatial_exp",
-    "spatial_n_scan",
-    "spatial_tiny",
-    "tiny",
-]
-
-
 @pytest.fixture(scope="module")
 def pins() -> dict:
     return json.loads(PINS_FILE.read_text())
 
 
 def test_the_pins_cover_every_preset(pins):
-    assert sorted(pins) == PINNED_PRESETS == preset_names()
+    assert sorted(pins) == preset_names()
 
 
-@pytest.mark.parametrize("name", PINNED_PRESETS)
+@pytest.mark.parametrize("name", preset_names())
 def test_a_preset_keeps_its_hashes(name, pins):
     pinned = pins[name]
     exp = preset(name)
@@ -134,7 +118,7 @@ def _data_hash_without_teacher(cfg: Config) -> str:
     return hashlib.sha256(json.dumps(hashed, sort_keys=True).encode()).hexdigest()[:12]
 
 
-@pytest.mark.parametrize("name", [*PINNED_PRESETS, "legacy_config"])
+@pytest.mark.parametrize("name", [*preset_names(), "legacy_config"])
 def test_only_an_orthonormal_teacher_enters_the_data_hash(name):
     # Fails if section_hash keeps `teacher` for the Gaussian teacher, or drops it for the
     # orthonormal one (the linear-ring presets). The train, solve and result hashes that include
