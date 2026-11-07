@@ -47,8 +47,8 @@ interrupted one, and changing a solver setting re-solves without retraining.
 The loss puts the prior $\\frac{\\lambda_w}{2\\beta}\\sum W^2$
 on the squared weights, so at equilibrium each weight has variance $1 / \\lambda_w$
 for every $\\beta$; the readout acts as a Gaussian likelihood whose ridge is
-$\\alpha = \\lambda_w\\,P\\,m / \\beta$, the rate penalty is a tilt
-$2\\beta\\,\\texttt{RATE\\_LAMBDA}$, and the data term of the action has prefactor
+$\\alpha = \\lambda_w\\,P\\,m / \\beta$, the rate penalty
+$\\frac{\\texttt{RATE\\_LAMBDA}}{2\\beta}\\sum\\phi^2$ is a tilt $\\texttt{RATE\\_LAMBDA}$, and the data term of the action has prefactor
 $\\lambda_w / 2$ (one half only for unit prior scale). The solver's defaults are exactly these four constants (`fct.meanfield.network_constants`), so
 the theory is that of the distribution the net was sampled from.
 
@@ -86,7 +86,7 @@ G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights
 PRIOR_COEFF = 1e-2  # coefficient of the sum of squared weights in the loss
-RATE_LAMBDA = 1e-3  # rate penalty"""
+RATE_LAMBDA = 1e-3  # rate coefficient r: the loss carries r / (2 beta) times sum phi^2"""
 
 TRAINING = """OPTIMIZER = "sgld"  # "sgld" (Langevin noise of variance 2 * LR / BETA per step) or "adam"
 BETA = 10.0  # inverse temperature: read by SGLD, and the beta of the mean-field theory
