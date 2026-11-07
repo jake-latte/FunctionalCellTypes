@@ -42,11 +42,18 @@ OLD_EXP_JSON = {
     "spatial_tiny": "d08077ea9dd2638ddb737b7509ff22c3287e68dc8f81888cf53eea141a7fcd28",
     "spatial_n_scan": "913e4c32aa4bc666f47703c9ef6ca5198686cf0d718fc3500b3d3a5f265ab6fd",
     "spatial_exp": "b6ab301de6953a037275e4c4a7fdab1672aac9d756c764c85be943e8e626adf6",
-    "phase_transition": "e0e498cc65190b09e7c8b09389aaef54a05f067ecaa596cc00ef26d1082bdae2",
 }
-# Presets written as files from the start: no Python preset wrote an exp.json for them, so they
-# are pinned only by tests/fixtures/preset_hashes.json.
-FILE_ONLY_PRESETS = {"linear_ring", "linear_ring_tiny"}
+# Presets whose exp.json is not the Python-era text plus a description, pinned only by
+# tests/fixtures/preset_hashes.json: the linear-ring presets were written as files from the
+# start, and phase_transition's ensemble size moved from a one-value `net.B` axis to the shared
+# field `B` (so that `exp extend` can grow it), which changes its text, exp hash and directory
+# names but not a single training config.
+NOT_PYTHON_ERA_TEXT = {
+    "linear_ring",
+    "linear_ring_equivalence",
+    "linear_ring_tiny",
+    "phase_transition",
+}
 NEW_EXP_JSON = {
     "tiny": "5a5b65629334c478eb9a0c13f2401182a4856bd5e467e877bcef7afa84e65a08",
     "full": "ae24961b09720fb9439e140d34041a108c7f067982ad9d8442da42d798db810f",
@@ -55,7 +62,6 @@ NEW_EXP_JSON = {
     "spatial_tiny": "6afc7b586b1eaef6b72090785c10d24d6a6f08e1dcf32bcc8a4333174cfe71b7",
     "spatial_n_scan": "dc50b8aec339769a35d9f146cda9e858f9354e84105f705d2923f8b67ea9a564",
     "spatial_exp": "3a5126b0509804ecd716a675c1e12d47b564dc3b89aab283213cc1476040c15a",
-    "phase_transition": "d856bc439c305fa21c4508ec52ce8df3366803ba885a63a69258745017dc25b2",
 }
 
 
@@ -109,8 +115,14 @@ def test_the_exp_json_written_by_the_cli_loads_back_to_the_preset(tmp_path):
     assert exp_hash(loaded) == exp_hash(preset("phase_transition"))
 
 
-def test_the_pins_cover_every_preset_that_had_a_python_definition():
-    assert set(NEW_EXP_JSON) == set(OLD_EXP_JSON) == set(preset_names()) - FILE_ONLY_PRESETS
+def test_the_pins_cover_every_preset_whose_text_is_the_python_era_one():
+    assert set(NEW_EXP_JSON) == set(OLD_EXP_JSON) == set(preset_names()) - NOT_PYTHON_ERA_TEXT
+
+
+def test_the_ensemble_size_is_a_shared_field_so_exp_extend_can_grow_it():
+    exp = preset("phase_transition")
+    assert exp.B == 8 and "net.B" not in exp.axes
+    assert {setting_config(exp, s).net.B for s in expand(exp)} == {8}
 
 
 @pytest.mark.parametrize("name", sorted(NEW_EXP_JSON))

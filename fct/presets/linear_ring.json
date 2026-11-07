@@ -1,12 +1,12 @@
 {
-  "description": "The linear ring of latex/notes/fct_experiment_plan.tex at sigma^2 = 0, sized for the large-N regime of fct.linear_theory: N = 512 hidden units, hidden kernel length_scale 2 sites (box = N), P = 256 patterns; linear_teacher with m = n = 4 features, K = 3 latents uniform on [0, 1] and an orthonormal teacher; L = 1, phi id, g 1; k0 = k1 = 1 (input and output kernels of length_scale 0 and amplitude 1, weight_lambda 1); r = rate_lambda = 0; beta 10 (target condensation, tau = 0.77, 0.21, 0.15); SGLD, float64; every population on the deterministic grid. B = 32 members, one sample per member (its final state); the records (every 10^4 epochs) feed only a drift check. predicted_spectra is the N -> infinity mean-field limit: it leaves out the readout's (n/2) log det term, an O(n/N) correction, so N/n is set by the falsifiers. Exact posterior (a Gibbs sampler, 512 chains) against the prediction, modes 1/2/3: R(1)/R(0) 0.9343/0.8916/0.8890 against 0.9350/0.8924/0.8896, R(2)/R(0) 0.7736/0.6352/0.6268 against 0.7757/0.6378/0.6289, band share (|q| <= 24) 0.664/0.483/0.474 against 0.668/0.486/0.476, Gaussian width at 2 sites 2.79/2.10/2.07 against 2.81/2.11/2.08, mode-1/mode-2 band power ratio 25.7 against 25.6. In SEs at B_max = 128 (the fourfold follow-up extension of B = 32) every primary statistic is within 0.1 to 0.8 SE, so the regime is accurate up to B_max (at N = 256 the errors would reach 1.1 SE there; at N = 16 the q = 0 power is half the predicted). The data term moves the same statistics from the prior by 33/5/3.5 SE at B = 32 (R(1)/R(0), modes 1/2/3), 31/4.7/3.3 (R(2)/R(0)), 21/3.1/2.2 (band share) and 12 (ratio), twice that at B_max. Falsified if a primary statistic of the member-averaged final-state spectrum lies further than 3 bootstrap SEs at the run's B from the prediction at this N (and the failure persists at 4B). The axes cross spatial.parametrisation [penalty, whitened] with train.lr [9e-5, 0.96], and the diagonal is the experiment: settings 0 and 3 (`exp run ROOT --index 0`, `--index 3`, or `bash jobs/fct_exp.sh ROOT --submit --index 0`); setting 1 (penalty at 0.96) is refused at run start; setting 2 (whitened at 9e-5) runs and is the lr check of the whitened result. Each lr is 0.9 of what its own run-start check accepts. Penalty (min_rel_eig 1e-6): lr weight_lambda stiffness / (2 beta) = 0.90, stiffness 1 / (min_rel_eig lambda_0) (refused at 1), which inflates the variance of the floored modes (|q| >= 215, prior variance 1e-6 lambda_0 each) by 1/(1 - 0.90) = 10x, a negligible part of the power. Whitened: lr lambda_max(loss Hessian) = 0.885 at the prior initial state (lambda_max 0.922; refused at 1), which inflates the stiffest mode, a data-carrying one, by 1/(1 - 0.44) = 1.8x and every prior-dominated mode by 1/(1 - lr / (2 beta)) = 1.05x; setting 2 measures what this does to the statistics. Run length: the whitened net relaxes within about 10^3 epochs; the penalty's slowest data-carrying direction has curvature about 1 / (beta lambda_0) = 0.02 and relaxes in about 1 / (lr x 0.02) = 6 x 10^5 epochs (an estimate, to be confirmed by the drift check), so n_epochs is 2 x 10^6. Both start from the prior (init prior, which whitened requires). Measured cost per epoch for all 32 members: about 8 ms (penalty) and 10 ms (whitened) on an RTX 4500 Ada GPU in float64, 39 and 29 ms on 8 CPU threads, so 2 x 10^6 epochs take about 4.5 and 5.5 GPU hours (22 and 16 CPU hours). Another beta or weight_lambda needs its own lr pair by the same rule (--set beta=, --axis 'train.lr=[...]') and a new regime check.",
+  "description": "The whitened base point of the linear ring at sigma^2 = 0, and the path of every sweep: N = 512, hidden length_scale 2, P = 256, m = n = 4, K = 3, beta 10 (target condensation, tau = 0.77, 0.21, 0.15), B = 32, spatial.parametrisation whitened, lr 0.96, 10^4 epochs, records every 25 epochs. linear_teacher with an orthonormal teacher and latents uniform on [0, 1]; L = 1, phi id, g 1; k0 = k1 = 1 (input and output kernels of length_scale 0 and amplitude 1, weight_lambda 1); r = rate_lambda = 0; SGLD, float64; every population on the deterministic grid with box = N, so length scales are in sites; init prior. One sample per member, its final state; statistics are read off the member-averaged final-state spectrum with bootstrap errors over members, after removing the frequencies the penalty floor raises (min_rel_eig of the top hidden eigenvalue) from both paths' spectra; the records feed only the relaxation diagnostic. Regime (exact posterior from a Gibbs sampler run off-repo, 512 chains, against predicted_spectra, modes 1/2/3): R(1)/R(0) 0.9343/0.8916/0.8890 against 0.9350/0.8924/0.8896, R(2)/R(0) 0.7736/0.6352/0.6268 against 0.7757/0.6378/0.6289, band share (|q| <= 24) 0.664/0.483/0.474 against 0.668/0.486/0.476, Gaussian width at 2 sites 2.79/2.10/2.07 against 2.81/2.11/2.08, mode-1/mode-2 band power ratio 25.7 against 25.6: within 0.1 to 0.8 SE at B_max = 128 (B = 32 and its fourfold extension), the accuracy budget of one SE at B_max. predicted_spectra is the N -> infinity limit and leaves out the readout's (n/2) log det term, an O(n/N) correction; at N = 256 these errors would reach 1.1 SE at B_max. The data term moves the same statistics from the prior by 33/5/3.5 SE at B = 32 (R(1)/R(0)), 31/4.7/3.3 (R(2)/R(0)), 21/3.1/2.2 (band share) and 12 (ratio). Rule: an agreement test fails when |observed - predicted| exceeds 3 bootstrap SEs at the run's B, and a failure counts only if it persists after `exp extend` to 4B members. The lr is 0.9 of what the run-start check accepts: lr lambda_max(loss Hessian) = 0.885 at the prior initial state (lambda_max 0.922; refused at 1). At stationarity lambda_max is 1.19, so lr lambda_max = 1.14, past the check's own bound (it is checked only at the start), and the stiffest mode's variance is inflated about 2.3x. Measured against lr 0.2 (B = 32, both stationary), lr 0.96 shifts R(1)/R(0) and R(2)/R(0) of mode 1 by -1.2 to -1.3 SE at B_max = 128, mode 1's band share by -0.7 SE and the ratio by -1.3 SE (modes 2 and 3 by at most 0.25 SE). That bias alone exceeds the one-SE accuracy budget, so by the plan's rule the regime is not accurate at this lr: a disagreement in mode 1's statistics or the ratio at this lr is not evidence against the theory. The whitened net relaxes with a time constant of about 90 / lr = 94 epochs (mode 1's low-q power), so 10^4 epochs are about 100 of them; the relaxation diagnostic (fct.linear_ring.relaxation_fit) must find the remaining deficit below one SE at B_max. Run plan: this setting and its penalty twin (`linear_ring_equivalence`) at the base point first, then the beta and k sweeps on this whitened path only (`--axis 'train.beta=[...]'` with a matching lr, each at 0.9 of its own check, and a new regime check per point). Cost: about 10 ms per epoch for all 32 members on an RTX 4500 Ada GPU in float64 (29 ms on 8 CPU threads), under two minutes of GPU time.",
   "N": 512,
   "P": 256,
-  "n_epochs": 2000000,
+  "n_epochs": 10000,
   "lr": 0.96,
-  "log_int": 10000,
-  "save_int": 100000,
-  "monitor_int": 10000,
+  "log_int": 1000,
+  "save_int": 10000,
+  "monitor_int": 25,
   "monitor_bins": 2,
   "monitor_shuffles": 1,
   "monitor_kind": "spectrum",
@@ -79,7 +79,7 @@
     },
     "min_rel_eig": 1e-06,
     "lambda_max": null,
-    "parametrisation": "penalty"
+    "parametrisation": "whitened"
   },
   "meanfield": {
     "n_points": 100,
@@ -139,13 +139,8 @@
     }
   },
   "axes": {
-    "spatial.parametrisation": [
-      "penalty",
-      "whitened"
-    ],
-    "train.lr": [
-      9e-05,
-      0.96
+    "train.beta": [
+      10.0
     ]
   }
 }
