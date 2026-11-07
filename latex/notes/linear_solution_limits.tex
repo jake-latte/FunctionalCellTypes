@@ -196,15 +196,15 @@ the input signal-to-noise ratio, the rate-penalty saturation (to be compared wit
 When $\sigma = r = 0$ the equation reduces exactly to two parameters. With $\ell_q = \lambda_q/\lambda_0\in[0,1]$, $c_* = \lambda_0\hat s_X\hat s_Y$ (the pole) and $x = c/c_* > 1$,
 \begin{equation}
 \begin{gathered}
-  1 - \frac{\Delta}{x} = \Theta\,\frac xN\sum_q\frac{\ell_q^2}{x^2 - \ell_q^2},
+  1 - \frac{\hat\delta}{x} = \Theta\,\frac xN\sum_q\frac{\ell_q^2}{x^2 - \ell_q^2},
   \qquad \tau = \frac1{x^2},\\
   \Theta = \frac{\lambda_0\hat s_X}{\hat s_Y} = \lambda_0\sqrt{\frac{k_0k_1}{m}}\,\frac{s_X}{s_Y},
   \qquad
-  \Delta = \frac{\delta}{c_*} = \frac{\sqrt m}{\kappa\lambda_0\sqrt{k_0k_1}\,s_Xs_Y}.
+  \hat\delta = \frac{\delta}{c_*} = \frac{\sqrt m}{\kappa\lambda_0\sqrt{k_0k_1}\,s_Xs_Y}.
 \end{gathered}
   \label{eq:reduced}
 \end{equation}
-(Checked: $c_*x$ and the full solve agree to ten digits, script section B5.) $\Theta$ is the input gain relative to the target demand, $\Delta$ the ridge (temperature) in units of the pole. At $\Delta = 0$, $x\to1$ ($\tau\to1$) when $\Theta\bar\ell_2 \ll 1$ with $\bar\ell_2 = \frac1N\sum_q\ell_q^2$, and $x\approx\Theta\bar\ell_2$ ($\tau\approx(\Theta\bar\ell_2)^{-2}$) when $\Theta\bar\ell_2\gg1$; raising $\Delta$ always raises $x$ and weakens the amplification.
+(Checked: $c_*x$ and the full solve agree to ten digits, script section B5.) $\Theta$ is the input gain relative to the target demand, $\hat\delta$ the ridge (temperature) in units of the pole. At $\hat\delta = 0$, $x\to1$ ($\tau\to1$) when $\Theta\bar\ell_2 \ll 1$ with $\bar\ell_2 = \frac1N\sum_q\ell_q^2$, and $x\approx\Theta\bar\ell_2$ ($\tau\approx(\Theta\bar\ell_2)^{-2}$) when $\Theta\bar\ell_2\gg1$; raising $\hat\delta$ always raises $x$ and weakens the amplification.
 
 \section{Limiting cases}
 \label{sec:limits}
@@ -240,9 +240,9 @@ which is the per-mode formula $c_i = \frac12(s\alpha_i + \sqrt{s^2\alpha_i^2 + 4
 
 \subsection{\texorpdfstring{$k_0 = k_1\equiv k$}{k0 = k1 = k}: equal pre- and post-synaptic prior scales}
 \label{sec:k}
-With a common scale, $\sX = ks_X^2/m$, $\sY = s_Y^2/k$ and $\delta = 1/(k\kappa)$. Two things are $k$-independent at $\sigma = r = 0$: the product $\sX\sY = s_X^2s_Y^2/m$, hence the pole $c_* = \lambda_0 s_Xs_Y/\sqrt m$ and the shape of $\amp_q$ at given $\tau$. What depends on $k$ are the reduced parameters \eqref{eq:reduced}, $\Theta = \lambda_0k/\sqrt m\cdot s_X/s_Y$ (increasing) and $\Delta = \sqrt m/(\kappa\lambda_0ks_Xs_Y)$ (decreasing). Hence:
+With a common scale, $\sX = ks_X^2/m$, $\sY = s_Y^2/k$ and $\delta = 1/(k\kappa)$. Two things are $k$-independent at $\sigma = r = 0$: the product $\sX\sY = s_X^2s_Y^2/m$, hence the pole $c_* = \lambda_0 s_Xs_Y/\sqrt m$ and the shape of $\amp_q$ at given $\tau$. What depends on $k$ are the reduced parameters \eqref{eq:reduced}, $\Theta = \lambda_0k/\sqrt m\cdot s_X/s_Y$ (increasing) and $\hat\delta = \sqrt m/(\kappa\lambda_0ks_Xs_Y)$ (decreasing). Hence:
 \begin{itemize}[nosep]
-  \item $k\to0$: $\Delta\to\infty$, $c\approx\delta = 1/(k\kappa)\to\infty$, $\tau\to0$: no amplification (the ridge dominates).
+  \item $k\to0$: $\hat\delta\to\infty$, $c\approx\delta = 1/(k\kappa)\to\infty$, $\tau\to0$: no amplification (the ridge dominates).
   \item $k\to\infty$: $\Theta\to\infty$, $c\approx k s_X^2\bar\lambda_2/m\to\infty$, $\tau\to0$: no amplification (the input drive is already large).
   \item in between, $\tau$ is maximal near the $k$ at which ridge and input drive balance, $\delta\approx ks_X^2\bar\lambda_2/m$, i.e.
   \begin{equation}
@@ -328,8 +328,8 @@ Four remarks on what this means for the analysis.
   \item \emph{Individual latents are not identified.} The contrast modes $u_2,\dots,u_K$ span the centred latent subspace, but within it the eigenvectors are set by $O(P^{-1/2})$ fluctuations: every statistic of the linear theory is invariant under rotations of that subspace. Cells ``tuned to $z_2$'' as opposed to a rotation of $(z_2,\dots,z_K)$ are therefore \emph{not} predicted; only the subspace and its spectrum are. Distinct ranges $a_k$ break the degeneracy (with centred latents, $G = \mathrm{diag}(a_k^2/12)$ and $U_Z$'s columns are the normalised individual latents).
   \item \emph{Scaling with $P$.} $s_k^2\propto P$ and $\delta = Pn/(\beta k_1)\propto P$, so at $\sigma = r = 0$ the reduced parameters are $P$-independent: $\Theta = \lambda_0\sqrt{k_0k_1/m}$ for every mode, and
   \begin{equation}
-    \Delta_1 = \frac{12\,n\sqrt m}{\beta\lambda_0\sqrt{k_0k_1}\,a^2(3K+1)},\qquad
-    \Delta_k = \frac{12\,n\sqrt m}{\beta\lambda_0\sqrt{k_0k_1}\,a^2}\quad(k\ge2) .
+    \hat\delta_1 = \frac{12\,n\sqrt m}{\beta\lambda_0\sqrt{k_0k_1}\,a^2(3K+1)},\qquad
+    \hat\delta_k = \frac{12\,n\sqrt m}{\beta\lambda_0\sqrt{k_0k_1}\,a^2}\quad(k\ge2) .
     \label{eq:Delta-latent}
   \end{equation}
   $\rho_k = \lambda_0k_0s_k^2/(m\sigma^2)$ and $\gamma_k = r\lambda_0k_0s_k^2/m$ grow $\propto P$: at fixed $\sigma$ and $r$, enough patterns always make the noise floor negligible and saturate the rate penalty; to keep those effects at large $P$ one must scale $\sigma^2\propto P$ and $r\propto1/P$.
@@ -381,19 +381,19 @@ Table~\ref{tab:regimes} lists the conditions. Each is tagged \task{} if it is se
     \midrule
     \multicolumn{5}{@{}l}{\emph{(a) All latents share the same spatial profile}}\\
     (a1) & weak target, no penalty & $r = 0$, $\tau_k\ll1$ for all $k$: $d_q^{(k)} = \lambda_q\hat s_{X,k}^2 + \sigma^2$, the shape $\lambda_q$ above a common floor; $R_k(\Delta)/R_k(0)\to K(\Delta)$ for $\Delta\ge1$ when $\rho_k\gg1$ & \prior{} ($r$, $\beta$ small) & \ref{sec:r0} \\
-    (a2) & zero temperature & $\sigma = r = 0$, $\Delta_k\ll1$ for all $k$: every mode has the same $\Theta$, hence the same $\tau(\Theta)$ and profile $\lambda_q/(1-\tau\ell_q^2)$, however strong the amplification & \prior{} ($\beta\to\infty$) given \task{} ($XX^\top\propto YY^\top$) & \eqref{eq:reduced} \\
+    (a2) & zero temperature & $\sigma = r = 0$, $\hat\delta_k\ll1$ for all $k$: every mode has the same $\Theta$, hence the same $\tau(\Theta)$ and profile $\lambda_q/(1-\tau\ell_q^2)$, however strong the amplification & \prior{} ($\beta\to\infty$) given \task{} ($XX^\top\propto YY^\top$) & \eqref{eq:reduced} \\
     (a3) & equal singular values & the $K-1$ contrast modes always share a profile because their $s_k$ coincide; a statement about symmetry & \task{} (isotropic latents) & \ref{sec:latent} \\
     \addlinespace
     \multicolumn{5}{@{}l}{\emph{(b) Different latents separate across spatial scales} (both need unequal $s_k$)}\\
     (b1) & rate-penalty whitening & $\gamma_1\gg1+r\sigma^2\gg\gamma_2$, i.e.\ $\hat s_{X,2}^2\ll1/(r\lambda_0)\ll\hat s_{X,1}^2$, a window of width $3K+1$ in $r$; \emph{the stronger latent occupies finer scales} & \mixed{} ($r\lambda_0$ against $k_0s_k^2/m$) & \ref{sec:whiten} \\
-    (b2) & target condensation & $\Delta_1\lesssim1\lesssim\Delta_2$, i.e.\ $\beta_c/(3K+1)\lesssim\beta\lesssim\beta_c = 12n\sqrt m/(\lambda_0\sqrt{k_0k_1}\,a^2)$ ($\beta\in[2.7,27]$ in Section~\ref{sec:predictions}); \emph{the stronger latent occupies coarser scales} & \mixed{} ($\beta$, $k_0k_1$, $\lambda_0$ against $a^2(3K+1)$, $n$, $m$) & \ref{sec:ring} \\
+    (b2) & target condensation & $\hat\delta_1\lesssim1\lesssim\hat\delta_2$, i.e.\ $\beta_c/(3K+1)\lesssim\beta\lesssim\beta_c = 12n\sqrt m/(\lambda_0\sqrt{k_0k_1}\,a^2)$ ($\beta\in[2.7,27]$ in Section~\ref{sec:predictions}); \emph{the stronger latent occupies coarser scales} & \mixed{} ($\beta$, $k_0k_1$, $\lambda_0$ against $a^2(3K+1)$, $n$, $m$) & \ref{sec:ring} \\
     \addlinespace
     \multicolumn{5}{@{}l}{\emph{(c) Nothing is spatially structured (white tuning maps)}}\\
     (c1) & noise-dominated & $\rho_k\ll1$, $\tau_k\ll1$: $d_q^{(k)} = \sigma_0^2(1+O(\rho_k))$; realised by $k_0\to0$, $\sigma\to\infty$ or small $P$ & \mixed{} ($k_0$, $\sigma$ against $s_k^2/m$) & Lem.~\ref{lem:floor} \\
     (c2) & rate-penalty clamp & $r\sigma^2\gg1$, $\tau_k\ll1$: $d_q\to1/r$ for every $q$, $k$ (at strong target $\amp_q$ still multiplies the clamp) & \prior{} & \ref{sec:whiten} \\
     (c3) & white prior & $\ell\to0$: $\lambda_q\equiv1$, no $q$-dependence at all & \prior{} & \ref{sec:r0} \\
     (c4) & null modes & anything outside $\col(Z)$ is white at level $\sigma_0^2$ & \task{} & Lem.~\ref{lem:floor} \\
-    (c5) & full condensation & $\tau_k\to1$ for all $k$ with $\xi_k\gtrsim N$: every cell has the same tuning (uniform maps) & \mixed{} ($\Delta_k\ll1$, $\Theta\bar\ell_2\ll1$) & \ref{sec:ring} \\
+    (c5) & full condensation & $\tau_k\to1$ for all $k$ with $\xi_k\gtrsim N$: every cell has the same tuning (uniform maps) & \mixed{} ($\hat\delta_k\ll1$, $\Theta\bar\ell_2\ll1$) & \ref{sec:ring} \\
     \bottomrule
   \end{tabular}
   \caption{Conditions for the three regimes of functional cell types, with the parameters that drive each. Both (b) mechanisms need unequal $s_k$: in the uniform task only mode 1 differs, by the factor $3K+1$. (a3) is the only purely task-driven statement in the list. Which direction (b) takes is decided by the prior: $r$ pushes a strong mode to fine scales, $\beta$ to coarse ones; the task only decides \emph{which} mode is strong.}
@@ -402,7 +402,7 @@ Table~\ref{tab:regimes} lists the conditions. Each is tagged \task{} if it is se
 
 \paragraph{Mechanism (b1), whitening.} At weak target, $d_q^{(k)} - \sigma_0^2 = \lambda_q\hat s_{X,k}^2/\big[(1+r\sigma^2)(1+r\sigma^2 + r\lambda_q\hat s_{X,k}^2)\big]$. A mode with $\gamma_k\gg1+r\sigma^2$ is flat for $|q|$ below the crossover $\lambda_{q_k^\times} = (1+r\sigma^2)/(r\hat s_{X,k}^2)$ and follows $\lambda_q$ beyond; a mode with $\gamma_k\ll1$ follows $\lambda_q$ throughout (details in Section~\ref{sec:whiten}).
 
-\paragraph{Mechanism (b2), condensation.} $\tau_k$ decreases with $\Delta_k\propto1/s_k^2$, so the mode with the largest $s_k$ is amplified first and its correlation length grows $\propto\hat s_{Y,k}$ while the others stay at $\ell$ (Section~\ref{sec:ring}); the window in $\beta$ follows from \eqref{eq:Delta-latent}.
+\paragraph{Mechanism (b2), condensation.} $\tau_k$ decreases with $\hat\delta_k\propto1/s_k^2$, so the mode with the largest $s_k$ is amplified first and its correlation length grows $\propto\hat s_{Y,k}$ while the others stay at $\ell$ (Section~\ref{sec:ring}); the window in $\beta$ follows from \eqref{eq:Delta-latent}.
 
 \subsection{Rate-penalty whitening in detail}
 \label{sec:whiten}

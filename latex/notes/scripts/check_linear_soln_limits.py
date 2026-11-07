@@ -403,20 +403,20 @@ def common_scale_sweep(lam):
 
 def reduced_form_check(lam):
     """B5: at sigma = r = 0 the equation reduces to
-    1 - Delta/x = Theta (x/N) sum l_q^2/(x^2 - l_q^2)
-    with x = c/c*, l_q = lam_q/lam_0, Theta = lam_0 sX/sY, Delta = delta/c*, c* = lam_0 sX sY."""
+    1 - delta_hat/x = Theta (x/N) sum l_q^2/(x^2 - l_q^2)
+    with x = c/c*, l_q = lam_q/lam_0, Theta = lam_0 sX/sY, delta_hat = delta/c*, c* = lam_0 sX sY."""
     sx2, sy2, delta = 3.0, 0.5, 2.0
     c_star, ell = lam[0] * np.sqrt(sx2 * sy2), lam / lam[0]
-    theta, Delta = lam[0] * np.sqrt(sx2 / sy2), delta / c_star
+    theta, delta_hat = lam[0] * np.sqrt(sx2 / sy2), delta / c_star
 
     def reduced_residual(x):
-        return 1 - Delta / x - theta * np.mean(x * ell**2 / (x**2 - ell**2))
+        return 1 - delta_hat / x - theta * np.mean(x * ell**2 / (x**2 - ell**2))
 
     x = bisect(reduced_residual, 1 + 1e-13, 1e9)
     c_full = solve_c(lam, sx2, sy2, 0.0, 0.0, delta)
     return {
         "theta": theta,
-        "Delta": Delta,
+        "delta_hat": delta_hat,
         "c_star_x": c_star * x,
         "c_full": c_full,
         "tau_reduced": 1 / x**2,
@@ -482,7 +482,7 @@ def report_b(res):
         print(f"    k = {kk:6.2f}: c = {c:9.4f}, tau = {tau:.4f}")
     x = res["reduced"]
     print(
-        f"  reduced form (sigma = r = 0): Theta = {x['theta']:.4f}, Delta = {x['Delta']:.4f}: "
+        f"  reduced form (sigma = r = 0): Theta = {x['theta']:.4f}, delta_hat = {x['delta_hat']:.4f}: "
         f"c* x = {x['c_star_x']:.10f}, full solve c = {x['c_full']:.10f}, "
         f"tau = 1/x^2 = {x['tau_reduced']:.6f} vs {x['tau_full']:.6f}"
     )
