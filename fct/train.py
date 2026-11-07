@@ -8,7 +8,9 @@ prior: the weights under "penalty", xi under "whitened" (`make_net_from_config` 
 whitening factors from the config, as `make_weight_penalty` rebuilds the penalty matrices).
 """
 
+import hashlib
 import pickle
+import shutil
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import partial
@@ -22,6 +24,7 @@ from fct.cache import (
     cache_paths,
     latest_checkpoint,
     load_artefact,
+    read_field,
     save_artefact,
     write_checkpoint,
 )
@@ -59,10 +62,16 @@ HESSIAN_RTOL = 1e-8
 
 
 def make_net_from_config(
-    cfg: Config, D_in: int, D_out: int, device: torch.device, dtype: torch.dtype
+    cfg: Config,
+    D_in: int,
+    D_out: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    members: range | None = None,
 ) -> Net:
     """The net `cfg` describes for `D_in` inputs and `D_out` outputs. The one place a config
-    turns into a net, for training and for loading alike.
+    turns into a net, for training and for loading alike. `members` builds only those members
+    of the ensemble (`fct.model.make_net`), each exactly as in the whole one.
 
     Every path starts from the same standard-normal draw z of `make_net(cfg.net)`. Under
     `net.init = "standard"` the parameters are z (the only start before `net.init` existed).
@@ -75,12 +84,21 @@ def make_net_from_config(
     prior = cfg.net.init == "prior"
     init_std = cfg.train.weight_lambda**-0.5 if prior else 1.0  # > 0: `Config` checks it
     if cfg.spatial is None or not prior:
-        return make_net(cfg.net, D_in, D_out, device, dtype, init_std=init_std)
+        return make_net(cfg.net, D_in, D_out, device, dtype, init_std=init_std, members=members)
     spaces = build_spaces(cfg.spatial, m=D_in, N=cfg.net.N, L=cfg.net.L, n_out=D_out)
     if cfg.is_whitened:
         factors = whitening_factors(spaces)
-        return make_net(cfg.net, D_in, D_out, device, dtype, whitening=factors, init_std=init_std)
-    net = make_net(cfg.net, D_in, D_out, device, dtype, init_std=init_std)
+        return make_net(
+            cfg.net,
+            D_in,
+            D_out,
+            device,
+            dtype,
+            whitening=factors,
+            init_std=init_std,
+            members=members,
+        )
+    net = make_net(cfg.net, D_in, D_out, device, dtype, init_std=init_std, members=members)
     return _correlate(net, floored_whitening_factors(spaces))
 
 
@@ -615,10 +633,22 @@ def train(
     `monitor_<key>` entry is a list over members of what the monitor returned. `epoch` and
     `monitor_epoch` have no member axis. `select_member` extracts one member's history.
     """
+    return _train_in(cfg, dataset, net, cache_paths(cache_dir).train, log, monitor)
+
+
+def _train_in(
+    cfg: Config,
+    dataset: Dataset,
+    net: Net,
+    train_dir: Path,
+    log: Callable[[str], None],
+    monitor: Monitor | None,
+) -> tuple[Net, History]:
+    """`train` with its checkpoints and final.pt in `train_dir`: CACHE_DIR/train for a run,
+    a staging directory for the members an extension adds (`extend_trained`)."""
     _check_net_matches_config(net, cfg)
     _check_monitor_matches_config(cfg, monitor)
     tc = cfg.train
-    train_dir = cache_paths(cache_dir).train
     config_hash = cfg.section_hash("data", "net", "train")
     final = train_dir / "final.pt"
 
@@ -796,3 +826,221 @@ def load_latest_checkpoint(
             f"cannot rebuild the net from {ckpt}: {type(err).__name__}: {err}"
         ) from err
     return net, payload["history"], payload["epoch"]
+
+
+# ---------------------------------------------------------------------------- extending an ensemble
+# An ensemble in final.pt grows without retraining its members: the members it lacks train as
+# an ensemble of their own in a staging directory beside final.pt, and are then appended.
+STAGING_PREFIX = "extend_"
+
+
+def staging_dir(train_dir: Path, b0: int, b1: int) -> Path:
+    """Where members b0 .. b1-1 (half-open, like a slice) of an extension train, with their own
+    checkpoints and final.pt: `train_dir/extend_<b0>-<b1>/`."""
+    return Path(train_dir) / f"{STAGING_PREFIX}{b0}-{b1}"
+
+
+def remove_staging(train_dir: Path, keep: Path | None = None) -> None:
+    """Delete every staging directory in `train_dir` but `keep`: what an extension that has
+    been appended (or abandoned for another block) leaves behind."""
+    for directory in Path(train_dir).glob(f"{STAGING_PREFIX}*"):
+        if directory.is_dir() and directory != keep:
+            shutil.rmtree(directory)
+
+
+def extension_seed(seed: int, b0: int) -> int:
+    """Seed of the global RNG, which draws the SGLD noise, while the members from b0 on of an
+    extension train: the first 8 bytes (little-endian) of sha256("fct.train.extension:<seed>:
+    <b0>"), with `seed` the run's `train.seed`. Reseeding with `seed` itself would replay the
+    stream the original members drew, so the new members' noise would be the old members'
+    noise rearranged; a stream of its own keeps every member independent."""
+    if b0 < 1:
+        raise ValueError(f"an extension adds members after the first, so b0 >= 1; got b0={b0}")
+    digest = hashlib.sha256(f"fct.train.extension:{seed}:{b0}".encode()).digest()
+    return int.from_bytes(digest[:8], "little")
+
+
+def with_ensemble_size(cfg: Config, B: int) -> Config:
+    """`cfg` with `net.B = B`: the config an ensemble of B of its members was trained under."""
+    return cfg.model_copy(update={"net": cfg.net.model_copy(update={"B": B})})
+
+
+def _staging_config(cfg: Config, b0: int) -> Config:
+    """The config members b0 .. cfg.net.B-1 train under in staging: an ensemble of that many,
+    with the extension's noise seed. Its hash stamps the staging checkpoints."""
+    train_cfg = cfg.train.model_copy(update={"seed": extension_seed(cfg.train.seed, b0)})
+    return with_ensemble_size(cfg, cfg.net.B - b0).model_copy(update={"train": train_cfg})
+
+
+def trained_member_count(path: Path) -> int:
+    """Members of the net in a train artefact (`final.pt`, a checkpoint): 1 for a single
+    network, else the length of the member axis of its U. Only that entry is read; ValueError
+    naming the file if it is unreadable or holds no net."""
+    state = read_field(path, "net_state_dict")
+    if not isinstance(state, dict) or not isinstance(state.get("U"), Tensor):
+        # ValueError, like an unreadable file: either way the file holds no usable net.
+        raise ValueError(f"{path} holds no net state dict with a parameter U")  # noqa: TRY004
+    return _members_of(state)
+
+
+def _members_of(state: dict) -> int:
+    U = state["U"]
+    return 1 if U.ndim == 2 else U.shape[0]
+
+
+def _with_member_axis(t: Tensor, members: int) -> Tensor:
+    """A per-member tensor with its member axis: a single network's gains one of length 1."""
+    return t.unsqueeze(0) if members == 1 else t
+
+
+def _member_entries(entry, members: int) -> list:
+    """A per-member history entry as a list over members (a single network's is one value)."""
+    if members == 1:
+        return [entry]
+    if len(entry) != members:
+        raise ValueError(f"a history entry has {len(entry)} members, the net {members}")
+    return list(entry)
+
+
+def _append_state(old: dict, new: dict, b_old: int, k: int) -> dict:
+    if old.keys() != new.keys():
+        raise ValueError(f"state dict keys differ: {sorted(old)} and {sorted(new)}")
+    merged = {}
+    for key, value in old.items():
+        a, b = _with_member_axis(value, b_old), _with_member_axis(new[key], k)
+        if a.shape[1:] != b.shape[1:]:
+            raise ValueError(
+                f"state dict entry {key!r} has member shape {tuple(a.shape[1:])} in the old "
+                f"payload, {tuple(b.shape[1:])} in the new one"
+            )
+        merged[key] = torch.cat([a, b])
+    return merged
+
+
+def _same(a, b) -> bool:
+    if isinstance(a, Tensor) and isinstance(b, Tensor):
+        return a.shape == b.shape and torch.equal(a, b)
+    return a == b
+
+
+def _append_param_state(
+    old: dict, new: dict, params: tuple[Tensor, Tensor], b_old: int, k: int
+) -> dict:
+    """One parameter's optimiser state: an entry of the parameter's shape (Adam's moments) is
+    per member and concatenated; any other (Adam's step count) must agree and is kept."""
+    if old.keys() != new.keys():
+        raise ValueError(f"optimiser state keys differ: {sorted(old)} and {sorted(new)}")
+    merged = {}
+    for name, a in old.items():
+        b = new[name]
+        per_member = isinstance(a, Tensor) and a.shape == params[0].shape
+        if per_member and isinstance(b, Tensor) and b.shape == params[1].shape:
+            merged[name] = torch.cat([_with_member_axis(a, b_old), _with_member_axis(b, k)])
+        elif _same(a, b):
+            merged[name] = a
+        else:
+            raise ValueError(f"optimiser state {name!r} differs and has no member axis")
+    return merged
+
+
+def _append_optim(old: dict, new: dict, b_old: int, k: int) -> dict:
+    """The optimiser state dict. Its per-parameter state is indexed like the parameters, which
+    are the state dict's entries in order (the state dict holds exactly the parameters)."""
+    o, n = old["optim_state_dict"], new["optim_state_dict"]
+    if o["param_groups"] != n["param_groups"]:
+        raise ValueError("the optimiser param_groups differ (another optimiser or lr)")
+    if o["state"].keys() != n["state"].keys():
+        raise ValueError(
+            f"optimiser state indices differ: {sorted(o['state'])} and {sorted(n['state'])}"
+        )
+    pairs = list(zip(old["net_state_dict"].values(), new["net_state_dict"].values(), strict=True))
+    state = {
+        i: _append_param_state(o["state"][i], n["state"][i], pairs[int(i)], b_old, k)
+        for i in o["state"]
+    }
+    return {**o, "state": state}
+
+
+def _append_history(old: History, new: History, b_old: int, k: int) -> History:
+    if old.keys() != new.keys():
+        raise ValueError(f"history keys differ: {sorted(old)} and {sorted(new)}")
+    merged: History = {}
+    for key, values in old.items():
+        if key in _SHARED_KEYS:
+            if values != new[key]:
+                raise ValueError(f"history {key!r} differs: {values} and {new[key]}")
+            merged[key] = list(values)
+        elif len(values) != len(new[key]):
+            raise ValueError(f"history {key!r} has {len(values)} entries and {len(new[key])}")
+        else:
+            merged[key] = [
+                _member_entries(a, b_old) + _member_entries(b, k)
+                for a, b in zip(values, new[key], strict=True)
+            ]
+    return merged
+
+
+def append_members(old: dict, new: dict) -> dict:
+    """The train payload of an ensemble whose members are `old`'s followed by `new`'s, both
+    finished payloads of one config but for `net.B` (as `_payload` builds them: no config
+    hash). Every per-member entry is concatenated along its member axis: the state dict (which
+    holds exactly the parameters; a whitened net's factors are non-persistent buffers, rebuilt
+    from the config), Adam's moments, and every history entry but `epoch` and `monitor_epoch`,
+    which must agree. A single network (no member axis) counts as one member. The RNG state is
+    `old`'s: a finished run is never resumed. ValueError if the payloads do not fit."""
+    for name, payload in (("old", old), ("new", new)):
+        if set(payload) != set(_REQUIRED_KEYS):
+            raise ValueError(f"the {name} payload has keys {sorted(payload)}, not {_REQUIRED_KEYS}")
+    if old["epoch"] != new["epoch"]:
+        raise ValueError(f"the payloads end at epoch {old['epoch']} and epoch {new['epoch']}")
+    b_old, k = _members_of(old["net_state_dict"]), _members_of(new["net_state_dict"])
+    return {
+        "epoch": old["epoch"],
+        "net_state_dict": _append_state(old["net_state_dict"], new["net_state_dict"], b_old, k),
+        "optim_state_dict": _append_optim(old, new, b_old, k),
+        "history": _append_history(old["history"], new["history"], b_old, k),
+        "rng_state": old["rng_state"],
+    }
+
+
+def _without_hash(payload: dict) -> dict:
+    return {k: v for k, v in payload.items() if k != "config_hash"}
+
+
+def extend_trained(
+    cfg: Config,
+    dataset: Dataset,
+    cache_dir: Path,
+    log: Callable[[str], None] = print,
+    monitor: Monitor | None = None,
+) -> tuple[Net, History]:
+    """Grow the trained ensemble in CACHE_DIR/train/final.pt from its b0 members to cfg.net.B.
+
+    final.pt must have been written under `cfg` with `net.B = b0` (StaleCacheError otherwise).
+    Members b0 .. B-1 are built exactly as in a from-scratch run of B (`member_seed` does not
+    depend on B) and trained by `train` as an ensemble of their own in `staging_dir(train, b0,
+    B)`, so an interrupted extension resumes from its checkpoints. The staging run draws its
+    SGLD noise from `extension_seed`, so under SGLD the new members are new samples of the same
+    law, not a from-scratch run's members bit for bit (Adam draws no noise: those are equal).
+    The monitor (built from `cfg`) sees each new member as in a from-scratch run. Then
+    final.pt is replaced by `append_members` stamped with `cfg`'s hash, the staging directory
+    is deleted, and the ensemble of B and its history are returned."""
+    train_dir = cache_paths(cache_dir).train
+    final = train_dir / "final.pt"
+    b0, B = trained_member_count(final), cfg.net.B
+    if b0 >= B:
+        raise ValueError(f"{final} holds {b0} members; there is nothing to add for net.B={B}")
+    cpu = torch.device("cpu")  # the payloads are merged on the CPU, the net built after
+    old = _load_payload(final, with_ensemble_size(cfg, b0), cpu)
+    staging, staging_cfg = staging_dir(train_dir, b0, B), _staging_config(cfg, b0)
+    remove_staging(train_dir, keep=staging)
+    device, dtype = resolve_device(cfg), resolve_dtype(cfg.dtype)
+    D_in, D_out = dataset.x.shape[1], dataset.y.shape[1]
+    net = make_net_from_config(cfg, D_in, D_out, device, dtype, members=range(b0, B))
+    log(f"extending {final} from {b0} to {B} members (staging in {staging})")
+    _train_in(staging_cfg, dataset, net, staging, log, monitor)
+    staged = _load_payload(staging / "final.pt", staging_cfg, cpu)
+    merged = append_members(_without_hash(old), _without_hash(staged))
+    save_artefact(final, merged, cfg.section_hash("data", "net", "train"))
+    shutil.rmtree(staging)
+    return _net_from_payload(merged, cfg, device, dtype), merged["history"]

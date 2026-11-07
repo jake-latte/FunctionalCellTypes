@@ -95,8 +95,8 @@ def _members(payload: dict, members: range) -> tuple[dict, dict]:
 
 def _assert_same_state(a: dict, b: dict) -> None:
     assert a.keys() == b.keys()
-    for key in a:
-        assert torch.equal(a[key], b[key]), key
+    for key, value in a.items():
+        assert torch.equal(value, b[key]), key
 
 
 # ---------------------------------------------------------------------------- the append
@@ -108,9 +108,9 @@ def test_extending_from_2_to_5_appends_three_members_equal_to_a_scratch_run(tmp_
 
     assert new["net_state_dict"]["U"].shape[0] == 5
     assert trained_member_count(_train_dir(tmp_path / "ext") / "final.pt") == 5
-    old_state, old_history = _members(old, range(0, 2))
-    _assert_same_state(_members(new, range(0, 2))[0], old_state)
-    assert _members(new, range(0, 2))[1] == old_history
+    old_state, old_history = _members(old, range(2))
+    _assert_same_state(_members(new, range(2))[0], old_state)
+    assert _members(new, range(2))[1] == old_history
     new_state, new_history = _members(new, range(2, 5))
     scratch_state, scratch_history = _members(scratch, range(2, 5))
     _assert_same_state(new_state, scratch_state)
@@ -151,8 +151,8 @@ def test_under_sgld_the_new_members_are_equal_in_distribution_not_bit_for_bit(tm
     new = _final(tmp_path / "ext", load_exp(tmp_path / "ext"))
     scratch = _scratch(tmp_path / "scratch", B=5, optimizer="sgld")
 
-    _assert_same_state(_members(new, range(0, 2))[0], _members(old, range(0, 2))[0])
-    assert _members(new, range(0, 2))[1] == _members(old, range(0, 2))[1]
+    _assert_same_state(_members(new, range(2))[0], _members(old, range(2))[0])
+    assert _members(new, range(2))[1] == _members(old, range(2))[1]
     _, new_history = _members(new, range(2, 5))
     _, scratch_history = _members(scratch, range(2, 5))
     for key in ("loss", "mse", "weight_l2", "rate_l2", "grad_norm"):

@@ -350,7 +350,7 @@ def test_the_exp_help_uses_only_the_experiment_vocabulary():
         a.choices["exp"] for a in top._actions if isinstance(a, argparse._SubParsersAction)
     )
     texts = _help_texts(exp_parser)
-    assert len(texts) == 7  # exp and its six actions
+    assert len(texts) == 8  # exp and its seven actions
     assert not any("sweep" in t.lower() or "grid" in t.lower() for t in texts)
 
 

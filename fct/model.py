@@ -354,17 +354,25 @@ def make_net(
     dtype: torch.dtype,
     whitening: Factors | None = None,
     init_std: float = 1.0,
+    members: range | None = None,
 ) -> Net:
     """Build the net `cfg` describes: an `MLP` for cfg.B = 1, else an `EnsembleMLP` of cfg.B
     members, member b drawn from a generator seeded with `member_seed(cfg.seed, b)`. Initial
     parameters are N(0, init_std^2), depending only on cfg.seed (and b), independent of device;
     with `whitening` they are xi (`fct.train.make_net_from_config` draws them from the prior).
 
+    `members` (default `range(cfg.B)`) builds only those members of the ensemble, in order: an
+    `MLP` if it holds one, else an `EnsembleMLP` whose member j is member `members[j]` of the
+    full ensemble, bit for bit. This is how the members an extended ensemble lacks are built.
+
     Weights are drawn on the CPU from local generators and then moved to `device`, so no
     global RNG (CPU or CUDA) is read or reseeded and CPU and CUDA builds agree. The
     activation is resolved by name, so a checkpoint needs only config.json plus a
     state_dict (nothing unpicklable is stored).
     """
-    members = [_make_member(cfg, b, D_in, D_out, dtype, whitening, init_std) for b in range(cfg.B)]
-    net = members[0] if cfg.B == 1 else EnsembleMLP(members)
+    members = range(cfg.B) if members is None else members
+    if len(members) == 0 or members.step != 1 or members.start < 0:
+        raise ValueError(f"members must be a non-empty range of member indices, got {members}")
+    nets = [_make_member(cfg, b, D_in, D_out, dtype, whitening, init_std) for b in members]
+    net = nets[0] if len(nets) == 1 else EnsembleMLP(nets)
     return net.to(device)
