@@ -67,7 +67,7 @@ what is plotted.
 - Loss (`fct/train.py`):
   $\mathcal{L} = \frac{N}{2}\,\mathrm{mse} + \frac{\lambda_w}{2\beta} \sum_l \mathrm{tr}(M^{\mathrm{post}}_l W_l M^{\mathrm{pre}}_l W_l^\top) + \frac{\lambda_r}{2\beta} \sum_{l, i, \mu} (r^{(l)}_{i\mu})^2$
   with $\mathrm{mse} = \frac{1}{P m} \sum_\mu \lVert y_\mu - \hat y_\mu \rVert^2$,
-  $\lambda_w = 2\beta\,$`PRIOR_COEFF` (derived from the loss coefficient `PRIOR_COEFF` $= \lambda_w / 2\beta$, so SGLD and Adam train the same loss), $\lambda_r$ = `RATE_LAMBDA` (so $\beta\mathcal{L}$ carries $\frac{\lambda_r}{2} \sum (r^{(l)}_{i\mu})^2$), $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
+  $\lambda_w = 2\beta\,$`PRIOR_COEFF` (derived from the loss coefficient `PRIOR_COEFF` $= \lambda_w / 2\beta$, so SGLD and Adam train the same weight prior), $\lambda_r$ = `RATE_LAMBDA`, the rate coefficient $r$ of the stationary law (so $\beta\mathcal{L}$ carries $\frac{\lambda_r}{2} \sum (r^{(l)}_{i\mu})^2$ and the loss's rate term, unlike its weight prior, differs between SGLD and Adam; the value of `RATE_LAMBDA` was kept from before the loss divided the rate term by $2\beta$, so that term is now $2\beta$ times smaller than it was), $\beta$ = `BETA` under SGLD and 1 under Adam; the penalty matrices $M$ are
   defined in the spatial prior section.
 
 Set `CACHE_ROOT` in the first cell. The run is cached under it in a directory named by a hash of
@@ -91,7 +91,9 @@ G = 1.0  # hidden-to-hidden gain
 NET_SEED = 0
 # loss weights
 PRIOR_COEFF = 3e-3  # coefficient of the spatial weight penalty in the loss
-RATE_LAMBDA = 1e-4  # rate coefficient: the loss carries RATE_LAMBDA / (2 beta) times the rate penalty
+# rate coefficient r of the stationary law, not of the loss: the loss carries r / (2 beta) sum phi^2.
+# The value was kept from before that rescaling, so the loss's rate term is 2 beta times smaller.
+RATE_LAMBDA = 1e-4
 DEVICE = "cpu"  # "cpu", "cuda" or "auto"; these nets are tiny"""
 
 TRAINING_TEXT = r"""## Training
@@ -171,7 +173,8 @@ they are a prior on the weights, not the mean-field kernels $\Phi^{(l)}$ over *s
 `fct/meanfield.py`. Under this prior those kernels gain a pair of unit indices; they are shown,
 built from the trained activity and these $K$, in their own section below."""
 
-SPATIAL = """from fct.spatial import SpatialConfig
+SPATIAL = """from fct.config import law_beta
+from fct.spatial import SpatialConfig
 from fct.spatial_view import population_spec
 
 D = 1  # embedding dimension: a ring for 1, a torus for 2 (a grid then needs a shape, d <= 2)
@@ -204,7 +207,7 @@ CFG = make_config(
     g=G,
     data_seed=DATA_SEED,
     net_seed=NET_SEED,
-    weight_lambda=PRIOR_COEFF * 2 * (1.0 if OPTIMIZER != "sgld" else BETA),
+    weight_lambda=PRIOR_COEFF * 2 * law_beta(OPTIMIZER, BETA),
     rate_lambda=RATE_LAMBDA,
     optimizer=OPTIMIZER,
     beta=BETA,
