@@ -510,8 +510,11 @@ equal to the rates). Every value is a list over hidden layers of CPU tensors:
 | `theta_hist` | (36,) int64, K >= 3 only  | `theta_histogram(t2, t3)`                                               |
 
 So `monitor_spectrum` stacks to (records, layers, K+1, N), and to (records, members, layers, K+1, N) for an ensemble.
+`SPECTRUM_MONITOR_KEYS` lists the keys of a K >= 3 record; for K < 3 a record holds `spectrum` alone. `hex` and
+`theta_hist` are recorded for every K >= 3 but are meaningful only at K = 3: for K >= 4 the contrast directions
+u_2..u_K have near-degenerate singular values, so `(u_2, u_3)` is an arbitrary plane of that space.
 The moment is stored complex, not as its modulus, and the histogram as counts, because those average and sum across
-records and members; |<e^{6 i theta}>| of a mean moment is prediction 6's statistic. Records are float32 because a
+records and members; the statistic is |<e^{6 i theta}>| of a mean moment. Records are float32 because a
 full-size run holds (K+1) N L floats per record per member over thousands of records (4 x 64 x 4 x 4000 = 4.1 x 10^6,
 16 MB per member as float32); the powers are computed in the run's dtype and only stored in float32. The records
 along one run are a diagnostic of burn-in and mixing (`record_sem` with its `reliable` mask), not an estimator; the
@@ -1463,13 +1466,15 @@ records and members sum. A silent neuron (`t2 = t3 = 0`) has `theta = 0` and cou
 means aligned with the SVD contrast axes `(u_2, u_3)`, not with the latents: at K = 3 the three latents project onto
 the contrast plane 120 degrees apart, so `cos 4 theta` does not detect tuning to individual latents.
 
-Prediction 6 uses the frame-free statistic `|<e^{6 i theta}>|` instead. Three directions 120 degrees apart have the
+Tuning to single latents is measured by the frame-free statistic `|<e^{6 i theta}>|` instead. Three directions 120 degrees apart have the
 same `6 theta`, so neurons each tuned to one of three latents give a modulus near 1 (above 0.99 at P = 4096 with the
 frame of `latent_basis`), and a rotation-invariant `(t2, t3)` gives `O(N^-1/2)` (`|m|` is Rayleigh with `E|m|^2 = 1/N`).
 Rotating the tunings by phi, that is the frame `(u_2, u_3)` by -phi, multiplies the moment by `e^{6 i phi}`, so the
 modulus does not depend on where the SVD puts `u_2` in the contrast plane. `hexatic_moment` returns the complex mean:
 moments average across members and records, moduli do not (the modulus of a mean is not the mean of moduli). A
-silent neuron has `theta = 0` here too.
+silent neuron has `theta = 0` here too. The moment, like every angle statistic, is meaningful only at K = 3, where
+`(u_2, u_3)` spans the whole contrast space; for K >= 4 the contrasts u_2..u_K have near-degenerate singular values and
+`(u_2, u_3)` is whichever plane of them the SVD returned.
 
 `record_sem`: `rho_k = C(k) / C(0)` from the biased autocovariance of the records after burn-in (FFT, zero-padded
 to 2n). `tau` is Geyer's initial monotone sequence estimator (Geyer 1992): the pairs `Gamma_m = rho_{2m} +

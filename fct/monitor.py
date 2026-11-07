@@ -21,8 +21,11 @@ from fct.tasks import Dataset
 from fct.train import Monitor
 
 MIR_MONITOR_KEYS = LayerMIRReport._fields  # one source of truth for the history keys
+# The keys of a record at K >= 3 latents. The angle keys "hex" and "theta_hist" use the
+# contrasts u_2 and u_3, so for K < 3 they are absent and a record holds "spectrum" alone. They
+# are recorded for every K >= 3 but mean something only at K = 3 (see
+# `fct.spectrum.hexatic_moment`: for K >= 4, (u_2, u_3) is an arbitrary plane of the contrasts).
 SPECTRUM_MONITOR_KEYS = ("spectrum", "hex", "theta_hist")
-# The angle keys use the contrasts u_2 and u_3, so they exist only for K >= 3 latents.
 _MIN_ANGLE_LATENTS = 3
 # Records are kept as float32: a full-size run holds thousands of (L, K + 1, N) records, and
 # float32's relative precision on each power is far below that power's sampling noise.
@@ -84,7 +87,7 @@ def spectrum_record(H: Tensor, U: Tensor) -> dict[str, list[Tensor]]:
       (rows 1 and 2 of the tuning maps); only for K >= 3;
     - `theta_hist`: (36,) int64, `theta_histogram` of the same contrasts; only for K >= 3.
     The complex moment and the counts, unlike |moment| or a normalised histogram, average
-    and sum across records and members.
+    and sum across records and members. The angle keys are meaningful only at K = 3.
     """
     h = H.transpose(0, 1)  # (L, P, N)
     record = {"spectrum": _per_layer(sp.mode_spectra(h, U))}

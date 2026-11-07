@@ -426,7 +426,8 @@ def per_network_cos4(t2: torch.Tensor, t3: torch.Tensor) -> tuple[float, float]:
 
 
 def isotropic_networks(P: int, N: int, n: int, seed: int) -> torch.Tensor:
-    """(n, P, N): every neuron's activity iid N(0, I_P), the null of prediction 6."""
+    """(n, P, N): every neuron's activity iid N(0, I_P), so its tunings are rotation-invariant:
+    the null of the angle statistics."""
     return torch.randn((n, P, N), dtype=F64, generator=torch.Generator().manual_seed(seed))
 
 
